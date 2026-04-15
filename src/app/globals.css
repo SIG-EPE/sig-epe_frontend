@@ -1,0 +1,52 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  /* Enseña Perú brand */
+  --color-background: oklch(0.98 0.002 60);
+  --color-foreground: oklch(0.15 0.01 25);
+  --color-card: oklch(1.0 0 0);
+  --color-card-foreground: oklch(0.15 0.01 25);
+  --color-popover: oklch(1.0 0 0);
+  --color-popover-foreground: oklch(0.15 0.01 25);
+  --color-primary: oklch(0.55 0.22 25);
+  --color-primary-foreground: oklch(0.99 0 0);
+  --color-secondary: oklch(0.94 0.005 60);
+  --color-secondary-foreground: oklch(0.25 0.01 25);
+  --color-muted: oklch(0.92 0.005 60);
+  --color-muted-foreground: oklch(0.45 0.01 25);
+  --color-accent: oklch(0.92 0.04 25);
+  --color-accent-foreground: oklch(0.30 0.10 25);
+  --color-destructive: oklch(0.45 0.22 25);
+  --color-destructive-foreground: oklch(0.99 0 0);
+  --color-border: oklch(0.88 0.005 60);
+  --color-input: oklch(0.88 0.005 60);
+  --color-ring: oklch(0.55 0.22 25);
+  /* Sidebar — dark burgundy */
+  --color-sidebar: oklch(0.28 0.12 25);
+  --color-sidebar-foreground: oklch(0.95 0.01 25);
+  --color-sidebar-primary: oklch(0.55 0.22 25);
+  --color-sidebar-primary-foreground: oklch(0.99 0 0);
+  --color-sidebar-accent: oklch(0.35 0.10 25);
+  --color-sidebar-accent-foreground: oklch(0.95 0.01 25);
+  --color-sidebar-border: oklch(0.35 0.08 25);
+  --color-sidebar-ring: oklch(0.55 0.22 25);
+  /* Charts */
+  --color-chart-1: oklch(0.55 0.22 25);
+  --color-chart-2: oklch(0.65 0.15 25);
+  --color-chart-3: oklch(0.45 0.18 25);
+  --color-chart-4: oklch(0.60 0.12 60);
+  --color-chart-5: oklch(0.50 0.10 200);
+  /* Radius */
+  --radius: 0.5rem;
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+}
