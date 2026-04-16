@@ -9,11 +9,11 @@ export default function AuthLayout({
         {/* Enseña Perú logo + app name */}
         <div className="mb-8 flex flex-col items-center gap-3">
           <img
-            src="/ensenia-logo.webp"
+            src="/ensenia-logo.png"
             alt="Enseña Perú"
-            width={80}
+            width={72}
             height={80}
-            className="h-20 w-20"
+            className="h-20 w-auto object-contain"
           />
           <h1 className="text-xl font-bold text-foreground">SIG-EPE</h1>
           <p className="text-sm text-muted-foreground">

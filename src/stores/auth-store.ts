@@ -28,8 +28,12 @@ export const useAuthStore = create<AuthStore>((set) => ({
   setAuth: (user, accessToken) =>
     set({ user, accessToken, isLoading: false }),
 
-  clearAuth: () =>
-    set({ user: null, accessToken: null, isLoading: false }),
+  clearAuth: () => {
+    if (typeof document !== "undefined") {
+      document.cookie = "access_token=; path=/; max-age=0; SameSite=Strict";
+    }
+    return set({ user: null, accessToken: null, isLoading: false });
+  },
 
   setLoading: (isLoading) =>
     set({ isLoading }),

@@ -1,7 +1,6 @@
 "use client";
 
 import { useState } from "react";
-import { useRouter } from "next/navigation";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -46,7 +45,6 @@ type LoginFormValues = z.infer<typeof loginSchema>;
 // -------------------------------------------------------
 
 export function LoginForm() {
-  const router = useRouter();
   const setAuth = useAuthStore((state) => state.setAuth);
   const [showPassword, setShowPassword] = useState(false);
 
@@ -66,10 +64,17 @@ export function LoginForm() {
 
       setAuth(data.user, data.accessToken);
 
+      // Set cookie so Next.js middleware (Edge Runtime) can verify the JWT.
+      // The access token is already in Zustand memory; the cookie is needed
+      // only for server-side route protection — not a security regression.
+      document.cookie = `access_token=${data.accessToken}; path=/; SameSite=Strict`;
+
+      // Use full page navigation so the browser sends the cookie in the very
+      // first request and the Edge middleware can read it without timing issues.
       if (data.onboardingRequired) {
-        router.push(ROUTES.ONBOARDING);
+        window.location.href = ROUTES.ONBOARDING;
       } else {
-        router.push(ROUTES.DASHBOARD);
+        window.location.href = ROUTES.DASHBOARD;
       }
     } catch (error) {
       if (error instanceof ApiRequestError) {

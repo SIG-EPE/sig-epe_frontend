@@ -104,7 +104,8 @@ async function apiFetch<T>(
         throw new ApiRequestError(retryRes.status, errorBody);
       }
 
-      return (await retryRes.json()) as T;
+      const retryJson = (await retryRes.json()) as ApiResponse<T>;
+      return retryJson.data;
     }
 
     // Refresh failed — clear auth + redirect to login
@@ -138,7 +139,8 @@ async function apiFetch<T>(
     return undefined as T;
   }
 
-  return (await res.json()) as T;
+  const json = (await res.json()) as ApiResponse<T>;
+  return json.data;
 }
 
 // -------------------------------------------------------

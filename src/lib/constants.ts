@@ -50,26 +50,31 @@ export interface MenuItem {
 /** Menu items available per role */
 export const ROLE_MENU_MAP: Record<RoleCode, MenuItem[]> = {
   SOLICITANTE_EPE: [
-    { label: "Dashboard", href: ROUTES.DASHBOARD, icon: "LayoutDashboard" },
+    { label: "Mis Solicitudes", href: "/solicitudes", icon: "FileText" },
+    { label: "Nueva Solicitud", href: "/solicitudes/nueva", icon: "FilePlus" },
   ],
   JEFE_AREA: [
     { label: "Dashboard", href: ROUTES.DASHBOARD, icon: "LayoutDashboard" },
   ],
   ADMIN_PRESUPUESTAL: [
-    { label: "Dashboard", href: ROUTES.DASHBOARD, icon: "LayoutDashboard" },
+    { label: "Presupuesto", href: "/presupuesto", icon: "DollarSign" },
+    { label: "Catálogos", href: "/catalogos", icon: "BookOpen" },
   ],
   GIOF_VALIDADOR: [
-    { label: "Dashboard", href: ROUTES.DASHBOARD, icon: "LayoutDashboard" },
+    { label: "Bandeja de Validación", href: "/validacion", icon: "ClipboardCheck" },
+    { label: "Solicitudes", href: "/solicitudes", icon: "FileText" },
   ],
   GIOF_APROBADOR: [
-    { label: "Dashboard", href: ROUTES.DASHBOARD, icon: "LayoutDashboard" },
+    { label: "Bandeja de Aprobación", href: "/aprobacion", icon: "CheckCircle" },
+    { label: "Cola de Pagos", href: "/pagos", icon: "DollarSign" },
   ],
   AUDITOR_DIRECCION: [
+    { label: "Reportes", href: "/reportes", icon: "BarChart3" },
     { label: "Dashboard", href: ROUTES.DASHBOARD, icon: "LayoutDashboard" },
   ],
   ADMIN_SISTEMA: [
-    { label: "Dashboard", href: ROUTES.DASHBOARD, icon: "LayoutDashboard" },
     { label: "Usuarios", href: ROUTES.ADMIN_USERS, icon: "Users" },
+    { label: "Configuración", href: "/admin/config", icon: "Settings" },
   ],
   SOCIO_FINANCIADOR: [
     { label: "Dashboard", href: ROUTES.DASHBOARD, icon: "LayoutDashboard" },

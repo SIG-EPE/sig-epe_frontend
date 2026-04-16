@@ -5,10 +5,14 @@ import { usePathname } from "next/navigation";
 import {
   LayoutDashboard,
   FileText,
+  FilePlus,
   DollarSign,
   Users,
   BarChart3,
   Settings,
+  ClipboardCheck,
+  CheckCircle,
+  BookOpen,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
@@ -36,10 +40,14 @@ import { NavUser } from "@/components/layout/nav-user";
 const ICON_MAP: Record<string, LucideIcon> = {
   LayoutDashboard,
   FileText,
+  FilePlus,
   DollarSign,
   Users,
   BarChart3,
   Settings,
+  ClipboardCheck,
+  CheckCircle,
+  BookOpen,
 };
 
 // -------------------------------------------------------
@@ -61,11 +69,11 @@ export function AppSidebar() {
       <SidebarHeader>
         <div className="flex items-center gap-2 px-2 py-2">
           <img
-            src="/ensenia-logo.webp"
+            src="/ensenia-logo.png"
             alt="Enseña Perú"
             width={32}
-            height={32}
-            className="h-8 w-8 rounded-full"
+            height={36}
+            className="h-9 w-8 object-contain"
           />
           <span className="text-sm font-bold text-sidebar-foreground group-data-[collapsible=icon]:hidden">
             SIG-EPE
@@ -90,7 +98,7 @@ export function AppSidebar() {
                       isActive={isActive}
                       tooltip={item.label}
                     >
-                      <Link href={item.href}>
+                      <Link href={item.href as never}>
                         <Icon />
                         <span>{item.label}</span>
                       </Link>
