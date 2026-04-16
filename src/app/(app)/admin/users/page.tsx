@@ -2,8 +2,10 @@
 
 import { Plus } from "lucide-react";
 
+import { useAuthStore } from "@/stores/auth-store";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Skeleton } from "@/components/ui/skeleton";
 import {
   Table,
   TableBody,
@@ -24,6 +26,25 @@ import {
 // -------------------------------------------------------
 
 export default function AdminUsersPage() {
+  const user = useAuthStore((state) => state.user);
+
+  // Skeleton while user data loads
+  if (!user) {
+    return (
+      <div className="space-y-6">
+        <Skeleton className="h-4 w-48" />
+        <div className="flex items-center justify-between">
+          <div className="space-y-2">
+            <Skeleton className="h-8 w-56" />
+            <Skeleton className="h-4 w-80" />
+          </div>
+          <Skeleton className="h-10 w-40" />
+        </div>
+        <Skeleton className="h-64 rounded-xl" />
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6">
       {/* Breadcrumb */}

@@ -9,6 +9,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { Skeleton } from "@/components/ui/skeleton";
 
 // -------------------------------------------------------
 // Dashboard page — Sprint 1 (placeholder stats)
@@ -17,9 +18,25 @@ import {
 export default function DashboardPage() {
   const user = useAuthStore((state) => state.user);
 
-  const displayName = user
-    ? `${user.firstName} ${user.lastName}`.trim()
-    : "Usuario";
+  // Skeleton while user data loads
+  if (!user) {
+    return (
+      <div className="space-y-6">
+        <div className="space-y-2">
+          <Skeleton className="h-8 w-64" />
+          <Skeleton className="h-4 w-96" />
+        </div>
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          <Skeleton className="h-28 rounded-xl" />
+          <Skeleton className="h-28 rounded-xl" />
+          <Skeleton className="h-28 rounded-xl" />
+        </div>
+        <Skeleton className="h-20 rounded-xl" />
+      </div>
+    );
+  }
+
+  const displayName = `${user.firstName} ${user.lastName}`.trim();
 
   return (
     <div className="space-y-6">
