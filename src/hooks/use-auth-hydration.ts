@@ -36,11 +36,29 @@ export function useAuthHydration() {
       return;
     }
 
+    // Read token from cookie as fallback (store is empty after full page reload)
+    function getTokenFromCookie(): string | null {
+      if (typeof document === "undefined") return null;
+      const match = document.cookie.match(/(?:^|;\s*)access_token=([^;]+)/);
+      return match ? match[1] : null;
+    }
+
     let cancelled = false;
 
     async function hydrate() {
+      const cookieToken = getTokenFromCookie();
+
+      // No token anywhere — clear and redirect
+      if (!cookieToken) {
+        clearAuth();
+        router.replace(ROUTES.LOGIN);
+        return;
+      }
+
       try {
-        const data = await api.get<MeResponse>("/auth/me");
+        const data = await api.get<MeResponse>("/auth/me", {
+          headers: { Authorization: `Bearer ${cookieToken}` },
+        });
         if (!cancelled) {
           setAuth(data.user, data.accessToken);
         }
