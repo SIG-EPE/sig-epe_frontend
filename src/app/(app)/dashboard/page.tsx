@@ -17,9 +17,10 @@ import { Skeleton } from "@/components/ui/skeleton";
 
 export default function DashboardPage() {
   const user = useAuthStore((state) => state.user);
+  const isLoading = useAuthStore((state) => state.isLoading);
 
-  // Skeleton while user data loads
-  if (!user) {
+  // Skeleton while auth is hydrating
+  if (isLoading || !user) {
     return (
       <div className="space-y-6">
         <div className="space-y-2">

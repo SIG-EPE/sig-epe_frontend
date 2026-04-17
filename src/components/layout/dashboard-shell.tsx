@@ -7,9 +7,11 @@ import {
   SidebarTrigger,
 } from "@/components/ui/sidebar";
 import { AppSidebar } from "@/components/layout/app-sidebar";
+import { useAuthHydration } from "@/hooks/use-auth-hydration";
 
 // -------------------------------------------------------
 // DashboardShell layout component
+// Hydrates auth store on mount so sidebar + pages get user data.
 // -------------------------------------------------------
 
 export function DashboardShell({
@@ -17,6 +19,9 @@ export function DashboardShell({
 }: {
   children: React.ReactNode;
 }) {
+  // Rehydrate user from /auth/me if Zustand state was lost (full page reload)
+  useAuthHydration();
+
   return (
     <SidebarProvider>
       <AppSidebar />
