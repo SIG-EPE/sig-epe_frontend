@@ -15,6 +15,8 @@ import {
   Receipt,
   ClipboardList,
   CreditCard,
+  ChevronLeft,
+  ChevronRight,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
@@ -32,7 +34,6 @@ import {
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
-  SidebarRail,
   useSidebar,
 } from "@/components/ui/sidebar";
 import { NavUser } from "@/components/layout/nav-user";
@@ -56,13 +57,42 @@ const ICON_MAP: Record<string, LucideIcon> = {
 };
 
 // -------------------------------------------------------
-// AppSidebar component
+// SidebarToggleButton — chevron positioned on the right edge of the sidebar
 // -------------------------------------------------------
+
+function SidebarToggleButton({
+  sidebarState,
+  onToggle,
+}: {
+  sidebarState: "expanded" | "collapsed";
+  onToggle: () => void;
+}) {
+  const isExpanded = sidebarState === "expanded";
+  const Icon = isExpanded ? ChevronLeft : ChevronRight;
+
+  return (
+    <button
+      onClick={onToggle}
+      aria-label={isExpanded ? "Colapsar sidebar" : "Expandir sidebar"}
+      className={[
+        "absolute -right-3 bottom-16 z-20",
+        "flex h-6 w-6 items-center justify-center",
+        "rounded-full border border-sidebar-border bg-sidebar text-sidebar-foreground",
+        "shadow-sm transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
+        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring",
+      ].join(" ")}
+    >
+      <Icon className="h-3 w-3" />
+    </button>
+  );
+}
+
+
 
 export function AppSidebar() {
   const pathname = usePathname();
   const user = useAuthStore((state) => state.user);
-  const { setOpenMobile } = useSidebar();
+  const { setOpenMobile, toggleSidebar, state: sidebarState } = useSidebar();
 
   // Close mobile drawer on route change
   useEffect(() => {
@@ -99,7 +129,7 @@ export function AppSidebar() {
             <Skeleton className="h-4 w-24 group-data-[collapsible=icon]:hidden" />
           </div>
         </SidebarFooter>
-        <SidebarRail />
+        <SidebarToggleButton sidebarState={sidebarState} onToggle={toggleSidebar} />
       </Sidebar>
     );
   }
@@ -164,7 +194,7 @@ export function AppSidebar() {
         <NavUser />
       </SidebarFooter>
 
-      <SidebarRail />
+      <SidebarToggleButton sidebarState={sidebarState} onToggle={toggleSidebar} />
     </Sidebar>
   );
 }
