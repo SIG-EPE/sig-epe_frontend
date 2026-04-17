@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
@@ -32,6 +33,7 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
   SidebarRail,
+  useSidebar,
 } from "@/components/ui/sidebar";
 import { NavUser } from "@/components/layout/nav-user";
 
@@ -60,6 +62,12 @@ const ICON_MAP: Record<string, LucideIcon> = {
 export function AppSidebar() {
   const pathname = usePathname();
   const user = useAuthStore((state) => state.user);
+  const { setOpenMobile } = useSidebar();
+
+  // Close mobile drawer on route change
+  useEffect(() => {
+    setOpenMobile(false);
+  }, [pathname, setOpenMobile]);
 
   // Skeleton while user data loads
   if (!user) {
@@ -127,7 +135,9 @@ export function AppSidebar() {
             <SidebarMenu>
               {menuItems.map((item) => {
                 const Icon = ICON_MAP[item.icon] ?? LayoutDashboard;
-                const isActive = pathname === item.href;
+                const isActive =
+                  pathname === item.href ||
+                  pathname.startsWith(item.href + "/");
 
                 return (
                   <SidebarMenuItem key={item.href}>

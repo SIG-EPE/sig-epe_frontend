@@ -33,8 +33,8 @@ export function DashboardShell({
           <div className="flex-1" />
         </header>
 
-        {/* Main content */}
-        <div className="flex flex-1 flex-col gap-4 p-4 md:p-6">
+        {/* Main content — scrollable */}
+        <div className="flex flex-1 flex-col gap-4 overflow-y-auto p-4 md:p-6">
           {children}
         </div>
       </SidebarInset>
