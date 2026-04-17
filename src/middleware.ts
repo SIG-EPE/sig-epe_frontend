@@ -8,60 +8,70 @@ import type { TokenPayload } from "@/types/auth";
 // Uses jose (Edge-compatible, no Node.js crypto dependency)
 // -------------------------------------------------------
 
-const PUBLIC_PATHS = ["/login", "/_next", "/favicon.ico", "/api/health"];
+const PUBLIC_PATHS = ["/_next", "/favicon.ico", "/api/health"];
 
 function isPublicPath(pathname: string): boolean {
   return PUBLIC_PATHS.some((p) => pathname.startsWith(p));
 }
 
+async function verifyToken(token: string): Promise<TokenPayload | null> {
+  try {
+    const secret = new TextEncoder().encode(process.env.JWT_ACCESS_SECRET);
+    const { payload } = await jwtVerify(token, secret);
+    return payload as unknown as TokenPayload;
+  } catch {
+    return null;
+  }
+}
+
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
-  // Allow public paths through
+  // Allow static/infra paths through without any token check
   if (isPublicPath(pathname)) {
     return NextResponse.next();
   }
 
-  // Read token from cookie
   const token = request.cookies.get("access_token")?.value;
 
-  if (!token) {
-    const loginUrl = new URL("/login", request.url);
-    return NextResponse.redirect(loginUrl);
-  }
-
-  try {
-    const secret = new TextEncoder().encode(
-      process.env.JWT_ACCESS_SECRET,
-    );
-
-    const { payload } = await jwtVerify(token, secret);
-    const tokenPayload = payload as unknown as TokenPayload;
-
-    // Onboarding scope: only allow /onboarding
-    if (
-      tokenPayload.scope === "onboarding" &&
-      !pathname.startsWith("/onboarding")
-    ) {
-      return NextResponse.redirect(new URL("/onboarding", request.url));
-    }
-
-    // Full scope: redirect away from /onboarding and /login
-    if (tokenPayload.scope === "full") {
-      if (pathname.startsWith("/onboarding")) {
+  // /login: if the user already has a valid token, redirect to the appropriate destination
+  if (pathname === "/login") {
+    if (token) {
+      const tokenPayload = await verifyToken(token);
+      if (tokenPayload?.scope === "full") {
         return NextResponse.redirect(new URL("/dashboard", request.url));
       }
-      if (pathname === "/login") {
-        return NextResponse.redirect(new URL("/dashboard", request.url));
+      if (tokenPayload?.scope === "onboarding") {
+        return NextResponse.redirect(new URL("/onboarding", request.url));
       }
     }
-
+    // No token or invalid token → show login page
     return NextResponse.next();
-  } catch {
-    // Invalid / expired token → redirect to login
-    const loginUrl = new URL("/login", request.url);
-    return NextResponse.redirect(loginUrl);
   }
+
+  // Protected routes: require a valid token
+  if (!token) {
+    return NextResponse.redirect(new URL("/login", request.url));
+  }
+
+  const tokenPayload = await verifyToken(token);
+
+  if (!tokenPayload) {
+    // Invalid / expired token → redirect to login
+    return NextResponse.redirect(new URL("/login", request.url));
+  }
+
+  // Onboarding scope: only allow /onboarding
+  if (tokenPayload.scope === "onboarding" && !pathname.startsWith("/onboarding")) {
+    return NextResponse.redirect(new URL("/onboarding", request.url));
+  }
+
+  // Full scope: redirect away from /onboarding
+  if (tokenPayload.scope === "full" && pathname.startsWith("/onboarding")) {
+    return NextResponse.redirect(new URL("/dashboard", request.url));
+  }
+
+  return NextResponse.next();
 }
 
 export const config = {
