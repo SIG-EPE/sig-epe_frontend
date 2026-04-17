@@ -10,9 +10,10 @@ import {
   Users,
   BarChart3,
   Settings,
-  ClipboardCheck,
-  CheckCircle,
   BookOpen,
+  Receipt,
+  ClipboardList,
+  CreditCard,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
@@ -46,9 +47,10 @@ const ICON_MAP: Record<string, LucideIcon> = {
   Users,
   BarChart3,
   Settings,
-  ClipboardCheck,
-  CheckCircle,
   BookOpen,
+  Receipt,
+  ClipboardList,
+  CreditCard,
 };
 
 // -------------------------------------------------------

@@ -16,13 +16,10 @@ export type AppRoute = (typeof ROUTES)[keyof typeof ROUTES];
 /** Role codes — must match backend RoleCode enum */
 const ROLE_CODE = {
   SOLICITANTE_EPE: "SOLICITANTE_EPE",
-  JEFE_AREA: "JEFE_AREA",
-  ADMIN_PRESUPUESTAL: "ADMIN_PRESUPUESTAL",
-  GIOF_VALIDADOR: "GIOF_VALIDADOR",
-  GIOF_APROBADOR: "GIOF_APROBADOR",
+  PATROCINADOR: "PATROCINADOR",
+  GIOF_GESTOR: "GIOF_GESTOR",
   AUDITOR_DIRECCION: "AUDITOR_DIRECCION",
   ADMIN_SISTEMA: "ADMIN_SISTEMA",
-  SOCIO_FINANCIADOR: "SOCIO_FINANCIADOR",
 } as const;
 
 export type RoleCode = (typeof ROLE_CODE)[keyof typeof ROLE_CODE];
@@ -31,13 +28,10 @@ export { ROLE_CODE };
 /** Human-readable labels in Spanish */
 export const ROLE_LABELS: Record<RoleCode, string> = {
   SOLICITANTE_EPE: "Solicitante EPE",
-  JEFE_AREA: "Jefe de Área",
-  ADMIN_PRESUPUESTAL: "Administrador Presupuestal",
-  GIOF_VALIDADOR: "GIOF Validador",
-  GIOF_APROBADOR: "GIOF Aprobador",
-  AUDITOR_DIRECCION: "Auditor / Dirección EPE",
+  PATROCINADOR: "Patrocinador",
+  GIOF_GESTOR: "GIOF Gestor",
+  AUDITOR_DIRECCION: "Auditor / Dirección",
   ADMIN_SISTEMA: "Administrador del Sistema",
-  SOCIO_FINANCIADOR: "Socio / Financiador",
 };
 
 /** Sidebar menu item shape */
@@ -53,20 +47,16 @@ export const ROLE_MENU_MAP: Record<RoleCode, MenuItem[]> = {
     { label: "Mis Solicitudes", href: "/solicitudes", icon: "FileText" },
     { label: "Nueva Solicitud", href: "/solicitudes/nueva", icon: "FilePlus" },
   ],
-  JEFE_AREA: [
+  PATROCINADOR: [
     { label: "Dashboard", href: ROUTES.DASHBOARD, icon: "LayoutDashboard" },
+    { label: "Rendiciones", href: "/rendiciones", icon: "Receipt" },
   ],
-  ADMIN_PRESUPUESTAL: [
+  GIOF_GESTOR: [
+    { label: "Bandeja de Gestión", href: "/gestion", icon: "ClipboardList" },
+    { label: "Solicitudes", href: "/solicitudes", icon: "FileText" },
+    { label: "Cola de Pagos", href: "/pagos", icon: "CreditCard" },
     { label: "Presupuesto", href: "/presupuesto", icon: "DollarSign" },
     { label: "Catálogos", href: "/catalogos", icon: "BookOpen" },
-  ],
-  GIOF_VALIDADOR: [
-    { label: "Bandeja de Validación", href: "/validacion", icon: "ClipboardCheck" },
-    { label: "Solicitudes", href: "/solicitudes", icon: "FileText" },
-  ],
-  GIOF_APROBADOR: [
-    { label: "Bandeja de Aprobación", href: "/aprobacion", icon: "CheckCircle" },
-    { label: "Cola de Pagos", href: "/pagos", icon: "DollarSign" },
   ],
   AUDITOR_DIRECCION: [
     { label: "Reportes", href: "/reportes", icon: "BarChart3" },
@@ -75,9 +65,6 @@ export const ROLE_MENU_MAP: Record<RoleCode, MenuItem[]> = {
   ADMIN_SISTEMA: [
     { label: "Usuarios", href: ROUTES.ADMIN_USERS, icon: "Users" },
     { label: "Configuración", href: "/admin/config", icon: "Settings" },
-  ],
-  SOCIO_FINANCIADOR: [
-    { label: "Dashboard", href: ROUTES.DASHBOARD, icon: "LayoutDashboard" },
   ],
 };
 

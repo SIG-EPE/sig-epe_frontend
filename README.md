@@ -30,12 +30,12 @@ Se comunica con el backend [`sig-epe-backend`](../sig-epe-backend) mediante una 
 
 ## Requisitos previos
 
-| Herramienta | Versión mínima | Notas |
-|---|---|---|
-| **Node.js** | 20+ | Recomendado 22 LTS (el Dockerfile usa `node:22-alpine`) |
-| **npm** | 10+ | Incluido con Node.js 20+ |
-| **sig-epe-backend** | — | Debe estar corriendo en `http://localhost:3001` |
-| **Docker** _(opcional)_ | 24+ | Solo si se quiere levantar con contenedores |
+| Herramienta             | Versión mínima | Notas                                                   |
+| ----------------------- | -------------- | ------------------------------------------------------- |
+| **Node.js**             | 20+            | Recomendado 22 LTS (el Dockerfile usa `node:22-alpine`) |
+| **npm**                 | 10+            | Incluido con Node.js 20+                                |
+| **sig-epe-backend**     | —              | Debe estar corriendo en `http://localhost:3001`         |
+| **Docker** _(opcional)_ | 24+            | Solo si se quiere levantar con contenedores             |
 
 ---
 
@@ -68,11 +68,11 @@ La aplicación estará disponible en **http://localhost:3000**.
 
 Copiar `.env.example` a `.env.local` y configurar:
 
-| Variable | Tipo | Requerida | Default | Descripción |
-|---|---|---|---|---|
-| `NEXT_PUBLIC_API_URL` | Pública | Sí | `http://localhost:3001` | URL base de la API del backend. Se expone al browser (`NEXT_PUBLIC_*`). |
-| `NEXT_PUBLIC_APP_NAME` | Pública | No | `SIG-EPE` | Nombre de la aplicación mostrado en la UI. |
-| `JWT_ACCESS_SECRET` | Server-only | Sí | — | Secret compartido con el backend para verificar access tokens JWT en el middleware (Edge Runtime). **Debe coincidir con el valor del backend.** |
+| Variable               | Tipo        | Requerida | Default                 | Descripción                                                                                                                                     |
+| ---------------------- | ----------- | --------- | ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| `NEXT_PUBLIC_API_URL`  | Pública     | Sí        | `http://localhost:3001` | URL base de la API del backend. Se expone al browser (`NEXT_PUBLIC_*`).                                                                         |
+| `NEXT_PUBLIC_APP_NAME` | Pública     | No        | `SIG-EPE`               | Nombre de la aplicación mostrado en la UI.                                                                                                      |
+| `JWT_ACCESS_SECRET`    | Server-only | Sí        | —                       | Secret compartido con el backend para verificar access tokens JWT en el middleware (Edge Runtime). **Debe coincidir con el valor del backend.** |
 
 > **Importante:** Las variables `NEXT_PUBLIC_*` se incrustan en el bundle del cliente en tiempo de build. Si se cambian, se requiere reconstruir la aplicación.
 
@@ -121,10 +121,10 @@ docker run -p 3000:3000 \
 
 ### Build args disponibles
 
-| Arg | Default | Descripción |
-|---|---|---|
-| `NEXT_PUBLIC_API_URL` | `http://localhost:3001` | URL de la API (incrustada en build) |
-| `NEXT_PUBLIC_APP_NAME` | `SIG-EPE` | Nombre de la app |
+| Arg                    | Default                 | Descripción                         |
+| ---------------------- | ----------------------- | ----------------------------------- |
+| `NEXT_PUBLIC_API_URL`  | `http://localhost:3001` | URL de la API (incrustada en build) |
+| `NEXT_PUBLIC_APP_NAME` | `SIG-EPE`               | Nombre de la app                    |
 
 > **Nota:** El contenedor corre con un usuario no-root (`nextjs:nodejs`) por seguridad, expone el puerto `3000` y usa `node server.js` (standalone output).
 
@@ -134,10 +134,10 @@ docker run -p 3000:3000 \
 
 Credenciales disponibles en el entorno de desarrollo (requiere que el backend tenga los seeds cargados):
 
-| Email | Contraseña | Rol | Acceso |
-|---|---|---|---|
-| `admin@sigepe.local` | `SigEpe2026!` | `ADMIN_SISTEMA` | Dashboard + Gestión de usuarios |
-| `carlos.huaman@ensenaperudev.org` | `DevPass2026!` | `GIOF_VALIDADOR` | Dashboard |
+| Email                             | Contraseña     | Rol              | Acceso                          |
+| --------------------------------- | -------------- | ---------------- | ------------------------------- |
+| `admin@sigepe.local`              | `SigEpe2026!`  | `ADMIN_SISTEMA`  | Dashboard + Gestión de usuarios |
+| `carlos.huaman@ensenaperudev.org` | `DevPass2026!` | `GIOF_VALIDADOR` | Dashboard                       |
 
 > **No usar estas credenciales en producción.** Son exclusivamente para desarrollo y testing.
 
@@ -247,31 +247,31 @@ Todas las demás rutas requieren un JWT válido. El menú lateral se genera din�
 
 ## Scripts disponibles
 
-| Script | Comando | Descripción |
-|---|---|---|
-| `dev` | `npm run dev` | Levanta el servidor de desarrollo con **Turbopack** en `http://localhost:3000` |
-| `build` | `npm run build` | Genera el build de producción (output `standalone`) |
-| `start` | `npm run start` | Inicia el servidor de producción (requiere build previo) |
-| `lint` | `npm run lint` | Ejecuta ESLint con la configuración de Next.js |
-| `type-check` | `npm run type-check` | Verifica tipos con `tsc --noEmit` (sin emitir archivos) |
+| Script       | Comando              | Descripción                                                                    |
+| ------------ | -------------------- | ------------------------------------------------------------------------------ |
+| `dev`        | `npm run dev`        | Levanta el servidor de desarrollo con **Turbopack** en `http://localhost:3000` |
+| `build`      | `npm run build`      | Genera el build de producción (output `standalone`)                            |
+| `start`      | `npm run start`      | Inicia el servidor de producción (requiere build previo)                       |
+| `lint`       | `npm run lint`       | Ejecuta ESLint con la configuración de Next.js                                 |
+| `type-check` | `npm run type-check` | Verifica tipos con `tsc --noEmit` (sin emitir archivos)                        |
 
 ---
 
 ## Stack tecnológico
 
-| Tecnología | Versión | Propósito |
-|---|---|---|
-| [Next.js](https://nextjs.org/) | 15.3 | Framework React con App Router, SSR y middleware Edge |
-| [React](https://react.dev/) | 19.1 | Biblioteca de UI |
-| [TypeScript](https://www.typescriptlang.org/) | 5.8 | Tipado estático estricto |
-| [Tailwind CSS](https://tailwindcss.com/) | 4.1 | Utilidades CSS |
-| [shadcn/ui](https://ui.shadcn.com/) | — | Componentes UI (Radix UI + Tailwind) |
-| [Zustand](https://zustand.docs.pmnd.rs/) | 5.0 | Estado global (autenticación) |
-| [jose](https://github.com/panva/jose) | 6.0 | Verificación JWT compatible con Edge Runtime |
-| [React Hook Form](https://react-hook-form.com/) | 7.56 | Manejo de formularios |
-| [Zod](https://zod.dev/) | 3.24 | Validación de schemas |
-| [Lucide React](https://lucide.dev/) | 0.487 | Iconos |
-| [Sonner](https://sonner.emilkowal.dev/) | 2.0 | Notificaciones toast |
+| Tecnología                                      | Versión | Propósito                                             |
+| ----------------------------------------------- | ------- | ----------------------------------------------------- |
+| [Next.js](https://nextjs.org/)                  | 15.3    | Framework React con App Router, SSR y middleware Edge |
+| [React](https://react.dev/)                     | 19.1    | Biblioteca de UI                                      |
+| [TypeScript](https://www.typescriptlang.org/)   | 5.8     | Tipado estático estricto                              |
+| [Tailwind CSS](https://tailwindcss.com/)        | 4.1     | Utilidades CSS                                        |
+| [shadcn/ui](https://ui.shadcn.com/)             | —       | Componentes UI (Radix UI + Tailwind)                  |
+| [Zustand](https://zustand.docs.pmnd.rs/)        | 5.0     | Estado global (autenticación)                         |
+| [jose](https://github.com/panva/jose)           | 6.0     | Verificación JWT compatible con Edge Runtime          |
+| [React Hook Form](https://react-hook-form.com/) | 7.56    | Manejo de formularios                                 |
+| [Zod](https://zod.dev/)                         | 3.24    | Validación de schemas                                 |
+| [Lucide React](https://lucide.dev/)             | 0.487   | Iconos                                                |
+| [Sonner](https://sonner.emilkowal.dev/)         | 2.0     | Notificaciones toast                                  |
 
 ---
 
@@ -301,16 +301,16 @@ El script `dev` usa `--turbopack` para hot reload significativamente más rápid
 
 El sistema maneja 8 roles, cada uno con su propio menú y permisos:
 
-| Código | Nombre |
-|---|---|
-| `SOLICITANTE_EPE` | Solicitante EPE |
-| `JEFE_AREA` | Jefe de Área |
+| Código               | Nombre                     |
+| -------------------- | -------------------------- |
+| `SOLICITANTE_EPE`    | Solicitante EPE            |
+| `JEFE_AREA`          | Jefe de Área               |
 | `ADMIN_PRESUPUESTAL` | Administrador Presupuestal |
-| `GIOF_VALIDADOR` | GIOF Validador |
-| `GIOF_APROBADOR` | GIOF Aprobador |
-| `AUDITOR_DIRECCION` | Auditor / Dirección EPE |
-| `ADMIN_SISTEMA` | Administrador del Sistema |
-| `SOCIO_FINANCIADOR` | Socio / Financiador |
+| `GIOF_VALIDADOR`     | GIOF Validador             |
+| `GIOF_APROBADOR`     | GIOF Aprobador             |
+| `AUDITOR_DIRECCION`  | Auditor / Dirección EPE    |
+| `ADMIN_SISTEMA`      | Administrador del Sistema  |
+| `SOCIO_FINANCIADOR`  | Socio / Financiador        |
 
 ---
 
