@@ -132,12 +132,18 @@ docker run -p 3000:3000 \
 
 ## Usuarios de prueba
 
-Credenciales disponibles en el entorno de desarrollo (requiere que el backend tenga los seeds cargados):
+Credenciales disponibles en el entorno de desarrollo (requiere que el backend tenga los seeds cargados). El campo de login acepta **email o DNI** como `identifier`.
 
-| Email                             | Contraseña     | Rol              | Acceso                          |
-| --------------------------------- | -------------- | ---------------- | ------------------------------- |
-| `admin@sigepe.local`              | `SigEpe2026!`  | `ADMIN_SISTEMA`  | Dashboard + Gestión de usuarios |
-| `carlos.huaman@ensenaperudev.org` | `DevPass2026!` | `GIOF_VALIDADOR` | Dashboard                       |
+### Cuentas de prueba
+
+| Identifier | Contraseña | Rol | Notas |
+|---|---|---|---|
+| `admin@sigepe.local` | `SigEpe2026!` | `ADMIN_SISTEMA` | Admin principal, onboarding completo |
+| `carlos.huaman@ensenaperudev.org` | `DevPass2026!` | `GIOF_GESTOR` | Onboarding completo |
+| `ana.torres@ensenaperudev.org` | `DevPass2026!` | `SOLICITANTE_EPE` | `onboarding_completed: false` |
+| DNI: `12345678` | *(sin contraseña local)* | `SOLICITANTE_EPE` | Sin email, sin password — simula primer login EPE |
+
+> **DNI `12345678` (María García Quispe):** simula el primer login de un empleado EPE. No tiene contraseña local; usa las credenciales del sistema EPE real.
 
 > **No usar estas credenciales en producción.** Son exclusivamente para desarrollo y testing.
 
@@ -297,20 +303,15 @@ La configuración de Next.js tiene `typedRoutes: true`, lo que habilita verifica
 
 El script `dev` usa `--turbopack` para hot reload significativamente más rápido durante el desarrollo.
 
-### Roles del sistema
+### Roles del sistema (5)
 
-El sistema maneja 8 roles, cada uno con su propio menú y permisos:
-
-| Código               | Nombre                     |
-| -------------------- | -------------------------- |
-| `SOLICITANTE_EPE`    | Solicitante EPE            |
-| `JEFE_AREA`          | Jefe de Área               |
-| `ADMIN_PRESUPUESTAL` | Administrador Presupuestal |
-| `GIOF_VALIDADOR`     | GIOF Validador             |
-| `GIOF_APROBADOR`     | GIOF Aprobador             |
-| `AUDITOR_DIRECCION`  | Auditor / Dirección EPE    |
-| `ADMIN_SISTEMA`      | Administrador del Sistema  |
-| `SOCIO_FINANCIADOR`  | Socio / Financiador        |
+| Código | Etiqueta |
+|---|---|
+| `SOLICITANTE_EPE` | Solicitante EPE |
+| `PATROCINADOR` | Patrocinador |
+| `GIOF_GESTOR` | GIOF Gestor |
+| `AUDITOR_DIRECCION` | Auditor / Dirección |
+| `ADMIN_SISTEMA` | Administrador del Sistema |
 
 ---
 
