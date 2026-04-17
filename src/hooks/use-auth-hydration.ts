@@ -17,9 +17,15 @@ import type { AuthUser } from "@/types/auth";
 // to restore the user + token into the store.
 // -------------------------------------------------------
 
-interface MeResponse {
-  user: AuthUser;
-  accessToken: string;
+/** Shape returned directly by GET /auth/me (after TransformInterceptor unwrap) */
+interface MeResponseRaw {
+  id: string;
+  firstName: string | null;
+  lastName: string | null;
+  email: string | null;
+  epeDni: string | null;
+  onboardingCompleted: boolean;
+  roles: { code: string; name: string }[];
 }
 
 export function useAuthHydration() {
@@ -56,11 +62,24 @@ export function useAuthHydration() {
       }
 
       try {
-        const data = await api.get<MeResponse>("/auth/me", {
+        // /auth/me returns user data directly (not wrapped in { user, accessToken })
+        const raw = await api.get<MeResponseRaw>("/auth/me", {
           headers: { Authorization: `Bearer ${cookieToken}` },
         });
+
         if (!cancelled) {
-          setAuth(data.user, data.accessToken);
+          // Map backend shape → AuthUser shape
+          const mappedUser: AuthUser = {
+            id: raw.id,
+            firstName: raw.firstName ?? "",
+            lastName: raw.lastName ?? "",
+            email: raw.email,
+            documentNumber: raw.epeDni ?? "",
+            onboardingCompleted: raw.onboardingCompleted,
+            role: raw.roles?.[0] ?? { code: "", name: "" },
+          };
+          // Reuse cookie token — /auth/me does not issue a new one
+          setAuth(mappedUser, cookieToken);
         }
       } catch (error) {
         if (cancelled) return;

@@ -2,12 +2,21 @@
 // Constants — SIG-EPE
 // -------------------------------------------------------
 
-/** All application routes */
+/** All application routes (English convention) */
 export const ROUTES = {
   LOGIN: "/login",
   ONBOARDING: "/onboarding",
   DASHBOARD: "/dashboard",
+  REQUESTS: "/requests",
+  REQUESTS_NEW: "/requests/new",
+  MANAGEMENT: "/management",
+  PAYMENTS: "/payments",
+  BUDGET: "/budget",
+  CATALOGS: "/catalogs",
+  ACCOUNTABILITY: "/accountability",
+  REPORTS: "/reports",
   ADMIN_USERS: "/admin/users",
+  ADMIN_CONFIG: "/admin/config",
   PROFILE: "/profile",
 } as const;
 
@@ -44,27 +53,27 @@ export interface MenuItem {
 /** Menu items available per role */
 export const ROLE_MENU_MAP: Record<RoleCode, MenuItem[]> = {
   SOLICITANTE_EPE: [
-    { label: "Mis Solicitudes", href: "/solicitudes", icon: "FileText" },
-    { label: "Nueva Solicitud", href: "/solicitudes/nueva", icon: "FilePlus" },
+    { label: "Mis Solicitudes", href: ROUTES.REQUESTS, icon: "FileText" },
+    { label: "Nueva Solicitud", href: ROUTES.REQUESTS_NEW, icon: "FilePlus" },
   ],
   PATROCINADOR: [
     { label: "Dashboard", href: ROUTES.DASHBOARD, icon: "LayoutDashboard" },
-    { label: "Rendiciones", href: "/rendiciones", icon: "Receipt" },
+    { label: "Rendiciones", href: ROUTES.ACCOUNTABILITY, icon: "Receipt" },
   ],
   GIOF_GESTOR: [
-    { label: "Bandeja de Gestión", href: "/gestion", icon: "ClipboardList" },
-    { label: "Solicitudes", href: "/solicitudes", icon: "FileText" },
-    { label: "Cola de Pagos", href: "/pagos", icon: "CreditCard" },
-    { label: "Presupuesto", href: "/presupuesto", icon: "DollarSign" },
-    { label: "Catálogos", href: "/catalogos", icon: "BookOpen" },
+    { label: "Bandeja de Gestión", href: ROUTES.MANAGEMENT, icon: "ClipboardList" },
+    { label: "Solicitudes", href: ROUTES.REQUESTS, icon: "FileText" },
+    { label: "Cola de Pagos", href: ROUTES.PAYMENTS, icon: "CreditCard" },
+    { label: "Presupuesto", href: ROUTES.BUDGET, icon: "DollarSign" },
+    { label: "Catálogos", href: ROUTES.CATALOGS, icon: "BookOpen" },
   ],
   AUDITOR_DIRECCION: [
-    { label: "Reportes", href: "/reportes", icon: "BarChart3" },
+    { label: "Reportes", href: ROUTES.REPORTS, icon: "BarChart3" },
     { label: "Dashboard", href: ROUTES.DASHBOARD, icon: "LayoutDashboard" },
   ],
   ADMIN_SISTEMA: [
     { label: "Usuarios", href: ROUTES.ADMIN_USERS, icon: "Users" },
-    { label: "Configuración", href: "/admin/config", icon: "Settings" },
+    { label: "Configuración", href: ROUTES.ADMIN_CONFIG, icon: "Settings" },
   ],
 };
 
