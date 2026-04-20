@@ -15,8 +15,10 @@ export interface AuthUser {
   lastName: string;
   email: string | null;
   documentNumber: string;
-  role: AuthUserRole;
+  role?: AuthUserRole;
   onboardingCompleted: boolean;
+  /** Auth source — preparatory field for Sprint 2 (GET /auth/me). Undefined until backend exposes it. */
+  authSource?: 'LOCAL' | 'EPE';
 }
 
 /** POST /auth/login request body */
@@ -28,17 +30,16 @@ export interface LoginRequest {
 /** POST /auth/login response body */
 export interface LoginResponse {
   accessToken: string;
-  user: AuthUser;
+  /** Backend returns roles as an array; normalize to `role` before calling setAuth */
+  user: AuthUser & { roles?: AuthUserRole[] };
   onboardingRequired: boolean;
 }
 
 /** POST /auth/onboarding request body */
 export interface OnboardingRequest {
   email: string;
-  firstName: string;
-  lastName: string;
-  password: string;
-  passwordConfirm: string;
+  newPassword?: string;
+  confirmPassword?: string;
 }
 
 /** JWT payload shape (decoded by jose in middleware) */
