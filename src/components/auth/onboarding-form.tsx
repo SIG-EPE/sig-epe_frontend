@@ -113,7 +113,7 @@ export function OnboardingForm({
       // Set cookie so Next.js middleware (Edge Runtime) can verify the new JWT
       // with scope=full. Without this, the middleware still reads the old
       // scope=onboarding token and redirects back to /onboarding in a loop.
-      document.cookie = `access_token=${data.accessToken}; path=/; SameSite=Strict`;
+      document.cookie = `access_token=${data.accessToken}; path=/; SameSite=Strict; Max-Age=900`;
 
       toast.success("¡Perfil configurado exitosamente!");
 

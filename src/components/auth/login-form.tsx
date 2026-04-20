@@ -69,7 +69,7 @@ export function LoginForm() {
       // Set cookie so Next.js middleware (Edge Runtime) can verify the JWT.
       // The access token is already in Zustand memory; the cookie is needed
       // only for server-side route protection — not a security regression.
-      document.cookie = `access_token=${data.accessToken}; path=/; SameSite=Strict`;
+      document.cookie = `access_token=${data.accessToken}; path=/; SameSite=Strict; Max-Age=900`;
 
       // Use full page navigation so the browser sends the cookie in the very
       // first request and the Edge middleware can read it without timing issues.

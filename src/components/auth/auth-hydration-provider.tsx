@@ -91,14 +91,44 @@ export function AuthHydrationProvider({
       } catch (error) {
         if (cancelled) return;
 
-        // 401/403 → middleware handles it; just stop loading so UI doesn't hang
-        if (
-          error instanceof ApiRequestError &&
-          (error.status === 401 || error.status === 403)
-        ) {
-          setLoading(false);
+        // 401 → try silent refresh before giving up
+        if (error instanceof ApiRequestError && error.status === 401) {
+          try {
+            // Browser automatically sends the httpOnly refresh_token cookie
+            const refreshData = await api.post<{ accessToken: string }>(
+              "/auth/refresh",
+              {},
+            );
+
+            if (cancelled) return;
+
+            // Persist the new access token so it survives browser restarts
+            document.cookie = `access_token=${refreshData.accessToken}; path=/; SameSite=Strict; Max-Age=900`;
+
+            // Retry /auth/me with the fresh token
+            const raw = await api.get<MeResponseRaw>("/auth/me", {
+              headers: { Authorization: `Bearer ${refreshData.accessToken}` },
+            });
+
+            if (cancelled) return;
+
+            const mappedUser: AuthUser = {
+              id: raw.id,
+              firstName: raw.firstName ?? "",
+              lastName: raw.lastName ?? "",
+              email: raw.email,
+              documentNumber: raw.epeDni ?? "",
+              onboardingCompleted: raw.onboardingCompleted,
+              authSource: (raw.authSource ?? "EPE") as "LOCAL" | "EPE",
+              role: raw.roles?.[0] ?? { code: "", name: "" },
+            };
+            setAuth(mappedUser, refreshData.accessToken);
+          } catch {
+            // Refresh also failed — session truly expired; middleware redirects
+            if (!cancelled) setLoading(false);
+          }
         } else {
-          // Network / unexpected error — stop loading, don't redirect
+          // 403 / network / unexpected error — stop loading, don't redirect
           setLoading(false);
         }
       }
