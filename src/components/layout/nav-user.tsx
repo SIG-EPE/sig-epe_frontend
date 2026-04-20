@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { ChevronsUpDown, LogOut, User } from "lucide-react";
 
@@ -106,9 +107,11 @@ export function NavUser() {
             </DropdownMenuLabel>
             <DropdownMenuSeparator />
             <DropdownMenuGroup>
-              <DropdownMenuItem disabled>
-                <User className="mr-2 h-4 w-4" />
-                Mi perfil
+              <DropdownMenuItem asChild>
+                <Link href={ROUTES.PROFILE}>
+                  <User className="mr-2 h-4 w-4" />
+                  Mi perfil
+                </Link>
               </DropdownMenuItem>
             </DropdownMenuGroup>
             <DropdownMenuSeparator />

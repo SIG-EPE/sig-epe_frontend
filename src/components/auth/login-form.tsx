@@ -10,6 +10,7 @@ import { toast } from "sonner";
 import { api, ApiRequestError } from "@/lib/api-client";
 import { useAuthStore } from "@/stores/auth-store";
 import { ROUTES } from "@/lib/constants";
+import { getRoleHomePath } from "@/lib/auth/role-redirect";
 import type { LoginResponse } from "@/types/auth";
 
 import { Button } from "@/components/ui/button";
@@ -62,7 +63,8 @@ export function LoginForm() {
     try {
       const data = await api.post<LoginResponse>("/auth/login", values);
 
-      setAuth(data.user, data.accessToken);
+      const normalizedUser = { ...data.user, role: data.user.roles?.[0] ?? data.user.role };
+      setAuth(normalizedUser, data.accessToken);
 
       // Set cookie so Next.js middleware (Edge Runtime) can verify the JWT.
       // The access token is already in Zustand memory; the cookie is needed
@@ -74,7 +76,7 @@ export function LoginForm() {
       if (data.onboardingRequired) {
         window.location.href = ROUTES.ONBOARDING;
       } else {
-        window.location.href = ROUTES.DASHBOARD;
+        window.location.href = getRoleHomePath(normalizedUser.role?.code ?? "");
       }
     } catch (error) {
       if (error instanceof ApiRequestError) {

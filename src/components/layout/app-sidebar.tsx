@@ -104,8 +104,8 @@ export function AppSidebar() {
     return (
       <Sidebar collapsible="icon" variant="sidebar">
         <SidebarHeader>
-          <div className="flex items-center gap-2 px-2 py-2">
-            <Skeleton className="h-9 w-8 rounded" />
+          <div className="flex items-center gap-2 px-2 py-2 group-data-[state=collapsed]:justify-center group-data-[state=collapsed]:px-0">
+            <Skeleton className="h-9 w-8 rounded group-data-[state=collapsed]:h-10 group-data-[state=collapsed]:w-10" />
             <Skeleton className="h-4 w-16 group-data-[collapsible=icon]:hidden" />
           </div>
         </SidebarHeader>
@@ -143,13 +143,13 @@ export function AppSidebar() {
     <Sidebar collapsible="icon" variant="sidebar">
       {/* Header — logo + app name */}
       <SidebarHeader>
-        <div className="flex items-center gap-2 px-2 py-2">
+        <div className="flex items-center gap-2 px-2 py-2 group-data-[state=collapsed]:justify-center group-data-[state=collapsed]:px-0">
           <img
-            src="/ensenia-logo.png"
+            src="/logo-ensena.svg"
             alt="Enseña Perú"
             width={32}
             height={36}
-            className="h-9 w-8 object-contain"
+            className="h-9 w-8 object-contain group-data-[state=collapsed]:h-10 group-data-[state=collapsed]:w-10"
           />
           <span className="text-sm font-bold text-sidebar-foreground group-data-[collapsible=icon]:hidden">
             SIG-EPE
