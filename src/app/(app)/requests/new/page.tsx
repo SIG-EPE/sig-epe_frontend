@@ -1,6 +1,6 @@
 import { Construction } from "lucide-react";
 
-export default function NuevaSolicitudPage() {
+export default function NewRequestPage() {
   return (
     <div className="flex flex-col items-center justify-center h-full gap-4 text-muted-foreground">
       <Construction className="h-12 w-12" />
