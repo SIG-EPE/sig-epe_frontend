@@ -1,3 +1,5 @@
+import { AuthHydrationProvider } from "@/components/auth/auth-hydration-provider";
+
 export default function AuthLayout({
   children,
 }: {
@@ -9,7 +11,7 @@ export default function AuthLayout({
         {/* Enseña Perú logo + app name */}
         <div className="mb-8 flex flex-col items-center gap-3">
           <img
-            src="/ensenia-logo.png"
+            src="/logo-ensena.svg"
             alt="Enseña Perú"
             width={72}
             height={80}
@@ -21,7 +23,7 @@ export default function AuthLayout({
           </p>
         </div>
 
-        {children}
+        <AuthHydrationProvider>{children}</AuthHydrationProvider>
       </div>
     </div>
   );

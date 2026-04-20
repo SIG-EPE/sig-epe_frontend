@@ -1,7 +1,6 @@
 "use client";
 
 import { useState } from "react";
-import { useRouter } from "next/navigation";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -10,7 +9,7 @@ import { toast } from "sonner";
 
 import { api, ApiRequestError } from "@/lib/api-client";
 import { useAuthStore } from "@/stores/auth-store";
-import { ROUTES } from "@/lib/constants";
+import { getRoleHomePath } from "@/lib/auth/role-redirect";
 import type { LoginResponse } from "@/types/auth";
 
 import { Button } from "@/components/ui/button";
@@ -31,11 +30,20 @@ import {
   FormMessage,
 } from "@/components/ui/form";
 
+import { Mail, ShieldCheck, Bell } from "lucide-react";
+
 // -------------------------------------------------------
-// Validation schema
+// Validation schemas — conditional by authSource
 // -------------------------------------------------------
 
-const onboardingSchema = z
+const epeSchema = z.object({
+  email: z
+    .string()
+    .min(1, "Ingresa tu correo electrónico")
+    .email("Ingresa un correo válido"),
+});
+
+const localSchema = z
   .object({
     email: z
       .string()
@@ -55,7 +63,9 @@ const onboardingSchema = z
     path: ["confirmPassword"],
   });
 
-type OnboardingFormValues = z.infer<typeof onboardingSchema>;
+type EpeFormValues = z.infer<typeof epeSchema>;
+type LocalFormValues = z.infer<typeof localSchema>;
+type OnboardingFormValues = EpeFormValues | LocalFormValues;
 
 // -------------------------------------------------------
 // OnboardingForm component
@@ -63,36 +73,53 @@ type OnboardingFormValues = z.infer<typeof onboardingSchema>;
 
 interface OnboardingFormProps {
   epeUserName: string;
+  authSource: "LOCAL" | "EPE";
 }
 
-export function OnboardingForm({ epeUserName }: OnboardingFormProps) {
-  const router = useRouter();
+export function OnboardingForm({
+  epeUserName,
+  authSource,
+}: OnboardingFormProps) {
   const setAuth = useAuthStore((state) => state.setAuth);
   const [showNewPassword, setShowNewPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
 
+  const isLocal = authSource === "LOCAL";
+  const schema = isLocal ? localSchema : epeSchema;
+
   const form = useForm<OnboardingFormValues>({
-    resolver: zodResolver(onboardingSchema),
-    defaultValues: {
-      email: "",
-      newPassword: "",
-      confirmPassword: "",
-    },
+    resolver: zodResolver(schema),
+    defaultValues: isLocal
+      ? { email: "", newPassword: "", confirmPassword: "" }
+      : { email: "" },
   });
 
   const isSubmitting = form.formState.isSubmitting;
 
   async function onSubmit(values: OnboardingFormValues) {
     try {
-      const data = await api.post<LoginResponse>("/auth/onboarding", {
-        email: values.email,
-        password: values.newPassword,
-        passwordConfirm: values.confirmPassword,
-      });
+      const payload: Record<string, string> = { email: values.email };
 
-      setAuth(data.user, data.accessToken);
+      if (isLocal && "newPassword" in values) {
+        payload.newPassword = values.newPassword;
+        payload.confirmPassword = values.confirmPassword;
+      }
+
+      const data = await api.post<LoginResponse>("/auth/onboarding", payload);
+
+      const normalizedUser = { ...data.user, role: data.user.roles?.[0] ?? data.user.role };
+      setAuth(normalizedUser, data.accessToken);
+
+      // Set cookie so Next.js middleware (Edge Runtime) can verify the new JWT
+      // with scope=full. Without this, the middleware still reads the old
+      // scope=onboarding token and redirects back to /onboarding in a loop.
+      document.cookie = `access_token=${data.accessToken}; path=/; SameSite=Strict`;
+
       toast.success("¡Perfil configurado exitosamente!");
-      router.push(ROUTES.DASHBOARD);
+
+      // Use full page navigation so the browser sends the updated cookie in the
+      // very first request and the Edge middleware can read it without timing issues.
+      window.location.href = getRoleHomePath(normalizedUser.role?.code ?? "");
     } catch (error) {
       if (error instanceof ApiRequestError) {
         if (error.status === 409) {
@@ -113,10 +140,35 @@ export function OnboardingForm({ epeUserName }: OnboardingFormProps) {
           Bienvenido/a, {epeUserName}
         </CardTitle>
         <CardDescription className="text-center">
-          Para continuar, configura tu correo y contraseña de acceso al SIG-EPE
+          {isLocal
+            ? "Configura tu correo y establece tu contraseña de acceso al SIG-EPE"
+            : "Configura tu correo electrónico para recibir notificaciones y gestionar tu cuenta"}
         </CardDescription>
       </CardHeader>
-      <CardContent>
+      <CardContent className="space-y-5">
+        {/* Why email matters */}
+        <div className="rounded-lg border border-blue-200 bg-blue-50 p-4 dark:border-blue-800 dark:bg-blue-950">
+          <p className="mb-2 text-sm font-medium text-blue-800 dark:text-blue-200">
+            ¿Por qué es obligatorio el correo?
+          </p>
+          <ul className="space-y-1.5 text-sm text-blue-700 dark:text-blue-300">
+            <li className="flex items-start gap-2">
+              <Bell className="mt-0.5 h-4 w-4 shrink-0" />
+              <span>Recibirás notificaciones sobre tus solicitudes y pagos</span>
+            </li>
+            <li className="flex items-start gap-2">
+              <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0" />
+              <span>Te permite recuperar tu contraseña si la olvidas</span>
+            </li>
+            <li className="flex items-start gap-2">
+              <Mail className="mt-0.5 h-4 w-4 shrink-0" />
+              <span>
+                Es el canal oficial de comunicación del equipo GIOF contigo
+              </span>
+            </li>
+          </ul>
+        </div>
+
         <Form {...form}>
           <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
             {/* Email field */}
@@ -139,90 +191,97 @@ export function OnboardingForm({ epeUserName }: OnboardingFormProps) {
               )}
             />
 
-            {/* New password field */}
-            <FormField
-              control={form.control}
-              name="newPassword"
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>Nueva contraseña</FormLabel>
-                  <FormControl>
-                    <div className="relative">
-                      <Input
-                        type={showNewPassword ? "text" : "password"}
-                        placeholder="Mínimo 8 caracteres"
-                        autoComplete="new-password"
-                        {...field}
-                      />
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon"
-                        className="absolute right-0 top-0 h-9 w-9 text-muted-foreground hover:text-foreground"
-                        onClick={() => setShowNewPassword((prev) => !prev)}
-                        tabIndex={-1}
-                      >
-                        {showNewPassword ? (
-                          <EyeOff className="h-4 w-4" />
-                        ) : (
-                          <Eye className="h-4 w-4" />
-                        )}
-                        <span className="sr-only">
-                          {showNewPassword ? "Ocultar" : "Mostrar"} contraseña
-                        </span>
-                      </Button>
-                    </div>
-                  </FormControl>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
+            {/* Password fields — only for LOCAL users */}
+            {isLocal && (
+              <>
+                {/* New password field */}
+                <FormField
+                  control={form.control}
+                  name="newPassword"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Nueva contraseña</FormLabel>
+                      <FormControl>
+                        <div className="relative">
+                          <Input
+                            type={showNewPassword ? "text" : "password"}
+                            placeholder="Mínimo 8 caracteres"
+                            autoComplete="new-password"
+                            {...field}
+                          />
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            className="absolute right-0 top-0 h-9 w-9 text-muted-foreground hover:text-foreground"
+                            onClick={() =>
+                              setShowNewPassword((prev) => !prev)
+                            }
+                            tabIndex={-1}
+                          >
+                            {showNewPassword ? (
+                              <EyeOff className="h-4 w-4" />
+                            ) : (
+                              <Eye className="h-4 w-4" />
+                            )}
+                            <span className="sr-only">
+                              {showNewPassword ? "Ocultar" : "Mostrar"}{" "}
+                              contraseña
+                            </span>
+                          </Button>
+                        </div>
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
 
-            {/* Confirm password field */}
-            <FormField
-              control={form.control}
-              name="confirmPassword"
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>Confirmar contraseña</FormLabel>
-                  <FormControl>
-                    <div className="relative">
-                      <Input
-                        type={showConfirmPassword ? "text" : "password"}
-                        placeholder="Repite tu contraseña"
-                        autoComplete="new-password"
-                        {...field}
-                      />
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon"
-                        className="absolute right-0 top-0 h-9 w-9 text-muted-foreground hover:text-foreground"
-                        onClick={() => setShowConfirmPassword((prev) => !prev)}
-                        tabIndex={-1}
-                      >
-                        {showConfirmPassword ? (
-                          <EyeOff className="h-4 w-4" />
-                        ) : (
-                          <Eye className="h-4 w-4" />
-                        )}
-                        <span className="sr-only">
-                          {showConfirmPassword ? "Ocultar" : "Mostrar"} contraseña
-                        </span>
-                      </Button>
-                    </div>
-                  </FormControl>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
+                {/* Confirm password field */}
+                <FormField
+                  control={form.control}
+                  name="confirmPassword"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Confirmar contraseña</FormLabel>
+                      <FormControl>
+                        <div className="relative">
+                          <Input
+                            type={showConfirmPassword ? "text" : "password"}
+                            placeholder="Repite tu contraseña"
+                            autoComplete="new-password"
+                            {...field}
+                          />
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            className="absolute right-0 top-0 h-9 w-9 text-muted-foreground hover:text-foreground"
+                            onClick={() =>
+                              setShowConfirmPassword((prev) => !prev)
+                            }
+                            tabIndex={-1}
+                          >
+                            {showConfirmPassword ? (
+                              <EyeOff className="h-4 w-4" />
+                            ) : (
+                              <Eye className="h-4 w-4" />
+                            )}
+                            <span className="sr-only">
+                              {showConfirmPassword ? "Ocultar" : "Mostrar"}{" "}
+                              contraseña
+                            </span>
+                          </Button>
+                        </div>
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+              </>
+            )}
 
             {/* Submit button */}
-            <Button
-              type="submit"
-              className="w-full"
-              disabled={isSubmitting}
-            >
+            <Button type="submit" className="w-full" disabled={isSubmitting}>
               {isSubmitting ? (
                 <>
                   <Loader2 className="h-4 w-4 animate-spin" />
