@@ -55,8 +55,8 @@ vi.mock("@/lib/constants", () => ({
 
 import { OnboardingForm } from "@/components/auth/onboarding-form";
 
-function renderOnboardingForm(epeUserName = "Juan Pérez") {
-  return render(<OnboardingForm epeUserName={epeUserName} />);
+function renderOnboardingForm(epeUserName = "Juan Pérez", authSource: "LOCAL" | "EPE" = "LOCAL") {
+  return render(<OnboardingForm epeUserName={epeUserName} authSource={authSource} />);
 }
 
 // -------------------------------------------------------
