@@ -28,11 +28,19 @@ export function EditUserModal({ user, onClose, onSuccess }: EditUserModalProps) 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
-      await updateUser(user.id, {
-        firstName: form.firstName,
-        lastName: form.lastName,
-        email: form.email || undefined,
-      });
+      if (isLocal) {
+        // LOCAL: puede editar todo
+        await updateUser(user.id, {
+          firstName: form.firstName,
+          lastName: form.lastName,
+          email: form.email || undefined,
+        });
+      } else {
+        // EPE: solo email (nombre y apellido vienen del sistema EPE)
+        await updateUser(user.id, {
+          email: form.email || undefined,
+        });
+      }
       toast.success("Usuario actualizado");
       onSuccess();
       onClose();
@@ -51,18 +59,20 @@ export function EditUserModal({ user, onClose, onSuccess }: EditUserModalProps) 
             <div className="space-y-1">
               <label className="text-sm font-medium">Nombre *</label>
               <input
-                className="w-full rounded-md border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+                className="w-full rounded-md border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
                 value={form.firstName}
                 onChange={(e) => setForm((f) => ({ ...f, firstName: e.target.value }))}
+                disabled={!isLocal}
                 required
               />
             </div>
             <div className="space-y-1">
               <label className="text-sm font-medium">Apellido *</label>
               <input
-                className="w-full rounded-md border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+                className="w-full rounded-md border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
                 value={form.lastName}
                 onChange={(e) => setForm((f) => ({ ...f, lastName: e.target.value }))}
+                disabled={!isLocal}
                 required
               />
             </div>
