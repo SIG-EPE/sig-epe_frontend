@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback } from "react";
 
 import { api } from "@/lib/api-client";
 import { useAuthStore } from "@/stores/auth-store";
+import type { ProfileUpdatePayload } from "@/types/auth";
 
 // -------------------------------------------------------
 // Types
@@ -218,4 +219,29 @@ export function useResetPassword() {
   };
 
   return { resetPassword, isLoading };
+}
+
+// -------------------------------------------------------
+// useUpdateMyProfile — actualiza el perfil del usuario
+// que tiene la sesion activa (no es admin).
+// -------------------------------------------------------
+
+export function useUpdateMyProfile() {
+  const [isLoading, setIsLoading] = useState(false);
+  const patchUser = useAuthStore((s) => s.patchUser);
+
+  const updateMyProfile = async (data: ProfileUpdatePayload): Promise<void> => {
+    setIsLoading(true);
+    try {
+      const updated = await api.patch<{ id: string; firstName: string; lastName: string; email: string | null }>(
+        "/auth/profile",
+        data,
+      );
+      patchUser(updated);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  return { updateMyProfile, isLoading };
 }
