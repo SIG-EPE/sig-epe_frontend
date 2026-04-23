@@ -59,3 +59,10 @@ const TOKEN_SCOPE = {
 
 export type TokenScope = (typeof TOKEN_SCOPE)[keyof typeof TOKEN_SCOPE];
 export { TOKEN_SCOPE };
+
+/** PATCH /api/auth/profile request body */
+export interface ProfileUpdatePayload {
+  firstName?: string;
+  lastName?: string;
+  email?: string;
+}
