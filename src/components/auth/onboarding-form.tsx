@@ -29,6 +29,7 @@ import {
   FormLabel,
   FormMessage,
 } from "@/components/ui/form";
+import { PasswordChecklist } from "@/components/auth/password-checklist";
 
 import { Mail, ShieldCheck, Bell } from "lucide-react";
 
@@ -53,8 +54,8 @@ const localSchema = z
       .string()
       .min(8, "La contraseña debe tener al menos 8 caracteres")
       .regex(
-        /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)/,
-        "Debe incluir mayúscula, minúscula y número",
+        /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^a-zA-Z0-9])/,
+        "Debe incluir mayúscula, minúscula, número y carácter especial",
       ),
     confirmPassword: z.string().min(1, "Confirma tu contraseña"),
   })
@@ -95,6 +96,9 @@ export function OnboardingForm({
   });
 
   const isSubmitting = form.formState.isSubmitting;
+  const watchedPassword = isLocal
+    ? ((form.watch("newPassword" as keyof OnboardingFormValues) as string) ?? "")
+    : "";
 
   async function onSubmit(values: OnboardingFormValues) {
     try {
@@ -231,7 +235,7 @@ export function OnboardingForm({
                           </Button>
                         </div>
                       </FormControl>
-                      <FormMessage />
+                      <PasswordChecklist password={watchedPassword} />
                     </FormItem>
                   )}
                 />

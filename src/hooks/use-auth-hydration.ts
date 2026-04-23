@@ -26,6 +26,7 @@ interface MeResponseRaw {
   epeDni: string | null;
   onboardingCompleted: boolean;
   roles: { code: string; name: string }[];
+  authSource?: 'LOCAL' | 'EPE';
 }
 
 export function useAuthHydration() {
@@ -36,17 +37,18 @@ export function useAuthHydration() {
   const clearAuth = useAuthStore((state) => state.clearAuth);
 
   useEffect(() => {
-    // Already hydrated — nothing to do
-    if (user) {
-      setLoading(false);
-      return;
-    }
-
-    // Read token from cookie as fallback (store is empty after full page reload)
+    // Read token from cookie (available both when store is empty and when
+    // pre-hydrated from SSR with accessToken: null)
     function getTokenFromCookie(): string | null {
       if (typeof document === "undefined") return null;
       const match = document.cookie.match(/(?:^|;\s*)access_token=([^;]+)/);
       return match ? match[1] : null;
+    }
+
+    // Already hydrated with a token in memory — nothing to do
+    if (user && useAuthStore.getState().accessToken) {
+      setLoading(false);
+      return;
     }
 
     let cancelled = false;
@@ -58,6 +60,18 @@ export function useAuthHydration() {
       if (!cookieToken) {
         clearAuth();
         router.replace(ROUTES.LOGIN);
+        return;
+      }
+
+      // SSR pre-hydrated the user but not the token (server can't expose the
+      // token to client memory directly). Reuse the cookie token and skip the
+      // /auth/me call to avoid an extra round-trip.
+      // Guard: only trust the SSR user if it has a valid id (guards against
+      // broken SSR mapping where fields are undefined/empty).
+      if (user && user.id) {
+        if (!cancelled) {
+          setAuth(user, cookieToken);
+        }
         return;
       }
 
@@ -77,6 +91,7 @@ export function useAuthHydration() {
             documentNumber: raw.epeDni ?? "",
             onboardingCompleted: raw.onboardingCompleted,
             role: raw.roles?.[0] ?? { code: "", name: "" },
+            authSource: raw.authSource ?? "LOCAL",
           };
           // Reuse cookie token — /auth/me does not issue a new one
           setAuth(mappedUser, cookieToken);

@@ -17,6 +17,7 @@ export const ROUTES = {
   REPORTS: "/reports",
   ADMIN_USERS: "/admin/users",
   ADMIN_CONFIG: "/admin/config",
+  ADMIN_AUDIT_LOGS: "/admin/audit-logs",
   PROFILE: "/profile",
 } as const;
 
@@ -66,6 +67,7 @@ export const ROLE_MENU_MAP: Record<RoleCode, MenuItem[]> = {
     { label: "Cola de Pagos", href: ROUTES.PAYMENTS, icon: "CreditCard" },
     { label: "Presupuesto", href: ROUTES.BUDGET, icon: "DollarSign" },
     { label: "Catálogos", href: ROUTES.CATALOGS, icon: "BookOpen" },
+    { label: "Usuarios", href: ROUTES.ADMIN_USERS, icon: "Users" },
   ],
   AUDITOR_DIRECCION: [
     { label: "Reportes", href: ROUTES.REPORTS, icon: "BarChart3" },
@@ -74,6 +76,7 @@ export const ROLE_MENU_MAP: Record<RoleCode, MenuItem[]> = {
   ADMIN_SISTEMA: [
     { label: "Usuarios", href: ROUTES.ADMIN_USERS, icon: "Users" },
     { label: "Configuración", href: ROUTES.ADMIN_CONFIG, icon: "Settings" },
+    { label: "Log de auditoría", href: ROUTES.ADMIN_AUDIT_LOGS, icon: "ClipboardList" },
   ],
 };
 
@@ -87,3 +90,7 @@ export const PUBLIC_PATHS = [
   "/favicon.ico",
   "/api/health",
 ] as const;
+
+/** Inactivity session management */
+export const INACTIVITY_WARNING_MINUTES = 110;
+export const INACTIVITY_TIMEOUT_MINUTES = 120;

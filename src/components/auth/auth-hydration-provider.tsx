@@ -83,7 +83,7 @@ export function AuthHydrationProvider({
             email: raw.email,
             documentNumber: raw.epeDni ?? "",
             onboardingCompleted: raw.onboardingCompleted,
-            authSource: (raw.authSource ?? "EPE") as "LOCAL" | "EPE",
+            authSource: (raw.authSource ?? "LOCAL") as "LOCAL" | "EPE",
             role: raw.roles?.[0] ?? { code: "", name: "" },
           };
           setAuth(mappedUser, cookieToken!);
@@ -119,10 +119,10 @@ export function AuthHydrationProvider({
               email: raw.email,
               documentNumber: raw.epeDni ?? "",
               onboardingCompleted: raw.onboardingCompleted,
-              authSource: (raw.authSource ?? "EPE") as "LOCAL" | "EPE",
-              role: raw.roles?.[0] ?? { code: "", name: "" },
-            };
-            setAuth(mappedUser, refreshData.accessToken);
+            authSource: (raw.authSource ?? "LOCAL") as "LOCAL" | "EPE",
+            role: raw.roles?.[0] ?? { code: "", name: "" },
+          };
+          setAuth(mappedUser, refreshData.accessToken);
           } catch {
             // Refresh also failed — session truly expired; middleware redirects
             if (!cancelled) setLoading(false);

@@ -31,7 +31,8 @@ type MockState = { user: AuthUser | null; isLoading: boolean }
 
 function mockStore(state: MockState) {
   vi.mocked(useAuthStore).mockImplementation(
-    (selector: (s: MockState) => unknown) => selector(state)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (selector: (s: any) => unknown) => selector(state)
   )
 }
 

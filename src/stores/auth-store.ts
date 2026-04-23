@@ -16,6 +16,7 @@ interface AuthActions {
   setAuth: (user: AuthUser, token: string) => void;
   clearAuth: () => void;
   setLoading: (loading: boolean) => void;
+  patchUser: (partial: Partial<AuthUser>) => void;
 }
 
 type AuthStore = AuthState & AuthActions;
@@ -37,4 +38,9 @@ export const useAuthStore = create<AuthStore>((set) => ({
 
   setLoading: (isLoading) =>
     set({ isLoading }),
+
+  patchUser: (partial) =>
+    set((state) => ({
+      user: state.user ? { ...state.user, ...partial } : null,
+    })),
 }));

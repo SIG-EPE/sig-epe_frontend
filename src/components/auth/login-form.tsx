@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useRef } from "react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -48,6 +48,12 @@ type LoginFormValues = z.infer<typeof loginSchema>;
 export function LoginForm() {
   const setAuth = useAuthStore((state) => state.setAuth);
   const [showPassword, setShowPassword] = useState(false);
+  // Track whether navigation is in progress so the button stays disabled
+  // after a successful login until the full page reload completes.
+  // react-hook-form resets isSubmitting when the Promise resolves, but
+  // window.location.href navigation happens after that — creating a brief
+  // window where the button re-enables. This ref prevents that.
+  const isNavigating = useRef(false);
 
   const form = useForm<LoginFormValues>({
     resolver: zodResolver(loginSchema),
@@ -57,7 +63,7 @@ export function LoginForm() {
     },
   });
 
-  const isSubmitting = form.formState.isSubmitting;
+  const isSubmitting = form.formState.isSubmitting || isNavigating.current;
 
   async function onSubmit(values: LoginFormValues) {
     try {
@@ -71,6 +77,12 @@ export function LoginForm() {
       // only for server-side route protection — not a security regression.
       document.cookie = `access_token=${data.accessToken}; path=/; SameSite=Strict; Max-Age=900`;
 
+      // Mark navigating BEFORE window.location.href so the button stays
+      // disabled during the full page reload. react-hook-form's isSubmitting
+      // resets to false when this async function returns, but the browser has
+      // not yet left the page — the ref keeps the button disabled.
+      isNavigating.current = true;
+
       // Use full page navigation so the browser sends the cookie in the very
       // first request and the Edge middleware can read it without timing issues.
       if (data.onboardingRequired) {
@@ -79,6 +91,9 @@ export function LoginForm() {
         window.location.href = getRoleHomePath(normalizedUser.role?.code ?? "");
       }
     } catch (error) {
+      // Navigation did not happen — reset the flag so the button re-enables
+      isNavigating.current = false;
+
       if (error instanceof ApiRequestError) {
         if (error.status === 401) {
           toast.error("DNI o contraseña incorrectos");

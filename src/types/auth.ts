@@ -17,8 +17,8 @@ export interface AuthUser {
   documentNumber: string;
   role?: AuthUserRole;
   onboardingCompleted: boolean;
-  /** Auth source — preparatory field for Sprint 2 (GET /auth/me). Undefined until backend exposes it. */
-  authSource?: 'LOCAL' | 'EPE';
+  /** Auth source — required since GET /auth/me always returns it. */
+  authSource: 'LOCAL' | 'EPE';
 }
 
 /** POST /auth/login request body */
