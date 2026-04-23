@@ -1,19 +1,13 @@
 "use client";
 
 import { useState } from "react";
-import { Plus, UserMinus, Shield } from "lucide-react";
-import { toast } from "sonner";
+import { Plus } from "lucide-react";
 
 import {
   useUsers,
-  useAssignRole,
-  useDeactivateUser,
-  useCreateUser,
   type UserDto,
-  type CreateUserPayload,
 } from "@/hooks/use-users";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
@@ -24,252 +18,17 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
+import { UserRow } from "@/components/admin/users/user-row";
+import { CreateUserModal } from "@/components/admin/users/create-user-modal";
+import { EditUserModal } from "@/components/admin/users/edit-user-modal";
+import { DeactivateUserModal } from "@/components/admin/users/deactivate-user-modal";
+import { ReactivateUserModal } from "@/components/admin/users/reactivate-user-modal";
 
 // -------------------------------------------------------
 // Constants
 // -------------------------------------------------------
 
-const ROLES = [
-  { code: "SOLICITANTE_EPE", label: "Solicitante EPE" },
-  { code: "PATROCINADOR", label: "Patrocinador" },
-  { code: "GIOF_GESTOR", label: "GIOF Gestor" },
-  { code: "AUDITOR_DIRECCION", label: "Auditor Dirección" },
-  { code: "ADMIN_SISTEMA", label: "Admin Sistema" },
-] as const;
-
 const PAGE_SIZE = 20;
-
-// -------------------------------------------------------
-// CreateUserModal
-// -------------------------------------------------------
-
-interface CreateUserModalProps {
-  onClose: () => void;
-  onSuccess: () => void;
-}
-
-function CreateUserModal({ onClose, onSuccess }: CreateUserModalProps) {
-  const { createUser, isLoading } = useCreateUser();
-  const [form, setForm] = useState<CreateUserPayload>({
-    firstName: "",
-    lastName: "",
-    epeDni: "",
-    email: "",
-    roleCode: "SOLICITANTE_EPE",
-  });
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    try {
-      await createUser({
-        ...form,
-        email: form.email?.trim() || undefined,
-      });
-      toast.success("Usuario creado exitosamente");
-      onSuccess();
-      onClose();
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Error al crear usuario");
-    }
-  };
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-      <div className="w-full max-w-md rounded-xl bg-background p-6 shadow-xl">
-        <h2 className="mb-4 text-lg font-semibold">Agregar usuario</h2>
-
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <div className="grid grid-cols-2 gap-3">
-            <div className="space-y-1">
-              <label className="text-sm font-medium">Nombre *</label>
-              <input
-                className="w-full rounded-md border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
-                value={form.firstName}
-                onChange={(e) => setForm((f) => ({ ...f, firstName: e.target.value }))}
-                required
-              />
-            </div>
-            <div className="space-y-1">
-              <label className="text-sm font-medium">Apellido *</label>
-              <input
-                className="w-full rounded-md border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
-                value={form.lastName}
-                onChange={(e) => setForm((f) => ({ ...f, lastName: e.target.value }))}
-                required
-              />
-            </div>
-          </div>
-
-          <div className="space-y-1">
-            <label className="text-sm font-medium">DNI EPE *</label>
-            <input
-              className="w-full rounded-md border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
-              value={form.epeDni}
-              onChange={(e) => setForm((f) => ({ ...f, epeDni: e.target.value }))}
-              required
-            />
-          </div>
-
-          <div className="space-y-1">
-            <label className="text-sm font-medium">Email (opcional)</label>
-            <input
-              type="email"
-              className="w-full rounded-md border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
-              value={form.email}
-              onChange={(e) => setForm((f) => ({ ...f, email: e.target.value }))}
-            />
-          </div>
-
-          <div className="space-y-1">
-            <label className="text-sm font-medium">Rol *</label>
-            <select
-              className="w-full rounded-md border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
-              value={form.roleCode}
-              onChange={(e) => setForm((f) => ({ ...f, roleCode: e.target.value }))}
-              required
-            >
-              {ROLES.map((r) => (
-                <option key={r.code} value={r.code}>
-                  {r.label}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <p className="text-xs text-muted-foreground">
-            La contraseña temporal será <strong>Temporal2030#</strong>. El usuario deberá cambiarla en su primer acceso.
-          </p>
-
-          <div className="flex justify-end gap-2 pt-2">
-            <Button type="button" variant="outline" onClick={onClose} disabled={isLoading}>
-              Cancelar
-            </Button>
-            <Button type="submit" disabled={isLoading}>
-              {isLoading ? "Creando..." : "Crear usuario"}
-            </Button>
-          </div>
-        </form>
-      </div>
-    </div>
-  );
-}
-
-// -------------------------------------------------------
-// UserRow
-// -------------------------------------------------------
-
-interface UserRowProps {
-  user: UserDto;
-  onRefetch: () => void;
-}
-
-function UserRow({ user, onRefetch }: UserRowProps) {
-  const { assignRole } = useAssignRole();
-  const { deactivateUser } = useDeactivateUser();
-
-  const handleAssignRole = async (roleCode: string) => {
-    try {
-      await assignRole(user.id, roleCode);
-      toast.success(`Rol actualizado a ${ROLES.find((r) => r.code === roleCode)?.label ?? roleCode}`);
-      onRefetch();
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Error al asignar rol");
-    }
-  };
-
-  const handleDeactivate = async () => {
-    if (!window.confirm(`¿Desactivar al usuario ${user.firstName} ${user.lastName}?`)) return;
-    try {
-      await deactivateUser(user.id);
-      toast.success("Usuario desactivado");
-      onRefetch();
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Error al desactivar usuario");
-    }
-  };
-
-  const currentRole = user.roles[0];
-  const createdDate = new Date(user.createdAt).toLocaleDateString("es-AR", {
-    day: "2-digit",
-    month: "2-digit",
-    year: "numeric",
-  });
-
-  return (
-    <TableRow>
-      <TableCell className="font-medium">
-        {user.firstName} {user.lastName}
-      </TableCell>
-      <TableCell className="text-muted-foreground">{user.epeDni ?? "—"}</TableCell>
-      <TableCell>{user.email ?? <span className="text-muted-foreground">—</span>}</TableCell>
-      <TableCell>
-        {currentRole ? (
-          <Badge variant="secondary" className="text-xs">
-            {ROLES.find((r) => r.code === currentRole.code)?.label ?? currentRole.name}
-          </Badge>
-        ) : (
-          <span className="text-muted-foreground text-xs">Sin rol</span>
-        )}
-      </TableCell>
-      <TableCell>
-        <Badge
-          variant={user.isActive ? "default" : "destructive"}
-          className="text-xs"
-        >
-          {user.isActive ? "Activo" : "Inactivo"}
-        </Badge>
-      </TableCell>
-      <TableCell className="text-xs text-muted-foreground">{createdDate}</TableCell>
-      <TableCell className="text-right">
-        <div className="flex items-center justify-end gap-2">
-          {/* Assign role */}
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button variant="ghost" size="sm" className="h-8 w-8 p-0">
-                <Shield className="h-4 w-4" />
-                <span className="sr-only">Asignar rol</span>
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              <DropdownMenuLabel>Asignar rol</DropdownMenuLabel>
-              <DropdownMenuSeparator />
-              {ROLES.map((r) => (
-                <DropdownMenuItem
-                  key={r.code}
-                  onClick={() => void handleAssignRole(r.code)}
-                  className={currentRole?.code === r.code ? "font-semibold" : ""}
-                >
-                  {r.label}
-                </DropdownMenuItem>
-              ))}
-            </DropdownMenuContent>
-          </DropdownMenu>
-
-          {/* Deactivate */}
-          {user.isActive && (
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-8 w-8 p-0 text-destructive hover:text-destructive"
-              onClick={() => void handleDeactivate()}
-            >
-              <UserMinus className="h-4 w-4" />
-              <span className="sr-only">Desactivar</span>
-            </Button>
-          )}
-        </div>
-      </TableCell>
-    </TableRow>
-  );
-}
 
 // -------------------------------------------------------
 // Page
@@ -278,10 +37,17 @@ function UserRow({ user, onRefetch }: UserRowProps) {
 export default function AdminUsersPage() {
   const [page, setPage] = useState(1);
   const [showCreateModal, setShowCreateModal] = useState(false);
+  const [editingUser, setEditingUser] = useState<UserDto | null>(null);
+  const [deactivatingUser, setDeactivatingUser] = useState<UserDto | null>(null);
+  const [reactivatingUser, setReactivatingUser] = useState<UserDto | null>(null);
 
   const { users, total, isLoading, error, refetch } = useUsers(page, PAGE_SIZE);
 
   const totalPages = Math.ceil(total / PAGE_SIZE);
+
+  const handleEdit = (user: UserDto) => setEditingUser(user);
+  const handleDeactivate = (user: UserDto) => setDeactivatingUser(user);
+  const handleReactivate = (user: UserDto) => setReactivatingUser(user);
 
   return (
     <div className="space-y-6">
@@ -297,7 +63,7 @@ export default function AdminUsersPage() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight">Gestión de Usuarios</h1>
+          <h1 className="text-2xl font-bold tracking-tight">Gestion de Usuarios</h1>
           <p className="text-muted-foreground">
             Administra los usuarios del sistema SIG-EPE.{" "}
             {!isLoading && (
@@ -360,7 +126,14 @@ export default function AdminUsersPage() {
                 </TableRow>
               ) : (
                 users.map((user) => (
-                  <UserRow key={user.id} user={user} onRefetch={refetch} />
+                  <UserRow
+                    key={user.id}
+                    user={user}
+                    onRefetch={refetch}
+                    onEdit={handleEdit}
+                    onDeactivate={handleDeactivate}
+                    onReactivate={handleReactivate}
+                  />
                 ))
               )}
             </TableBody>
@@ -370,7 +143,7 @@ export default function AdminUsersPage() {
           {totalPages > 1 && (
             <div className="mt-4 flex items-center justify-between text-sm text-muted-foreground">
               <span>
-                Página {page} de {totalPages}
+                Pagina {page} de {totalPages}
               </span>
               <div className="flex gap-2">
                 <Button
@@ -395,11 +168,35 @@ export default function AdminUsersPage() {
         </CardContent>
       </Card>
 
-      {/* Create user modal */}
+      {/* Modals */}
       {showCreateModal && (
         <CreateUserModal
           onClose={() => setShowCreateModal(false)}
           onSuccess={refetch}
+        />
+      )}
+
+      {editingUser && (
+        <EditUserModal
+          user={editingUser}
+          onClose={() => setEditingUser(null)}
+          onSuccess={() => { setEditingUser(null); refetch(); }}
+        />
+      )}
+
+      {deactivatingUser && (
+        <DeactivateUserModal
+          user={deactivatingUser}
+          onClose={() => setDeactivatingUser(null)}
+          onSuccess={() => { setDeactivatingUser(null); refetch(); }}
+        />
+      )}
+
+      {reactivatingUser && (
+        <ReactivateUserModal
+          user={reactivatingUser}
+          onClose={() => setReactivatingUser(null)}
+          onSuccess={() => { setReactivatingUser(null); refetch(); }}
         />
       )}
     </div>
