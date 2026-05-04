@@ -21,6 +21,19 @@ export interface AuthUser {
   authSource: 'LOCAL' | 'EPE';
 }
 
+/** Raw backend auth user shape before frontend normalization. */
+export interface BackendAuthUser {
+  id: string;
+  firstName: string | null;
+  lastName: string | null;
+  email: string | null;
+  epeDni: string | null;
+  onboardingCompleted: boolean;
+  authSource?: 'LOCAL' | 'EPE';
+  role?: AuthUserRole;
+  roles?: AuthUserRole[];
+}
+
 /** POST /auth/login request body */
 export interface LoginRequest {
   identifier: string;
@@ -30,8 +43,10 @@ export interface LoginRequest {
 /** POST /auth/login response body */
 export interface LoginResponse {
   accessToken: string;
+  accessTokenExpiresAt: string;
+  sessionExpiresAt: string;
   /** Backend returns roles as an array; normalize to `role` before calling setAuth */
-  user: AuthUser & { roles?: AuthUserRole[] };
+  user: BackendAuthUser;
   onboardingRequired: boolean;
 }
 

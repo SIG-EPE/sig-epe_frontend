@@ -8,8 +8,8 @@ export const metadata: Metadata = {
 export default async function LoginPage({
   searchParams,
 }: {
-  searchParams: Promise<{ reason?: string }>;
+  searchParams: Promise<{ reason?: string; token?: string }>;
 }) {
-  const { reason } = await searchParams;
-  return <LoginPageClient reason={reason} />;
+  const { reason, token } = await searchParams;
+  return <LoginPageClient reason={reason} ssoToken={token} />;
 }

@@ -1,5 +1,7 @@
-import { useAuthStore } from "@/stores/auth-store";
 import type { ApiResponse, ApiError } from "@/types/api";
+import type { LoginResponse } from "@/types/auth";
+import { useAuthStore } from "@/stores/auth-store";
+import { syncAuthSession, toSessionSyncInput } from "@/lib/auth/session-sync";
 
 // -------------------------------------------------------
 // API Client — SIG-EPE
@@ -7,6 +9,19 @@ import type { ApiResponse, ApiError } from "@/types/api";
 // -------------------------------------------------------
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3001";
+
+const AUTH_HEADER_EXCLUDED_PATHS = [
+  "/auth/login",
+  "/auth/logout",
+  "/auth/refresh",
+  "/auth/sso",
+] as const;
+
+function shouldAttachAuthHeader(path: string): boolean {
+  return !AUTH_HEADER_EXCLUDED_PATHS.some((excludedPath) =>
+    path.startsWith(excludedPath),
+  );
+}
 
 /** Thrown on API errors so callers can inspect status + body */
 export class ApiRequestError extends Error {
@@ -35,13 +50,11 @@ async function refreshAccessToken(): Promise<string | null> {
 
     if (!res.ok) return null;
 
-    const json = (await res.json()) as ApiResponse<{ accessToken: string }>;
+    const json = (await res.json()) as ApiResponse<LoginResponse>;
     const newToken = json.data.accessToken;
 
-    // Update Zustand store with new token
-    const { user, setAuth } = useAuthStore.getState();
-    if (user && newToken) {
-      setAuth(user, newToken);
+    if (newToken) {
+      syncAuthSession(toSessionSyncInput(json.data));
     }
 
     return newToken;
@@ -63,7 +76,11 @@ async function apiFetch<T>(
   if (!headers.has("Content-Type") && !(options.body instanceof FormData)) {
     headers.set("Content-Type", "application/json");
   }
-  if (accessToken) {
+  if (
+    accessToken &&
+    shouldAttachAuthHeader(path) &&
+    !headers.has("Authorization")
+  ) {
     headers.set("Authorization", `Bearer ${accessToken}`);
   }
 

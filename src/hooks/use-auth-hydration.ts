@@ -6,7 +6,13 @@ import { useRouter } from "next/navigation";
 import { useAuthStore } from "@/stores/auth-store";
 import { api, ApiRequestError } from "@/lib/api-client";
 import { ROUTES } from "@/lib/constants";
-import type { AuthUser } from "@/types/auth";
+import type { LoginResponse } from "@/types/auth";
+import {
+  getAccessTokenFromCookie,
+  normalizeAuthUser,
+  syncAuthSession,
+  toSessionSyncInput,
+} from "@/lib/auth/session-sync";
 
 // -------------------------------------------------------
 // useAuthHydration — rehydrates the auth store on mount
@@ -17,16 +23,15 @@ import type { AuthUser } from "@/types/auth";
 // to restore the user + token into the store.
 // -------------------------------------------------------
 
-/** Shape returned directly by GET /auth/me (after TransformInterceptor unwrap) */
-interface MeResponseRaw {
-  id: string;
-  firstName: string | null;
-  lastName: string | null;
-  email: string | null;
-  epeDni: string | null;
-  onboardingCompleted: boolean;
-  roles: { code: string; name: string }[];
-  authSource?: 'LOCAL' | 'EPE';
+type MeResponseRaw = LoginResponse["user"];
+
+function clearSessionCookiesInBrowser(): void {
+  if (typeof document === "undefined") return;
+
+  for (const name of ["access_token", "refresh_token"]) {
+    document.cookie = `${name}=; path=/; max-age=0; SameSite=Strict`;
+    document.cookie = `${name}=; path=/; max-age=0; SameSite=Lax`;
+  }
 }
 
 export function useAuthHydration() {
@@ -37,14 +42,6 @@ export function useAuthHydration() {
   const clearAuth = useAuthStore((state) => state.clearAuth);
 
   useEffect(() => {
-    // Read token from cookie (available both when store is empty and when
-    // pre-hydrated from SSR with accessToken: null)
-    function getTokenFromCookie(): string | null {
-      if (typeof document === "undefined") return null;
-      const match = document.cookie.match(/(?:^|;\s*)access_token=([^;]+)/);
-      return match ? match[1] : null;
-    }
-
     // Already hydrated with a token in memory — nothing to do
     if (user && useAuthStore.getState().accessToken) {
       setLoading(false);
@@ -54,13 +51,25 @@ export function useAuthHydration() {
     let cancelled = false;
 
     async function hydrate() {
-      const cookieToken = getTokenFromCookie();
+      const cookieToken = getAccessTokenFromCookie();
 
-      // No token anywhere — clear and redirect
+      // No access cookie — try refresh continuity before redirecting
       if (!cookieToken) {
-        clearAuth();
-        router.replace(ROUTES.LOGIN);
-        return;
+        try {
+          const refreshed = await api.post<LoginResponse>("/auth/refresh", {});
+
+          if (cancelled) return;
+
+          syncAuthSession(toSessionSyncInput(refreshed));
+          return;
+        } catch {
+          if (!cancelled) {
+            clearSessionCookiesInBrowser();
+            clearAuth();
+            router.replace(ROUTES.LOGIN);
+          }
+          return;
+        }
       }
 
       // SSR pre-hydrated the user but not the token (server can't expose the
@@ -82,29 +91,30 @@ export function useAuthHydration() {
         });
 
         if (!cancelled) {
-          // Map backend shape → AuthUser shape
-          const mappedUser: AuthUser = {
-            id: raw.id,
-            firstName: raw.firstName ?? "",
-            lastName: raw.lastName ?? "",
-            email: raw.email,
-            documentNumber: raw.epeDni ?? "",
-            onboardingCompleted: raw.onboardingCompleted,
-            role: raw.roles?.[0] ?? { code: "", name: "" },
-            authSource: raw.authSource ?? "LOCAL",
-          };
-          // Reuse cookie token — /auth/me does not issue a new one
-          setAuth(mappedUser, cookieToken);
+          setAuth(normalizeAuthUser(raw), cookieToken);
         }
       } catch (error) {
         if (cancelled) return;
 
         if (error instanceof ApiRequestError && error.status === 401) {
-          clearAuth();
-          router.replace(ROUTES.LOGIN);
+          try {
+            const refreshed = await api.post<LoginResponse>("/auth/refresh", {});
+
+            if (cancelled) return;
+
+            syncAuthSession(toSessionSyncInput(refreshed));
+          } catch {
+            if (!cancelled) {
+              clearSessionCookiesInBrowser();
+              clearAuth();
+              router.replace(ROUTES.LOGIN);
+            }
+          }
         } else {
           // Network error or unexpected — still clear loading so UI doesn't hang
-          setLoading(false);
+          if (!cancelled) {
+            setLoading(false);
+          }
         }
       }
     }

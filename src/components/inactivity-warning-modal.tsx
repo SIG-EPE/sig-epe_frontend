@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Dialog,
   DialogContent,
@@ -8,13 +8,12 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-  DialogClose,
 } from "@/components/ui/dialog";
 
 interface InactivityWarningModalProps {
   open: boolean;
   remainingSeconds: number;
-  onContinue: () => void;
+  onContinue: () => void | Promise<void>;
   onLogout: () => void;
 }
 
@@ -25,21 +24,33 @@ export function InactivityWarningModal({
   onLogout,
 }: InactivityWarningModalProps) {
   const [countdown, setCountdown] = useState(remainingSeconds);
+  const logoutCalledRef = useRef(false);
 
   useEffect(() => {
     if (!open) return;
+
+    logoutCalledRef.current = false;
+    const deadline = Date.now() + remainingSeconds * 1000;
     setCountdown(remainingSeconds);
+
     const interval = setInterval(() => {
-      setCountdown((prev) => {
-        if (prev <= 1) {
-          clearInterval(interval);
-          return 0;
-        }
-        return prev - 1;
-      });
+      const secondsLeft = Math.max(0, Math.ceil((deadline - Date.now()) / 1000));
+      setCountdown(secondsLeft);
+
+      if (secondsLeft === 0) {
+        clearInterval(interval);
+      }
     }, 1000);
+
     return () => clearInterval(interval);
   }, [open, remainingSeconds]);
+
+  useEffect(() => {
+    if (!open || countdown > 0 || logoutCalledRef.current) return;
+
+    logoutCalledRef.current = true;
+    onLogout();
+  }, [open, countdown, onLogout]);
 
   const minutes = Math.floor(countdown / 60);
   const seconds = countdown % 60;
@@ -57,13 +68,17 @@ export function InactivityWarningModal({
           </DialogDescription>
         </DialogHeader>
         <DialogFooter>
-          <DialogClose className="bg-muted text-foreground hover:bg-muted/90 h-10 px-4 rounded-md">
+          <button
+            type="button"
+            onClick={onContinue}
+            className="bg-muted text-foreground hover:bg-muted/90 h-10 rounded-md px-4"
+          >
             Mantener sesion
-          </DialogClose>
+          </button>
           <button
             type="button"
             onClick={onLogout}
-            className="bg-primary text-primary-foreground hover:bg-primary/90 h-10 px-4 rounded-md"
+            className="bg-primary text-primary-foreground hover:bg-primary/90 h-10 rounded-md px-4"
           >
             Cerrar sesion
           </button>

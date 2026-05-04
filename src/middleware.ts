@@ -41,9 +41,15 @@ export async function middleware(request: NextRequest) {
   }
 
   const token = request.cookies.get("access_token")?.value;
+  const refreshToken = request.cookies.get("refresh_token")?.value;
+  const hasSessionContinuity = Boolean(refreshToken);
 
   // /login: if the user already has a valid token, redirect to the appropriate destination
   if (pathname === "/login") {
+    if (request.nextUrl.searchParams.has("token")) {
+      return NextResponse.next();
+    }
+
     if (token) {
       const tokenPayload = await verifyToken(token);
       if (tokenPayload?.scope === "full") {
@@ -59,13 +65,20 @@ export async function middleware(request: NextRequest) {
 
   // Protected routes: require a valid token
   if (!token) {
+    if (hasSessionContinuity) {
+      return NextResponse.next();
+    }
+
     return NextResponse.redirect(new URL("/login", request.url));
   }
 
   const tokenPayload = await verifyToken(token);
 
   if (!tokenPayload) {
-    // Invalid / expired token → redirect to login
+    if (hasSessionContinuity) {
+      return NextResponse.next();
+    }
+
     return NextResponse.redirect(new URL("/login", request.url));
   }
 

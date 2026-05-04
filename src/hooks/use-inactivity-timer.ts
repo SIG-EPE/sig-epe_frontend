@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
+
 import { InactivityTimer } from "@/lib/auth/inactivity-timer";
 
 interface UseInactivityTimerOptions {
@@ -13,15 +14,23 @@ export function useInactivityTimer({
   onTimeout,
 }: UseInactivityTimerOptions) {
   const timerRef = useRef<InactivityTimer | null>(null);
+  const onWarningRef = useRef(onWarning);
+  const onTimeoutRef = useRef(onTimeout);
+
+  onWarningRef.current = onWarning;
+  onTimeoutRef.current = onTimeout;
 
   useEffect(() => {
-    timerRef.current = new InactivityTimer(onWarning, onTimeout);
+    timerRef.current = new InactivityTimer(
+      () => onWarningRef.current(),
+      () => onTimeoutRef.current(),
+    );
     timerRef.current.start();
 
     return () => {
       timerRef.current?.stop();
     };
-  }, [onWarning, onTimeout]);
+  }, []);
 
   return {
     reset: () => timerRef.current?.reset(),

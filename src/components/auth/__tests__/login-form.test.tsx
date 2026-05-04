@@ -10,6 +10,7 @@ import userEvent from "@testing-library/user-event";
 // Mock api-client — NO es un flujo de auth real, es test de UI
 vi.mock("@/lib/api-client", () => ({
   api: {
+    get: vi.fn(),
     post: vi.fn(),
   },
   ApiRequestError: class ApiRequestError extends Error {
@@ -21,13 +22,6 @@ vi.mock("@/lib/api-client", () => ({
       this.name = "ApiRequestError";
     }
   },
-}));
-
-// Mock auth-store
-vi.mock("@/stores/auth-store", () => ({
-  useAuthStore: vi.fn((selector: (state: { setAuth: ReturnType<typeof vi.fn> }) => unknown) =>
-    selector({ setAuth: vi.fn() })
-  ),
 }));
 
 // Mock sonner
@@ -46,6 +40,7 @@ vi.mock("next/navigation", () => ({
 
 // Mock ROUTES constant
 vi.mock("@/lib/constants", () => ({
+  TOKEN_KEY: "access_token",
   ROUTES: {
     LOGIN: "/login",
     ONBOARDING: "/onboarding",
@@ -58,6 +53,8 @@ vi.mock("@/lib/constants", () => ({
 // -------------------------------------------------------
 
 import { LoginForm } from "@/components/auth/login-form";
+import { useAuthStore } from "@/stores/auth-store";
+import type { AuthUser } from "@/types/auth";
 
 function renderLoginForm() {
   return render(<LoginForm />);
@@ -70,6 +67,8 @@ function renderLoginForm() {
 describe("LoginForm", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    useAuthStore.setState({ user: null, accessToken: null, isLoading: true });
+    document.cookie = "access_token=; path=/; max-age=0; SameSite=Strict";
   });
 
   it("✅ Renderiza los campos DNI/correo y contraseña", () => {
@@ -155,5 +154,51 @@ describe("LoginForm", () => {
     await user.click(hideButton);
 
     expect(passwordInput).toHaveAttribute("type", "password");
+  });
+
+  it("limpia sesión previa local si falla el handoff SSO inválido", async () => {
+    const { api, ApiRequestError } = await import("@/lib/api-client");
+    const { toast } = await import("sonner");
+    const mockPost = vi.mocked(api.post);
+    const mockGet = vi.mocked(api.get);
+
+    const previousUser: AuthUser = {
+      id: "user-previo",
+      firstName: "Usuario",
+      lastName: "Previo",
+      email: "previo@example.com",
+      documentNumber: "12345678",
+      onboardingCompleted: true,
+      authSource: "LOCAL",
+      role: { code: "ADMIN_SISTEMA", name: "Administrador del Sistema" },
+    };
+
+    useAuthStore.getState().setAuth(previousUser, "old-access-token");
+    document.cookie = "access_token=old-access-token; path=/; SameSite=Strict";
+
+    mockPost.mockResolvedValue(undefined);
+    mockGet.mockRejectedValue(
+      new ApiRequestError(401, {
+        statusCode: 401,
+        message: "Invalid handoff token",
+        error: "Unauthorized",
+        timestamp: new Date().toISOString(),
+        path: "/auth/sso",
+      }),
+    );
+
+    render(<LoginForm ssoToken="invalid" />);
+
+    await waitFor(() => {
+      expect(mockGet).toHaveBeenCalledWith("/auth/sso?token=invalid");
+    });
+
+    expect(mockPost).toHaveBeenCalledWith("/auth/logout");
+    expect(useAuthStore.getState().user).toBeNull();
+    expect(useAuthStore.getState().accessToken).toBeNull();
+    expect(document.cookie).not.toContain("old-access-token");
+    expect(toast.error).toHaveBeenCalledWith(
+      "El enlace de acceso es inválido o ya expiró. Iniciá sesión manualmente.",
+    );
   });
 });

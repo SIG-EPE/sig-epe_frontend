@@ -1,18 +1,32 @@
 "use server";
 
 import { cookies } from "next/headers";
-import { redirect } from "next/navigation";
+
+function expireSessionCookie(name: string) {
+  return {
+    name,
+    value: "",
+    options: {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "lax" as const,
+      path: "/",
+      maxAge: 0,
+    },
+  };
+}
 
 /**
- * Clears the session httpOnly cookie (access_token) and redirects to login.
+ * Clears every session cookie used by the app so inactivity logout cannot
+ * silently continue through refresh on the next navigation.
  */
 export async function clearSessionAction() {
   const cookieStore = await cookies();
-  cookieStore.set("access_token", "", {
-    httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
-    sameSite: "lax",
-    maxAge: 0,
-  });
-  redirect("/login?reason=inactividad");
+
+  for (const cookie of [
+    expireSessionCookie("access_token"),
+    expireSessionCookie("refresh_token"),
+  ]) {
+    cookieStore.set(cookie.name, cookie.value, cookie.options);
+  }
 }

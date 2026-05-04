@@ -1,15 +1,16 @@
 // -------------------------------------------------------
 // InactivityTimer — auto-logout after 2h of inactivity
 //
-// - warning at 110 min (10 min before expiry)
+// - warning at 60 min (60 min before expiry)
 // - logout at 120 min
-// - any user interaction resets both timers
+// - activity before warning resets both timers
+// - once warning is visible, only explicit session continuation resets timers
 // -------------------------------------------------------
 
 export type InactivityEvent = "warning" | "expire";
 
 export interface InactivityTimerOptions {
-  /** Time in ms before warning fires (default: 110 min) */
+  /** Time in ms before warning fires (default: 60 min) */
   warningMs?: number;
   /** Time in ms before expiry fires (default: 120 min) */
   expireMs?: number;
@@ -26,7 +27,8 @@ export class InactivityTimer {
   private expireMs: number;
   private events: string[];
   private isRunning = false;
-  private resetHandler: () => void;
+  private isWarningActive = false;
+  private activityHandler: (event: Event) => void;
 
   constructor(
     onWarning: () => void,
@@ -35,16 +37,17 @@ export class InactivityTimer {
   ) {
     this.onWarning = onWarning;
     this.onExpire = onExpire;
-    this.warningMs = options.warningMs ?? 110 * 60 * 1000; // 110 min
+    this.warningMs = options.warningMs ?? 60 * 60 * 1000; // 60 min
     this.expireMs = options.expireMs ?? 120 * 60 * 1000; // 120 min
     this.events = options.events ?? [
-      "mousemove",
+      "pointerdown",
       "keydown",
       "click",
       "scroll",
       "touchstart",
+      "visibilitychange",
     ];
-    this.resetHandler = this.reset.bind(this);
+    this.activityHandler = this.handleActivity.bind(this);
   }
 
   /** Start the inactivity timers */
@@ -53,7 +56,7 @@ export class InactivityTimer {
     this.isRunning = true;
     this.scheduleTimers();
     this.events.forEach((event) => {
-      window.addEventListener(event, this.resetHandler, { passive: true });
+      window.addEventListener(event, this.activityHandler, { passive: true });
     });
   }
 
@@ -61,20 +64,37 @@ export class InactivityTimer {
   stop(): void {
     this.isRunning = false;
     this.clearTimers();
+    this.isWarningActive = false;
     this.events.forEach((event) => {
-      window.removeEventListener(event, this.resetHandler);
+      window.removeEventListener(event, this.activityHandler);
     });
   }
 
   /** Manually reset both timers (called on user activity) */
   reset(): void {
     if (!this.isRunning) return;
+    this.isWarningActive = false;
     this.clearTimers();
     this.scheduleTimers();
   }
 
+  private handleActivity(event: Event): void {
+    if (!this.isRunning || this.isWarningActive) return;
+
+    if (
+      event.type === "visibilitychange" &&
+      typeof document !== "undefined" &&
+      document.visibilityState !== "visible"
+    ) {
+      return;
+    }
+
+    this.reset();
+  }
+
   private scheduleTimers(): void {
     this.warningTimer = setTimeout(() => {
+      this.isWarningActive = true;
       this.onWarning();
     }, this.warningMs);
 

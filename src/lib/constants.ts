@@ -92,5 +92,5 @@ export const PUBLIC_PATHS = [
 ] as const;
 
 /** Inactivity session management */
-export const INACTIVITY_WARNING_MINUTES = 110;
+export const INACTIVITY_WARNING_MINUTES = 60;
 export const INACTIVITY_TIMEOUT_MINUTES = 120;

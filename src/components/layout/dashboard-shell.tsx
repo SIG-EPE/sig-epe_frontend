@@ -2,6 +2,7 @@
 
 import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+
 import { Separator } from "@/components/ui/separator";
 import {
   SidebarInset,
@@ -13,11 +14,14 @@ import { useAuthHydration } from "@/hooks/use-auth-hydration";
 import { useInactivityTimer } from "@/hooks/use-inactivity-timer";
 import { InactivityWarningModal } from "@/components/inactivity-warning-modal";
 import { clearSessionAction } from "@/actions/auth.actions";
+import { api } from "@/lib/api-client";
+import { syncAuthSession, toSessionSyncInput } from "@/lib/auth/session-sync";
 import { useAuthStore } from "@/stores/auth-store";
-import type { AuthUser } from "@/types/auth";
+import type { AuthUser, LoginResponse } from "@/types/auth";
 import {
   INACTIVITY_WARNING_MINUTES,
   INACTIVITY_TIMEOUT_MINUTES,
+  ROUTES,
 } from "@/lib/constants";
 
 // -------------------------------------------------------
@@ -41,8 +45,13 @@ export function DashboardShell({
   // useRef ensures we only write once (not on every re-render).
   // Runs synchronously before first render — no useEffect needed.
   const hydrated = useRef(false);
+  const loggingOut = useRef(false);
   if (initialUser && !hydrated.current) {
-    useAuthStore.setState({ user: initialUser, accessToken: null, isLoading: false });
+    useAuthStore.setState({
+      user: initialUser,
+      accessToken: null,
+      isLoading: false,
+    });
     hydrated.current = true;
   } else if (!hydrated.current) {
     hydrated.current = true;
@@ -56,9 +65,30 @@ export function DashboardShell({
   const [showWarning, setShowWarning] = useState(false);
 
   async function handleLogout() {
-    await clearSessionAction();
-    clearAuth();
-    router.replace("/login?reason=inactivity");
+    if (loggingOut.current) return;
+    loggingOut.current = true;
+    setShowWarning(false);
+
+    try {
+      await api.post("/auth/logout");
+    } catch {
+      // Backend logout is best effort; local cleanup still has to win.
+    } finally {
+      await clearSessionAction();
+      clearAuth();
+      router.replace(`${ROUTES.LOGIN}?reason=inactividad`);
+    }
+  }
+
+  async function handleContinueSession() {
+    try {
+      const refreshed = await api.post<LoginResponse>("/auth/refresh", {});
+      syncAuthSession(toSessionSyncInput(refreshed));
+      setShowWarning(false);
+      reset();
+    } catch {
+      await handleLogout();
+    }
   }
 
   const { reset } = useInactivityTimer({
@@ -87,10 +117,7 @@ export function DashboardShell({
       <InactivityWarningModal
         open={showWarning}
         remainingSeconds={WARNING_COUNTDOWN_SECONDS}
-        onContinue={() => {
-          setShowWarning(false);
-          reset();
-        }}
+        onContinue={handleContinueSession}
         onLogout={handleLogout}
       />
     </SidebarProvider>
