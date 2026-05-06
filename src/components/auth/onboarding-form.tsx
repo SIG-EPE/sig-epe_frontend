@@ -8,7 +8,7 @@ import { Eye, EyeOff, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 
 import { api, ApiRequestError } from "@/lib/api-client";
-import { useAuthStore } from "@/stores/auth-store";
+import { syncAuthSession, toSessionSyncInput } from "@/lib/auth/session-sync";
 import { getRoleHomePath } from "@/lib/auth/role-redirect";
 import type { LoginResponse } from "@/types/auth";
 
@@ -29,8 +29,6 @@ import {
   FormLabel,
   FormMessage,
 } from "@/components/ui/form";
-import { PasswordChecklist } from "@/components/auth/password-checklist";
-
 import { Mail, ShieldCheck, Bell } from "lucide-react";
 
 // -------------------------------------------------------
@@ -50,13 +48,7 @@ const localSchema = z
       .string()
       .min(1, "Ingresa tu correo electrónico")
       .email("Ingresa un correo válido"),
-    newPassword: z
-      .string()
-      .min(8, "La contraseña debe tener al menos 8 caracteres")
-      .regex(
-        /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^a-zA-Z0-9])/,
-        "Debe incluir mayúscula, minúscula, número y carácter especial",
-      ),
+    newPassword: z.string().min(1, "Ingresa tu contraseña"),
     confirmPassword: z.string().min(1, "Confirma tu contraseña"),
   })
   .refine((data) => data.newPassword === data.confirmPassword, {
@@ -81,7 +73,6 @@ export function OnboardingForm({
   epeUserName,
   authSource,
 }: OnboardingFormProps) {
-  const setAuth = useAuthStore((state) => state.setAuth);
   const [showNewPassword, setShowNewPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
 
@@ -96,9 +87,6 @@ export function OnboardingForm({
   });
 
   const isSubmitting = form.formState.isSubmitting;
-  const watchedPassword = isLocal
-    ? ((form.watch("newPassword" as keyof OnboardingFormValues) as string) ?? "")
-    : "";
 
   async function onSubmit(values: OnboardingFormValues) {
     try {
@@ -111,13 +99,8 @@ export function OnboardingForm({
 
       const data = await api.post<LoginResponse>("/auth/onboarding", payload);
 
+      syncAuthSession(toSessionSyncInput(data));
       const normalizedUser = { ...data.user, role: data.user.roles?.[0] ?? data.user.role };
-      setAuth(normalizedUser, data.accessToken);
-
-      // Set cookie so Next.js middleware (Edge Runtime) can verify the new JWT
-      // with scope=full. Without this, the middleware still reads the old
-      // scope=onboarding token and redirects back to /onboarding in a loop.
-      document.cookie = `access_token=${data.accessToken}; path=/; SameSite=Strict; Max-Age=900`;
 
       toast.success("¡Perfil configurado exitosamente!");
 
@@ -209,7 +192,7 @@ export function OnboardingForm({
                         <div className="relative">
                           <Input
                             type={showNewPassword ? "text" : "password"}
-                            placeholder="Mínimo 8 caracteres"
+                            placeholder="Ingresa tu contraseña"
                             autoComplete="new-password"
                             {...field}
                           />
@@ -235,7 +218,7 @@ export function OnboardingForm({
                           </Button>
                         </div>
                       </FormControl>
-                      <PasswordChecklist password={watchedPassword} />
+                      <FormMessage />
                     </FormItem>
                   )}
                 />

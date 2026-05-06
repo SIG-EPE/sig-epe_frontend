@@ -27,7 +27,8 @@ export function LineDetailPage() {
 
   const { line, isLoading, error, refetch } = usePlanningLine(id);
   const { user } = useAuthStore();
-  const isGiof = user?.role?.code === "GIOF";
+  const isGiof =
+    user?.role?.code === "GIOF" || user?.role?.code === "GIOF_GESTOR";
 
   if (isLoading) {
     return (
@@ -126,6 +127,7 @@ export function LineDetailPage() {
           totalCost={line.total_cost}
           entries={line.monthly_distribution}
           editable={isGiof && line.status === "DRAFT"}
+          lineStatus={line.status}
         />
       </div>
 

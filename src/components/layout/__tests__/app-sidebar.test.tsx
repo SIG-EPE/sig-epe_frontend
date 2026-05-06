@@ -108,6 +108,7 @@ const adminUser: AuthUser = {
     name: "Administrador del Sistema",
   },
   onboardingCompleted: true,
+  authSource: 'LOCAL',
 };
 
 const solicitanteUser: AuthUser = {
@@ -121,6 +122,7 @@ const solicitanteUser: AuthUser = {
     name: "Solicitante EPE",
   },
   onboardingCompleted: true,
+  authSource: 'LOCAL',
 };
 
 // -------------------------------------------------------

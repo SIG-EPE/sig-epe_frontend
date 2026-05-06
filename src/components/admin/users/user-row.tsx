@@ -28,7 +28,6 @@ import { MoreHorizontal, Pencil, Shield, UserMinus, Mail } from "lucide-react";
 // Roles disponibles para asignacion
 const ROLES = [
   { code: "SOLICITANTE_EPE", label: "Solicitante EPE" },
-  { code: "PATROCINADOR", label: "Patrocinador" },
   { code: "GIOF_GESTOR", label: "GIOF Gestor" },
   { code: "AUDITOR_DIRECCION", label: "Auditor Direccion" },
   { code: "ADMIN_SISTEMA", label: "Admin Sistema" },
@@ -37,10 +36,9 @@ const ROLES = [
 // Jerarquia de roles: nivel mas alto = mas poder
 // RN: actorLevel > targetLevel para poder gestionar (strict >, no >=)
 const ROLE_LEVELS: Record<string, number> = {
-  ADMIN_SISTEMA: 5,
-  GIOF_GESTOR: 4,
-  AUDITOR_DIRECCION: 3,
-  PATROCINADOR: 2,
+  ADMIN_SISTEMA: 4,
+  GIOF_GESTOR: 3,
+  AUDITOR_DIRECCION: 2,
   SOLICITANTE_EPE: 1,
 };
 

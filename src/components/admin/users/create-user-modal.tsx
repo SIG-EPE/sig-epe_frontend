@@ -17,7 +17,6 @@ interface CreateUserModalProps {
 // Roles disponibles para creacion de usuarios
 const ROLES = [
   { code: "SOLICITANTE_EPE", label: "Solicitante EPE" },
-  { code: "PATROCINADOR", label: "Patrocinador" },
   { code: "GIOF_GESTOR", label: "GIOF Gestor" },
   { code: "AUDITOR_DIRECCION", label: "Auditor Direccion" },
   { code: "ADMIN_SISTEMA", label: "Admin Sistema" },

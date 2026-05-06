@@ -12,6 +12,10 @@ export const ROUTES = {
   MANAGEMENT: "/management",
   PAYMENTS: "/payments",
   BUDGET: "/budget",
+  BUDGET_FISCAL_YEARS: "/budget/fiscal-years",
+  BUDGET_ALLOCATIONS: "/budget/allocations",
+  BUDGET_PLANNING: "/budget/planning",
+  BUDGET_PLANNING_NEW: "/budget/planning/new",
   CATALOGS: "/catalogs",
   ACCOUNTABILITY: "/accountability",
   REPORTS: "/reports",
@@ -26,7 +30,6 @@ export type AppRoute = (typeof ROUTES)[keyof typeof ROUTES];
 /** Role codes — must match backend RoleCode enum */
 const ROLE_CODE = {
   SOLICITANTE_EPE: "SOLICITANTE_EPE",
-  PATROCINADOR: "PATROCINADOR",
   GIOF_GESTOR: "GIOF_GESTOR",
   AUDITOR_DIRECCION: "AUDITOR_DIRECCION",
   ADMIN_SISTEMA: "ADMIN_SISTEMA",
@@ -38,7 +41,6 @@ export { ROLE_CODE };
 /** Human-readable labels in Spanish */
 export const ROLE_LABELS: Record<RoleCode, string> = {
   SOLICITANTE_EPE: "Solicitante EPE",
-  PATROCINADOR: "Patrocinador",
   GIOF_GESTOR: "GIOF Gestor",
   AUDITOR_DIRECCION: "Auditor / Dirección",
   ADMIN_SISTEMA: "Administrador del Sistema",
@@ -57,15 +59,14 @@ export const ROLE_MENU_MAP: Record<RoleCode, MenuItem[]> = {
     { label: "Mis Solicitudes", href: ROUTES.REQUESTS, icon: "FileText" },
     { label: "Nueva Solicitud", href: ROUTES.REQUESTS_NEW, icon: "FilePlus" },
   ],
-  PATROCINADOR: [
-    { label: "Dashboard", href: ROUTES.DASHBOARD, icon: "LayoutDashboard" },
-    { label: "Rendiciones", href: ROUTES.ACCOUNTABILITY, icon: "Receipt" },
-  ],
   GIOF_GESTOR: [
     { label: "Bandeja de Gestión", href: ROUTES.MANAGEMENT, icon: "ClipboardList" },
     { label: "Solicitudes", href: ROUTES.REQUESTS, icon: "FileText" },
     { label: "Cola de Pagos", href: ROUTES.PAYMENTS, icon: "CreditCard" },
-    { label: "Presupuesto", href: ROUTES.BUDGET, icon: "DollarSign" },
+    { label: "Resumen de Saldos", href: ROUTES.BUDGET, icon: "DollarSign" },
+    { label: "Años Fiscales", href: ROUTES.BUDGET_FISCAL_YEARS, icon: "CalendarDays" },
+    { label: "Plan Operativo (POA)", href: ROUTES.BUDGET_PLANNING, icon: "ListChecks" },
+    { label: "Aportes de Socios", href: ROUTES.BUDGET_ALLOCATIONS, icon: "Handshake" },
     { label: "Catálogos", href: ROUTES.CATALOGS, icon: "BookOpen" },
     { label: "Usuarios", href: ROUTES.ADMIN_USERS, icon: "Users" },
   ],

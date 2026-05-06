@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import { User, Mail, CreditCard, Shield, Lock, Briefcase } from 'lucide-react'
+import { User, Mail, CreditCard, Shield, Briefcase } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { useAuthStore } from '@/stores/auth-store'
@@ -226,28 +226,6 @@ export function ProfileView() {
         </CardContent>
       </Card>
 
-      {/* Card 4 — Security */}
-      <Card>
-        <CardHeader>
-          <CardTitle>Seguridad</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <TooltipProvider>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                {/* span wrapper required — disabled buttons don't fire pointer events */}
-                <span className="inline-block">
-                  <Button disabled variant="outline">
-                    <Lock className="mr-2 h-4 w-4" />
-                    Cambiar contraseña
-                  </Button>
-                </span>
-              </TooltipTrigger>
-              <TooltipContent>Disponible próximamente</TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
-        </CardContent>
-      </Card>
     </div>
   )
 }
