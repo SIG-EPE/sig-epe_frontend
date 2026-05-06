@@ -98,7 +98,7 @@ export function MonthlyTable({
     if (!lineId) return;
     try {
       await upsert(lineId, {
-        monthly: Object.entries(plannedAmounts).map(([month, planned_amount]) => ({
+        distribution: Object.entries(plannedAmounts).map(([month, planned_amount]) => ({
           month: Number(month),
           planned_amount,
         })),

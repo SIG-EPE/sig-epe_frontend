@@ -1217,7 +1217,7 @@ export const useRemoveLinePartner = useRemoveLineFundingSource;
 // -------------------------------------------------------
 
 export interface UpsertMonthlyDto {
-  monthly: Array<{ month: number; planned_amount: number }>;
+  distribution: Array<{ month: number; planned_amount: number }>;
 }
 
 export function useUpsertMonthly() {
