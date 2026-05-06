@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import React, { useState, useCallback } from "react";
 import { toast } from "sonner";
 import { Save, Loader2, ChevronRight, ChevronDown, Plus } from "lucide-react";
 import {
@@ -136,7 +136,7 @@ export function MonthlyTable({
             const isExpanded = expandedMonths.has(month);
             const canAddExecution = lineStatus === "APPROVED" && isGiofGestor && !!lineId;
             return (
-              <>
+              <React.Fragment key={month}>
                 <TableRow
                   key={month}
                   className="cursor-pointer hover:bg-muted/50"
@@ -227,7 +227,7 @@ export function MonthlyTable({
                     </TableCell>
                   </TableRow>
                 )}
-              </>
+              </React.Fragment>
             );
           })}
         </TableBody>
