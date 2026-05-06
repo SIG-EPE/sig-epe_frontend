@@ -125,7 +125,7 @@ export function LineDetailPage() {
         <MonthlyTable
           lineId={line.id}
           totalCost={line.total_cost}
-          entries={line.monthly_distribution}
+          entries={line.monthlyDistribution ?? line.monthly_distribution}
           editable={isGiof && line.status === "DRAFT"}
           lineStatus={line.status}
         />

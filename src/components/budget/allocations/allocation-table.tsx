@@ -178,7 +178,7 @@ export function AllocationTable({ fiscalYearId, onRefetch }: AllocationTableProp
                   {alloc.fiscal_year?.year ?? getFiscalYearLabel(alloc.fiscal_year_id)}
                 </TableCell>
                 <TableCell>
-                  {alloc.funding_source?.name ?? getFundingSourceName(alloc.funding_source_id)}
+                  {alloc.fundingSource?.name ?? getFundingSourceName(alloc.funding_source_id)}
                 </TableCell>
                 <TableCell className="text-right font-mono">
                   {formatCurrency(alloc.total_contribution)}
@@ -240,7 +240,7 @@ export function AllocationTable({ fiscalYearId, onRefetch }: AllocationTableProp
         <ConfirmarEliminacion
           allocation={deletingAllocation}
           partnerName={
-            deletingAllocation.funding_source?.name ?? getFundingSourceName(deletingAllocation.funding_source_id)
+            deletingAllocation.fundingSource?.name ?? getFundingSourceName(deletingAllocation.funding_source_id)
           }
           open
           onClose={() => setDeletingAllocation(null)}

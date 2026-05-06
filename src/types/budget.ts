@@ -66,7 +66,8 @@ export interface PlanningLine {
   organizational_unit?: { id: string; code: string; name: string; short_name?: string };
   budget_program?: { id: string; code: string; name: string } | null;
   budget_category?: { id: string; code: string; name: string };
-  monthly_distribution?: MonthlyEntry[];
+  monthlyDistribution?: MonthlyEntry[];
+  monthly_distribution?: MonthlyEntry[]; // alias snake_case — usar monthlyDistribution
   fundingSources?: FundingSourceAllocation[];
   partners?: FundingSourceAllocation[];
 }
@@ -83,9 +84,10 @@ export interface FundingSourceAllocation {
   id: string;
   planning_line_id: string;
   funding_source_id: string;
-  allocated_amount: number;
-  percentage: number;
-  funding_source?: { id: string; code: string; name: string };
+  allocated_amount?: number | null;
+  percentage?: number | null;
+  /** Relación cargada por TypeORM — el backend serializa en camelCase */
+  fundingSource?: { id: string; code: string; name: string };
 }
 
 /** Ejecución manual de presupuesto por mes */

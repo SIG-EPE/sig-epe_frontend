@@ -251,7 +251,8 @@ export type LineFundingSourceEntry = {
   funding_source_id: string;
   allocated_amount: number;
   percentage: number;
-  funding_source?: { id: string; code: string; name: string };
+  /** Relación cargada por TypeORM — camelCase */
+  fundingSource?: { id: string; code: string; name: string };
 };
 
 /** @deprecated Use LineFundingSourceEntry */
@@ -380,6 +381,53 @@ export function useSubmitPlanningLine(id: string) {
   };
 
   return { submit, isLoading };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function toReadableMessage(value: unknown): string | null {
+  if (typeof value === "string" && value.trim().length > 0) {
+    return value;
+  }
+
+  if (Array.isArray(value)) {
+    const messages = value
+      .filter((item): item is string => typeof item === "string")
+      .map((item) => item.trim())
+      .filter((item) => item.length > 0);
+
+    return messages.length > 0 ? messages.join("\n") : null;
+  }
+
+  return null;
+}
+
+export function getSubmitPlanningLineErrorMessage(error: unknown): string | null {
+  if (error instanceof ApiRequestError) {
+    return toReadableMessage(error.body.message) ?? toReadableMessage(error.message);
+  }
+
+  if (isRecord(error)) {
+    const response = error.response;
+    if (isRecord(response)) {
+      const data = response.data;
+      if (isRecord(data)) {
+        const responseMessage = toReadableMessage(data.message);
+        if (responseMessage) return responseMessage;
+      }
+    }
+
+    const directMessage = toReadableMessage(error.message);
+    if (directMessage) return directMessage;
+  }
+
+  if (error instanceof Error) {
+    return toReadableMessage(error.message);
+  }
+
+  return null;
 }
 
 // -------------------------------------------------------
@@ -672,8 +720,8 @@ export interface FundingSourceAllocation {
   created_by: string | null;
   created_at: string;
   updated_at: string;
-  // Relaciones opcionales que el backend puede incluir
-  funding_source?: { id: string; code: string; name: string };
+  // Relaciones opcionales que el backend puede incluir (camelCase — TypeORM)
+  fundingSource?: { id: string; code: string; name: string };
   fiscal_year?: { id: string; year: number };
 }
 
@@ -1055,10 +1103,11 @@ export interface LineFundingSource {
   id: string;
   funding_source_id: string;
   planning_line_id: string;
-  allocated_amount: number;
-  percentage: number;
+  allocated_amount?: number | null;
+  percentage?: number | null;
   created_at: string;
-  funding_source?: { id: string; code: string; name: string };
+  /** Relación cargada por TypeORM — el backend serializa en camelCase */
+  fundingSource?: { id: string; code: string; name: string };
 }
 
 /** @deprecated Use LineFundingSource */
@@ -1169,13 +1218,11 @@ export function useAddLineFundingSource() {
   const add = async (
     lineId: string,
     fundingSourceId: string,
-    allocatedAmount: number,
   ): Promise<LineFundingSource> => {
     setIsLoading(true);
     try {
       return await api.post<LineFundingSource>(`/budget/planning-lines/${lineId}/funding-sources`, {
         funding_source_id: fundingSourceId,
-        allocated_amount: allocatedAmount,
       });
     } finally {
       setIsLoading(false);

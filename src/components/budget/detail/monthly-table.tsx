@@ -50,7 +50,7 @@ export function MonthlyTable({
     const initial: Record<number, number> = {};
     for (let m = 1; m <= 12; m++) {
       const entry = entries.find((e) => e.month === m);
-      initial[m] = entry?.planned_amount ?? 0;
+      initial[m] = Number(entry?.planned_amount ?? 0);
     }
     return initial;
   });
@@ -66,12 +66,12 @@ export function MonthlyTable({
   const { user } = useAuthStore();
   const isGiofGestor = user?.role?.code === "GIOF_GESTOR" || user?.role?.code === "GIOF";
 
-  const totalPlanned = Object.values(plannedAmounts).reduce((s, v) => s + v, 0);
+  const totalPlanned = Object.values(plannedAmounts).reduce((s, v) => s + Number(v), 0);
   const totalExecuted = entries.reduce((s, e) => {
     const manualSum = manualExecutions
       .filter((m) => m.month === e.month)
-      .reduce((acc, m) => acc + m.amount, 0);
-    return s + e.executed_amount + manualSum;
+      .reduce((acc, m) => acc + Number(m.amount), 0);
+    return s + Number(e.executed_amount) + manualSum;
   }, 0);
   const totalBalance = totalPlanned - totalExecuted;
 
@@ -127,10 +127,10 @@ export function MonthlyTable({
             const month = index + 1;
             const planned = plannedAmounts[month] ?? 0;
             const entry = entries.find((e) => e.month === month);
-            const apiExecuted = entry?.executed_amount ?? 0;
+            const apiExecuted = Number(entry?.executed_amount ?? 0);
             const manualSum = manualExecutions
               .filter((me) => me.month === month)
-              .reduce((acc, me) => acc + me.amount, 0);
+              .reduce((acc, me) => acc + Number(me.amount), 0);
             const executed = apiExecuted + manualSum;
             const balance = planned - executed;
             const isExpanded = expandedMonths.has(month);

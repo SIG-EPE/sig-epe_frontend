@@ -12,8 +12,11 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import { RejectModal } from "@/components/budget/planning/reject-modal";
-import { useSubmitPlanningLine } from "@/hooks/use-budget";
-import { useApprovePlanningLine } from "@/hooks/use-budget";
+import {
+  getSubmitPlanningLineErrorMessage,
+  useApprovePlanningLine,
+  useSubmitPlanningLine,
+} from "@/hooks/use-budget";
 import type { PlanningLine } from "@/hooks/use-budget";
 
 interface LineActionsProps {
@@ -34,8 +37,8 @@ export function LineActions({ line, isGiof, onRefetch }: LineActionsProps) {
       await submit();
       toast.success("Linea enviada");
       onRefetch();
-    } catch {
-      toast.error("Error al enviar la linea");
+    } catch (error) {
+      toast.error(getSubmitPlanningLineErrorMessage(error) ?? "Error al enviar la linea");
     }
   }
 
