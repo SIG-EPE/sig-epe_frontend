@@ -281,7 +281,7 @@ export function MonthlyTable({
                 ? `La programación (${formatCurrency(totalPlanned)}) excede el costo total de la línea (${formatCurrency(totalCost)})`
                 : totalPlanned === 0
                 ? "Ingrese los montos programados por mes"
-                : `Total programado: ${formatCurrency(totalPlanned)} de ${formatCurrency(totalCost)}`}
+                : `Te queda: ${formatCurrency((totalCost ?? 0) - totalPlanned)} de ${formatCurrency(totalCost)}`}
             </p>
           )}
           <Button
