@@ -20,7 +20,7 @@ import {
   usePlanningLineStats,
 } from "@/hooks/use-budget";
 import { ROUTES } from "@/lib/constants";
-import { Plus, FileText, Send, CheckCircle } from "lucide-react";
+import { Plus, FileText, Send, CheckCircle2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 // -------------------------------------------------------
@@ -89,7 +89,6 @@ export function PlanningLinesPage() {
       key: "DRAFT",
       label: "Borrador",
       icon: FileText,
-      iconClass: "text-muted-foreground",
       count: stats?.DRAFT.count ?? 0,
       total: stats?.DRAFT.total ?? 0,
     },
@@ -97,15 +96,13 @@ export function PlanningLinesPage() {
       key: "SUBMITTED",
       label: "Enviados",
       icon: Send,
-      iconClass: "text-blue-600",
       count: stats?.SUBMITTED.count ?? 0,
       total: stats?.SUBMITTED.total ?? 0,
     },
     {
       key: "APPROVED",
       label: "Aprobados",
-      icon: CheckCircle,
-      iconClass: "text-green-600",
+      icon: CheckCircle2,
       count: stats?.APPROVED.count ?? 0,
       total: stats?.APPROVED.total ?? 0,
     },
@@ -145,24 +142,24 @@ export function PlanningLinesPage() {
         </div>
       ) : (
         <div className="grid grid-cols-3 gap-4">
-          {kpiCards.map(({ key, label, icon: Icon, iconClass, count, total: cardTotal }) => (
+          {kpiCards.map(({ key, label, icon: Icon, count, total: cardTotal }) => (
             <Card
               key={key}
               className={cn(
                 "cursor-pointer transition-all hover:shadow-md",
                 activeStatusFilter === key
-                  ? "border-primary ring-2 ring-primary"
+                  ? "ring-2 ring-primary"
                   : "border-border",
               )}
               onClick={() => handleKpiClick(key)}
             >
-              <CardContent className="flex items-center gap-4 p-4">
-                <Icon className={cn("h-8 w-8 shrink-0", iconClass)} />
-                <div className="min-w-0">
-                  <p className="text-sm font-medium text-muted-foreground">{label}</p>
-                  <p className="text-2xl font-bold">{count}</p>
-                  <p className="truncate text-xs text-muted-foreground">{formatCurrency(cardTotal)}</p>
+              <CardContent className="p-6">
+                <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10">
+                  <Icon className="h-5 w-5 text-primary" />
                 </div>
+                <p className="mt-4 text-3xl font-bold text-foreground">{count}</p>
+                <p className="text-sm text-muted-foreground">{label}</p>
+                <p className="text-sm text-muted-foreground">{formatCurrency(cardTotal)}</p>
               </CardContent>
             </Card>
           ))}
