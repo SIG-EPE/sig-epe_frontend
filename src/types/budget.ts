@@ -110,6 +110,13 @@ export interface PlanningLineStats {
   REJECTED: { count: number; total: number };
 }
 
+/** Respuesta del backend cuando las estadísticas vienen envueltas */
+export interface PlanningLineStatsResponse {
+  fiscal_year_id?: string;
+  org_unit_id?: string | null;
+  stats: PlanningLineStats;
+}
+
 /** Verificación de techo presupuestal */
 export interface CeilingCheck {
   ceiling: number | null;
@@ -127,5 +134,4 @@ export interface Partner {
   percentage: number;
   partner?: { id: string; code: string; name: string };
 }
-
 

@@ -18,7 +18,44 @@ import type {
   FundingSourceAllocation as LineFundingSourceAllocationFromTypes,
   ManualExecution,
   PlanningLineStats,
+  PlanningLineStatsResponse,
 } from "@/types/budget";
+
+const PLANNING_LINE_STAT_KEYS = ["DRAFT", "SUBMITTED", "APPROVED", "REJECTED"] as const;
+
+const EMPTY_PLANNING_LINE_STATS: PlanningLineStats = {
+  DRAFT: { count: 0, total: 0 },
+  SUBMITTED: { count: 0, total: 0 },
+  APPROVED: { count: 0, total: 0 },
+  REJECTED: { count: 0, total: 0 },
+};
+
+function isObjectRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function isPlanningLineStatsResponse(value: unknown): value is PlanningLineStatsResponse {
+  return isObjectRecord(value) && isObjectRecord(value.stats);
+}
+
+function normalizePlanningLineStats(
+  response: PlanningLineStats | PlanningLineStatsResponse,
+): PlanningLineStats {
+  const source = isPlanningLineStatsResponse(response) ? response.stats : response;
+  const sourceRecord: Record<string, unknown> = isObjectRecord(source) ? source : {};
+
+  return PLANNING_LINE_STAT_KEYS.reduce<PlanningLineStats>((acc, key) => {
+    const bucket = sourceRecord[key];
+    const bucketRecord = isObjectRecord(bucket) ? bucket : {};
+    const count = typeof bucketRecord.count === "number" ? bucketRecord.count : 0;
+    const total = typeof bucketRecord.total === "number" ? bucketRecord.total : 0;
+
+    return {
+      ...acc,
+      [key]: { count, total },
+    };
+  }, EMPTY_PLANNING_LINE_STATS);
+}
 
 // -------------------------------------------------------
 // Hook para obtener el balance presupuestal
@@ -1296,15 +1333,20 @@ export function usePlanningLineStats(fiscalYearId?: string, orgUnitId?: string) 
   const accessToken = useAuthStore((s) => s.accessToken);
 
   const refetch = useCallback(async () => {
-    if (!fiscalYearId || authIsLoading || !accessToken) return;
+    if (!fiscalYearId) {
+      setData(null);
+      setError(null);
+      return;
+    }
+    if (authIsLoading || !accessToken) return;
     setIsLoading(true);
     setError(null);
     try {
       const params = new URLSearchParams();
       params.set("fiscal_year_id", fiscalYearId);
       if (orgUnitId) params.set("org_unit_id", orgUnitId);
-      const result = await api.get<PlanningLineStats>(`/budget/planning-lines/stats?${params.toString()}`);
-      setData(result);
+      const result = await api.get<PlanningLineStats | PlanningLineStatsResponse>(`/budget/planning-lines/stats?${params.toString()}`);
+      setData(normalizePlanningLineStats(result));
     } catch (e) {
       // Si el endpoint aún no existe, no crashear — retornar null silenciosamente
       setData(null);

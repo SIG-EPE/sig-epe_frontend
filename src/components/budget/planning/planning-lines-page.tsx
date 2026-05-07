@@ -31,8 +31,8 @@ import { cn } from "@/lib/utils";
 const STATUS_OPTIONS = [
   { value: "all", label: "Todos los estados" },
   { value: "DRAFT", label: "Borrador" },
-  { value: "SUBMITTED", label: "Enviado" },
-  { value: "APPROVED", label: "Aprobado" },
+  { value: "SUBMITTED", label: "Enviados" },
+  { value: "APPROVED", label: "Aprobados" },
   { value: "REJECTED", label: "Rechazado" },
 ];
 
@@ -45,23 +45,22 @@ export function PlanningLinesPage() {
 
   const fiscalYears = fiscalYearsData ?? [];
   const orgUnits = orgUnitsData ?? [];
+  const activeFiscalYear = fiscalYears.find((fy) => fy.status === "ACTIVE");
 
   // Leer filtros desde URL
   const fiscalYearId = searchParams.get("fiscal_year_id") ?? "";
   const orgUnitId = searchParams.get("org_unit_id") ?? "";
   const status = searchParams.get("status") ?? "";
+  const effectiveStatus = status || undefined;
+  const effectiveFiscalYearId = fiscalYearId || activeFiscalYear?.id;
 
   const [page, setPage] = useState(1);
-  const [activeStatusFilter, setActiveStatusFilter] = useState<string | null>(null);
 
   // Stats para KPI cards
   const { data: stats, isLoading: statsLoading } = usePlanningLineStats(
-    fiscalYearId || undefined,
+    effectiveFiscalYearId,
     orgUnitId || undefined,
   );
-
-  // Combinar filtro URL con filtro KPI card
-  const effectiveStatus = activeStatusFilter ?? (status || undefined);
 
   const { lines, total, limit, isLoading, refetch } = usePlanningLines({
     fiscal_year_id: fiscalYearId || undefined,
@@ -78,7 +77,9 @@ export function PlanningLinesPage() {
       params.delete(key);
     }
     params.delete("page"); // reset page when filter changes
-    router.push(`/budget/planning?${params.toString()}`);
+    setPage(1);
+    const queryString = params.toString();
+    router.push(queryString ? `/budget/planning?${queryString}` : "/budget/planning");
   }
 
   const totalPages = Math.ceil(total / limit);
@@ -113,8 +114,7 @@ export function PlanningLinesPage() {
   }
 
   function handleKpiClick(key: string) {
-    setActiveStatusFilter((prev) => (prev === key ? null : key));
-    setPage(1);
+    updateFilter("status", status === key ? "all" : key);
   }
 
   return (
@@ -147,18 +147,20 @@ export function PlanningLinesPage() {
               key={key}
               className={cn(
                 "cursor-pointer transition-all hover:shadow-md",
-                activeStatusFilter === key
+                status === key
                   ? "ring-2 ring-primary"
                   : "border-border",
               )}
               onClick={() => handleKpiClick(key)}
             >
               <CardContent className="p-6">
-                <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10">
-                  <Icon className="h-5 w-5 text-primary" />
+                <div className="flex items-center gap-4">
+                  <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10">
+                    <Icon className="h-5 w-5 text-primary" />
+                  </div>
+                  <p className="text-3xl font-bold text-foreground">{count}</p>
                 </div>
-                <p className="mt-4 text-3xl font-bold text-foreground">{count}</p>
-                <p className="text-sm text-muted-foreground">{label}</p>
+                <p className="mt-4 text-sm text-muted-foreground">{label}</p>
                 <p className="text-sm text-muted-foreground">{formatCurrency(cardTotal)}</p>
               </CardContent>
             </Card>
@@ -173,10 +175,10 @@ export function PlanningLinesPage() {
           onValueChange={(val) => updateFilter("fiscal_year_id", val)}
         >
           <SelectTrigger className="w-[180px]">
-            <SelectValue placeholder="Ano fiscal" />
+            <SelectValue placeholder="Año fiscal" />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="all">Todos los anos</SelectItem>
+            <SelectItem value="all">Todos los años</SelectItem>
             {fiscalYears.map((fy) => (
               <SelectItem key={fy.id} value={fy.id}>
                 {fy.year}
@@ -190,7 +192,7 @@ export function PlanningLinesPage() {
           onValueChange={(val) => updateFilter("org_unit_id", val)}
         >
           <SelectTrigger className="w-[220px]">
-            <SelectValue placeholder="Unidad organica" />
+            <SelectValue placeholder="Unidad orgánica" />
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="all">Todas las unidades</SelectItem>
@@ -203,7 +205,7 @@ export function PlanningLinesPage() {
         </Select>
 
         <Select
-          value={status || "all"}
+          value={effectiveStatus ?? "all"}
           onValueChange={(val) => updateFilter("status", val)}
         >
           <SelectTrigger className="w-[180px]">
