@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState } from "react";
 import { ChevronsUpDown, Check, Plus } from "lucide-react";
 import {
   Dialog,
@@ -30,6 +30,7 @@ interface SearchSelectModalProps<T> {
   getItemLabel: (item: T) => string;
   getItemSubLabel?: (item: T) => string;
   searchPlaceholder?: string;
+  testId?: string;
 
   // Callback
   onChange: (id: string | null) => void;
@@ -59,6 +60,7 @@ export function SearchSelectModal<T>({
   getItemLabel,
   getItemSubLabel,
   searchPlaceholder = "Buscar...",
+  testId,
   onChange,
   onClear,
   onCreateNew,
@@ -69,7 +71,7 @@ export function SearchSelectModal<T>({
   const [inlineValue, setInlineValue] = useState("");
   const [isCreating, setIsCreating] = useState(false);
 
-  const filtered = useMemo(() => {
+  const filtered = (() => {
     if (!query.trim()) return items;
     const q = normalize(query);
     return items.filter((item) => {
@@ -79,7 +81,7 @@ export function SearchSelectModal<T>({
         : false;
       return labelMatch || subMatch;
     });
-  }, [items, query, getItemLabel, getItemSubLabel]);
+  })();
 
   const handleSelect = (id: string | null) => {
     onChange(id);
@@ -116,6 +118,7 @@ export function SearchSelectModal<T>({
       {/* Trigger — aspecto de select nativo */}
       <button
         type="button"
+        data-testid={testId}
         disabled={disabled}
         onClick={() => !disabled && setOpen(true)}
         className={[
@@ -176,6 +179,7 @@ export function SearchSelectModal<T>({
                   <button
                     key={id}
                     type="button"
+                    data-testid={testId ? `${testId}-option` : undefined}
                     onClick={() => handleSelect(id)}
                     className={[
                       "w-full flex items-center justify-between px-3 py-2 text-sm text-left transition-colors",

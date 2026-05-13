@@ -61,7 +61,7 @@ export const ROLE_MENU_MAP: Record<RoleCode, MenuItem[]> = {
   ],
   GIOF_GESTOR: [
     { label: "Bandeja de Gestión", href: ROUTES.MANAGEMENT, icon: "ClipboardList" },
-    { label: "Solicitudes", href: ROUTES.REQUESTS, icon: "FileText" },
+    { label: "Bandeja de revisión", href: ROUTES.REQUESTS, icon: "FileText" },
     { label: "Cola de Pagos", href: ROUTES.PAYMENTS, icon: "CreditCard" },
     { label: "Resumen de Saldos", href: ROUTES.BUDGET, icon: "DollarSign" },
     { label: "Años Fiscales", href: ROUTES.BUDGET_FISCAL_YEARS, icon: "CalendarDays" },
@@ -75,6 +75,7 @@ export const ROLE_MENU_MAP: Record<RoleCode, MenuItem[]> = {
     { label: "Dashboard", href: ROUTES.DASHBOARD, icon: "LayoutDashboard" },
   ],
   ADMIN_SISTEMA: [
+    { label: "Bandeja de revisión", href: ROUTES.REQUESTS, icon: "FileText" },
     { label: "Usuarios", href: ROUTES.ADMIN_USERS, icon: "Users" },
     { label: "Configuración", href: ROUTES.ADMIN_CONFIG, icon: "Settings" },
     { label: "Log de auditoría", href: ROUTES.ADMIN_AUDIT_LOGS, icon: "ClipboardList" },

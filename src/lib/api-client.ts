@@ -177,6 +177,14 @@ export const api = {
     });
   },
 
+  postForm<T>(path: string, body: FormData, options?: RequestInit): Promise<T> {
+    return apiFetch<T>(path, {
+      ...options,
+      method: "POST",
+      body,
+    });
+  },
+
   patch<T>(path: string, body?: unknown, options?: RequestInit): Promise<T> {
     return apiFetch<T>(path, {
       ...options,
