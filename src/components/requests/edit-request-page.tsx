@@ -1,17 +1,19 @@
 "use client";
 
-import { useParams, useRouter } from "next/navigation";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { useRequest } from "@/hooks/use-requests";
 import { ROUTES } from "@/lib/constants";
+import { getRequestEditStep } from "@/lib/requests";
 import { REQUEST_STATUS } from "@/types/requests";
 import { RequestForm } from "./request-form";
 
 export function EditRequestPage() {
   const params = useParams<{ id: string }>();
   const router = useRouter();
+  const searchParams = useSearchParams();
   const { request, isLoading, error, refetch } = useRequest(params.id);
 
   if (isLoading) {
@@ -66,7 +68,7 @@ export function EditRequestPage() {
         </Alert>
       )}
 
-      <RequestForm initialRequest={request} mode="edit" />
+      <RequestForm initialRequest={request} mode="edit" activeStep={getRequestEditStep(searchParams.get("step"))} />
     </div>
   );
 }

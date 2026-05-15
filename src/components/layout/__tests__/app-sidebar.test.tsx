@@ -125,6 +125,20 @@ const solicitanteUser: AuthUser = {
   authSource: 'LOCAL',
 };
 
+const giofUser: AuthUser = {
+  id: "3",
+  firstName: "Giof",
+  lastName: "Gestor",
+  email: "giof@example.com",
+  documentNumber: "12345679",
+  role: {
+    code: "GIOF_GESTOR",
+    name: "GIOF Gestor",
+  },
+  onboardingCompleted: true,
+  authSource: "LOCAL",
+};
+
 // -------------------------------------------------------
 // Helpers
 // -------------------------------------------------------
@@ -187,6 +201,25 @@ describe("AppSidebar", () => {
 
     // No debe mostrar items de admin
     expect(screen.queryByText("Usuarios")).not.toBeInTheDocument();
+  });
+
+  it("✅ Muestra Bandeja de Revisión para GIOF sin Bandeja de Gestión", () => {
+    mockUseAuthStore.mockImplementation(
+      (selector: (state: { user: AuthUser }) => unknown) =>
+        selector({ user: giofUser })
+    );
+
+    renderSidebar();
+
+    expect(screen.getByText("Bandeja de Revisión")).toBeInTheDocument();
+    expect(screen.getByText("Cola de Pagos")).toBeInTheDocument();
+    expect(screen.getByText("Resumen de Saldos")).toBeInTheDocument();
+    expect(screen.getByText("Años Fiscales")).toBeInTheDocument();
+    expect(screen.getByText("Plan Operativo (POA)")).toBeInTheDocument();
+    expect(screen.getByText("Aportes de Socios")).toBeInTheDocument();
+    expect(screen.getByText("Catálogos")).toBeInTheDocument();
+    expect(screen.getByText("Usuarios")).toBeInTheDocument();
+    expect(screen.queryByText("Bandeja de Gestión")).not.toBeInTheDocument();
   });
 
   it("✅ Botón chevron llama toggleSidebar al hacer click", async () => {

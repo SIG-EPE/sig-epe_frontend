@@ -1,21 +1,33 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm } from "react-hook-form";
 import { toast } from "sonner";
 import { z } from "zod";
 
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-import { useBudgetPreview, useCreateRequest, useSubmitRequest, useUpdateRequest } from "@/hooks/use-requests";
+import { useBudgetPreview, useCreateRequest, useRequestDocuments, useSubmitRequest, useUpdateRequest } from "@/hooks/use-requests";
 import { ROUTES } from "@/lib/constants";
-import { MONTH_OPTIONS, getApiErrorMessage, isBudgetPreviewBlocking, isKnownBankCode } from "@/lib/requests";
+import {
+  MONTH_OPTIONS,
+  REQUEST_EDIT_STEP,
+  getApiErrorMessage,
+  getMissingDocumentMessagesFromError,
+  getNewAdvancePendingSettlementBlockMessage,
+  getRequestEditStepperItems,
+  getRequiredDocumentChecklist,
+  isBudgetPreviewBlocking,
+  isKnownBankCode,
+  type RequestEditStep,
+} from "@/lib/requests";
 import { useAuthStore } from "@/stores/auth-store";
 import {
   ACCOUNT_TYPE,
@@ -33,6 +45,7 @@ import { BeneficiaryFields } from "./beneficiary-fields";
 import { BudgetPreviewCard } from "./budget-preview-card";
 import { PlanningLineSelector } from "./planning-line-selector";
 import { RequestTypeSelector } from "./request-type-selector";
+import { RequestDocumentsCard } from "./request-documents-card";
 import { SupplierFields } from "./supplier-fields";
 
 const requestFormSchema = z.object({
@@ -45,6 +58,7 @@ const requestFormSchema = z.object({
   budget_month: z.coerce.number().int().min(1, "Selecciona un mes").max(12, "Selecciona un mes válido"),
   requested_amount: z.coerce.number().positive("Ingresa un monto mayor a cero"),
   concept: z.string().min(5, "Describe el concepto o justificación"),
+  scheduled_rendition_at: z.string().optional(),
   beneficiary_name: z.string().optional(),
   beneficiary_document_type: z.union([z.enum([
     BENEFICIARY_DOCUMENT_TYPE.DNI,
@@ -123,7 +137,7 @@ function optionalAccountType(value?: string): AccountType | undefined {
 
 function toCreateDto(values: RequestFormValues): CreateRequestDto {
   const bankCode = values.bank_code && isKnownBankCode(values.bank_code) ? values.bank_code : undefined;
-  return {
+  const dto: CreateRequestDto = {
     request_type: values.request_type,
     budget_planning_line_id: values.budget_planning_line_id,
     budget_month: values.budget_month,
@@ -141,17 +155,26 @@ function toCreateDto(values: RequestFormValues): CreateRequestDto {
     bank_cci: emptyToUndefined(values.bank_cci),
     account_type: optionalAccountType(values.account_type),
   };
+
+  if (values.request_type === REQUEST_TYPE.ADVANCE) {
+    dto.scheduled_rendition_at = emptyToUndefined(values.scheduled_rendition_at);
+  }
+
+  return dto;
 }
 
 interface RequestFormProps {
   initialRequest?: PaymentRequest;
   mode?: "create" | "edit";
+  activeStep?: RequestEditStep;
 }
 
-export function RequestForm({ initialRequest, mode = "create" }: RequestFormProps) {
+export function RequestForm({ initialRequest, mode = "create", activeStep = REQUEST_EDIT_STEP.DATA }: RequestFormProps) {
   const router = useRouter();
   const user = useAuthStore((state) => state.user);
   const [draftId, setDraftId] = useState<string | null>(initialRequest?.id ?? null);
+  const [currentRequest, setCurrentRequest] = useState<PaymentRequest | null>(initialRequest ?? null);
+  const [submitErrors, setSubmitErrors] = useState<string[]>([]);
   const [selectedLine, setSelectedLine] = useState<RequestPlanningLineLookupItem | null>(
     initialRequest?.budgetPlanningLine
       ? {
@@ -180,6 +203,7 @@ export function RequestForm({ initialRequest, mode = "create" }: RequestFormProp
       budget_month: initialRequest?.budget_month ?? new Date().getMonth() + 1,
       requested_amount: Number(initialRequest?.requested_amount ?? 0),
       concept: initialRequest?.concept ?? "",
+      scheduled_rendition_at: initialRequest?.request_type === REQUEST_TYPE.ADVANCE ? initialRequest.scheduled_rendition_at ?? "" : "",
       beneficiary_name: initialRequest?.beneficiary_name ?? "",
       beneficiary_document_type: initialRequest?.beneficiary_document_type ?? "",
       beneficiary_document_number: initialRequest?.beneficiary_document_number ?? "",
@@ -206,28 +230,58 @@ export function RequestForm({ initialRequest, mode = "create" }: RequestFormProp
   const { createRequest, isLoading: creating } = useCreateRequest();
   const { updateRequest, isLoading: updating } = useUpdateRequest();
   const { submitRequest, isLoading: submitting } = useSubmitRequest();
+  const reviewDocuments = useRequestDocuments(draftId ?? undefined);
 
   const isSaving = creating || updating;
+  const stepperItems = getRequestEditStepperItems(mode === "create" ? REQUEST_EDIT_STEP.DATA : activeStep);
+  const checklist = getRequiredDocumentChecklist(currentRequest?.request_type ?? requestType, reviewDocuments.documents);
+  const canSubmitReview = checklist.isComplete && !isBudgetPreviewBlocking(preview.data);
+
+  useEffect(() => {
+    if (activeStep === REQUEST_EDIT_STEP.REVIEW && draftId) {
+      void reviewDocuments.refetch();
+    }
+  }, [activeStep, draftId, reviewDocuments.refetch]);
+
+  function navigateToStep(step: RequestEditStep, requestId = draftId): void {
+    if (!requestId) return;
+    router.push(`${ROUTES.REQUESTS}/${requestId}/edit?step=${step}` as Parameters<typeof router.push>[0]);
+  }
 
   async function saveDraft(values: RequestFormValues): Promise<PaymentRequest> {
     const dto = toCreateDto(values);
     const saved = draftId ? await updateRequest(draftId, dto) : await createRequest(dto);
     setDraftId(saved.id);
+    setCurrentRequest(saved);
     return saved;
   }
 
   async function handleSaveDraft(values: RequestFormValues): Promise<void> {
+    const requestTypeForBlocking = values.request_type;
     try {
       const saved = await saveDraft(values);
       toast.success(`Borrador guardado: ${saved.request_code ?? saved.sequential_number ?? saved.id}`);
+      if (mode === "create") {
+        router.push(`${ROUTES.REQUESTS}/${saved.id}/edit?step=${REQUEST_EDIT_STEP.DOCUMENTS}` as Parameters<typeof router.push>[0]);
+        return;
+      }
+      navigateToStep(REQUEST_EDIT_STEP.DOCUMENTS, saved.id);
     } catch (error) {
-      toast.error(getApiErrorMessage(error));
+      toast.error(getNewAdvancePendingSettlementBlockMessage(requestTypeForBlocking, error) ?? getApiErrorMessage(error));
     }
   }
 
   async function handleSubmitDraft(values: RequestFormValues): Promise<void> {
+    const requestTypeForBlocking = values.request_type;
+    setSubmitErrors([]);
     if (isBudgetPreviewBlocking(preview.data)) {
       toast.error("El techo de la unidad orgánica bloquea el envío. Puedes guardar el borrador para corregirlo luego.");
+      return;
+    }
+
+    if (!checklist.isComplete) {
+      setSubmitErrors(checklist.missingMessages);
+      toast.error("Adjunta los documentos requeridos antes de enviar. La validación final se realizará al enviar la solicitud.");
       return;
     }
 
@@ -236,7 +290,7 @@ export function RequestForm({ initialRequest, mode = "create" }: RequestFormProp
       saved = await saveDraft(values);
       toast.success("Borrador guardado. Enviando solicitud...");
     } catch (error) {
-      toast.error(getApiErrorMessage(error));
+      toast.error(getNewAdvancePendingSettlementBlockMessage(requestTypeForBlocking, error) ?? getApiErrorMessage(error));
       return;
     }
 
@@ -245,13 +299,41 @@ export function RequestForm({ initialRequest, mode = "create" }: RequestFormProp
       toast.success(mode === "edit" ? "Solicitud reenviada correctamente" : "Solicitud enviada correctamente");
       router.push(`${ROUTES.REQUESTS}/${submitted.id}`);
     } catch (error) {
-      toast.error(`El borrador fue guardado, pero el envío falló: ${getApiErrorMessage(error)}`);
+      const missingMessages = getMissingDocumentMessagesFromError(error);
+      const pendingSettlementMessage = getNewAdvancePendingSettlementBlockMessage(saved.request_type, error);
+      const message = pendingSettlementMessage ?? getApiErrorMessage(error);
+      setSubmitErrors(missingMessages.length > 0 ? missingMessages : [message]);
+      toast.error(`El borrador fue guardado, pero el envío falló: ${message}`);
     }
   }
 
-  return (
-    <Form {...form}>
-      <form className="space-y-6">
+  function renderStepper(): ReactNode {
+    if (mode === "create") return null;
+
+    return (
+      <nav aria-label="Pasos de edición" className="grid gap-2 md:grid-cols-3">
+        {stepperItems.map((item, index) => (
+          <button
+            key={item.step}
+            type="button"
+            className="rounded-md border p-3 text-left transition hover:bg-muted"
+            onClick={() => navigateToStep(item.step)}
+            data-testid={`request-edit-step-${item.step}`}
+          >
+            <span className="text-xs font-medium text-muted-foreground">Paso {index + 1}</span>
+            <span className="block text-sm font-semibold">{item.label}</span>
+            <span className="text-xs text-muted-foreground">
+              {item.state === "completed" ? "Completado" : item.state === "current" ? "Actual" : "Pendiente"}
+            </span>
+          </button>
+        ))}
+      </nav>
+    );
+  }
+
+  function renderDataStep(): ReactNode {
+    return (
+      <>
         <Card>
           <CardContent className="space-y-6 pt-6">
             <section className="space-y-4">
@@ -287,6 +369,16 @@ export function RequestForm({ initialRequest, mode = "create" }: RequestFormProp
                   </FormItem>
                 )} />
               </div>
+              {requestType === REQUEST_TYPE.ADVANCE && (
+                <FormField control={form.control} name="scheduled_rendition_at" render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Fecha límite de rendición</FormLabel>
+                    <FormControl><Input type="date" data-testid="request-scheduled-rendition-input" {...field} /></FormControl>
+                    <p className="text-xs text-muted-foreground">Opcional. Se usará para dar seguimiento a la rendición del anticipo pagado.</p>
+                    <FormMessage />
+                  </FormItem>
+                )} />
+              )}
               <FormField control={form.control} name="concept" render={({ field }) => (
                 <FormItem>
                   <FormLabel>Concepto / justificación *</FormLabel>
@@ -311,13 +403,73 @@ export function RequestForm({ initialRequest, mode = "create" }: RequestFormProp
 
         <div className="flex flex-col-reverse gap-3 border-t pt-4 sm:flex-row sm:justify-end">
           <Button type="button" variant="outline" onClick={() => router.push(ROUTES.REQUESTS)} disabled={isSaving || submitting}>Cancelar</Button>
-          <Button type="button" variant="outline" onClick={form.handleSubmit(handleSaveDraft)} disabled={isSaving || submitting} data-testid="request-save-draft-button">
-            {isSaving ? "Guardando..." : mode === "edit" ? "Guardar corrección" : "Guardar borrador"}
+          <Button type="button" onClick={form.handleSubmit(handleSaveDraft)} disabled={isSaving || submitting} data-testid="request-save-draft-button">
+            {isSaving ? "Guardando..." : mode === "edit" ? "Guardar cambios y continuar" : "Guardar borrador y continuar"}
           </Button>
-          <Button type="button" onClick={form.handleSubmit(handleSubmitDraft)} disabled={isSaving || submitting || isBudgetPreviewBlocking(preview.data)}>
+        </div>
+      </>
+    );
+  }
+
+  function renderDocumentsStep(): ReactNode {
+    if (!currentRequest) return null;
+
+    return (
+      <>
+        <RequestDocumentsCard request={currentRequest} />
+        <div className="flex flex-col-reverse gap-3 border-t pt-4 sm:flex-row sm:justify-between">
+          <Button type="button" variant="outline" onClick={() => navigateToStep(REQUEST_EDIT_STEP.DATA)}>Volver a datos</Button>
+          <Button type="button" onClick={() => navigateToStep(REQUEST_EDIT_STEP.REVIEW)}>Continuar a revisión</Button>
+        </div>
+      </>
+    );
+  }
+
+  function renderReviewStep(): ReactNode {
+    if (!currentRequest) return null;
+
+    return (
+      <>
+        <Alert>
+          <AlertDescription>
+            Revisa datos y documentos antes del envío. La validación final se realizará al enviar la solicitud.
+          </AlertDescription>
+        </Alert>
+        {submitErrors.length > 0 && (
+          <Alert variant="destructive">
+            <AlertDescription>
+              <p className="font-medium">No se puede enviar todavía</p>
+              <ul className="mt-2 list-disc space-y-1 pl-5">
+                {submitErrors.map((message) => <li key={message}>{message}</li>)}
+              </ul>
+            </AlertDescription>
+          </Alert>
+        )}
+        {!checklist.isComplete && submitErrors.length === 0 && (
+          <Alert variant="destructive">
+            <AlertDescription>
+              Faltan documentos requeridos: {checklist.missingMessages.join(" ")}
+            </AlertDescription>
+          </Alert>
+        )}
+        <RequestDocumentsCard request={currentRequest} backendMissingMessages={submitErrors} />
+        <div className="flex flex-col-reverse gap-3 border-t pt-4 sm:flex-row sm:justify-between">
+          <Button type="button" variant="outline" onClick={() => navigateToStep(REQUEST_EDIT_STEP.DOCUMENTS)} disabled={isSaving || submitting}>Volver a documentos</Button>
+          <Button type="button" onClick={form.handleSubmit(handleSubmitDraft)} disabled={isSaving || submitting || !canSubmitReview}>
             {submitting ? "Enviando..." : mode === "edit" ? "Reenviar solicitud" : "Enviar solicitud"}
           </Button>
         </div>
+      </>
+    );
+  }
+
+  return (
+    <Form {...form}>
+      <form className="space-y-6">
+        {renderStepper()}
+        {(mode === "create" || activeStep === REQUEST_EDIT_STEP.DATA) && renderDataStep()}
+        {mode === "edit" && activeStep === REQUEST_EDIT_STEP.DOCUMENTS && renderDocumentsStep()}
+        {mode === "edit" && activeStep === REQUEST_EDIT_STEP.REVIEW && renderReviewStep()}
       </form>
     </Form>
   );

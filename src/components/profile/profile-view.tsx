@@ -46,6 +46,7 @@ export function ProfileView() {
   const isAuthLoading = useAuthStore((state) => state.isLoading)
   const { updateProfile, isLoading: isSaving } = useProfile()
 
+  const isLocal = user?.authSource === 'LOCAL'
   const isEpe = user?.authSource === 'EPE'
 
   const [firstName, setFirstName] = useState(user?.firstName ?? '')
@@ -223,6 +224,14 @@ export function ProfileView() {
               </div>
             </div>
           </div>
+
+          {isLocal && (
+            <div className="flex justify-end pt-6">
+              <Button type="button" variant="outline" disabled>
+                Cambiar contraseña
+              </Button>
+            </div>
+          )}
         </CardContent>
       </Card>
 

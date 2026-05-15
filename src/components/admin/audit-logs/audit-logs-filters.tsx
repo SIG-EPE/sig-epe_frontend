@@ -55,11 +55,11 @@ export function AuditLogsFiltersPanel({
         {/* Acción */}
         <div className="space-y-1.5">
           <Label htmlFor="filter-action" className="text-xs font-medium">
-            Acción / Endpoint
+            Acción / Ruta
           </Label>
           <Input
             id="filter-action"
-            placeholder="Ej: POST /users"
+            placeholder="Ej: creación de usuario"
             value={localAction}
             onChange={(e) => setLocalAction(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && handleSearch()}

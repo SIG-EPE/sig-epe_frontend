@@ -53,6 +53,8 @@ vi.mock("@/lib/constants", () => ({
 // Helpers
 // -------------------------------------------------------
 
+import { ApiRequestError, api } from "@/lib/api-client";
+import { toast } from "sonner";
 import { OnboardingForm } from "@/components/auth/onboarding-form";
 
 function renderOnboardingForm(epeUserName = "Juan Pérez") {
@@ -72,7 +74,7 @@ describe("OnboardingForm", () => {
     renderOnboardingForm();
 
     expect(screen.getByPlaceholderText(/usuario@correo.com/i)).toBeInTheDocument();
-    expect(screen.getByPlaceholderText(/Mínimo 8 caracteres/i)).toBeInTheDocument();
+    expect(screen.getByPlaceholderText(/Ingresa tu contraseña/i)).toBeInTheDocument();
     expect(screen.getByPlaceholderText(/Repite tu contraseña/i)).toBeInTheDocument();
   });
 
@@ -85,7 +87,7 @@ describe("OnboardingForm", () => {
       "test@example.com"
     );
     await user.type(
-      screen.getByPlaceholderText(/Mínimo 8 caracteres/i),
+      screen.getByPlaceholderText(/Ingresa tu contraseña/i),
       "Password123"
     );
     await user.type(
@@ -113,7 +115,7 @@ describe("OnboardingForm", () => {
       "not-an-email"
     );
     await user.type(
-      screen.getByPlaceholderText(/Mínimo 8 caracteres/i),
+      screen.getByPlaceholderText(/Ingresa tu contraseña/i),
       "Password123"
     );
     await user.type(
@@ -130,5 +132,82 @@ describe("OnboardingForm", () => {
     await waitFor(() => {
       expect(screen.getByText(/Ingresa un correo válido/i)).toBeInTheDocument();
     });
+  });
+
+  it("bloquea correos externos antes de enviar la activación de cuenta", async () => {
+    const user = userEvent.setup();
+    renderOnboardingForm();
+
+    await user.type(screen.getByPlaceholderText(/usuario@correo.com/i), "persona@gmail.com");
+    await user.type(screen.getByPlaceholderText(/Ingresa tu contraseña/i), "Password123");
+    await user.type(screen.getByPlaceholderText(/Repite tu contraseña/i), "Password123");
+
+    await user.click(screen.getByRole("button", { name: /configurar acceso/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/solo se permiten correos @ensenaperu\.org/i)).toBeInTheDocument();
+    });
+    expect(api.post).not.toHaveBeenCalled();
+  });
+
+  it("acepta el dominio permitido sin importar mayúsculas ni espacios", async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.post).mockResolvedValue({
+      accessToken: "token",
+      refreshToken: "refresh",
+      onboardingRequired: false,
+      user: {
+        id: "user-1",
+        firstName: "Juan",
+        lastName: "Pérez",
+        email: "persona@ensenaperu.org",
+        documentNumber: "12345678",
+        onboardingCompleted: true,
+        authSource: "LOCAL",
+        role: { code: "SOLICITANTE_EPE", name: "Solicitante EPE" },
+      },
+    });
+    renderOnboardingForm();
+
+    await user.type(screen.getByPlaceholderText(/usuario@correo.com/i), "  Persona@EnsenaPeru.Org  ");
+    await user.type(screen.getByPlaceholderText(/Ingresa tu contraseña/i), "Password123");
+    await user.type(screen.getByPlaceholderText(/Repite tu contraseña/i), "Password123");
+
+    await user.click(screen.getByRole("button", { name: /configurar acceso/i }));
+
+    await waitFor(() => {
+      expect(api.post).toHaveBeenCalledWith("/auth/onboarding", {
+        email: "Persona@EnsenaPeru.Org",
+        newPassword: "Password123",
+        confirmPassword: "Password123",
+      });
+    });
+  });
+
+  it("muestra el rechazo de dominio devuelto por backend", async () => {
+    const user = userEvent.setup();
+    const backendMessage = "Solo se permiten correos @ensenaperu.org para completar el onboarding.";
+    const sanitizedMessage = "Solo se permiten correos @ensenaperu.org para completar la activación de cuenta.";
+    vi.mocked(api.post).mockRejectedValue(
+      new ApiRequestError(400, {
+        statusCode: 400,
+        message: backendMessage,
+        error: "Bad Request",
+        timestamp: "2026-05-14T00:00:00.000Z",
+        path: "/auth/onboarding",
+      }),
+    );
+    renderOnboardingForm();
+
+    await user.type(screen.getByPlaceholderText(/usuario@correo.com/i), "persona@ensenaperu.org");
+    await user.type(screen.getByPlaceholderText(/Ingresa tu contraseña/i), "Password123");
+    await user.type(screen.getByPlaceholderText(/Repite tu contraseña/i), "Password123");
+
+    await user.click(screen.getByRole("button", { name: /configurar acceso/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText(sanitizedMessage)).toBeInTheDocument();
+    });
+    expect(toast.error).toHaveBeenCalledWith(sanitizedMessage);
   });
 });

@@ -10,7 +10,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
-import { useApproveRequest, useObserveRequest, useRejectRequest, useRequest } from "@/hooks/use-requests";
+import { useApproveRequest, useObserveRequest, useRejectRequest, useRequest, useStartAdvanceSettlement } from "@/hooks/use-requests";
 import { ROUTES } from "@/lib/constants";
 import {
   canCorrectObservedRequest,
@@ -18,13 +18,18 @@ import {
   canReviewRequest,
   formatRequestCurrency,
   formatRequestDate,
+  getAdvanceSettlementCta,
   getApiErrorMessage,
+  getPaymentRequestRenditionStatus,
+  getRequestDisplayCode,
   getPlanningLineDisplay,
+  getRenditionStatusLabel,
   getRequestMonthLabel,
   getRequestObserverName,
   REQUEST_TYPE_LABELS,
 } from "@/lib/requests";
 import { useAuthStore } from "@/stores/auth-store";
+import { ADVANCE_SETTLEMENT_CTA_STATE } from "@/types/requests";
 import { RequestStatusStepper } from "./request-status-stepper";
 import { RequestDocumentsCard } from "./request-documents-card";
 import { StatusBadge } from "./status-badge";
@@ -45,6 +50,7 @@ export function RequestDetailPage() {
   const { observeRequest, isLoading: observing } = useObserveRequest();
   const { approveRequest, isLoading: approving } = useApproveRequest();
   const { rejectRequest, isLoading: rejecting } = useRejectRequest();
+  const { startAdvanceSettlement, isLoading: startingSettlement } = useStartAdvanceSettlement();
 
   if (isLoading) {
     return <p className="rounded-md border p-6 text-sm text-muted-foreground">Cargando solicitud...</p>;
@@ -64,6 +70,8 @@ export function RequestDetailPage() {
   const canReview = canReviewRequest(roleCode, request.status);
   const canCorrect = canCorrectObservedRequest(roleCode, request.status);
   const canEditDraft = canEditDraftRequest(roleCode, request.status);
+  const advanceSettlementCta = getAdvanceSettlementCta(roleCode, request, user?.id);
+  const renditionStatus = getPaymentRequestRenditionStatus(request);
   const editHref = `${ROUTES.REQUESTS}/${request.id}/edit`;
 
   async function handleObserve(): Promise<void> {
@@ -116,6 +124,18 @@ export function RequestDetailPage() {
       await refetch();
     } catch (reviewError) {
       toast.error(getApiErrorMessage(reviewError));
+    }
+  }
+
+  async function handleStartSettlement(): Promise<void> {
+    if (!request) return;
+    try {
+      const settlement = await startAdvanceSettlement(request.id);
+      toast.success("Rendición iniciada correctamente");
+      router.push(`${ROUTES.REQUESTS}/${settlement.id}/edit?step=documents` as Parameters<typeof router.push>[0]);
+    } catch (settlementError) {
+      toast.error(getApiErrorMessage(settlementError));
+      await refetch();
     }
   }
 
@@ -174,7 +194,64 @@ export function RequestDetailPage() {
         </Card>
       )}
 
+      {advanceSettlementCta && (
+        <Card>
+          <CardHeader><CardTitle>Rendición de anticipo</CardTitle></CardHeader>
+          <CardContent className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+            <div className="grid gap-2 text-sm sm:grid-cols-2">
+              <div>
+                <p className="text-xs text-muted-foreground">Estado de rendición</p>
+                <p className="font-medium">{renditionStatus ? getRenditionStatusLabel(renditionStatus) : "—"}</p>
+              </div>
+              <div>
+                <p className="text-xs text-muted-foreground">Fecha límite de rendición</p>
+                <p className="font-medium">{formatRequestDate(request.scheduled_rendition_at)}</p>
+              </div>
+              <p className="text-muted-foreground sm:col-span-2">{advanceSettlementCta.description}</p>
+            </div>
+            {advanceSettlementCta.href ? (
+              <Button
+                variant={advanceSettlementCta.state === ADVANCE_SETTLEMENT_CTA_STATE.COMPLETED ? "outline" : "default"}
+                onClick={() => router.push(advanceSettlementCta.href as Parameters<typeof router.push>[0])}
+              >
+                {advanceSettlementCta.label}
+              </Button>
+            ) : (
+              <Button onClick={() => void handleStartSettlement()} disabled={startingSettlement}>
+                {startingSettlement ? "Iniciando..." : advanceSettlementCta.label}
+              </Button>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
       <RequestStatusStepper request={request} />
+
+      {(request.relatedRequest || (request.advanceSettlements?.length ?? 0) > 0) && (
+        <Card>
+          <CardHeader><CardTitle>Solicitudes relacionadas</CardTitle></CardHeader>
+          <CardContent className="space-y-3">
+            {request.relatedRequest && (
+              <div className="flex flex-col gap-3 rounded-md border p-3 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <p className="text-sm font-medium">Anticipo original</p>
+                  <p className="text-sm text-muted-foreground">{getRequestDisplayCode(request.relatedRequest)} · {formatRequestCurrency(Number(request.relatedRequest.requested_amount), request.relatedRequest.currency)}</p>
+                </div>
+                <Button variant="outline" onClick={() => router.push(`${ROUTES.REQUESTS}/${request.relatedRequest?.id}` as Parameters<typeof router.push>[0])}>Ver anticipo</Button>
+              </div>
+            )}
+            {request.advanceSettlements?.map((settlement) => (
+              <div key={settlement.id} className="flex flex-col gap-3 rounded-md border p-3 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <p className="text-sm font-medium">Rendición vinculada</p>
+                  <p className="text-sm text-muted-foreground">{getRequestDisplayCode(settlement)} · {formatRequestCurrency(Number(settlement.requested_amount), settlement.currency)}</p>
+                </div>
+                <Button variant="outline" onClick={() => router.push(`${ROUTES.REQUESTS}/${settlement.id}` as Parameters<typeof router.push>[0])}>Ver rendición</Button>
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+      )}
 
       <RequestDocumentsCard request={request} />
 

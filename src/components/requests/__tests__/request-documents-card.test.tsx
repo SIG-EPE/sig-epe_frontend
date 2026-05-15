@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 import { RequestDocumentsCard } from "@/components/requests/request-documents-card";
@@ -79,14 +79,14 @@ function makeDocument(overrides: Partial<RequestDocument> = {}): RequestDocument
   return {
     id: "doc-1",
     payment_request_id: "req-1",
-    document_category: REQUEST_DOCUMENT_CATEGORY.SUPPORT,
+    document_category: REQUEST_DOCUMENT_CATEGORY.REQUEST_SUPPORT,
     safe_filename: "sustento.pdf",
     original_filename: "Sustento.pdf",
     mime_type: "application/pdf",
     size_bytes: 2048,
     sha256_hash: "hash",
-    storage_provider: "local",
-    upload_status: "UPLOADED",
+    storage_provider: "DRIVE",
+    upload_status: "PERMANENT",
     uploaded_by_id: "user-1",
     created_at: "2026-05-01T10:00:00.000Z",
     ...overrides,
@@ -117,17 +117,68 @@ describe("RequestDocumentsCard", () => {
     vi.mocked(api.delete).mockResolvedValue(undefined);
 
     const user = userEvent.setup();
-    render(<RequestDocumentsCard request={makeRequest()} />);
+    render(<RequestDocumentsCard request={makeRequest({ request_type: REQUEST_TYPE.SUPPLIER_PAYMENT })} />);
 
     expect(await screen.findByText("Sustento.pdf")).toBeInTheDocument();
-    expect(screen.getAllByText("Sustento").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Sustento de solicitud").length).toBeGreaterThan(0);
     expect(screen.getByText("2.0 KB")).toBeInTheDocument();
+    expect(screen.getByText("Proveedor: Google Drive")).toBeInTheDocument();
+    expect(screen.getByText("Estado: Guardado")).toBeInTheDocument();
+    expect(screen.getByText("Enlace no disponible")).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: /eliminar/i }));
+    await user.click(screen.getByRole("button", { name: /eliminar documento/i }));
 
     await waitFor(() => {
       expect(api.delete).toHaveBeenCalledWith("/requests/req-1/documents/doc-1");
     });
+  });
+
+  it("muestra un enlace visible de Drive para revisores GIOF sin habilitar acciones de edición", async () => {
+    const driveWebUrl = "https://drive.google.com/file/d/doc-1/view";
+    vi.mocked(api.get).mockResolvedValue([makeDocument({ drive_web_url: driveWebUrl })]);
+    useAuthStore.setState({
+      user: {
+        id: "giof-1",
+        firstName: "Gina",
+        lastName: "Gestora",
+        email: "gina@example.com",
+        documentNumber: "87654321",
+        onboardingCompleted: true,
+        authSource: "LOCAL",
+        role: { code: ROLE_CODE.GIOF_GESTOR, name: "GIOF Gestor" },
+      },
+      accessToken: "token",
+      isLoading: false,
+    });
+
+    render(<RequestDocumentsCard request={makeRequest({ status: REQUEST_STATUS.SUBMITTED })} />);
+
+    const link = await screen.findByRole("link", { name: /ver documento/i });
+    expect(link).toHaveAttribute("href", driveWebUrl);
+    expect(link).toHaveAttribute("target", "_blank");
+    expect(link).toHaveAttribute("rel", "noopener noreferrer");
+    expect(screen.queryByRole("button", { name: /adjuntar/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /eliminar/i })).not.toBeInTheDocument();
+    expect(screen.queryByText(/no se muestran enlaces de drive/i)).not.toBeInTheDocument();
+  });
+
+  it("explica que los documentos compartidos pueden abrirse cuando el acceso fue habilitado", async () => {
+    vi.mocked(api.get).mockResolvedValue([]);
+
+    render(<RequestDocumentsCard request={makeRequest()} />);
+
+    expect(await screen.findByText(/podrás abrir los documentos compartidos/i)).toBeInTheDocument();
+    expect(screen.getByText(/cuando el acceso haya sido habilitado/i)).toBeInTheDocument();
+  });
+
+  it("muestra una indicación no intrusiva cuando el documento no tiene enlace", async () => {
+    vi.mocked(api.get).mockResolvedValue([makeDocument({ drive_web_url: null })]);
+
+    render(<RequestDocumentsCard request={makeRequest({ request_type: REQUEST_TYPE.SUPPLIER_PAYMENT })} />);
+
+    expect(await screen.findByText("Enlace no disponible")).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /ver documento/i })).not.toBeInTheDocument();
   });
 
   it("sube un archivo válido usando multipart", async () => {
@@ -135,10 +186,10 @@ describe("RequestDocumentsCard", () => {
     vi.mocked(api.postForm).mockResolvedValue(makeDocument({ id: "doc-2", original_filename: "nuevo.pdf" }));
 
     const user = userEvent.setup();
-    render(<RequestDocumentsCard request={makeRequest()} />);
+    render(<RequestDocumentsCard request={makeRequest({ request_type: REQUEST_TYPE.SUPPLIER_PAYMENT })} />);
 
     const file = new File(["contenido"], "nuevo.pdf", { type: "application/pdf" });
-    await user.upload(screen.getByLabelText(/archivo/i), file);
+    fireEvent.change(screen.getByLabelText(/archivo/i), { target: { files: [file] } });
     await user.click(screen.getByRole("button", { name: /adjuntar/i }));
 
     await waitFor(() => {
@@ -146,7 +197,52 @@ describe("RequestDocumentsCard", () => {
     });
     const formData = vi.mocked(api.postForm).mock.calls[0][1] as FormData;
     expect(formData.get("file")).toBe(file);
-    expect(formData.get("document_category")).toBe(REQUEST_DOCUMENT_CATEGORY.SUPPORT);
+    expect(formData.get("document_category")).toBe(REQUEST_DOCUMENT_CATEGORY.RECEIPT);
+    expect(await screen.findByText(/puede enviar una notificación por correo/i)).toBeInTheDocument();
+  });
+
+  it("muestra checklist requerido y permite Excel para PxQ", async () => {
+    vi.mocked(api.get).mockResolvedValue([]);
+    vi.mocked(api.postForm).mockResolvedValue(makeDocument({ id: "doc-2", original_filename: "pxq.xlsx" }));
+
+    const user = userEvent.setup();
+    render(<RequestDocumentsCard request={makeRequest({ request_type: REQUEST_TYPE.ADVANCE })} />);
+
+    expect(await screen.findByText("Excel PxQ")).toBeInTheDocument();
+    expect(screen.getByText("Pendiente")).toBeInTheDocument();
+    expect(screen.getByText(/formatos esperados: XLS o XLSX/i)).toBeInTheDocument();
+
+    const file = new File(["contenido"], "pxq.xlsx", { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+    fireEvent.change(screen.getByLabelText(/archivo/i), { target: { files: [file] } });
+    await user.click(screen.getByRole("button", { name: /adjuntar/i }));
+
+    await waitFor(() => {
+      expect(api.postForm).toHaveBeenCalledWith("/requests/req-1/documents", expect.any(FormData));
+    });
+    const formData = vi.mocked(api.postForm).mock.calls[0][1] as FormData;
+    expect(formData.get("document_category")).toBe(REQUEST_DOCUMENT_CATEGORY.PXQ);
+  });
+
+  it("muestra mensajes faltantes de la validación final", async () => {
+    vi.mocked(api.get).mockResolvedValue([]);
+
+    render(<RequestDocumentsCard request={makeRequest()} backendMissingMessages={["Falta adjuntar Excel PxQ."]} />);
+
+    expect(await screen.findByText(/documentos requeridos pendientes/i)).toBeInTheDocument();
+    expect(screen.getByText("Falta adjuntar Excel PxQ.")).toBeInTheDocument();
+  });
+
+  it("bloquea archivo inválido antes de llamar al backend", async () => {
+    vi.mocked(api.get).mockResolvedValue([]);
+
+    render(<RequestDocumentsCard request={makeRequest()} />);
+
+    const file = new File(["texto"], "nota.txt", { type: "text/plain" });
+    fireEvent.change(screen.getByLabelText(/archivo/i), { target: { files: [file] } });
+
+    expect(await screen.findByText(/formato no permitido/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /adjuntar/i })).toBeDisabled();
+    expect(api.postForm).not.toHaveBeenCalled();
   });
 
   it("oculta acciones de carga y eliminación para solicitudes no editables", async () => {
@@ -157,5 +253,6 @@ describe("RequestDocumentsCard", () => {
     expect(await screen.findByText("Sustento.pdf")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /adjuntar/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /eliminar/i })).not.toBeInTheDocument();
+    expect(screen.getByText(/borrador u observación/i)).toBeInTheDocument();
   });
 });

@@ -10,6 +10,7 @@ import { toast } from "sonner";
 import { api, ApiRequestError } from "@/lib/api-client";
 import { syncAuthSession, toSessionSyncInput } from "@/lib/auth/session-sync";
 import { getRoleHomePath } from "@/lib/auth/role-redirect";
+import { getOnboardingEmailDomainMessage, isAllowedOnboardingEmailDomain } from "@/lib/onboarding-domain";
 import type { LoginResponse } from "@/types/auth";
 
 import { Button } from "@/components/ui/button";
@@ -35,19 +36,20 @@ import { Mail, ShieldCheck, Bell } from "lucide-react";
 // Validation schemas — conditional by authSource
 // -------------------------------------------------------
 
+const onboardingEmailSchema = z
+  .string()
+  .trim()
+  .min(1, "Ingresa tu correo electrónico")
+  .email("Ingresa un correo válido")
+  .refine(isAllowedOnboardingEmailDomain, getOnboardingEmailDomainMessage());
+
 const epeSchema = z.object({
-  email: z
-    .string()
-    .min(1, "Ingresa tu correo electrónico")
-    .email("Ingresa un correo válido"),
+  email: onboardingEmailSchema,
 });
 
 const localSchema = z
   .object({
-    email: z
-      .string()
-      .min(1, "Ingresa tu correo electrónico")
-      .email("Ingresa un correo válido"),
+    email: onboardingEmailSchema,
     newPassword: z.string().min(1, "Ingresa tu contraseña"),
     confirmPassword: z.string().min(1, "Confirma tu contraseña"),
   })
@@ -88,6 +90,18 @@ export function OnboardingForm({
 
   const isSubmitting = form.formState.isSubmitting;
 
+  function extractApiErrorMessages(error: ApiRequestError): string[] {
+    return Array.isArray(error.body.message) ? error.body.message : [error.body.message];
+  }
+
+  function getDomainBackendErrorMessage(error: ApiRequestError): string | null {
+    if (error.status !== 400) return null;
+
+    const hasDomainError = extractApiErrorMessages(error).some((message) => /ensenaperu\.org|dominio|domain/i.test(message));
+
+    return hasDomainError ? getOnboardingEmailDomainMessage() : null;
+  }
+
   async function onSubmit(values: OnboardingFormValues) {
     try {
       const payload: Record<string, string> = { email: values.email };
@@ -109,7 +123,12 @@ export function OnboardingForm({
       window.location.href = getRoleHomePath(normalizedUser.role?.code ?? "");
     } catch (error) {
       if (error instanceof ApiRequestError) {
-        if (error.status === 409) {
+        const backendDomainMessage = getDomainBackendErrorMessage(error);
+
+        if (backendDomainMessage) {
+          form.setError("email", { message: backendDomainMessage });
+          toast.error(backendDomainMessage);
+        } else if (error.status === 409) {
           toast.error("Este correo ya está en uso");
         } else {
           toast.error("Error al configurar tu perfil. Intenta de nuevo.");

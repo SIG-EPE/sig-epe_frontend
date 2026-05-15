@@ -34,14 +34,12 @@ export function RequestListTable({ requests, isLoading, roleCode }: RequestListT
           <TableHead>Mes</TableHead>
           <TableHead className="text-right">Monto</TableHead>
           <TableHead>Fecha y hora</TableHead>
-          <TableHead className="text-right">Acción</TableHead>
+          <TableHead className="text-right">Acciones</TableHead>
         </TableRow>
       </TableHeader>
       <TableBody>
         {requests.map((request) => {
           const actions = getRequestListActions(roleCode, request.status, request.id);
-          const primaryAction = actions[0];
-          const secondaryActions = actions.slice(1);
           const timelineDate = getRequestTimelineDate(request);
           const timelineLabel = request.submitted_at ? "Envío" : "Creación";
 
@@ -60,18 +58,17 @@ export function RequestListTable({ requests, isLoading, roleCode }: RequestListT
                 </div>
               </TableCell>
               <TableCell className="text-right">
-                <div className="flex flex-wrap justify-end gap-2">
-                  <Button asChild size="sm" variant={primaryAction.kind === "detail" ? "outline" : "default"}>
-                    <Link href={primaryAction.href} data-testid={primaryAction.testId}>{primaryAction.label}</Link>
-                  </Button>
-                  {secondaryActions.map((action) => (
-                    <Button key={action.href} asChild size="sm" variant="outline">
-                      <Link href={action.href} data-testid={action.testId}>{action.label}</Link>
-                    </Button>
-                  ))}
+                <div className="flex justify-end">
                   <DropdownMenu>
                     <DropdownMenuTrigger asChild>
-                      <Button variant="ghost" size="icon" className="h-8 w-8" data-testid="request-action-menu-trigger" aria-label="Más acciones de solicitud">
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-8 w-8"
+                        data-testid="request-action-menu-trigger"
+                        aria-label="Más acciones de solicitud"
+                        title="Más acciones de solicitud"
+                      >
                         <MoreHorizontal className="h-4 w-4" />
                       </Button>
                     </DropdownMenuTrigger>
@@ -80,7 +77,7 @@ export function RequestListTable({ requests, isLoading, roleCode }: RequestListT
                       <DropdownMenuSeparator />
                       {actions.map((action) => (
                         <DropdownMenuItem key={`${request.id}-${action.kind}`} asChild>
-                          <Link href={action.href}>{action.label}</Link>
+                          <Link href={action.href} data-testid={action.testId}>{action.label}</Link>
                         </DropdownMenuItem>
                       ))}
                     </DropdownMenuContent>

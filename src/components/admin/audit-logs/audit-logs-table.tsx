@@ -67,8 +67,8 @@ export function AuditLogsTable({ logs, isLoading }: AuditLogsTableProps) {
         <TableRow>
           <TableHead className="w-[160px]">Fecha / Hora</TableHead>
           <TableHead>Usuario</TableHead>
-          <TableHead>Metodo</TableHead>
-          <TableHead>Accion / Endpoint</TableHead>
+          <TableHead>Método</TableHead>
+          <TableHead>Acción / Ruta</TableHead>
           <TableHead>Estado</TableHead>
           <TableHead>IP</TableHead>
         </TableRow>
@@ -131,7 +131,7 @@ export function AuditLogsTable({ logs, isLoading }: AuditLogsTableProps) {
                 )}
               </TableCell>
 
-              {/* Accion / Endpoint */}
+              {/* Acción / Ruta */}
               <TableCell>
                 <div className="flex flex-col gap-0.5">
                   <span className="text-sm font-medium">{log.action}</span>
