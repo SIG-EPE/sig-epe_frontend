@@ -7,7 +7,7 @@ The frontend is prepared for the existing Azure Static Web App `webapsigepe` and
 Required repository secrets:
 
 - `AZURE_STATIC_WEB_APPS_API_TOKEN` — deployment token from the existing Azure Static Web App `webapsigepe`.
-- `SWA_JWT_ACCESS_SECRET` — same JWT access secret used by the backend so Next.js middleware can verify auth cookies.
+- `JWT_ACCESS_SECRET` — same JWT access secret used by the backend so Next.js middleware can verify auth cookies.
 
 Required or recommended repository variables:
 

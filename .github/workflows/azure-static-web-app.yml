@@ -17,7 +17,7 @@ jobs:
     env:
       NEXT_PUBLIC_API_URL: ${{ vars.NEXT_PUBLIC_API_URL }}
       NEXT_PUBLIC_ONBOARDING_ALLOWED_EMAIL_DOMAINS: ${{ vars.NEXT_PUBLIC_ONBOARDING_ALLOWED_EMAIL_DOMAINS }}
-      JWT_ACCESS_SECRET: ${{ secrets.SWA_JWT_ACCESS_SECRET }}
+      JWT_ACCESS_SECRET: ${{ secrets.JWT_ACCESS_SECRET }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
