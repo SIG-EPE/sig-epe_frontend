@@ -88,6 +88,36 @@ export const REQUEST_DOCUMENT_UPLOAD_STATUS = {
 
 export type RequestDocumentUploadStatus = (typeof REQUEST_DOCUMENT_UPLOAD_STATUS)[keyof typeof REQUEST_DOCUMENT_UPLOAD_STATUS];
 
+export const REQUEST_RECEIPT_OCR_STATUS = {
+  MANUAL: "MANUAL",
+  PENDING: "PENDING",
+  PROCESSING: "PROCESSING",
+  SUCCESS: "SUCCESS",
+  FAILED: "FAILED",
+  REQUIRES_REVIEW: "REQUIRES_REVIEW",
+} as const;
+
+export type RequestReceiptOcrStatus = (typeof REQUEST_RECEIPT_OCR_STATUS)[keyof typeof REQUEST_RECEIPT_OCR_STATUS];
+
+export const REQUEST_RECEIPT_DUPLICATE_STATUS = {
+  UNIQUE: "UNIQUE",
+  POSSIBLE_DUPLICATE: "POSSIBLE_DUPLICATE",
+  DUPLICATE_CONFIRMED: "DUPLICATE_CONFIRMED",
+  IGNORED: "IGNORED",
+} as const;
+
+export type RequestReceiptDuplicateStatus = (typeof REQUEST_RECEIPT_DUPLICATE_STATUS)[keyof typeof REQUEST_RECEIPT_DUPLICATE_STATUS];
+
+export const REQUEST_RECEIPT_TYPE = {
+  INVOICE: "INVOICE",
+  FEE_RECEIPT: "FEE_RECEIPT",
+  SALES_RECEIPT: "SALES_RECEIPT",
+  TICKET: "TICKET",
+  OTHER: "OTHER",
+} as const;
+
+export type RequestReceiptType = (typeof REQUEST_RECEIPT_TYPE)[keyof typeof REQUEST_RECEIPT_TYPE];
+
 export const BENEFICIARY_DOCUMENT_TYPE = {
   DNI: "DNI",
   CE: "CE",
@@ -378,6 +408,64 @@ export interface RequestDocument {
   metadata_json?: Record<string, unknown> | null;
   uploaded_by_id?: string | null;
   created_at: string;
+}
+
+export interface RequestReceipt {
+  id: string;
+  request_id: string;
+  document_id: string | null;
+  receipt_type: RequestReceiptType | string;
+  issuer_document_type: string | null;
+  issuer_document_number: string | null;
+  issuer_name: string | null;
+  series: string | null;
+  number: string | null;
+  issue_date: string | null;
+  amount: number | null;
+  currency: RequestCurrency | string;
+  duplicate_status: RequestReceiptDuplicateStatus | string;
+  ocr_status: RequestReceiptOcrStatus | string;
+  corrected_fields: Record<string, unknown> | null;
+  confirmed_by_id: string | null;
+  confirmed_at: string | null;
+}
+
+export interface RequestReceiptExtractionSummary {
+  id: string;
+  provider: string;
+  status: RequestReceiptOcrStatus | string;
+  confidence: number | null;
+  error_message: string | null;
+  extracted_fields: Record<string, unknown> | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface RequestReceiptDuplicateCandidate {
+  receipt_id: string;
+  request_id: string;
+  document_id: string | null;
+  issuer_document_number: string | null;
+  series: string | null;
+  number: string | null;
+  issue_date: string | null;
+  amount: number | null;
+}
+
+export interface RequestReceiptReview {
+  receipt: RequestReceipt;
+  latest_extraction: RequestReceiptExtractionSummary | null;
+  duplicate_candidates: RequestReceiptDuplicateCandidate[];
+}
+
+export interface UpdateRequestReceiptReviewInput {
+  issuer_document_number?: string;
+  issuer_name?: string;
+  series?: string;
+  number?: string;
+  issue_date?: string;
+  amount?: number;
+  currency?: RequestCurrency;
 }
 
 export interface RequiredDocumentChecklistItem {

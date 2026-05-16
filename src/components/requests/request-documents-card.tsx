@@ -11,7 +11,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { useDeleteRequestDocument, useRequestDocuments, useUploadRequestDocument } from "@/hooks/use-requests";
+import { useConfirmRequestReceiptReview, useDeleteRequestDocument, useRequestDocuments, useRequestReceiptReviews, useUpdateRequestReceiptReview, useUploadRequestDocument } from "@/hooks/use-requests";
 import {
   canManageRequestDocuments,
   formatRequestDateTime,
@@ -31,11 +31,32 @@ import {
   validateRequestDocumentFile,
 } from "@/lib/requests";
 import { useAuthStore } from "@/stores/auth-store";
-import { REQUEST_DOCUMENT_CATEGORY, REQUEST_TYPE, type PaymentRequest, type RequestDocument, type RequestDocumentCategory } from "@/types/requests";
+import {
+  REQUEST_CURRENCY,
+  REQUEST_DOCUMENT_CATEGORY,
+  REQUEST_RECEIPT_DUPLICATE_STATUS,
+  REQUEST_RECEIPT_OCR_STATUS,
+  REQUEST_TYPE,
+  type PaymentRequest,
+  type RequestDocument,
+  type RequestDocumentCategory,
+  type RequestReceiptReview,
+  type UpdateRequestReceiptReviewInput,
+} from "@/types/requests";
 
 interface RequestDocumentsCardProps {
   request: PaymentRequest;
   backendMissingMessages?: string[];
+}
+
+interface ReceiptReviewFormState {
+  issuer_document_number: string;
+  issuer_name: string;
+  series: string;
+  number: string;
+  issue_date: string;
+  amount: string;
+  currency: string;
 }
 
 function getRequestDocumentWebUrl(document: RequestDocument): string | null {
@@ -51,20 +72,91 @@ function getDefaultDocumentCategory(request: PaymentRequest): RequestDocumentCat
   return REQUEST_DOCUMENT_CATEGORY.REQUEST_SUPPORT;
 }
 
+function getReceiptStatusLabel(receiptReview?: RequestReceiptReview): string {
+  if (!receiptReview) return "Procesando comprobante";
+  if (receiptReview.receipt.duplicate_status === REQUEST_RECEIPT_DUPLICATE_STATUS.POSSIBLE_DUPLICATE) return "Factura duplicada por revisar";
+  if (receiptReview.duplicate_candidates.length > 0) return "Factura duplicada por revisar";
+  if (receiptReview.receipt.confirmed_at) return "Factura registrada";
+
+  const status = receiptReview.receipt.ocr_status;
+  if (status === REQUEST_RECEIPT_OCR_STATUS.PENDING || status === REQUEST_RECEIPT_OCR_STATUS.PROCESSING) return "Procesando comprobante";
+  if (status === REQUEST_RECEIPT_OCR_STATUS.REQUIRES_REVIEW || status === REQUEST_RECEIPT_OCR_STATUS.FAILED) return "Requiere revisión";
+  if (status === REQUEST_RECEIPT_OCR_STATUS.SUCCESS) return "Datos detectados";
+  return "Lectura automática disponible";
+}
+
+function getReceiptStatusVariant(receiptReview?: RequestReceiptReview): "default" | "secondary" | "destructive" | "outline" {
+  if (!receiptReview) return "outline";
+  if (receiptReview.receipt.duplicate_status === REQUEST_RECEIPT_DUPLICATE_STATUS.POSSIBLE_DUPLICATE || receiptReview.duplicate_candidates.length > 0) return "destructive";
+  if (receiptReview.receipt.ocr_status === REQUEST_RECEIPT_OCR_STATUS.REQUIRES_REVIEW || receiptReview.receipt.ocr_status === REQUEST_RECEIPT_OCR_STATUS.FAILED) return "secondary";
+  if (receiptReview.receipt.confirmed_at || receiptReview.receipt.ocr_status === REQUEST_RECEIPT_OCR_STATUS.SUCCESS) return "default";
+  return "outline";
+}
+
+function canConfirmReceiptReview(receiptReview: RequestReceiptReview): boolean {
+  const receipt = receiptReview.receipt;
+  return Boolean(
+    !receipt.confirmed_at &&
+    receipt.issuer_document_number &&
+    receipt.series &&
+    receipt.number &&
+    receipt.issue_date &&
+    receipt.amount !== null,
+  );
+}
+
+function getReceiptReviewFormState(receiptReview: RequestReceiptReview): ReceiptReviewFormState {
+  return {
+    issuer_document_number: receiptReview.receipt.issuer_document_number ?? "",
+    issuer_name: receiptReview.receipt.issuer_name ?? "",
+    series: receiptReview.receipt.series ?? "",
+    number: receiptReview.receipt.number ?? "",
+    issue_date: receiptReview.receipt.issue_date ?? "",
+    amount: receiptReview.receipt.amount === null ? "" : String(receiptReview.receipt.amount),
+    currency: receiptReview.receipt.currency || REQUEST_CURRENCY.PEN,
+  };
+}
+
+function getReceiptReviewPayload(formState: ReceiptReviewFormState): UpdateRequestReceiptReviewInput {
+  const amount = Number(formState.amount);
+  return {
+    issuer_document_number: formState.issuer_document_number.trim(),
+    issuer_name: formState.issuer_name.trim(),
+    series: formState.series.trim().toUpperCase(),
+    number: formState.number.trim(),
+    issue_date: formState.issue_date,
+    amount: Number.isFinite(amount) ? amount : undefined,
+    currency: formState.currency === REQUEST_CURRENCY.USD ? REQUEST_CURRENCY.USD : REQUEST_CURRENCY.PEN,
+  };
+}
+
+function getReceiptValueSummary(receiptReview: RequestReceiptReview): string {
+  const receipt = receiptReview.receipt;
+  const serieNumber = [receipt.series, receipt.number].filter(Boolean).join("-") || "sin serie/número";
+  const provider = receipt.issuer_name?.trim() || "proveedor no detectado";
+  const amount = receipt.amount === null ? "monto no detectado" : `${receipt.currency} ${receipt.amount}`;
+  return `${provider} · ${serieNumber} · ${amount}`;
+}
+
 export function RequestDocumentsCard({ request, backendMissingMessages = [] }: RequestDocumentsCardProps) {
   const user = useAuthStore((state) => state.user);
   const roleCode = user?.role?.code;
   const canManage = canManageRequestDocuments(roleCode, request.status, request, user?.id);
   const permissionMessage = getRequestDocumentPermissionMessage(roleCode, request.status, request, user?.id);
   const { documents, isLoading, error, refetch } = useRequestDocuments(request.id);
+  const { receipts, isLoading: receiptsLoading, error: receiptsError, refetch: refetchReceipts } = useRequestReceiptReviews(request.id);
   const { uploadDocument, isLoading: uploading } = useUploadRequestDocument();
   const { deleteDocument, isLoading: deleting } = useDeleteRequestDocument();
+  const { updateReceiptReview, isLoading: updatingReceipt } = useUpdateRequestReceiptReview();
+  const { confirmReceiptReview, isLoading: confirmingReceipt } = useConfirmRequestReceiptReview();
   const [category, setCategory] = useState<RequestDocumentCategory>(getDefaultDocumentCategory(request));
   const [file, setFile] = useState<File | null>(null);
   const [validationError, setValidationError] = useState<string | null>(null);
   const [operationError, setOperationError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [documentToDelete, setDocumentToDelete] = useState<string | null>(null);
+  const [receiptToReview, setReceiptToReview] = useState<RequestReceiptReview | null>(null);
+  const [receiptForm, setReceiptForm] = useState<ReceiptReviewFormState | null>(null);
   const checklist = getRequiredDocumentChecklist(request.request_type, documents);
   const acceptedFormatsLabel = getRequestDocumentAcceptedFormatsLabel(category);
 
@@ -94,12 +186,12 @@ export function RequestDocumentsCard({ request, backendMissingMessages = [] }: R
       setSuccessMessage(REQUEST_DOCUMENT_UPLOAD_SUCCESS_MESSAGE);
       setFile(null);
       setValidationError(null);
-      await refetch();
+      await Promise.all([refetch(), refetchReceipts()]);
     } catch (uploadError) {
       const message = getApiErrorMessage(uploadError);
       setOperationError(message);
       toast.error(message);
-      await refetch();
+      await Promise.all([refetch(), refetchReceipts()]);
     }
   }
 
@@ -109,12 +201,55 @@ export function RequestDocumentsCard({ request, backendMissingMessages = [] }: R
       await deleteDocument(request.id, documentId);
       toast.success("Documento eliminado correctamente");
       setDocumentToDelete(null);
-      await refetch();
+      await Promise.all([refetch(), refetchReceipts()]);
     } catch (deleteError) {
       const message = getApiErrorMessage(deleteError);
       setOperationError(message);
       toast.error(message);
-      await refetch();
+      await Promise.all([refetch(), refetchReceipts()]);
+    }
+  }
+
+  function openReceiptReview(receiptReview: RequestReceiptReview): void {
+    setReceiptToReview(receiptReview);
+    setReceiptForm(getReceiptReviewFormState(receiptReview));
+    setOperationError(null);
+  }
+
+  function closeReceiptReview(): void {
+    setReceiptToReview(null);
+    setReceiptForm(null);
+  }
+
+  function updateReceiptFormField(field: keyof ReceiptReviewFormState, value: string): void {
+    setReceiptForm((current) => current ? { ...current, [field]: value } : current);
+  }
+
+  async function handleSaveReceiptReview(): Promise<void> {
+    if (!receiptToReview || !receiptForm) return;
+    try {
+      setOperationError(null);
+      await updateReceiptReview(request.id, receiptToReview.receipt.id, getReceiptReviewPayload(receiptForm));
+      toast.success("Datos del comprobante actualizados");
+      closeReceiptReview();
+      await refetchReceipts();
+    } catch (reviewError) {
+      const message = getApiErrorMessage(reviewError);
+      setOperationError(message);
+      toast.error(message);
+    }
+  }
+
+  async function handleConfirmReceiptReview(receiptReview: RequestReceiptReview): Promise<void> {
+    try {
+      setOperationError(null);
+      await confirmReceiptReview(request.id, receiptReview.receipt.id);
+      toast.success("Datos del comprobante confirmados");
+      await refetchReceipts();
+    } catch (confirmError) {
+      const message = getApiErrorMessage(confirmError);
+      setOperationError(message);
+      toast.error(message);
     }
   }
 
@@ -234,6 +369,15 @@ export function RequestDocumentsCard({ request, backendMissingMessages = [] }: R
           </Alert>
         )}
 
+        {receiptsError && (
+          <Alert variant="destructive">
+            <AlertDescription className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+              <span>No se pudo cargar la lectura automática de comprobantes. Puedes reintentar sin afectar los documentos adjuntos.</span>
+              <Button type="button" variant="outline" size="sm" onClick={() => void refetchReceipts()}>Reintentar lectura</Button>
+            </AlertDescription>
+          </Alert>
+        )}
+
         {isLoading ? (
           <p className="text-sm text-muted-foreground">Cargando documentos...</p>
         ) : documents.length === 0 ? (
@@ -242,6 +386,8 @@ export function RequestDocumentsCard({ request, backendMissingMessages = [] }: R
           <div className="space-y-3">
             {documents.map((document) => {
               const documentWebUrl = getRequestDocumentWebUrl(document);
+              const receiptReview = receipts.find((item) => item.receipt?.document_id === document.id);
+              const shouldShowReceiptReview = document.document_category === REQUEST_DOCUMENT_CATEGORY.RECEIPT && (receiptsLoading || receiptReview);
 
               return (
                 <div key={document.id} className="flex flex-col gap-3 rounded-md border p-3 sm:flex-row sm:items-center sm:justify-between">
@@ -257,6 +403,25 @@ export function RequestDocumentsCard({ request, backendMissingMessages = [] }: R
                         <span>Proveedor: {getRequestDocumentStorageProviderLabel(document.storage_provider)}</span>
                         <span>Estado: {getRequestDocumentUploadStatusLabel(document.upload_status)}</span>
                       </div>
+                      {shouldShowReceiptReview && (
+                        <div className="mt-2 rounded-md bg-muted p-3 text-xs">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <Badge variant={getReceiptStatusVariant(receiptReview)}>{getReceiptStatusLabel(receiptReview)}</Badge>
+                            <span className="text-muted-foreground">Lectura automática del comprobante</span>
+                          </div>
+                          {receiptReview ? (
+                            <div className="mt-2 space-y-1 text-muted-foreground">
+                              <p>{getReceiptValueSummary(receiptReview)}</p>
+                              {receiptReview.receipt.issuer_document_number && <p>RUC: {receiptReview.receipt.issuer_document_number}</p>}
+                              {receiptReview.receipt.issue_date && <p>Fecha: {receiptReview.receipt.issue_date}</p>}
+                              {receiptReview.latest_extraction?.error_message && <p>Necesita revisión manual para completar la información.</p>}
+                              {receiptReview.duplicate_candidates.length > 0 && <p>Ya existe un comprobante con la misma serie y número en otra solicitud activa.</p>}
+                            </div>
+                          ) : (
+                            <p className="mt-2 text-muted-foreground">Estamos leyendo el comprobante para ayudarte a validar sus datos.</p>
+                          )}
+                        </div>
+                      )}
                     </div>
                   </div>
                   <div className="flex shrink-0 flex-col gap-2 sm:items-end">
@@ -270,6 +435,16 @@ export function RequestDocumentsCard({ request, backendMissingMessages = [] }: R
                     ) : (
                       <p className="text-xs text-muted-foreground">Enlace no disponible</p>
                     )}
+                    {receiptReview && canManage && (
+                      <Button type="button" variant="outline" size="sm" onClick={() => openReceiptReview(receiptReview)}>
+                        Revisar datos
+                      </Button>
+                    )}
+                    {receiptReview && canManage && canConfirmReceiptReview(receiptReview) && (
+                      <Button type="button" size="sm" onClick={() => void handleConfirmReceiptReview(receiptReview)} disabled={confirmingReceipt}>
+                        {confirmingReceipt ? "Confirmando..." : "Confirmar datos"}
+                      </Button>
+                    )}
                     {canManage && (
                       <Button type="button" variant="outline" size="sm" onClick={() => setDocumentToDelete(document.id)} disabled={deleting}>
                         <Trash2 className="size-4" />
@@ -282,6 +457,60 @@ export function RequestDocumentsCard({ request, backendMissingMessages = [] }: R
             })}
           </div>
         )}
+        <Dialog open={Boolean(receiptToReview)} onOpenChange={(open) => !open && closeReceiptReview()}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Revisar datos del comprobante</DialogTitle>
+              <DialogDescription>
+                Corrige los datos detectados por la lectura automática antes de continuar. No se cambia el archivo adjunto.
+              </DialogDescription>
+            </DialogHeader>
+            {receiptForm && (
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div className="space-y-2">
+                  <label className="text-sm font-medium" htmlFor="receipt-ruc">RUC</label>
+                  <Input id="receipt-ruc" value={receiptForm.issuer_document_number} onChange={(event) => updateReceiptFormField("issuer_document_number", event.target.value)} />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-sm font-medium" htmlFor="receipt-provider">Proveedor</label>
+                  <Input id="receipt-provider" value={receiptForm.issuer_name} onChange={(event) => updateReceiptFormField("issuer_name", event.target.value)} />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-sm font-medium" htmlFor="receipt-series">Serie</label>
+                  <Input id="receipt-series" value={receiptForm.series} onChange={(event) => updateReceiptFormField("series", event.target.value)} />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-sm font-medium" htmlFor="receipt-number">Número</label>
+                  <Input id="receipt-number" value={receiptForm.number} onChange={(event) => updateReceiptFormField("number", event.target.value)} />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-sm font-medium" htmlFor="receipt-date">Fecha</label>
+                  <Input id="receipt-date" type="date" value={receiptForm.issue_date} onChange={(event) => updateReceiptFormField("issue_date", event.target.value)} />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-sm font-medium" htmlFor="receipt-amount">Total</label>
+                  <Input id="receipt-amount" type="number" min="0" step="0.01" value={receiptForm.amount} onChange={(event) => updateReceiptFormField("amount", event.target.value)} />
+                </div>
+                <div className="space-y-2 sm:col-span-2">
+                  <label className="text-sm font-medium" htmlFor="receipt-currency">Moneda</label>
+                  <Select value={receiptForm.currency} onValueChange={(value) => updateReceiptFormField("currency", value)}>
+                    <SelectTrigger id="receipt-currency"><SelectValue placeholder="Selecciona moneda" /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value={REQUEST_CURRENCY.PEN}>Soles (PEN)</SelectItem>
+                      <SelectItem value={REQUEST_CURRENCY.USD}>Dólares (USD)</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+            )}
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={closeReceiptReview} disabled={updatingReceipt}>Cancelar</Button>
+              <Button type="button" onClick={() => void handleSaveReceiptReview()} disabled={updatingReceipt || !receiptForm}>
+                {updatingReceipt ? "Guardando..." : "Guardar corrección"}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
         <Dialog open={Boolean(documentToDelete)} onOpenChange={(open) => !open && setDocumentToDelete(null)}>
           <DialogContent>
             <DialogHeader>

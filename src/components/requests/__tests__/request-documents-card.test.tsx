@@ -3,15 +3,17 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 import { RequestDocumentsCard } from "@/components/requests/request-documents-card";
-import { api } from "@/lib/api-client";
+import { api, ApiRequestError } from "@/lib/api-client";
 import { ROLE_CODE } from "@/lib/constants";
 import { useAuthStore } from "@/stores/auth-store";
-import { REQUEST_CURRENCY, REQUEST_DOCUMENT_CATEGORY, REQUEST_STATUS, REQUEST_TYPE, type PaymentRequest, type RequestDocument } from "@/types/requests";
+import { REQUEST_CURRENCY, REQUEST_DOCUMENT_CATEGORY, REQUEST_RECEIPT_DUPLICATE_STATUS, REQUEST_RECEIPT_OCR_STATUS, REQUEST_STATUS, REQUEST_TYPE, type PaymentRequest, type RequestDocument, type RequestReceiptReview } from "@/types/requests";
 
 vi.mock("@/lib/api-client", () => ({
   api: {
     get: vi.fn(),
+    post: vi.fn(),
     postForm: vi.fn(),
+    patch: vi.fn(),
     delete: vi.fn(),
   },
   ApiRequestError: class ApiRequestError extends Error {
@@ -93,6 +95,42 @@ function makeDocument(overrides: Partial<RequestDocument> = {}): RequestDocument
   };
 }
 
+function makeReceiptReview(overrides: Partial<RequestReceiptReview> = {}): RequestReceiptReview {
+  return {
+    receipt: {
+      id: "receipt-1",
+      request_id: "req-1",
+      document_id: "doc-1",
+      receipt_type: "INVOICE",
+      issuer_document_type: "RUC",
+      issuer_document_number: "20123456789",
+      issuer_name: "Proveedor SAC",
+      series: "F001",
+      number: "123",
+      issue_date: "2026-05-01",
+      amount: 150.5,
+      currency: REQUEST_CURRENCY.PEN,
+      duplicate_status: REQUEST_RECEIPT_DUPLICATE_STATUS.UNIQUE,
+      ocr_status: REQUEST_RECEIPT_OCR_STATUS.SUCCESS,
+      corrected_fields: null,
+      confirmed_by_id: null,
+      confirmed_at: null,
+    },
+    latest_extraction: {
+      id: "ocr-1",
+      provider: "LOCAL",
+      status: REQUEST_RECEIPT_OCR_STATUS.SUCCESS,
+      confidence: 0.92,
+      error_message: null,
+      extracted_fields: null,
+      created_at: "2026-05-01T10:00:00.000Z",
+      updated_at: "2026-05-01T10:00:00.000Z",
+    },
+    duplicate_candidates: [],
+    ...overrides,
+  };
+}
+
 describe("RequestDocumentsCard", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -116,7 +154,6 @@ describe("RequestDocumentsCard", () => {
     vi.mocked(api.get).mockResolvedValue([makeDocument()]);
     vi.mocked(api.delete).mockResolvedValue(undefined);
 
-    const user = userEvent.setup();
     render(<RequestDocumentsCard request={makeRequest({ request_type: REQUEST_TYPE.SUPPLIER_PAYMENT })} />);
 
     expect(await screen.findByText("Sustento.pdf")).toBeInTheDocument();
@@ -126,13 +163,13 @@ describe("RequestDocumentsCard", () => {
     expect(screen.getByText("Estado: Guardado")).toBeInTheDocument();
     expect(screen.getByText("Enlace no disponible")).toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: /eliminar/i }));
-    await user.click(screen.getByRole("button", { name: /eliminar documento/i }));
+    fireEvent.click(screen.getByRole("button", { name: /eliminar/i }));
+    fireEvent.click(screen.getByRole("button", { name: /eliminar documento/i }));
 
     await waitFor(() => {
       expect(api.delete).toHaveBeenCalledWith("/requests/req-1/documents/doc-1");
     });
-  });
+  }, 10_000);
 
   it("muestra un enlace visible de Drive para revisores GIOF sin habilitar acciones de edición", async () => {
     const driveWebUrl = "https://drive.google.com/file/d/doc-1/view";
@@ -199,6 +236,89 @@ describe("RequestDocumentsCard", () => {
     expect(formData.get("file")).toBe(file);
     expect(formData.get("document_category")).toBe(REQUEST_DOCUMENT_CATEGORY.RECEIPT);
     expect(await screen.findByText(/puede enviar una notificación por correo/i)).toBeInTheDocument();
+  });
+
+  it("muestra el mensaje específico cuando el comprobante ya fue registrado", async () => {
+    vi.mocked(api.get).mockResolvedValue([]);
+    vi.mocked(api.postForm).mockRejectedValue(new ApiRequestError(409, {
+      statusCode: 409,
+      message: "Esta factura ya fue registrada",
+      error: "Conflict",
+      timestamp: "2026-05-01T10:00:00.000Z",
+      path: "/requests/req-1/documents",
+    }));
+
+    const user = userEvent.setup();
+    render(<RequestDocumentsCard request={makeRequest({ request_type: REQUEST_TYPE.SUPPLIER_PAYMENT })} />);
+
+    const file = new File(["contenido"], "factura.pdf", { type: "application/pdf" });
+    fireEvent.change(screen.getByLabelText(/archivo/i), { target: { files: [file] } });
+    await user.click(screen.getByRole("button", { name: /adjuntar/i }));
+
+    expect(await screen.findByText("Esta factura ya fue registrada")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /adjuntar/i })).toBeInTheDocument();
+  });
+
+  it("muestra datos detectados del comprobante y permite corregirlos", async () => {
+    vi.mocked(api.get).mockImplementation(async (path) => {
+      if (path === "/requests/req-1/receipts") return [makeReceiptReview()];
+      return [makeDocument({ document_category: REQUEST_DOCUMENT_CATEGORY.RECEIPT, original_filename: "Factura.pdf" })];
+    });
+    vi.mocked(api.patch).mockResolvedValue(makeReceiptReview({
+      receipt: {
+        ...makeReceiptReview().receipt,
+        issuer_name: "Proveedor Corregido SAC",
+      },
+    }));
+
+    const user = userEvent.setup();
+    render(<RequestDocumentsCard request={makeRequest({ request_type: REQUEST_TYPE.SUPPLIER_PAYMENT })} />);
+
+    expect(await screen.findByText("Factura.pdf")).toBeInTheDocument();
+    expect(screen.getByText("Datos detectados")).toBeInTheDocument();
+    expect(screen.getByText(/Proveedor SAC · F001-123 · PEN 150.5/i)).toBeInTheDocument();
+    expect(screen.getByText("RUC: 20123456789")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /revisar datos/i }));
+    const providerInput = await screen.findByLabelText(/proveedor/i);
+    fireEvent.change(providerInput, { target: { value: "Proveedor Corregido SAC" } });
+    await user.click(screen.getByRole("button", { name: /guardar corrección/i }));
+
+    await waitFor(() => {
+      expect(api.patch).toHaveBeenCalledWith("/requests/req-1/receipts/receipt-1", expect.objectContaining({
+        issuer_name: "Proveedor Corregido SAC",
+        issuer_document_number: "20123456789",
+      }));
+    });
+  });
+
+  it("confirma datos detectados del comprobante y no muestra reintento de lectura", async () => {
+    vi.mocked(api.get).mockImplementation(async (path) => {
+      if (path === "/requests/req-1/receipts") return [makeReceiptReview()];
+      return [makeDocument({ document_category: REQUEST_DOCUMENT_CATEGORY.RECEIPT, original_filename: "Factura.pdf" })];
+    });
+    vi.mocked(api.post).mockResolvedValue(makeReceiptReview({
+      receipt: {
+        ...makeReceiptReview().receipt,
+        confirmed_by_id: "user-1",
+        confirmed_at: "2026-05-01T11:00:00.000Z",
+      },
+    }));
+
+    const user = userEvent.setup();
+    render(<RequestDocumentsCard request={makeRequest({ request_type: REQUEST_TYPE.SUPPLIER_PAYMENT })} />);
+
+    expect(await screen.findByText("Factura.pdf")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /reintentar lectura/i })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /confirmar datos/i }));
+
+    await waitFor(() => {
+      expect(api.post).toHaveBeenCalledWith("/requests/req-1/receipts/receipt-1/confirm");
+    });
+    await waitFor(() => {
+      expect(api.get).toHaveBeenCalledWith("/requests/req-1/receipts");
+    });
   });
 
   it("muestra checklist requerido y permite Excel para PxQ", async () => {

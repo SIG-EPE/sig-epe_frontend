@@ -18,7 +18,9 @@ import type {
   RequestBudgetPreview,
   RequestPlanningLineLookupResponse,
   RequestDocument,
+  RequestReceiptReview,
   StartAdvanceSettlementResponse,
+  UpdateRequestReceiptReviewInput,
   UploadRequestDocumentInput,
   RejectRequestDto,
   RequestsListFilters,
@@ -380,6 +382,81 @@ export function useRequestDocuments(requestId?: string) {
   }, [accessToken, authIsLoading, refetch]);
 
   return { documents, isLoading, error, refetch };
+}
+
+export function useRequestReceiptReviews(requestId?: string) {
+  const [receipts, setReceipts] = useState<RequestReceiptReview[]>([]);
+  const [isLoading, setIsLoading] = useState(Boolean(requestId));
+  const [error, setError] = useState<Error | null>(null);
+
+  const authIsLoading = useAuthStore((state) => state.isLoading);
+  const accessToken = useAuthStore((state) => state.accessToken);
+
+  const refetch = useCallback(async () => {
+    if (!requestId || authIsLoading || !accessToken) return;
+    setIsLoading(true);
+    setError(null);
+    try {
+      setReceipts(await api.get<RequestReceiptReview[]>(`/requests/${requestId}/receipts`));
+    } catch (e) {
+      setError(e instanceof Error ? e : new Error("Error al cargar lectura automática de comprobantes"));
+    } finally {
+      setIsLoading(false);
+    }
+  }, [accessToken, authIsLoading, requestId]);
+
+  useEffect(() => {
+    if (authIsLoading || !accessToken) return;
+    void refetch();
+  }, [accessToken, authIsLoading, refetch]);
+
+  return { receipts, isLoading, error, refetch };
+}
+
+export function useUpdateRequestReceiptReview() {
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<Error | null>(null);
+
+  const updateReceiptReview = async (
+    requestId: string,
+    receiptId: string,
+    input: UpdateRequestReceiptReviewInput,
+  ): Promise<RequestReceiptReview> => {
+    setIsLoading(true);
+    setError(null);
+    try {
+      return await api.patch<RequestReceiptReview>(`/requests/${requestId}/receipts/${receiptId}`, input);
+    } catch (e) {
+      const nextError = e instanceof Error ? e : new Error("Error al actualizar datos del comprobante");
+      setError(nextError);
+      throw e;
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  return { updateReceiptReview, isLoading, error };
+}
+
+export function useConfirmRequestReceiptReview() {
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<Error | null>(null);
+
+  const confirmReceiptReview = async (requestId: string, receiptId: string): Promise<RequestReceiptReview> => {
+    setIsLoading(true);
+    setError(null);
+    try {
+      return await api.post<RequestReceiptReview>(`/requests/${requestId}/receipts/${receiptId}/confirm`);
+    } catch (e) {
+      const nextError = e instanceof Error ? e : new Error("Error al confirmar datos del comprobante");
+      setError(nextError);
+      throw e;
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  return { confirmReceiptReview, isLoading, error };
 }
 
 export function useUploadRequestDocument() {
