@@ -1,15 +1,15 @@
 # =============================================
 # SIG-EPE Frontend — Continuous Integration
-# Runs on push to main/develop and PRs to main
+# Runs on push/PR to develop
 # =============================================
 
 name: Frontend CI
 
 on:
   push:
-    branches: [main, develop]
+    branches: [develop]
   pull_request:
-    branches: [main]
+    branches: [develop]
 
 jobs:
   ci:
@@ -37,6 +37,9 @@ jobs:
 
       - name: Type check
         run: npm run type-check
+
+      - name: Unit tests
+        run: npm test -- --run
 
       - name: Build
         run: npm run build
