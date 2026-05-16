@@ -10,6 +10,14 @@ import { getRoleHomePath } from "@/lib/auth/role-redirect";
 // -------------------------------------------------------
 
 const PUBLIC_PATHS = ["/_next", "/favicon.ico", "/api/health"];
+const SESSION_HINT_COOKIE_NAME = "session_hint" as const;
+
+// Routes that require specific roles — checked after token verification
+const ROUTE_ROLE_REQUIREMENTS: Record<string, string[]> = {
+  "/admin/users": ["ADMIN_SISTEMA", "GIOF_GESTOR"],
+  "/admin/config": ["ADMIN_SISTEMA"],
+  "/admin/audit-logs": ["ADMIN_SISTEMA"],
+};
 
 function isPublicPath(pathname: string): boolean {
   return PUBLIC_PATHS.some((p) => pathname.startsWith(p));
@@ -34,9 +42,14 @@ export async function middleware(request: NextRequest) {
   }
 
   const token = request.cookies.get("access_token")?.value;
+  const hasSessionContinuity = request.cookies.get(SESSION_HINT_COOKIE_NAME)?.value === "present";
 
   // /login: if the user already has a valid token, redirect to the appropriate destination
   if (pathname === "/login") {
+    if (request.nextUrl.searchParams.has("token")) {
+      return NextResponse.next();
+    }
+
     if (token) {
       const tokenPayload = await verifyToken(token);
       if (tokenPayload?.scope === "full") {
@@ -50,15 +63,24 @@ export async function middleware(request: NextRequest) {
     return NextResponse.next();
   }
 
-  // Protected routes: require a valid token
+  // Protected routes: a valid access token is authoritative. If it is missing
+  // or expired, a non-sensitive session hint may admit only the protected shell;
+  // AuthGate/RoleGuard and backend APIs make the final auth decision.
   if (!token) {
+    if (hasSessionContinuity) {
+      return NextResponse.next();
+    }
+
     return NextResponse.redirect(new URL("/login", request.url));
   }
 
   const tokenPayload = await verifyToken(token);
 
   if (!tokenPayload) {
-    // Invalid / expired token → redirect to login
+    if (hasSessionContinuity) {
+      return NextResponse.next();
+    }
+
     return NextResponse.redirect(new URL("/login", request.url));
   }
 
@@ -70,6 +92,24 @@ export async function middleware(request: NextRequest) {
   // Full scope: redirect away from /onboarding
   if (tokenPayload.scope === "full" && pathname.startsWith("/onboarding")) {
     return NextResponse.redirect(new URL(getRoleHomePath(tokenPayload.role), request.url));
+  }
+
+  // Redirect root "/" to role-specific home page
+  if (pathname === "/" && tokenPayload.scope === "full") {
+    return NextResponse.redirect(new URL(getRoleHomePath(tokenPayload.role), request.url));
+  }
+
+  // Role-based route protection — check after scope logic
+  if (tokenPayload.scope === "full") {
+    for (const [route, allowedRoles] of Object.entries(ROUTE_ROLE_REQUIREMENTS)) {
+      if (pathname.startsWith(route)) {
+        if (!allowedRoles.includes(tokenPayload.role)) {
+          const homePath = getRoleHomePath(tokenPayload.role) ?? "/dashboard";
+          return NextResponse.redirect(new URL(homePath, request.url));
+        }
+        break;
+      }
+    }
   }
 
   return NextResponse.next();

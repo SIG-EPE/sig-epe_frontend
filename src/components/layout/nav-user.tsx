@@ -2,7 +2,8 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { ChevronsUpDown, LogOut, User } from "lucide-react";
+import { useTransition } from "react";
+import { ChevronsUpDown, Loader2, LogOut, User } from "lucide-react";
 
 import { useAuthStore } from "@/stores/auth-store";
 import { api } from "@/lib/api-client";
@@ -40,6 +41,7 @@ function getInitials(firstName: string, lastName: string): string {
 
 export function NavUser() {
   const router = useRouter();
+  const [isPending, startTransition] = useTransition();
   const user = useAuthStore((state) => state.user);
   const clearAuth = useAuthStore((state) => state.clearAuth);
 
@@ -48,7 +50,7 @@ export function NavUser() {
   const fullName = `${user.firstName} ${user.lastName}`.trim();
   const initials = getInitials(user.firstName, user.lastName);
   const roleLabel =
-    ROLE_LABELS[user.role.code as RoleCode] ?? user.role.name;
+    ROLE_LABELS[user.role?.code as RoleCode] ?? user.role?.name ?? "";
 
   async function handleLogout() {
     try {
@@ -57,7 +59,9 @@ export function NavUser() {
       // Even if the API call fails, clear local state
     } finally {
       clearAuth();
-      router.push(ROUTES.LOGIN);
+      startTransition(() => {
+        router.push(ROUTES.LOGIN);
+      });
     }
   }
 
@@ -115,8 +119,12 @@ export function NavUser() {
               </DropdownMenuItem>
             </DropdownMenuGroup>
             <DropdownMenuSeparator />
-            <DropdownMenuItem onClick={handleLogout}>
-              <LogOut className="mr-2 h-4 w-4" />
+            <DropdownMenuItem onClick={handleLogout} disabled={isPending}>
+              {isPending ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              ) : (
+                <LogOut className="mr-2 h-4 w-4" />
+              )}
               Cerrar sesión
             </DropdownMenuItem>
           </DropdownMenuContent>

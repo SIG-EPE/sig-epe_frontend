@@ -31,7 +31,8 @@ type MockState = { user: AuthUser | null; isLoading: boolean }
 
 function mockStore(state: MockState) {
   vi.mocked(useAuthStore).mockImplementation(
-    (selector: (s: MockState) => unknown) => selector(state)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (selector: (s: any) => unknown) => selector(state)
   )
 }
 
@@ -90,14 +91,22 @@ describe('ProfileView', () => {
   it('✅ muestra "No configurado" cuando email es null', () => {
     mockStore({ user: { ...baseUser, email: null }, isLoading: false })
     render(<ProfileView />)
-    expect(screen.getByText('No configurado')).toBeInTheDocument()
+    expect(screen.getByPlaceholderText('No configurado')).toBeInTheDocument()
   })
 
-  it('✅ botón cambiar contraseña está deshabilitado', () => {
+  it('✅ muestra botón cambiar contraseña deshabilitado para usuarios LOCAL', () => {
     mockStore({ user: baseUser, isLoading: false })
     render(<ProfileView />)
     const btn = screen.getByRole('button', { name: /cambiar contraseña/i })
     expect(btn).toBeDisabled()
+  })
+
+  it('✅ no muestra botón cambiar contraseña para usuarios EPE', () => {
+    mockStore({ user: { ...baseUser, authSource: 'EPE' }, isLoading: false })
+    render(<ProfileView />)
+    expect(
+      screen.queryByRole('button', { name: /cambiar contraseña/i })
+    ).not.toBeInTheDocument()
   })
 
   it('✅ muestra tipo de cuenta LOCAL correctamente', () => {

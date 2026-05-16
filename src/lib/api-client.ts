@@ -1,5 +1,7 @@
-import { useAuthStore } from "@/stores/auth-store";
 import type { ApiResponse, ApiError } from "@/types/api";
+import { useAuthStore } from "@/stores/auth-store";
+import { clearClientAuthSession } from "@/lib/auth/session-sync";
+import { refreshSession } from "@/lib/auth/refresh-session";
 
 // -------------------------------------------------------
 // API Client — SIG-EPE
@@ -7,6 +9,19 @@ import type { ApiResponse, ApiError } from "@/types/api";
 // -------------------------------------------------------
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3001";
+
+const AUTH_HEADER_EXCLUDED_PATHS = [
+  "/auth/login",
+  "/auth/logout",
+  "/auth/refresh",
+  "/auth/sso",
+] as const;
+
+function shouldAttachAuthHeader(path: string): boolean {
+  return !AUTH_HEADER_EXCLUDED_PATHS.some((excludedPath) =>
+    path.startsWith(excludedPath),
+  );
+}
 
 /** Thrown on API errors so callers can inspect status + body */
 export class ApiRequestError extends Error {
@@ -16,37 +31,6 @@ export class ApiRequestError extends Error {
   ) {
     super(typeof body.message === "string" ? body.message : body.message[0]);
     this.name = "ApiRequestError";
-  }
-}
-
-/** Whether a token refresh is in-flight (prevents concurrent refreshes) */
-let refreshPromise: Promise<string | null> | null = null;
-
-/**
- * Attempt to refresh the access token using the httpOnly refresh cookie.
- * Returns the new access token or null on failure.
- */
-async function refreshAccessToken(): Promise<string | null> {
-  try {
-    const res = await fetch(`${API_URL}/auth/refresh`, {
-      method: "POST",
-      credentials: "include", // sends httpOnly cookie
-    });
-
-    if (!res.ok) return null;
-
-    const json = (await res.json()) as ApiResponse<{ accessToken: string }>;
-    const newToken = json.data.accessToken;
-
-    // Update Zustand store with new token
-    const { user, setAuth } = useAuthStore.getState();
-    if (user && newToken) {
-      setAuth(user, newToken);
-    }
-
-    return newToken;
-  } catch {
-    return null;
   }
 }
 
@@ -63,7 +47,11 @@ async function apiFetch<T>(
   if (!headers.has("Content-Type") && !(options.body instanceof FormData)) {
     headers.set("Content-Type", "application/json");
   }
-  if (accessToken) {
+  if (
+    accessToken &&
+    shouldAttachAuthHeader(path) &&
+    !headers.has("Authorization")
+  ) {
     headers.set("Authorization", `Bearer ${accessToken}`);
   }
 
@@ -74,15 +62,9 @@ async function apiFetch<T>(
   });
 
   // --- 401: attempt token refresh + retry ---
-  if (res.status === 401 && accessToken) {
-    // Deduplicate concurrent refresh calls
-    if (!refreshPromise) {
-      refreshPromise = refreshAccessToken().finally(() => {
-        refreshPromise = null;
-      });
-    }
-
-    const newToken = await refreshPromise;
+  if (res.status === 401 && shouldAttachAuthHeader(path)) {
+    const refreshResult = await refreshSession({ reason: "api-401" }).catch(() => null);
+    const newToken = refreshResult?.accessToken ?? null;
 
     if (newToken) {
       // Retry original request with new token
@@ -109,7 +91,7 @@ async function apiFetch<T>(
     }
 
     // Refresh failed — clear auth + redirect to login
-    useAuthStore.getState().clearAuth();
+    clearClientAuthSession();
     if (typeof window !== "undefined") {
       window.location.href = "/login";
     }
@@ -160,10 +142,26 @@ export const api = {
     });
   },
 
+  postForm<T>(path: string, body: FormData, options?: RequestInit): Promise<T> {
+    return apiFetch<T>(path, {
+      ...options,
+      method: "POST",
+      body,
+    });
+  },
+
   patch<T>(path: string, body?: unknown, options?: RequestInit): Promise<T> {
     return apiFetch<T>(path, {
       ...options,
       method: "PATCH",
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+    });
+  },
+
+  put<T>(path: string, body?: unknown, options?: RequestInit): Promise<T> {
+    return apiFetch<T>(path, {
+      ...options,
+      method: "PUT",
       body: body !== undefined ? JSON.stringify(body) : undefined,
     });
   },

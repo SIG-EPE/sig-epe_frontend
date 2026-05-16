@@ -17,8 +17,21 @@ export interface AuthUser {
   documentNumber: string;
   role?: AuthUserRole;
   onboardingCompleted: boolean;
-  /** Auth source — preparatory field for Sprint 2 (GET /auth/me). Undefined until backend exposes it. */
+  /** Auth source — required since GET /auth/me always returns it. */
+  authSource: 'LOCAL' | 'EPE';
+}
+
+/** Raw backend auth user shape before frontend normalization. */
+export interface BackendAuthUser {
+  id: string;
+  firstName: string | null;
+  lastName: string | null;
+  email: string | null;
+  epeDni: string | null;
+  onboardingCompleted: boolean;
   authSource?: 'LOCAL' | 'EPE';
+  role?: AuthUserRole;
+  roles?: AuthUserRole[];
 }
 
 /** POST /auth/login request body */
@@ -30,8 +43,10 @@ export interface LoginRequest {
 /** POST /auth/login response body */
 export interface LoginResponse {
   accessToken: string;
+  accessTokenExpiresAt: string;
+  sessionExpiresAt: string;
   /** Backend returns roles as an array; normalize to `role` before calling setAuth */
-  user: AuthUser & { roles?: AuthUserRole[] };
+  user: BackendAuthUser;
   onboardingRequired: boolean;
 }
 
@@ -59,3 +74,10 @@ const TOKEN_SCOPE = {
 
 export type TokenScope = (typeof TOKEN_SCOPE)[keyof typeof TOKEN_SCOPE];
 export { TOKEN_SCOPE };
+
+/** PATCH /api/auth/profile request body */
+export interface ProfileUpdatePayload {
+  firstName?: string;
+  lastName?: string;
+  email?: string;
+}

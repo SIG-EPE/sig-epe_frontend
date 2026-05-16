@@ -9,14 +9,20 @@ export const ROUTES = {
   DASHBOARD: "/dashboard",
   REQUESTS: "/requests",
   REQUESTS_NEW: "/requests/new",
+  RENDITIONS: "/renditions",
   MANAGEMENT: "/management",
   PAYMENTS: "/payments",
   BUDGET: "/budget",
+  BUDGET_FISCAL_YEARS: "/budget/fiscal-years",
+  BUDGET_ALLOCATIONS: "/budget/allocations",
+  BUDGET_PLANNING: "/budget/planning",
+  BUDGET_PLANNING_NEW: "/budget/planning/new",
   CATALOGS: "/catalogs",
   ACCOUNTABILITY: "/accountability",
   REPORTS: "/reports",
   ADMIN_USERS: "/admin/users",
   ADMIN_CONFIG: "/admin/config",
+  ADMIN_AUDIT_LOGS: "/admin/audit-logs",
   PROFILE: "/profile",
 } as const;
 
@@ -25,7 +31,6 @@ export type AppRoute = (typeof ROUTES)[keyof typeof ROUTES];
 /** Role codes — must match backend RoleCode enum */
 const ROLE_CODE = {
   SOLICITANTE_EPE: "SOLICITANTE_EPE",
-  PATROCINADOR: "PATROCINADOR",
   GIOF_GESTOR: "GIOF_GESTOR",
   AUDITOR_DIRECCION: "AUDITOR_DIRECCION",
   ADMIN_SISTEMA: "ADMIN_SISTEMA",
@@ -37,7 +42,6 @@ export { ROLE_CODE };
 /** Human-readable labels in Spanish */
 export const ROLE_LABELS: Record<RoleCode, string> = {
   SOLICITANTE_EPE: "Solicitante EPE",
-  PATROCINADOR: "Patrocinador",
   GIOF_GESTOR: "GIOF Gestor",
   AUDITOR_DIRECCION: "Auditor / Dirección",
   ADMIN_SISTEMA: "Administrador del Sistema",
@@ -56,24 +60,27 @@ export const ROLE_MENU_MAP: Record<RoleCode, MenuItem[]> = {
     { label: "Mis Solicitudes", href: ROUTES.REQUESTS, icon: "FileText" },
     { label: "Nueva Solicitud", href: ROUTES.REQUESTS_NEW, icon: "FilePlus" },
   ],
-  PATROCINADOR: [
-    { label: "Dashboard", href: ROUTES.DASHBOARD, icon: "LayoutDashboard" },
-    { label: "Rendiciones", href: ROUTES.ACCOUNTABILITY, icon: "Receipt" },
-  ],
   GIOF_GESTOR: [
-    { label: "Bandeja de Gestión", href: ROUTES.MANAGEMENT, icon: "ClipboardList" },
-    { label: "Solicitudes", href: ROUTES.REQUESTS, icon: "FileText" },
+    { label: "Bandeja de Revisión", href: ROUTES.REQUESTS, icon: "FileText" },
     { label: "Cola de Pagos", href: ROUTES.PAYMENTS, icon: "CreditCard" },
-    { label: "Presupuesto", href: ROUTES.BUDGET, icon: "DollarSign" },
+    { label: "Bandeja de Rendiciones", href: ROUTES.RENDITIONS, icon: "Receipt" },
+    { label: "Resumen de Saldos", href: ROUTES.BUDGET, icon: "DollarSign" },
+    { label: "Años Fiscales", href: ROUTES.BUDGET_FISCAL_YEARS, icon: "CalendarDays" },
+    { label: "Plan Operativo (POA)", href: ROUTES.BUDGET_PLANNING, icon: "ListChecks" },
+    { label: "Aportes de Socios", href: ROUTES.BUDGET_ALLOCATIONS, icon: "Handshake" },
     { label: "Catálogos", href: ROUTES.CATALOGS, icon: "BookOpen" },
+    { label: "Usuarios", href: ROUTES.ADMIN_USERS, icon: "Users" },
   ],
   AUDITOR_DIRECCION: [
     { label: "Reportes", href: ROUTES.REPORTS, icon: "BarChart3" },
     { label: "Dashboard", href: ROUTES.DASHBOARD, icon: "LayoutDashboard" },
   ],
   ADMIN_SISTEMA: [
+    { label: "Bandeja de Revisión", href: ROUTES.REQUESTS, icon: "FileText" },
+    { label: "Bandeja de Rendiciones", href: ROUTES.RENDITIONS, icon: "Receipt" },
     { label: "Usuarios", href: ROUTES.ADMIN_USERS, icon: "Users" },
     { label: "Configuración", href: ROUTES.ADMIN_CONFIG, icon: "Settings" },
+    { label: "Log de auditoría", href: ROUTES.ADMIN_AUDIT_LOGS, icon: "ClipboardList" },
   ],
 };
 
@@ -87,3 +94,7 @@ export const PUBLIC_PATHS = [
   "/favicon.ico",
   "/api/health",
 ] as const;
+
+/** Inactivity session management */
+export const INACTIVITY_WARNING_MINUTES = 60;
+export const INACTIVITY_TIMEOUT_MINUTES = 120;

@@ -8,8 +8,9 @@ import { Eye, EyeOff, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 
 import { api, ApiRequestError } from "@/lib/api-client";
-import { useAuthStore } from "@/stores/auth-store";
+import { syncAuthSession, toSessionSyncInput } from "@/lib/auth/session-sync";
 import { getRoleHomePath } from "@/lib/auth/role-redirect";
+import { getOnboardingEmailDomainMessage, isAllowedOnboardingEmailDomain } from "@/lib/onboarding-domain";
 import type { LoginResponse } from "@/types/auth";
 
 import { Button } from "@/components/ui/button";
@@ -29,33 +30,27 @@ import {
   FormLabel,
   FormMessage,
 } from "@/components/ui/form";
-
 import { Mail, ShieldCheck, Bell } from "lucide-react";
 
 // -------------------------------------------------------
 // Validation schemas — conditional by authSource
 // -------------------------------------------------------
 
+const onboardingEmailSchema = z
+  .string()
+  .trim()
+  .min(1, "Ingresa tu correo electrónico")
+  .email("Ingresa un correo válido")
+  .refine(isAllowedOnboardingEmailDomain, getOnboardingEmailDomainMessage());
+
 const epeSchema = z.object({
-  email: z
-    .string()
-    .min(1, "Ingresa tu correo electrónico")
-    .email("Ingresa un correo válido"),
+  email: onboardingEmailSchema,
 });
 
 const localSchema = z
   .object({
-    email: z
-      .string()
-      .min(1, "Ingresa tu correo electrónico")
-      .email("Ingresa un correo válido"),
-    newPassword: z
-      .string()
-      .min(8, "La contraseña debe tener al menos 8 caracteres")
-      .regex(
-        /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)/,
-        "Debe incluir mayúscula, minúscula y número",
-      ),
+    email: onboardingEmailSchema,
+    newPassword: z.string().min(1, "Ingresa tu contraseña"),
     confirmPassword: z.string().min(1, "Confirma tu contraseña"),
   })
   .refine((data) => data.newPassword === data.confirmPassword, {
@@ -80,7 +75,6 @@ export function OnboardingForm({
   epeUserName,
   authSource,
 }: OnboardingFormProps) {
-  const setAuth = useAuthStore((state) => state.setAuth);
   const [showNewPassword, setShowNewPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
 
@@ -96,6 +90,18 @@ export function OnboardingForm({
 
   const isSubmitting = form.formState.isSubmitting;
 
+  function extractApiErrorMessages(error: ApiRequestError): string[] {
+    return Array.isArray(error.body.message) ? error.body.message : [error.body.message];
+  }
+
+  function getDomainBackendErrorMessage(error: ApiRequestError): string | null {
+    if (error.status !== 400) return null;
+
+    const hasDomainError = extractApiErrorMessages(error).some((message) => /ensenaperu\.org|dominio|domain/i.test(message));
+
+    return hasDomainError ? getOnboardingEmailDomainMessage() : null;
+  }
+
   async function onSubmit(values: OnboardingFormValues) {
     try {
       const payload: Record<string, string> = { email: values.email };
@@ -107,13 +113,8 @@ export function OnboardingForm({
 
       const data = await api.post<LoginResponse>("/auth/onboarding", payload);
 
+      syncAuthSession(toSessionSyncInput(data));
       const normalizedUser = { ...data.user, role: data.user.roles?.[0] ?? data.user.role };
-      setAuth(normalizedUser, data.accessToken);
-
-      // Set cookie so Next.js middleware (Edge Runtime) can verify the new JWT
-      // with scope=full. Without this, the middleware still reads the old
-      // scope=onboarding token and redirects back to /onboarding in a loop.
-      document.cookie = `access_token=${data.accessToken}; path=/; SameSite=Strict; Max-Age=900`;
 
       toast.success("¡Perfil configurado exitosamente!");
 
@@ -122,7 +123,12 @@ export function OnboardingForm({
       window.location.href = getRoleHomePath(normalizedUser.role?.code ?? "");
     } catch (error) {
       if (error instanceof ApiRequestError) {
-        if (error.status === 409) {
+        const backendDomainMessage = getDomainBackendErrorMessage(error);
+
+        if (backendDomainMessage) {
+          form.setError("email", { message: backendDomainMessage });
+          toast.error(backendDomainMessage);
+        } else if (error.status === 409) {
           toast.error("Este correo ya está en uso");
         } else {
           toast.error("Error al configurar tu perfil. Intenta de nuevo.");
@@ -205,7 +211,7 @@ export function OnboardingForm({
                         <div className="relative">
                           <Input
                             type={showNewPassword ? "text" : "password"}
-                            placeholder="Mínimo 8 caracteres"
+                            placeholder="Ingresa tu contraseña"
                             autoComplete="new-password"
                             {...field}
                           />

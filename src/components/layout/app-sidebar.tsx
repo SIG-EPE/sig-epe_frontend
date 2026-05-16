@@ -17,6 +17,9 @@ import {
   CreditCard,
   ChevronLeft,
   ChevronRight,
+  CalendarDays,
+  ListChecks,
+  Handshake,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
@@ -54,6 +57,9 @@ const ICON_MAP: Record<string, LucideIcon> = {
   Receipt,
   ClipboardList,
   CreditCard,
+  CalendarDays,
+  ListChecks,
+  Handshake,
 };
 
 // -------------------------------------------------------

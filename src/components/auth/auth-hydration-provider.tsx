@@ -5,7 +5,12 @@ import { Loader2 } from "lucide-react";
 
 import { useAuthStore } from "@/stores/auth-store";
 import { api, ApiRequestError } from "@/lib/api-client";
-import type { AuthUser } from "@/types/auth";
+import { refreshSession } from "@/lib/auth/refresh-session";
+import type { LoginResponse } from "@/types/auth";
+import {
+  getAccessTokenFromCookie,
+  normalizeAuthUser,
+} from "@/lib/auth/session-sync";
 
 // -------------------------------------------------------
 // AuthHydrationProvider
@@ -24,22 +29,22 @@ import type { AuthUser } from "@/types/auth";
 //   - Network error → set isLoading=false so UI doesn't hang
 // -------------------------------------------------------
 
-/** Shape returned directly by GET /auth/me (after TransformInterceptor unwrap) */
-interface MeResponseRaw {
-  id: string;
-  firstName: string | null;
-  lastName: string | null;
-  email: string | null;
-  epeDni: string | null;
-  authSource: string;
-  onboardingCompleted: boolean;
-  roles: { code: string; name: string }[];
+type MeResponseRaw = LoginResponse["user"];
+
+function clearSessionCookiesInBrowser(): void {
+  if (typeof document === "undefined") return;
+
+  for (const name of ["access_token", "refresh_token"]) {
+    document.cookie = `${name}=; path=/; max-age=0; SameSite=Strict`;
+    document.cookie = `${name}=; path=/; max-age=0; SameSite=Lax`;
+  }
 }
 
-function getTokenFromCookie(): string | null {
-  if (typeof document === "undefined") return null;
-  const match = document.cookie.match(/(?:^|;\s*)access_token=([^;]+)/);
-  return match ? match[1] : null;
+function isSsoLoginRequest(): boolean {
+  if (typeof window === "undefined") return false;
+
+  const { pathname, search } = window.location;
+  return pathname === "/login" && new URLSearchParams(search).has("token");
 }
 
 export function AuthHydrationProvider({
@@ -53,40 +58,51 @@ export function AuthHydrationProvider({
   const setLoading = useAuthStore((state) => state.setLoading);
 
   useEffect(() => {
+    let cancelled = false;
+
+    // SSO handoff owns session cleanup and token exchange. Do not silently
+    // refresh a previous browser session here, or an old user can win the race.
+    if (isSsoLoginRequest()) {
+      setLoading(false);
+      return () => {
+        cancelled = true;
+      };
+    }
+
     // Already hydrated — nothing to do
     if (user) {
       setLoading(false);
-      return;
+      return () => {
+        cancelled = true;
+      };
     }
-
-    const cookieToken = getTokenFromCookie();
-
-    // No token — middleware handles the redirect; just stop loading
-    if (!cookieToken) {
-      setLoading(false);
-      return;
-    }
-
-    let cancelled = false;
 
     async function hydrate() {
+      const cookieToken = getAccessTokenFromCookie();
+
+      // No access cookie — try refresh continuity before giving up
+      if (!cookieToken) {
+        try {
+          await refreshSession({ reason: "hydrate" });
+
+          if (cancelled) return;
+        } catch {
+          if (!cancelled) {
+            clearSessionCookiesInBrowser();
+            setLoading(false);
+          }
+        }
+
+        return;
+      }
+
       try {
         const raw = await api.get<MeResponseRaw>("/auth/me", {
           headers: { Authorization: `Bearer ${cookieToken}` },
         });
 
         if (!cancelled) {
-          const mappedUser: AuthUser = {
-            id: raw.id,
-            firstName: raw.firstName ?? "",
-            lastName: raw.lastName ?? "",
-            email: raw.email,
-            documentNumber: raw.epeDni ?? "",
-            onboardingCompleted: raw.onboardingCompleted,
-            authSource: (raw.authSource ?? "EPE") as "LOCAL" | "EPE",
-            role: raw.roles?.[0] ?? { code: "", name: "" },
-          };
-          setAuth(mappedUser, cookieToken!);
+          setAuth(normalizeAuthUser(raw), cookieToken);
         }
       } catch (error) {
         if (cancelled) return;
@@ -94,42 +110,21 @@ export function AuthHydrationProvider({
         // 401 → try silent refresh before giving up
         if (error instanceof ApiRequestError && error.status === 401) {
           try {
-            // Browser automatically sends the httpOnly refresh_token cookie
-            const refreshData = await api.post<{ accessToken: string }>(
-              "/auth/refresh",
-              {},
-            );
+            await refreshSession({ reason: "hydrate" });
 
             if (cancelled) return;
-
-            // Persist the new access token so it survives browser restarts
-            document.cookie = `access_token=${refreshData.accessToken}; path=/; SameSite=Strict; Max-Age=900`;
-
-            // Retry /auth/me with the fresh token
-            const raw = await api.get<MeResponseRaw>("/auth/me", {
-              headers: { Authorization: `Bearer ${refreshData.accessToken}` },
-            });
-
-            if (cancelled) return;
-
-            const mappedUser: AuthUser = {
-              id: raw.id,
-              firstName: raw.firstName ?? "",
-              lastName: raw.lastName ?? "",
-              email: raw.email,
-              documentNumber: raw.epeDni ?? "",
-              onboardingCompleted: raw.onboardingCompleted,
-              authSource: (raw.authSource ?? "EPE") as "LOCAL" | "EPE",
-              role: raw.roles?.[0] ?? { code: "", name: "" },
-            };
-            setAuth(mappedUser, refreshData.accessToken);
           } catch {
             // Refresh also failed — session truly expired; middleware redirects
-            if (!cancelled) setLoading(false);
+            if (!cancelled) {
+              clearSessionCookiesInBrowser();
+              setLoading(false);
+            }
           }
         } else {
           // 403 / network / unexpected error — stop loading, don't redirect
-          setLoading(false);
+          if (!cancelled) {
+            setLoading(false);
+          }
         }
       }
     }

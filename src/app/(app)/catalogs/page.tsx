@@ -1,40 +1,67 @@
-import { Tag, Building2, Package, Handshake } from "lucide-react";
+import Link from "next/link";
+import {
+  Globe,
+  Package,
+  Handshake,
+  Map,
+  Building2,
+  Layers,
+  ArrowRight,
+} from "lucide-react";
 
 import {
   Card,
   CardContent,
+  CardDescription,
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
 
 // -------------------------------------------------------
-// Catalogs page — placeholder (base page)
+// Catalogs index page — 6 catálogos navegables
 // -------------------------------------------------------
 
-const SECTIONS = [
+const CATALOGS = [
   {
-    icon: Tag,
-    title: "Conceptos de gasto",
-    description:
-      "Administra los conceptos y rubros de gasto reconocidos por el sistema.",
-  },
-  {
+    href: "/catalogs/organizational-units",
     icon: Building2,
-    title: "Áreas y programas",
-    description:
-      "Gestión de áreas orgánicas y programas presupuestales de la entidad.",
+    title: "Unidades Orgánicas",
+    description: "Áreas y unidades orgánicas de la entidad con sus siglas.",
   },
   {
-    icon: Package,
-    title: "Tipos de recurso",
+    href: "/catalogs/budget-programs",
+    icon: Globe,
+    title: "Programas / Proyectos",
     description:
-      "Clasificación de recursos (RO, RDR, donaciones) disponibles para gasto.",
+      "Programas presupuestales, proyectos y gestiones de la entidad.",
   },
   {
+    href: "/catalogs/funding-source-types",
+    icon: Layers,
+    title: "Tipos de Fuente de Financiamiento",
+    description:
+      "Categorías de fuentes: Presupuestado, No Presupuestado, Back Office, etc.",
+  },
+  {
+    href: "/catalogs/funding-sources",
     icon: Handshake,
-    title: "Socios y financiadores",
+    title: "Fuentes de Financiamiento",
     description:
-      "Directorio de organismos cooperantes y entidades financiadoras.",
+      "Directorio de fuentes de financiamiento del sistema presupuestario.",
+  },
+  {
+    href: "/catalogs/territories",
+    icon: Map,
+    title: "Territorios",
+    description:
+      "Jerarquía territorial: Región, Provincia, Distrito, Comunidad.",
+  },
+  {
+    href: "/catalogs/budget-categories",
+    icon: Package,
+    title: "Tipos de Recurso",
+    description:
+      "Categorías de gasto reconocidas en el sistema presupuestario.",
   },
 ] as const;
 
@@ -43,29 +70,36 @@ export default function CatalogsPage() {
     <div className="space-y-6">
       {/* Header */}
       <div>
-        <div className="flex items-center gap-3">
-          <h1 className="text-2xl font-bold tracking-tight">Catálogos</h1>
-          <span className="rounded-full bg-amber-100 px-2.5 py-0.5 text-xs font-medium text-amber-800">
-            En desarrollo
-          </span>
-        </div>
+        <h1 className="text-2xl font-bold tracking-tight">Catálogos</h1>
         <p className="text-muted-foreground">
-          Administración de datos maestros del sistema
+          Administración de datos maestros del sistema presupuestario
         </p>
       </div>
 
-      {/* Feature cards */}
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        {SECTIONS.map(({ icon: Icon, title, description }) => (
-          <Card key={title}>
-            <CardHeader className="flex flex-row items-center gap-3 space-y-0 pb-2">
-              <Icon className="h-5 w-5 text-muted-foreground" />
-              <CardTitle className="text-sm font-medium">{title}</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <p className="text-xs text-muted-foreground">{description}</p>
-            </CardContent>
-          </Card>
+      {/* Grid de catálogos */}
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        {CATALOGS.map(({ href, icon: Icon, title, description }) => (
+          <Link key={href} href={href}>
+            <Card className="h-full cursor-pointer transition-shadow hover:shadow-md">
+              <CardHeader className="flex flex-row items-center gap-3 space-y-0 pb-2">
+                <div className="flex h-9 w-9 items-center justify-center rounded-md bg-primary/10">
+                  <Icon className="h-5 w-5 text-primary" />
+                </div>
+                <CardTitle className="text-base font-semibold">
+                  {title}
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <CardDescription className="text-xs leading-relaxed">
+                  {description}
+                </CardDescription>
+                <div className="mt-3 flex items-center gap-1 text-xs font-medium text-primary">
+                  Gestionar
+                  <ArrowRight className="h-3 w-3" />
+                </div>
+              </CardContent>
+            </Card>
+          </Link>
         ))}
       </div>
     </div>

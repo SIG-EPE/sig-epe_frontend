@@ -1,10 +1,15 @@
 import type { Metadata } from "next";
-import { LoginForm } from "@/components/auth/login-form";
+import LoginPageClient from "./page-client";
 
 export const metadata: Metadata = {
-  title: "Iniciar sesión | SIG-EPE",
+  title: "Iniciar sesion | SIG-EPE",
 };
 
-export default function LoginPage() {
-  return <LoginForm />;
+export default async function LoginPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ reason?: string; token?: string }>;
+}) {
+  const { reason, token } = await searchParams;
+  return <LoginPageClient reason={reason} ssoToken={token} />;
 }

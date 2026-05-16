@@ -1,8 +1,11 @@
 'use client'
 
-import { User, Mail, CreditCard, Shield, Lock, Briefcase } from 'lucide-react'
+import { useState } from 'react'
+import { User, Mail, CreditCard, Shield, Briefcase } from 'lucide-react'
+import { toast } from 'sonner'
 
 import { useAuthStore } from '@/stores/auth-store'
+import { useProfile } from '@/hooks/use-profile'
 import { ROLE_LABELS, type RoleCode } from '@/lib/constants'
 
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
@@ -14,6 +17,8 @@ import {
   CardHeader,
   CardTitle,
 } from '@/components/ui/card'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
 import {
   Tooltip,
   TooltipContent,
@@ -38,13 +43,21 @@ function getInitials(firstName: string, lastName: string): string {
 
 export function ProfileView() {
   const user = useAuthStore((state) => state.user)
-  const isLoading = useAuthStore((state) => state.isLoading)
+  const isAuthLoading = useAuthStore((state) => state.isLoading)
+  const { updateProfile, isLoading: isSaving } = useProfile()
 
-  if (isLoading || !user) return <ProfileSkeleton />
+  const isLocal = user?.authSource === 'LOCAL'
+  const isEpe = user?.authSource === 'EPE'
+
+  const [firstName, setFirstName] = useState(user?.firstName ?? '')
+  const [lastName, setLastName] = useState(user?.lastName ?? '')
+  const [email, setEmail] = useState(user?.email ?? '')
+
+  if (isAuthLoading || !user) return <ProfileSkeleton />
 
   const fullName = `${user.firstName} ${user.lastName}`.trim()
   const initials = getInitials(user.firstName, user.lastName)
-  const roleLabel = ROLE_LABELS[user.role.code as RoleCode] ?? user.role.name
+  const roleLabel = ROLE_LABELS[user.role?.code as RoleCode] ?? user.role?.name ?? '—'
 
   const authSourceLabel =
     user.authSource === 'LOCAL'
@@ -52,6 +65,20 @@ export function ProfileView() {
       : user.authSource === 'EPE'
         ? 'Cuenta Enseña Perú'
         : '—'
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    try {
+      await updateProfile({
+        email: email || undefined,
+        firstName: isEpe ? undefined : firstName || undefined,
+        lastName: isEpe ? undefined : lastName || undefined,
+      })
+      toast.success('Perfil actualizado exitosamente')
+    } catch {
+      toast.error('Error al actualizar perfil')
+    }
+  }
 
   return (
     <div className="max-w-2xl mx-auto space-y-6">
@@ -70,48 +97,110 @@ export function ProfileView() {
         </CardContent>
       </Card>
 
-      {/* Card 2 — Personal information */}
+      {/* Card 2 — Editable personal information */}
       <Card>
         <CardHeader>
           <CardTitle>Información personal</CardTitle>
         </CardHeader>
         <CardContent>
+          <form onSubmit={(e) => void handleSubmit(e)} className="space-y-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {/* Nombre */}
+              <div className="space-y-1.5">
+                <Label htmlFor="firstName" className="flex items-center gap-1.5">
+                  <User className="h-3.5 w-3.5 text-muted-foreground" />
+                  Nombre
+                </Label>
+                {isEpe ? (
+                  <TooltipProvider>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Input
+                          id="firstName"
+                          value={firstName}
+                          disabled
+                          className="cursor-not-allowed"
+                        />
+                      </TooltipTrigger>
+                      <TooltipContent>Campo gestionado por Enseña Perú</TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
+                ) : (
+                  <Input
+                    id="firstName"
+                    value={firstName}
+                    onChange={(e) => setFirstName(e.target.value)}
+                  />
+                )}
+              </div>
+
+              {/* Apellido */}
+              <div className="space-y-1.5">
+                <Label htmlFor="lastName" className="flex items-center gap-1.5">
+                  <User className="h-3.5 w-3.5 text-muted-foreground" />
+                  Apellido
+                </Label>
+                {isEpe ? (
+                  <TooltipProvider>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Input
+                          id="lastName"
+                          value={lastName}
+                          disabled
+                          className="cursor-not-allowed"
+                        />
+                      </TooltipTrigger>
+                      <TooltipContent>Campo gestionado por Enseña Perú</TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
+                ) : (
+                  <Input
+                    id="lastName"
+                    value={lastName}
+                    onChange={(e) => setLastName(e.target.value)}
+                  />
+                )}
+              </div>
+
+              {/* Correo electrónico — siempre editable */}
+              <div className="space-y-1.5 md:col-span-2">
+                <Label htmlFor="email" className="flex items-center gap-1.5">
+                  <Mail className="h-3.5 w-3.5 text-muted-foreground" />
+                  Correo electrónico
+                </Label>
+                <Input
+                  id="email"
+                  type="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  placeholder="No configurado"
+                />
+              </div>
+            </div>
+
+            <div className="flex justify-end pt-2">
+              <Button type="submit" disabled={isSaving}>
+                {isSaving ? 'Guardando...' : 'Guardar cambios'}
+              </Button>
+            </div>
+          </form>
+        </CardContent>
+      </Card>
+
+      {/* Card 3 — Read-only fields */}
+      <Card>
+        <CardHeader>
+          <CardTitle>Información de cuenta</CardTitle>
+        </CardHeader>
+        <CardContent>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            {/* Nombre */}
-            <div className="flex items-start gap-3">
-              <User className="h-4 w-4 mt-0.5 text-muted-foreground shrink-0" />
-              <div>
-                <p className="text-xs text-muted-foreground font-medium">Nombre</p>
-                <p className="text-sm">{user.firstName ?? '—'}</p>
-              </div>
-            </div>
-
-            {/* Apellido */}
-            <div className="flex items-start gap-3">
-              <User className="h-4 w-4 mt-0.5 text-muted-foreground shrink-0" />
-              <div>
-                <p className="text-xs text-muted-foreground font-medium">Apellido</p>
-                <p className="text-sm">{user.lastName ?? '—'}</p>
-              </div>
-            </div>
-
             {/* DNI */}
             <div className="flex items-start gap-3">
               <CreditCard className="h-4 w-4 mt-0.5 text-muted-foreground shrink-0" />
               <div>
                 <p className="text-xs text-muted-foreground font-medium">DNI</p>
                 <p className="text-sm">{user.documentNumber ?? '—'}</p>
-              </div>
-            </div>
-
-            {/* Correo electrónico */}
-            <div className="flex items-start gap-3">
-              <Mail className="h-4 w-4 mt-0.5 text-muted-foreground shrink-0" />
-              <div>
-                <p className="text-xs text-muted-foreground font-medium">
-                  Correo electrónico
-                </p>
-                <p className="text-sm">{user.email ?? 'No configurado'}</p>
               </div>
             </div>
 
@@ -135,31 +224,17 @@ export function ProfileView() {
               </div>
             </div>
           </div>
+
+          {isLocal && (
+            <div className="flex justify-end pt-6">
+              <Button type="button" variant="outline" disabled>
+                Cambiar contraseña
+              </Button>
+            </div>
+          )}
         </CardContent>
       </Card>
 
-      {/* Card 3 — Security */}
-      <Card>
-        <CardHeader>
-          <CardTitle>Seguridad</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <TooltipProvider>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                {/* span wrapper required — disabled buttons don't fire pointer events */}
-                <span className="inline-block">
-                  <Button disabled variant="outline">
-                    <Lock className="mr-2 h-4 w-4" />
-                    Cambiar contraseña
-                  </Button>
-                </span>
-              </TooltipTrigger>
-              <TooltipContent>Disponible próximamente</TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
-        </CardContent>
-      </Card>
     </div>
   )
 }
