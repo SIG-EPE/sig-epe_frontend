@@ -5,11 +5,15 @@ import type { AuthUser, BackendAuthUser, LoginResponse } from "@/types/auth";
 interface SyncAuthSessionInput {
   accessToken: string;
   accessTokenExpiresAt?: string;
+  sessionExpiresAt?: string;
   user?: BackendAuthUser;
 }
 
 const ACCESS_TOKEN_MAX_AGE_SECONDS = 15 * 60;
+const SESSION_HINT_MAX_AGE_SECONDS = 7 * 24 * 60 * 60;
 const ACCESS_TOKEN_CLEAR_PATHS = ["/", "/login", "/auth", "/auth/"] as const;
+const SESSION_HINT_COOKIE_NAME = "session_hint" as const;
+const SESSION_HINT_COOKIE_VALUE = "present" as const;
 
 function getCookieDomainCandidates(): string[] {
   if (typeof window === "undefined") return [];
@@ -52,8 +56,27 @@ export function clearAccessTokenCookie(): void {
   }
 }
 
+export function writeSessionHintCookie(sessionExpiresAt?: string): void {
+  if (typeof document === "undefined") return;
+
+  const maxAge = getSessionHintMaxAge(sessionExpiresAt);
+  document.cookie = `${SESSION_HINT_COOKIE_NAME}=${SESSION_HINT_COOKIE_VALUE}; path=/; SameSite=Strict; Max-Age=${maxAge}`;
+}
+
+export function clearSessionHintCookie(): void {
+  if (typeof document === "undefined") return;
+
+  const domainCandidates = getCookieDomainCandidates();
+  expireCookie(SESSION_HINT_COOKIE_NAME, "/");
+
+  for (const domain of domainCandidates) {
+    expireCookie(SESSION_HINT_COOKIE_NAME, "/", domain);
+  }
+}
+
 export function clearClientAuthSession(): void {
   clearAccessTokenCookie();
+  clearSessionHintCookie();
   useAuthStore.getState().clearAuth();
 }
 
@@ -83,6 +106,19 @@ export function getAccessTokenMaxAge(
   return maxAge > 0 ? maxAge : 0;
 }
 
+export function getSessionHintMaxAge(
+  sessionExpiresAt?: string,
+  now = Date.now(),
+): number {
+  if (!sessionExpiresAt) return SESSION_HINT_MAX_AGE_SECONDS;
+
+  const expiresAt = new Date(sessionExpiresAt).getTime();
+  if (Number.isNaN(expiresAt)) return SESSION_HINT_MAX_AGE_SECONDS;
+
+  const maxAge = Math.floor((expiresAt - now) / 1000);
+  return maxAge > 0 ? maxAge : 0;
+}
+
 export function writeAccessTokenCookie(
   accessToken: string,
   accessTokenExpiresAt?: string,
@@ -98,18 +134,22 @@ export function writeAccessTokenCookie(
 export function syncAuthSession({
   accessToken,
   accessTokenExpiresAt,
+  sessionExpiresAt,
   user,
 }: SyncAuthSessionInput): void {
   writeAccessTokenCookie(accessToken, accessTokenExpiresAt);
+  writeSessionHintCookie(sessionExpiresAt);
+
+  const expiries = { accessTokenExpiresAt, sessionExpiresAt };
 
   if (user) {
-    useAuthStore.getState().setAuth(normalizeAuthUser(user), accessToken);
+    useAuthStore.getState().setAuth(normalizeAuthUser(user), accessToken, expiries);
     return;
   }
 
   const currentUser = useAuthStore.getState().user;
   if (currentUser) {
-    useAuthStore.getState().setAuth(currentUser, accessToken);
+    useAuthStore.getState().setAuth(currentUser, accessToken, expiries);
   }
 }
 
@@ -117,6 +157,7 @@ export function toSessionSyncInput(data: LoginResponse): SyncAuthSessionInput {
   return {
     accessToken: data.accessToken,
     accessTokenExpiresAt: data.accessTokenExpiresAt,
+    sessionExpiresAt: data.sessionExpiresAt,
     user: data.user,
   };
 }

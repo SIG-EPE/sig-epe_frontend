@@ -5,12 +5,11 @@ import { Loader2 } from "lucide-react";
 
 import { useAuthStore } from "@/stores/auth-store";
 import { api, ApiRequestError } from "@/lib/api-client";
+import { refreshSession } from "@/lib/auth/refresh-session";
 import type { LoginResponse } from "@/types/auth";
 import {
   getAccessTokenFromCookie,
   normalizeAuthUser,
-  syncAuthSession,
-  toSessionSyncInput,
 } from "@/lib/auth/session-sync";
 
 // -------------------------------------------------------
@@ -84,11 +83,9 @@ export function AuthHydrationProvider({
       // No access cookie — try refresh continuity before giving up
       if (!cookieToken) {
         try {
-          const refreshData = await api.post<LoginResponse>("/auth/refresh", {});
+          await refreshSession({ reason: "hydrate" });
 
           if (cancelled) return;
-
-          syncAuthSession(toSessionSyncInput(refreshData));
         } catch {
           if (!cancelled) {
             clearSessionCookiesInBrowser();
@@ -113,15 +110,9 @@ export function AuthHydrationProvider({
         // 401 → try silent refresh before giving up
         if (error instanceof ApiRequestError && error.status === 401) {
           try {
-            // Browser automatically sends the httpOnly refresh_token cookie
-            const refreshData = await api.post<LoginResponse>(
-              "/auth/refresh",
-              {},
-            );
+            await refreshSession({ reason: "hydrate" });
 
             if (cancelled) return;
-
-            syncAuthSession(toSessionSyncInput(refreshData));
           } catch {
             // Refresh also failed — session truly expired; middleware redirects
             if (!cancelled) {

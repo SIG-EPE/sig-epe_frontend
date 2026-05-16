@@ -9,11 +9,17 @@ import type { AuthUser } from "@/types/auth";
 interface AuthState {
   user: AuthUser | null;
   accessToken: string | null;
+  accessTokenExpiresAt: string | null;
+  sessionExpiresAt: string | null;
   isLoading: boolean;
 }
 
 interface AuthActions {
-  setAuth: (user: AuthUser, token: string) => void;
+  setAuth: (
+    user: AuthUser,
+    token: string,
+    expiries?: { accessTokenExpiresAt?: string; sessionExpiresAt?: string },
+  ) => void;
   clearAuth: () => void;
   setLoading: (loading: boolean) => void;
   patchUser: (partial: Partial<AuthUser>) => void;
@@ -24,16 +30,30 @@ type AuthStore = AuthState & AuthActions;
 export const useAuthStore = create<AuthStore>((set) => ({
   user: null,
   accessToken: null,
+  accessTokenExpiresAt: null,
+  sessionExpiresAt: null,
   isLoading: true,
 
-  setAuth: (user, accessToken) =>
-    set({ user, accessToken, isLoading: false }),
+  setAuth: (user, accessToken, expiries) =>
+    set({
+      user,
+      accessToken,
+      accessTokenExpiresAt: expiries?.accessTokenExpiresAt ?? null,
+      sessionExpiresAt: expiries?.sessionExpiresAt ?? null,
+      isLoading: false,
+    }),
 
   clearAuth: () => {
     if (typeof document !== "undefined") {
       document.cookie = "access_token=; path=/; max-age=0; SameSite=Strict";
     }
-    return set({ user: null, accessToken: null, isLoading: false });
+    return set({
+      user: null,
+      accessToken: null,
+      accessTokenExpiresAt: null,
+      sessionExpiresAt: null,
+      isLoading: false,
+    });
   },
 
   setLoading: (isLoading) =>

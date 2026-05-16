@@ -6,17 +6,15 @@ const {
   mockGet,
   mockSetAuth,
   mockSetLoading,
-  mockSyncAuthSession,
-  mockToSessionSyncInput,
   mockGetAccessTokenFromCookie,
+  mockRefreshSession,
 } = vi.hoisted(() => ({
   mockPost: vi.fn(),
   mockGet: vi.fn(),
   mockSetAuth: vi.fn(),
   mockSetLoading: vi.fn(),
-  mockSyncAuthSession: vi.fn(),
-  mockToSessionSyncInput: vi.fn(),
   mockGetAccessTokenFromCookie: vi.fn(),
+  mockRefreshSession: vi.fn(),
 }));
 
 vi.mock("@/stores/auth-store", () => ({
@@ -50,8 +48,10 @@ vi.mock("@/lib/api-client", () => ({
 vi.mock("@/lib/auth/session-sync", () => ({
   getAccessTokenFromCookie: mockGetAccessTokenFromCookie,
   normalizeAuthUser: vi.fn(),
-  syncAuthSession: mockSyncAuthSession,
-  toSessionSyncInput: mockToSessionSyncInput,
+}));
+
+vi.mock("@/lib/auth/refresh-session", () => ({
+  refreshSession: mockRefreshSession,
 }));
 
 import { AuthHydrationProvider } from "@/components/auth/auth-hydration-provider";
@@ -98,11 +98,7 @@ describe("AuthHydrationProvider", () => {
       },
     };
 
-    mockPost.mockResolvedValue(refreshResponse);
-    mockToSessionSyncInput.mockReturnValue({
-      accessToken: "new-token",
-      user: refreshResponse.user,
-    });
+    mockRefreshSession.mockResolvedValue(refreshResponse);
 
     render(
       <AuthHydrationProvider>
@@ -113,16 +109,12 @@ describe("AuthHydrationProvider", () => {
     expect(screen.queryByText("protected content")).not.toBeInTheDocument();
 
     await waitFor(() => {
-      expect(mockPost).toHaveBeenCalledWith("/auth/refresh", {});
-      expect(mockSyncAuthSession).toHaveBeenCalledWith({
-        accessToken: "new-token",
-        user: refreshResponse.user,
-      });
+      expect(mockRefreshSession).toHaveBeenCalledWith({ reason: "hydrate" });
     });
   });
 
   it("stops loading when refresh continuity also fails", async () => {
-    mockPost.mockRejectedValue(new Error("refresh failed"));
+    mockRefreshSession.mockRejectedValue(new Error("refresh failed"));
 
     render(
       <AuthHydrationProvider>

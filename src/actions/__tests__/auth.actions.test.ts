@@ -15,10 +15,10 @@ describe("clearSessionAction", () => {
     vi.clearAllMocks();
   });
 
-  it("clears both access and refresh cookies", async () => {
+  it("clears access, refresh, and session hint cookies", async () => {
     await clearSessionAction();
 
-    expect(mockSet).toHaveBeenCalledTimes(2);
+    expect(mockSet).toHaveBeenCalledTimes(4);
     expect(mockSet).toHaveBeenNthCalledWith(1, "access_token", "", {
       httpOnly: true,
       secure: false,
@@ -27,6 +27,20 @@ describe("clearSessionAction", () => {
       maxAge: 0,
     });
     expect(mockSet).toHaveBeenNthCalledWith(2, "refresh_token", "", {
+      httpOnly: true,
+      secure: false,
+      sameSite: "lax",
+      path: "/",
+      maxAge: 0,
+    });
+    expect(mockSet).toHaveBeenNthCalledWith(3, "refresh_token", "", {
+      httpOnly: true,
+      secure: false,
+      sameSite: "lax",
+      path: "/auth/",
+      maxAge: 0,
+    });
+    expect(mockSet).toHaveBeenNthCalledWith(4, "session_hint", "", {
       httpOnly: true,
       secure: false,
       sameSite: "lax",

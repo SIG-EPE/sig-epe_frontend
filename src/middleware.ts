@@ -10,6 +10,7 @@ import { getRoleHomePath } from "@/lib/auth/role-redirect";
 // -------------------------------------------------------
 
 const PUBLIC_PATHS = ["/_next", "/favicon.ico", "/api/health"];
+const SESSION_HINT_COOKIE_NAME = "session_hint" as const;
 
 // Routes that require specific roles — checked after token verification
 const ROUTE_ROLE_REQUIREMENTS: Record<string, string[]> = {
@@ -41,8 +42,7 @@ export async function middleware(request: NextRequest) {
   }
 
   const token = request.cookies.get("access_token")?.value;
-  const refreshToken = request.cookies.get("refresh_token")?.value;
-  const hasSessionContinuity = Boolean(refreshToken);
+  const hasSessionContinuity = request.cookies.get(SESSION_HINT_COOKIE_NAME)?.value === "present";
 
   // /login: if the user already has a valid token, redirect to the appropriate destination
   if (pathname === "/login") {
@@ -63,7 +63,9 @@ export async function middleware(request: NextRequest) {
     return NextResponse.next();
   }
 
-  // Protected routes: require a valid token
+  // Protected routes: a valid access token is authoritative. If it is missing
+  // or expired, a non-sensitive session hint may admit only the protected shell;
+  // AuthGate/RoleGuard and backend APIs make the final auth decision.
   if (!token) {
     if (hasSessionContinuity) {
       return NextResponse.next();

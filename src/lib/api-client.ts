@@ -1,7 +1,7 @@
 import type { ApiResponse, ApiError } from "@/types/api";
-import type { LoginResponse } from "@/types/auth";
 import { useAuthStore } from "@/stores/auth-store";
-import { syncAuthSession, toSessionSyncInput } from "@/lib/auth/session-sync";
+import { clearClientAuthSession } from "@/lib/auth/session-sync";
+import { refreshSession } from "@/lib/auth/refresh-session";
 
 // -------------------------------------------------------
 // API Client — SIG-EPE
@@ -34,35 +34,6 @@ export class ApiRequestError extends Error {
   }
 }
 
-/** Whether a token refresh is in-flight (prevents concurrent refreshes) */
-let refreshPromise: Promise<string | null> | null = null;
-
-/**
- * Attempt to refresh the access token using the httpOnly refresh cookie.
- * Returns the new access token or null on failure.
- */
-async function refreshAccessToken(): Promise<string | null> {
-  try {
-    const res = await fetch(`${API_URL}/auth/refresh`, {
-      method: "POST",
-      credentials: "include", // sends httpOnly cookie
-    });
-
-    if (!res.ok) return null;
-
-    const json = (await res.json()) as ApiResponse<LoginResponse>;
-    const newToken = json.data.accessToken;
-
-    if (newToken) {
-      syncAuthSession(toSessionSyncInput(json.data));
-    }
-
-    return newToken;
-  } catch {
-    return null;
-  }
-}
-
 /**
  * Core fetch function with auth + refresh logic.
  */
@@ -91,15 +62,9 @@ async function apiFetch<T>(
   });
 
   // --- 401: attempt token refresh + retry ---
-  if (res.status === 401 && accessToken) {
-    // Deduplicate concurrent refresh calls
-    if (!refreshPromise) {
-      refreshPromise = refreshAccessToken().finally(() => {
-        refreshPromise = null;
-      });
-    }
-
-    const newToken = await refreshPromise;
+  if (res.status === 401 && shouldAttachAuthHeader(path)) {
+    const refreshResult = await refreshSession({ reason: "api-401" }).catch(() => null);
+    const newToken = refreshResult?.accessToken ?? null;
 
     if (newToken) {
       // Retry original request with new token
@@ -126,7 +91,7 @@ async function apiFetch<T>(
     }
 
     // Refresh failed — clear auth + redirect to login
-    useAuthStore.getState().clearAuth();
+    clearClientAuthSession();
     if (typeof window !== "undefined") {
       window.location.href = "/login";
     }

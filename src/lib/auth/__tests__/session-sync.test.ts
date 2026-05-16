@@ -1,7 +1,9 @@
 import { beforeEach, describe, expect, it } from "vitest";
 
 import {
+  clearClientAuthSession,
   getAccessTokenMaxAge,
+  getSessionHintMaxAge,
   normalizeAuthUser,
   syncAuthSession,
 } from "@/lib/auth/session-sync";
@@ -11,6 +13,7 @@ describe("session-sync", () => {
   beforeEach(() => {
     useAuthStore.setState({ user: null, accessToken: null, isLoading: true });
     document.cookie = "access_token=; path=/; max-age=0; SameSite=Strict";
+    document.cookie = "session_hint=; path=/; max-age=0; SameSite=Strict";
   });
 
   it("normalizes backend auth users into store shape", () => {
@@ -40,12 +43,14 @@ describe("session-sync", () => {
   it("computes cookie max-age from backend expiry metadata", () => {
     const now = new Date("2026-05-03T16:00:00.000Z").getTime();
     expect(getAccessTokenMaxAge("2026-05-03T16:15:00.000Z", now)).toBe(900);
+    expect(getSessionHintMaxAge("2026-05-10T16:00:00.000Z", now)).toBe(604_800);
   });
 
   it("syncs the access cookie and Zustand store from one path", () => {
     syncAuthSession({
       accessToken: "token-123",
       accessTokenExpiresAt: "2099-01-01T00:15:00.000Z",
+      sessionExpiresAt: "2099-01-08T00:00:00.000Z",
       user: {
         id: "user-1",
         firstName: "Ada",
@@ -60,8 +65,24 @@ describe("session-sync", () => {
 
     const state = useAuthStore.getState();
     expect(state.accessToken).toBe("token-123");
+    expect(state.sessionExpiresAt).toBe("2099-01-08T00:00:00.000Z");
     expect(state.user?.role?.code).toBe("ADMIN_SISTEMA");
     expect(document.cookie).toContain("access_token=token-123");
+    expect(document.cookie).toContain("session_hint=present");
+  });
+
+  it("clears access and hint cookies with local auth state", () => {
+    syncAuthSession({
+      accessToken: "token-123",
+      accessTokenExpiresAt: "2099-01-01T00:15:00.000Z",
+      sessionExpiresAt: "2099-01-08T00:00:00.000Z",
+    });
+
+    clearClientAuthSession();
+
+    expect(useAuthStore.getState().accessToken).toBeNull();
+    expect(document.cookie).not.toContain("access_token=token-123");
+    expect(document.cookie).not.toContain("session_hint=present");
   });
 
   it("removes stale path-specific access cookies before writing the new token", () => {

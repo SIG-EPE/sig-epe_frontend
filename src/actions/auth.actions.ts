@@ -2,7 +2,7 @@
 
 import { cookies } from "next/headers";
 
-function expireSessionCookie(name: string) {
+function expireSessionCookie(name: string, path = "/") {
   return {
     name,
     value: "",
@@ -10,7 +10,7 @@ function expireSessionCookie(name: string) {
       httpOnly: true,
       secure: process.env.NODE_ENV === "production",
       sameSite: "lax" as const,
-      path: "/",
+      path,
       maxAge: 0,
     },
   };
@@ -26,6 +26,8 @@ export async function clearSessionAction() {
   for (const cookie of [
     expireSessionCookie("access_token"),
     expireSessionCookie("refresh_token"),
+    expireSessionCookie("refresh_token", "/auth/"),
+    expireSessionCookie("session_hint"),
   ]) {
     cookieStore.set(cookie.name, cookie.value, cookie.options);
   }
