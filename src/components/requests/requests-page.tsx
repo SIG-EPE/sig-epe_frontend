@@ -141,7 +141,7 @@ export function RequestsPage() {
         )}
       </div>
 
-      <div className={cn("grid gap-3 sm:grid-cols-2", isGiofReviewInbox ? "lg:grid-cols-4" : "lg:grid-cols-5")} data-testid="requests-status-summary">
+      <div className={cn("grid gap-3 sm:grid-cols-2", isGiofReviewInbox ? "lg:grid-cols-3" : "lg:grid-cols-5")} data-testid="requests-status-summary">
         {isGiofReviewInbox ? REQUEST_REVIEW_QUEUE_CARDS.map((card) => {
           const isActive = activeQueue === card.value;
 

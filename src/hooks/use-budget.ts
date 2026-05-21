@@ -665,6 +665,7 @@ export interface MonthlyDistribution {
   month: number;
   planned_amount: number;
   executed_amount: number;
+  execution_details?: MonthlyEntry["execution_details"];
 }
 
 interface UseMonthlyDistributionReturn {

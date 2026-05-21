@@ -24,6 +24,7 @@ import {
   getNewAdvancePendingSettlementBlockMessage,
   getRequestEditStepperItems,
   getRequiredDocumentChecklist,
+  REQUEST_TYPE_LABELS,
   isBudgetPreviewBlocking,
   isKnownBankCode,
   type RequestEditStep,
@@ -40,6 +41,8 @@ import {
   type CreateRequestDto,
   type PaymentRequest,
   type RequestPlanningLineLookupItem,
+  type RequestType,
+  type UpdateRequestDto,
 } from "@/types/requests";
 import { BeneficiaryFields } from "./beneficiary-fields";
 import { BudgetPreviewCard } from "./budget-preview-card";
@@ -53,6 +56,7 @@ const requestFormSchema = z.object({
     REQUEST_TYPE.ADVANCE,
     REQUEST_TYPE.REIMBURSEMENT,
     REQUEST_TYPE.SUPPLIER_PAYMENT,
+    REQUEST_TYPE.ADVANCE_SETTLEMENT,
   ], { errorMap: () => ({ message: "Selecciona un tipo de solicitud válido" }) }),
   budget_planning_line_id: z.string().min(1, "Selecciona una línea POA"),
   budget_month: z.coerce.number().int().min(1, "Selecciona un mes").max(12, "Selecciona un mes válido"),
@@ -135,7 +139,7 @@ function optionalAccountType(value?: string): AccountType | undefined {
   return value === ACCOUNT_TYPE.SAVINGS || value === ACCOUNT_TYPE.CHECKING ? value : undefined;
 }
 
-function toCreateDto(values: RequestFormValues): CreateRequestDto {
+export function toCreateRequestDto(values: RequestFormValues): CreateRequestDto {
   const bankCode = values.bank_code && isKnownBankCode(values.bank_code) ? values.bank_code : undefined;
   const dto: CreateRequestDto = {
     request_type: values.request_type,
@@ -157,6 +161,34 @@ function toCreateDto(values: RequestFormValues): CreateRequestDto {
   };
 
   if (values.request_type === REQUEST_TYPE.ADVANCE) {
+    dto.scheduled_rendition_at = emptyToUndefined(values.scheduled_rendition_at);
+  }
+
+  return dto;
+}
+
+export function toUpdateRequestDto(values: RequestFormValues, currentRequestType?: RequestType | null): UpdateRequestDto {
+  const bankCode = values.bank_code && isKnownBankCode(values.bank_code) ? values.bank_code : undefined;
+  const effectiveRequestType = currentRequestType ?? values.request_type;
+  const dto: UpdateRequestDto = {
+    budget_planning_line_id: values.budget_planning_line_id,
+    budget_month: values.budget_month,
+    requested_amount: values.requested_amount,
+    currency: REQUEST_CURRENCY.PEN,
+    concept: values.concept.trim(),
+    supplier_ruc: emptyToUndefined(values.supplier_ruc),
+    supplier_name: emptyToUndefined(values.supplier_name),
+    beneficiary_name: emptyToUndefined(values.beneficiary_name),
+    beneficiary_document_type: optionalDocumentType(values.beneficiary_document_type),
+    beneficiary_document_number: emptyToUndefined(values.beneficiary_document_number)?.toUpperCase(),
+    bank_code: bankCode,
+    bank_name: emptyToUndefined(values.bank_name),
+    bank_account: emptyToUndefined(values.bank_account),
+    bank_cci: emptyToUndefined(values.bank_cci),
+    account_type: optionalAccountType(values.account_type),
+  };
+
+  if (effectiveRequestType === REQUEST_TYPE.ADVANCE) {
     dto.scheduled_rendition_at = emptyToUndefined(values.scheduled_rendition_at);
   }
 
@@ -198,7 +230,7 @@ export function RequestForm({ initialRequest, mode = "create", activeStep = REQU
   const form = useForm<RequestFormValues>({
     resolver: zodResolver(requestFormSchema),
     defaultValues: {
-      request_type: initialRequest?.request_type === REQUEST_TYPE.ADVANCE_SETTLEMENT ? REQUEST_TYPE.ADVANCE : initialRequest?.request_type ?? REQUEST_TYPE.ADVANCE,
+      request_type: initialRequest?.request_type ?? REQUEST_TYPE.ADVANCE,
       budget_planning_line_id: initialRequest?.budget_planning_line_id ?? "",
       budget_month: initialRequest?.budget_month ?? new Date().getMonth() + 1,
       requested_amount: Number(initialRequest?.requested_amount ?? 0),
@@ -218,6 +250,7 @@ export function RequestForm({ initialRequest, mode = "create", activeStep = REQU
   });
 
   const requestType = form.watch("request_type");
+  const effectiveRequestType = currentRequest?.request_type ?? initialRequest?.request_type ?? requestType;
   const planningLineId = form.watch("budget_planning_line_id");
   const budgetMonth = form.watch("budget_month");
   const requestedAmount = form.watch("requested_amount");
@@ -234,7 +267,7 @@ export function RequestForm({ initialRequest, mode = "create", activeStep = REQU
 
   const isSaving = creating || updating;
   const stepperItems = getRequestEditStepperItems(mode === "create" ? REQUEST_EDIT_STEP.DATA : activeStep);
-  const checklist = getRequiredDocumentChecklist(currentRequest?.request_type ?? requestType, reviewDocuments.documents);
+  const checklist = getRequiredDocumentChecklist(effectiveRequestType, reviewDocuments.documents);
   const canSubmitReview = checklist.isComplete && !isBudgetPreviewBlocking(preview.data);
 
   useEffect(() => {
@@ -249,15 +282,16 @@ export function RequestForm({ initialRequest, mode = "create", activeStep = REQU
   }
 
   async function saveDraft(values: RequestFormValues): Promise<PaymentRequest> {
-    const dto = toCreateDto(values);
-    const saved = draftId ? await updateRequest(draftId, dto) : await createRequest(dto);
+    const saved = draftId
+      ? await updateRequest(draftId, toUpdateRequestDto(values, effectiveRequestType))
+      : await createRequest(toCreateRequestDto(values));
     setDraftId(saved.id);
     setCurrentRequest(saved);
     return saved;
   }
 
   async function handleSaveDraft(values: RequestFormValues): Promise<void> {
-    const requestTypeForBlocking = values.request_type;
+    const requestTypeForBlocking = effectiveRequestType;
     try {
       const saved = await saveDraft(values);
       toast.success(`Borrador guardado: ${saved.request_code ?? saved.sequential_number ?? saved.id}`);
@@ -272,7 +306,7 @@ export function RequestForm({ initialRequest, mode = "create", activeStep = REQU
   }
 
   async function handleSubmitDraft(values: RequestFormValues): Promise<void> {
-    const requestTypeForBlocking = values.request_type;
+    const requestTypeForBlocking = effectiveRequestType;
     setSubmitErrors([]);
     if (isBudgetPreviewBlocking(preview.data)) {
       toast.error("El techo de la unidad orgánica bloquea el envío. Puedes guardar el borrador para corregirlo luego.");
@@ -339,7 +373,13 @@ export function RequestForm({ initialRequest, mode = "create", activeStep = REQU
             <section className="space-y-4">
               <h2 className="border-b pb-2 text-base font-semibold">1. Datos de la solicitud</h2>
               <div className="grid gap-4 md:grid-cols-2">
-                <RequestTypeSelector control={form.control} />
+                {effectiveRequestType === REQUEST_TYPE.ADVANCE_SETTLEMENT ? (
+                  <div className="rounded-md border bg-muted/40 p-3">
+                    <p className="text-sm font-medium">Tipo de solicitud</p>
+                    <p className="mt-1 text-sm">{REQUEST_TYPE_LABELS[REQUEST_TYPE.ADVANCE_SETTLEMENT]} (REXAN)</p>
+                    <p className="mt-1 text-xs text-muted-foreground">La rendición se origina desde un anticipo pagado y no se cambia a anticipo durante la edición.</p>
+                  </div>
+                ) : <RequestTypeSelector control={form.control} />}
                 <FormField control={form.control} name="budget_month" render={({ field }) => (
                   <FormItem>
                     <FormLabel>Mes presupuestal *</FormLabel>

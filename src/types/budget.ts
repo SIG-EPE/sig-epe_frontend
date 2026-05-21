@@ -72,12 +72,34 @@ export interface PlanningLine {
   partners?: FundingSourceAllocation[];
 }
 
+export const MONTHLY_EXECUTION_DETAIL_SOURCE = {
+  PAYMENT_REQUEST: "PAYMENT_REQUEST",
+  MANUAL: "MANUAL",
+} as const;
+
+export type MonthlyExecutionDetailSource =
+  (typeof MONTHLY_EXECUTION_DETAIL_SOURCE)[keyof typeof MONTHLY_EXECUTION_DETAIL_SOURCE];
+
+export interface MonthlyExecutionDetail {
+  id: string;
+  source: MonthlyExecutionDetailSource;
+  requestId?: string | null;
+  requestCode?: string | null;
+  concept: string | null;
+  amount: number;
+  paidAt?: string | null;
+  createdAt?: string | null;
+  status?: string | null;
+  type?: string | null;
+}
+
 export interface MonthlyEntry {
   id: string;
   planning_line_id: string;
   month: number;
   planned_amount: number;
   executed_amount: number;
+  execution_details?: MonthlyExecutionDetail[];
 }
 
 export interface FundingSourceAllocation {

@@ -200,6 +200,32 @@ describe("RequestDocumentsCard", () => {
     expect(screen.queryByText(/no se muestran enlaces de drive/i)).not.toBeInTheDocument();
   });
 
+  it("mantiene a GIOF solo en lectura para una REXAN observada", async () => {
+    const driveWebUrl = "https://drive.google.com/file/d/doc-1/view";
+    vi.mocked(api.get).mockResolvedValue([makeDocument({ drive_web_url: driveWebUrl })]);
+    useAuthStore.setState({
+      user: {
+        id: "giof-1",
+        firstName: "Gina",
+        lastName: "Gestora",
+        email: "gina@example.com",
+        documentNumber: "87654321",
+        onboardingCompleted: true,
+        authSource: "LOCAL",
+        role: { code: ROLE_CODE.GIOF_GESTOR, name: "GIOF Gestor" },
+      },
+      accessToken: "token",
+      isLoading: false,
+    });
+
+    render(<RequestDocumentsCard request={makeRequest({ request_type: REQUEST_TYPE.ADVANCE_SETTLEMENT, status: REQUEST_STATUS.OBSERVED })} />);
+
+    expect(await screen.findByRole("link", { name: /ver documento/i })).toHaveAttribute("href", driveWebUrl);
+    expect(screen.queryByRole("button", { name: /adjuntar/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /eliminar/i })).not.toBeInTheDocument();
+    expect(screen.getByText(/GIOF solo puede revisar los documentos de una rendición observada/i)).toBeInTheDocument();
+  });
+
   it("explica que los documentos compartidos pueden abrirse cuando el acceso fue habilitado", async () => {
     vi.mocked(api.get).mockResolvedValue([]);
 

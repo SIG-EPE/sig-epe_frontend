@@ -3,6 +3,7 @@ import type { NextRequest } from "next/server";
 import { jwtVerify } from "jose";
 import type { TokenPayload } from "@/types/auth";
 import { getRoleHomePath } from "@/lib/auth/role-redirect";
+import { canAccessRoute } from "@/lib/auth/route-access";
 
 // -------------------------------------------------------
 // Next.js Middleware — Edge Runtime JWT verification
@@ -11,13 +12,6 @@ import { getRoleHomePath } from "@/lib/auth/role-redirect";
 
 const PUBLIC_PATHS = ["/_next", "/favicon.ico", "/api/health"];
 const SESSION_HINT_COOKIE_NAME = "session_hint" as const;
-
-// Routes that require specific roles — checked after token verification
-const ROUTE_ROLE_REQUIREMENTS: Record<string, string[]> = {
-  "/admin/users": ["ADMIN_SISTEMA", "GIOF_GESTOR"],
-  "/admin/config": ["ADMIN_SISTEMA"],
-  "/admin/audit-logs": ["ADMIN_SISTEMA"],
-};
 
 function isPublicPath(pathname: string): boolean {
   return PUBLIC_PATHS.some((p) => pathname.startsWith(p));
@@ -101,14 +95,10 @@ export async function middleware(request: NextRequest) {
 
   // Role-based route protection — check after scope logic
   if (tokenPayload.scope === "full") {
-    for (const [route, allowedRoles] of Object.entries(ROUTE_ROLE_REQUIREMENTS)) {
-      if (pathname.startsWith(route)) {
-        if (!allowedRoles.includes(tokenPayload.role)) {
-          const homePath = getRoleHomePath(tokenPayload.role) ?? "/dashboard";
-          return NextResponse.redirect(new URL(homePath, request.url));
-        }
-        break;
-      }
+    const access = canAccessRoute(pathname, tokenPayload.role);
+
+    if (access.isProtectedRoute && !access.isAllowed) {
+      return NextResponse.redirect(new URL(getRoleHomePath(tokenPayload.role), request.url));
     }
   }
 

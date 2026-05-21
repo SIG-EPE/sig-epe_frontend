@@ -1,8 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { ApiRequestError } from "@/lib/api-client";
 import {
   ACTIVE_REVIEW_STATUSES,
+  PAYMENT_PROOF_ACCEPT,
+  PAYMENT_PROOF_ACCEPTED_FORMATS_LABEL,
   REQUEST_TYPE_LABELS,
   REQUEST_TYPE_OPTIONS,
   REQUEST_LIST_SORT,
@@ -220,13 +222,19 @@ describe("requests helpers", () => {
 
   it("habilita inicio de rendición solo para anticipos pagados y usuarios autorizados", () => {
     const paidAdvance = makeRequest({ status: REQUEST_STATUS.PAID, requester_id: "user-1" });
+    const paidReimbursement = makeRequest({ request_type: REQUEST_TYPE.REIMBURSEMENT, status: REQUEST_STATUS.PAID });
+    const paidSupplierPayment = makeRequest({ request_type: REQUEST_TYPE.SUPPLIER_PAYMENT, status: REQUEST_STATUS.PAID });
 
     expect(canStartAdvanceSettlement(ROLE_CODE.SOLICITANTE_EPE, paidAdvance, "user-1")).toBe(true);
     expect(canStartAdvanceSettlement(ROLE_CODE.GIOF_GESTOR, paidAdvance, "reviewer-1")).toBe(true);
     expect(canStartAdvanceSettlement(ROLE_CODE.ADMIN_SISTEMA, paidAdvance, "admin-1")).toBe(true);
     expect(canStartAdvanceSettlement(ROLE_CODE.SOLICITANTE_EPE, paidAdvance, "other-user")).toBe(false);
     expect(canStartAdvanceSettlement(ROLE_CODE.SOLICITANTE_EPE, makeRequest({ status: REQUEST_STATUS.APPROVED }), "user-1")).toBe(false);
-    expect(canStartAdvanceSettlement(ROLE_CODE.SOLICITANTE_EPE, makeRequest({ request_type: REQUEST_TYPE.REIMBURSEMENT, status: REQUEST_STATUS.PAID }), "user-1")).toBe(false);
+    expect(canStartAdvanceSettlement(ROLE_CODE.SOLICITANTE_EPE, paidReimbursement, "user-1")).toBe(false);
+    expect(canStartAdvanceSettlement(ROLE_CODE.GIOF_GESTOR, paidReimbursement, "reviewer-1")).toBe(false);
+    expect(canStartAdvanceSettlement(ROLE_CODE.ADMIN_SISTEMA, paidSupplierPayment, "admin-1")).toBe(false);
+    expect(getAdvanceSettlementCta(ROLE_CODE.SOLICITANTE_EPE, paidReimbursement, "user-1")).toBeNull();
+    expect(getAdvanceSettlementCta(ROLE_CODE.GIOF_GESTOR, paidSupplierPayment, "reviewer-1")).toBeNull();
   });
 
   it("detecta una rendición activa y evita duplicar el inicio", () => {
@@ -299,6 +307,9 @@ describe("requests helpers", () => {
   });
 
   it("etiqueta y deriva estados de bandeja de rendiciones", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-15T00:00:00.000Z"));
+
     const counts: RenditionInboxCounts = {
       [RENDITION_STATUS.PENDING]: 2,
       [RENDITION_STATUS.OVERDUE]: 1,
@@ -309,6 +320,7 @@ describe("requests helpers", () => {
     const pendingDueSoon = makeRenditionRow({ scheduled_rendition_at: "2026-05-20" });
     const overdue = makeRenditionRow({ rendition_status: RENDITION_STATUS.OVERDUE, days_overdue: 2 });
     const paidAdvance = makeRequest({ status: REQUEST_STATUS.PAID, scheduled_rendition_at: "2026-05-20" });
+    const overdueAdvance = makeRequest({ status: REQUEST_STATUS.PAID, scheduled_rendition_at: "2026-05-14" });
     const observedSettlement = {
       id: "settlement-observed",
       request_code: "REXAN-1",
@@ -321,15 +333,22 @@ describe("requests helpers", () => {
       requester_id: "user-1",
       created_at: "2026-05-01T10:00:00.000Z",
     };
+    const rejectedSettlement = { ...observedSettlement, id: "settlement-rejected", status: REQUEST_STATUS.REJECTED };
 
-    expect(parseRenditionStatusFilter("OVERDUE")).toBe(RENDITION_STATUS.OVERDUE);
-    expect(parseRenditionSortField("paid_at")).toBe(RENDITION_SORT_FIELD.PAID_AT);
-    expect(parseRenditionSortDirection("desc")).toBe(RENDITION_SORT_DIRECTION.DESC);
-    expect(getRenditionStatusLabel(RENDITION_STATUS.IN_REVIEW)).toBe("En revisión");
-    expect(getRenditionDueLabel(overdue, new Date("2026-05-15T00:00:00.000Z"))).toBe("2 días vencida");
-    expect(getRenditionSummaryCount({ key: "due-soon", label: "Próximas a vencer", description: "" }, counts, [pendingDueSoon, overdue])).toBe(1);
-    expect(getPaymentRequestRenditionStatus(paidAdvance)).toBe(RENDITION_STATUS.PENDING);
-    expect(getPaymentRequestRenditionStatus(makeRequest({ status: REQUEST_STATUS.PAID, advanceSettlements: [observedSettlement] }))).toBe(RENDITION_STATUS.OBSERVED);
+    try {
+      expect(parseRenditionStatusFilter("OVERDUE")).toBe(RENDITION_STATUS.OVERDUE);
+      expect(parseRenditionSortField("paid_at")).toBe(RENDITION_SORT_FIELD.PAID_AT);
+      expect(parseRenditionSortDirection("desc")).toBe(RENDITION_SORT_DIRECTION.DESC);
+      expect(getRenditionStatusLabel(RENDITION_STATUS.IN_REVIEW)).toBe("En revisión");
+      expect(getRenditionDueLabel(overdue, new Date("2026-05-15T00:00:00.000Z"))).toBe("2 días vencida");
+      expect(getRenditionSummaryCount({ key: "due-soon", label: "Próximas a vencer", description: "" }, counts, [pendingDueSoon, overdue])).toBe(1);
+      expect(getPaymentRequestRenditionStatus(paidAdvance)).toBe(RENDITION_STATUS.PENDING);
+      expect(getPaymentRequestRenditionStatus(makeRequest({ status: REQUEST_STATUS.PAID, advanceSettlements: [observedSettlement] }))).toBe(RENDITION_STATUS.OBSERVED);
+      expect(getPaymentRequestRenditionStatus(makeRequest({ status: REQUEST_STATUS.PAID, scheduled_rendition_at: "2026-05-20", advanceSettlements: [rejectedSettlement] }))).toBe(RENDITION_STATUS.PENDING);
+      expect(getPaymentRequestRenditionStatus({ ...overdueAdvance, advanceSettlements: [rejectedSettlement] })).toBe(RENDITION_STATUS.OVERDUE);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("aplica mensaje de bloqueo de nuevo anticipo sin bloquear corrección REXAN", () => {
@@ -369,9 +388,12 @@ describe("requests helpers", () => {
     expect(validateRequestDocumentFile(null)).toContain("Selecciona un archivo");
   });
 
-  it("define estados activos de revisión y valida constancias de pago PDF", () => {
+  it("define estados activos de revisión y valida constancias de pago PDF o imagen", () => {
     const validPdf = new File(["contenido"], "telecredito.pdf", { type: "application/pdf" });
     const validPdfWithoutMime = new File(["contenido"], "telecredito.pdf", { type: "" });
+    const validJpeg = new File(["contenido"], "telecredito.jpg", { type: "image/jpeg" });
+    const validJpegWithoutMime = new File(["contenido"], "telecredito.jpeg", { type: "" });
+    const validPng = new File(["contenido"], "telecredito.png", { type: "image/png" });
     const textFile = new File(["texto"], "telecredito.txt", { type: "text/plain" });
     const oversizedFile = new File([new Uint8Array(10 * 1024 * 1024 + 1)], "grande.pdf", { type: "application/pdf" });
 
@@ -383,9 +405,19 @@ describe("requests helpers", () => {
     expect(ACTIVE_REVIEW_STATUSES).not.toContain(REQUEST_STATUS.DRAFT);
     expect(ACTIVE_REVIEW_STATUSES).not.toContain(REQUEST_STATUS.APPROVED);
     expect(ACTIVE_REVIEW_STATUSES).not.toContain(REQUEST_STATUS.PAID);
+    expect(PAYMENT_PROOF_ACCEPT).toContain("application/pdf");
+    expect(PAYMENT_PROOF_ACCEPT).toContain("image/jpeg");
+    expect(PAYMENT_PROOF_ACCEPT).toContain("image/png");
+    expect(PAYMENT_PROOF_ACCEPT).toContain(".jpg");
+    expect(PAYMENT_PROOF_ACCEPT).toContain(".jpeg");
+    expect(PAYMENT_PROOF_ACCEPT).toContain(".png");
+    expect(PAYMENT_PROOF_ACCEPTED_FORMATS_LABEL).toBe("PDF, JPG o PNG");
     expect(validatePaymentProofFile(validPdf)).toBeNull();
     expect(validatePaymentProofFile(validPdfWithoutMime)).toBeNull();
-    expect(validatePaymentProofFile(textFile)).toContain("PDF");
+    expect(validatePaymentProofFile(validJpeg)).toBeNull();
+    expect(validatePaymentProofFile(validJpegWithoutMime)).toBeNull();
+    expect(validatePaymentProofFile(validPng)).toBeNull();
+    expect(validatePaymentProofFile(textFile)).toContain("PDF, JPG o PNG");
     expect(validatePaymentProofFile(oversizedFile)).toContain("10 MB");
     expect(validatePaymentProofFile(null)).toContain("constancia");
   });
@@ -442,16 +474,42 @@ describe("requests helpers", () => {
     const supplier = getRequiredDocumentChecklist(REQUEST_TYPE.SUPPLIER_PAYMENT, []);
     expect(supplier.missingMessages).toEqual(["Falta adjuntar comprobante factura/RH."]);
     expect(supplier.conditionalNotes.length).toBeGreaterThan(0);
+
+    const rexanMissing = getRequiredDocumentChecklist(REQUEST_TYPE.ADVANCE_SETTLEMENT, []);
+    expect(rexanMissing.items.map((item) => item.category)).toEqual([
+      REQUEST_DOCUMENT_CATEGORY.SETTLEMENT_REPORT,
+      REQUEST_DOCUMENT_CATEGORY.RECEIPT,
+    ]);
+    expect(rexanMissing.missingMessages).toEqual([
+      "Falta adjuntar informe de rendición REXAN Excel.",
+      "Falta adjuntar comprobante de la rendición.",
+    ]);
+
+    const rexanWrongReport = getRequiredDocumentChecklist(REQUEST_TYPE.ADVANCE_SETTLEMENT, [
+      makeDocument({ document_category: REQUEST_DOCUMENT_CATEGORY.SETTLEMENT_REPORT, original_filename: "reporte.pdf", safe_filename: "reporte.pdf", mime_type: "application/pdf" }),
+      makeDocument({ document_category: REQUEST_DOCUMENT_CATEGORY.RECEIPT }),
+    ]);
+    expect(rexanWrongReport.isComplete).toBe(false);
+    expect(rexanWrongReport.missingMessages).toEqual(["Falta adjuntar informe de rendición REXAN Excel."]);
+
+    const rexanComplete = getRequiredDocumentChecklist(REQUEST_TYPE.ADVANCE_SETTLEMENT, [
+      makeDocument({ document_category: REQUEST_DOCUMENT_CATEGORY.SETTLEMENT_REPORT, original_filename: "rexan.xlsx", safe_filename: "rexan.xlsx", mime_type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }),
+      makeDocument({ document_category: REQUEST_DOCUMENT_CATEGORY.RECEIPT }),
+    ]);
+    expect(rexanComplete.isComplete).toBe(true);
   });
 
   it("aplica heurística frontend para gestionar documentos", () => {
     const draft = makeRequest({ status: REQUEST_STATUS.DRAFT, requester_id: "user-1" });
     const observed = makeRequest({ status: REQUEST_STATUS.OBSERVED, requester_id: "user-1" });
+    const observedRexan = makeRequest({ request_type: REQUEST_TYPE.ADVANCE_SETTLEMENT, status: REQUEST_STATUS.OBSERVED, requester_id: "user-1" });
     const submitted = makeRequest({ status: REQUEST_STATUS.SUBMITTED, requester_id: "user-1" });
 
     expect(canManageRequestDocuments(ROLE_CODE.SOLICITANTE_EPE, REQUEST_STATUS.DRAFT, draft, "user-1")).toBe(true);
     expect(canManageRequestDocuments(ROLE_CODE.SOLICITANTE_EPE, REQUEST_STATUS.DRAFT, draft, "other-user")).toBe(false);
     expect(canManageRequestDocuments(ROLE_CODE.GIOF_GESTOR, REQUEST_STATUS.OBSERVED, observed, "giof-1")).toBe(true);
+    expect(canManageRequestDocuments(ROLE_CODE.GIOF_GESTOR, REQUEST_STATUS.OBSERVED, observedRexan, "giof-1")).toBe(false);
+    expect(canManageRequestDocuments(ROLE_CODE.SOLICITANTE_EPE, REQUEST_STATUS.OBSERVED, observedRexan, "user-1")).toBe(true);
     expect(canManageRequestDocuments(ROLE_CODE.ADMIN_SISTEMA, REQUEST_STATUS.DRAFT, draft, "admin-1")).toBe(true);
     expect(canManageRequestDocuments(ROLE_CODE.ADMIN_SISTEMA, REQUEST_STATUS.SUBMITTED, submitted, "admin-1")).toBe(false);
     expect(getRequestDocumentPermissionMessage(ROLE_CODE.SOLICITANTE_EPE, REQUEST_STATUS.SUBMITTED, submitted, "user-1")).toContain("borrador u observación");
@@ -496,7 +554,6 @@ describe("requests helpers", () => {
       REQUEST_REVIEW_QUEUE.PENDING_LEVEL_1,
       REQUEST_REVIEW_QUEUE.PENDING_LEVEL_2,
       REQUEST_REVIEW_QUEUE.OBSERVED_RETURNED,
-      REQUEST_REVIEW_QUEUE.BLOCKED,
     ]);
     expect(getRequestReviewQueueFilter(REQUEST_REVIEW_QUEUE.PENDING_LEVEL_1)).toMatchObject({
       status: REQUEST_STATUS.SUBMITTED,

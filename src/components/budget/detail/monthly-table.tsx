@@ -1,6 +1,8 @@
 "use client";
 
-import React, { useState, useCallback } from "react";
+import { Fragment, useState } from "react";
+import Link from "next/link";
+import type { Route } from "next";
 import { toast } from "sonner";
 import { Save, Loader2, ChevronRight, ChevronDown, Plus } from "lucide-react";
 import {
@@ -14,8 +16,10 @@ import {
 } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { ROUTES } from "@/lib/constants";
 import { useUpsertMonthly, useManualExecutions } from "@/hooks/use-budget";
 import { useAuthStore } from "@/stores/auth-store";
+import { MONTHLY_EXECUTION_DETAIL_SOURCE, type MonthlyEntry, type MonthlyExecutionDetail } from "@/types/budget";
 import { ManualExecutionModal } from "./manual-execution-modal";
 
 const MONTHS_ES = [
@@ -26,7 +30,7 @@ const MONTHS_ES = [
 interface MonthlyTableProps {
   lineId?: string;
   totalCost?: number;
-  entries?: { month: number; planned_amount: number; executed_amount: number }[];
+  entries?: MonthlyEntry[];
   editable?: boolean;
   lineStatus?: string;
 }
@@ -36,6 +40,30 @@ function formatCurrency(amount: number): string {
     style: "currency",
     currency: "PEN",
   }).format(amount);
+}
+
+function formatExecutionDate(value?: string | null): string {
+  if (!value) return "Sin fecha";
+  return new Intl.DateTimeFormat("es-PE", { dateStyle: "short" }).format(new Date(value));
+}
+
+function getExecutionDetailLabel(detail: MonthlyExecutionDetail): string {
+  if (detail.source === MONTHLY_EXECUTION_DETAIL_SOURCE.PAYMENT_REQUEST) {
+    return detail.requestCode ? `Solicitud ${detail.requestCode}` : "Solicitud pagada";
+  }
+
+  return "Ejecución manual";
+}
+
+function getRequestDetailHref(detail: MonthlyExecutionDetail): Route | null {
+  if (
+    detail.source !== MONTHLY_EXECUTION_DETAIL_SOURCE.PAYMENT_REQUEST ||
+    !detail.requestId
+  ) {
+    return null;
+  }
+
+  return `${ROUTES.REQUESTS}/${detail.requestId}` as Route;
 }
 
 export function MonthlyTable({
@@ -89,10 +117,10 @@ export function MonthlyTable({
     });
   }
 
-  const handlePlannedChange = useCallback((month: number, value: string) => {
+  function handlePlannedChange(month: number, value: string) {
     const num = parseFloat(value) || 0;
     setPlannedAmounts((prev) => ({ ...prev, [month]: num }));
-  }, []);
+  }
 
   const handleSave = async () => {
     if (!lineId) return;
@@ -135,8 +163,22 @@ export function MonthlyTable({
             const balance = planned - executed;
             const isExpanded = expandedMonths.has(month);
             const canAddExecution = lineStatus === "APPROVED" && isGiofGestor && !!lineId;
+            const paidExecutionDetails = entry?.execution_details ?? [];
+            const manualExecutionDetails: MonthlyExecutionDetail[] = manualExecutions
+              .filter((me) => me.month === month)
+              .map((me) => ({
+                id: me.id,
+                source: MONTHLY_EXECUTION_DETAIL_SOURCE.MANUAL,
+                concept: me.concept,
+                amount: Number(me.amount),
+                paidAt: me.execution_date,
+                createdAt: me.created_at,
+                status: "MANUAL",
+                type: "MANUAL",
+              }));
+            const executionDetails = [...paidExecutionDetails, ...manualExecutionDetails];
             return (
-              <React.Fragment key={month}>
+              <Fragment key={month}>
                 <TableRow
                   key={month}
                   className="cursor-pointer hover:bg-muted/50"
@@ -187,19 +229,46 @@ export function MonthlyTable({
                     <TableCell />
                     <TableCell colSpan={4} className="py-3">
                       <div className="flex flex-col gap-2 pl-2">
-                        {/* Desglose de ejecuciones manuales */}
-                        {manualExecutions.filter((me) => me.month === month).length > 0 && (
+                        {/* Desglose de ejecuciones */}
+                        {executionDetails.length > 0 && (
                           <div className="text-sm text-muted-foreground">
-                            <p className="font-medium mb-1">Ejecuciones manuales:</p>
-                            {manualExecutions
-                              .filter((me) => me.month === month)
-                              .map((me) => (
-                                <div key={me.id} className="flex gap-2 text-xs">
-                                  <span className="font-mono">{formatCurrency(me.amount)}</span>
-                                  <span>— {me.concept}</span>
-                                  <span className="text-muted-foreground">({me.execution_date})</span>
-                                </div>
-                              ))}
+                            <p className="mb-1 font-medium">Detalle de ejecuciones:</p>
+                            <div className="flex flex-col gap-1">
+                              {executionDetails.map((detail) => {
+                                const requestHref = getRequestDetailHref(detail);
+                                const detailLabel = getExecutionDetailLabel(detail);
+
+                                return (
+                                  <div key={`${detail.source}-${detail.id}`} className="grid gap-1 rounded-md border bg-background/60 p-2 text-xs md:grid-cols-[minmax(0,1fr)_auto]">
+                                    <div className="min-w-0">
+                                      <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                                        {requestHref ? (
+                                          <Link
+                                            href={requestHref}
+                                            className="font-medium text-primary underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                                            aria-label={`Ver ${detailLabel}`}
+                                          >
+                                            {detailLabel}
+                                          </Link>
+                                        ) : (
+                                          <span className="font-medium text-foreground">{detailLabel}</span>
+                                        )}
+                                        <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] uppercase tracking-wide text-muted-foreground">
+                                          {detail.source === MONTHLY_EXECUTION_DETAIL_SOURCE.PAYMENT_REQUEST ? "Solicitud pagada" : "Manual"}
+                                        </span>
+                                        {detail.status && <span className="text-muted-foreground">{detail.status}</span>}
+                                      </div>
+                                      <p className="truncate text-muted-foreground">{detail.concept}</p>
+                                      <p className="text-muted-foreground">
+                                        Fecha: {formatExecutionDate(detail.paidAt ?? detail.createdAt)}
+                                        {detail.type ? ` · Tipo: ${detail.type}` : ""}
+                                      </p>
+                                    </div>
+                                    <span className="font-mono font-medium text-foreground md:text-right">{formatCurrency(detail.amount)}</span>
+                                  </div>
+                                );
+                              })}
+                            </div>
                           </div>
                         )}
 
@@ -216,18 +285,18 @@ export function MonthlyTable({
                             }}
                           >
                             <Plus className="mr-1 h-3 w-3" />
-                            Ejecución
+                            Registrar ejecución manual
                           </Button>
                         )}
 
-                        {!canAddExecution && manualExecutions.filter((me) => me.month === month).length === 0 && (
-                          <p className="text-xs text-muted-foreground italic">Sin ejecuciones manuales en este mes</p>
+                        {!canAddExecution && executionDetails.length === 0 && (
+                          <p className="text-xs italic text-muted-foreground">Sin ejecuciones en este mes</p>
                         )}
                       </div>
                     </TableCell>
                   </TableRow>
                 )}
-              </React.Fragment>
+              </Fragment>
             );
           })}
         </TableBody>

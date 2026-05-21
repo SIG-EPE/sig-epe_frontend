@@ -1,4 +1,5 @@
 import { AuthGate } from "@/components/auth/auth-gate";
+import { RouteAccessGuard } from "@/components/auth/route-access-guard";
 import { SessionManager } from "@/components/auth/session-manager";
 import { DashboardShell } from "@/components/layout/dashboard-shell";
 
@@ -10,7 +11,9 @@ export default function AppLayout({
   return (
     <SessionManager>
       <AuthGate>
-        <DashboardShell>{children}</DashboardShell>
+        <RouteAccessGuard>
+          <DashboardShell>{children}</DashboardShell>
+        </RouteAccessGuard>
       </AuthGate>
     </SessionManager>
   );

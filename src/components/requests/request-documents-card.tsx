@@ -68,6 +68,7 @@ function getRequestDocumentWebUrl(document: RequestDocument): string | null {
 function getDefaultDocumentCategory(request: PaymentRequest): RequestDocumentCategory {
   if (request.request_type === REQUEST_TYPE.ADVANCE) return REQUEST_DOCUMENT_CATEGORY.PXQ;
   if (request.request_type === REQUEST_TYPE.REIMBURSEMENT) return REQUEST_DOCUMENT_CATEGORY.SETTLEMENT_REPORT;
+  if (request.request_type === REQUEST_TYPE.ADVANCE_SETTLEMENT) return REQUEST_DOCUMENT_CATEGORY.SETTLEMENT_REPORT;
   if (request.request_type === REQUEST_TYPE.SUPPLIER_PAYMENT) return REQUEST_DOCUMENT_CATEGORY.RECEIPT;
   return REQUEST_DOCUMENT_CATEGORY.REQUEST_SUPPORT;
 }

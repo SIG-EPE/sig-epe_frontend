@@ -139,6 +139,20 @@ const giofUser: AuthUser = {
   authSource: "LOCAL",
 };
 
+const auditorUser: AuthUser = {
+  id: "4",
+  firstName: "Auditor",
+  lastName: "Dirección",
+  email: "auditor@example.com",
+  documentNumber: "12345670",
+  role: {
+    code: "AUDITOR_DIRECCION",
+    name: "Auditor / Dirección",
+  },
+  onboardingCompleted: true,
+  authSource: "LOCAL",
+};
+
 // -------------------------------------------------------
 // Helpers
 // -------------------------------------------------------
@@ -181,7 +195,10 @@ describe("AppSidebar", () => {
     renderSidebar();
 
     expect(screen.getByText("Usuarios")).toBeInTheDocument();
-    expect(screen.getByText("Configuración")).toBeInTheDocument();
+    expect(screen.getByText("Bandeja de Revisión")).toBeInTheDocument();
+    expect(screen.getByText("Bandeja de Rendiciones")).toBeInTheDocument();
+    expect(screen.getByText("Log de auditoría")).toBeInTheDocument();
+    expect(screen.queryByText("Configuración")).not.toBeInTheDocument();
 
     // No debe mostrar items de otros roles
     expect(screen.queryByText("Mis Solicitudes")).not.toBeInTheDocument();
@@ -213,13 +230,25 @@ describe("AppSidebar", () => {
 
     expect(screen.getByText("Bandeja de Revisión")).toBeInTheDocument();
     expect(screen.getByText("Cola de Pagos")).toBeInTheDocument();
-    expect(screen.getByText("Resumen de Saldos")).toBeInTheDocument();
+    expect(screen.queryByText("Resumen de Saldos")).not.toBeInTheDocument();
     expect(screen.getByText("Años Fiscales")).toBeInTheDocument();
     expect(screen.getByText("Plan Operativo (POA)")).toBeInTheDocument();
     expect(screen.getByText("Aportes de Socios")).toBeInTheDocument();
     expect(screen.getByText("Catálogos")).toBeInTheDocument();
     expect(screen.getByText("Usuarios")).toBeInTheDocument();
     expect(screen.queryByText("Bandeja de Gestión")).not.toBeInTheDocument();
+  });
+
+  it("✅ Oculta navegación no MVP para AUDITOR_DIRECCION", () => {
+    mockUseAuthStore.mockImplementation(
+      (selector: (state: { user: AuthUser }) => unknown) =>
+        selector({ user: auditorUser })
+    );
+
+    renderSidebar();
+
+    expect(screen.queryByText("Dashboard")).not.toBeInTheDocument();
+    expect(screen.queryByText("Reportes")).not.toBeInTheDocument();
   });
 
   it("✅ Botón chevron llama toggleSidebar al hacer click", async () => {

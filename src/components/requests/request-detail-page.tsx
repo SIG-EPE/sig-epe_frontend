@@ -29,7 +29,7 @@ import {
   REQUEST_TYPE_LABELS,
 } from "@/lib/requests";
 import { useAuthStore } from "@/stores/auth-store";
-import { ADVANCE_SETTLEMENT_CTA_STATE } from "@/types/requests";
+import { ADVANCE_SETTLEMENT_CTA_STATE, REQUEST_TYPE } from "@/types/requests";
 import { RequestStatusStepper } from "./request-status-stepper";
 import { RequestDocumentsCard } from "./request-documents-card";
 import { StatusBadge } from "./status-badge";
@@ -73,6 +73,27 @@ export function RequestDetailPage() {
   const advanceSettlementCta = getAdvanceSettlementCta(roleCode, request, user?.id);
   const renditionStatus = getPaymentRequestRenditionStatus(request);
   const editHref = `${ROUTES.REQUESTS}/${request.id}/edit`;
+  const isAdvanceSettlement = request.request_type === REQUEST_TYPE.ADVANCE_SETTLEMENT;
+  const reviewCopy = {
+    observeAction: isAdvanceSettlement ? "Observar rendición" : "Observar",
+    approveAction: isAdvanceSettlement ? "Aprobar rendición" : "Aprobar",
+    rejectAction: isAdvanceSettlement ? "Rechazar rendición" : "Rechazar",
+    observeTitle: isAdvanceSettlement ? "Observar rendición" : "Observar solicitud",
+    approveTitle: isAdvanceSettlement ? "Aprobar rendición" : "Aprobar solicitud",
+    rejectTitle: isAdvanceSettlement ? "Rechazar rendición" : "Rechazar solicitud",
+    observeDescription: isAdvanceSettlement
+      ? "Indica qué debe corregir el solicitante antes de reenviar la rendición."
+      : "Indica qué debe corregir el solicitante antes de reenviar la solicitud.",
+    approveDescription: isAdvanceSettlement
+      ? "Confirma que la rendición fue revisada y puede cerrar la revisión del anticipo."
+      : "Confirma que la solicitud fue revisada y puede continuar el proceso.",
+    rejectDescription: isAdvanceSettlement
+      ? "El rechazo devuelve el anticipo original a la etapa de rendición. Ingresa un motivo claro."
+      : "El rechazo cierra la revisión de esta solicitud. Ingresa un motivo claro.",
+    observeSubmit: isAdvanceSettlement ? "Registrar observación de rendición" : "Registrar observación",
+    approveSubmit: isAdvanceSettlement ? "Aprobar rendición" : "Aprobar solicitud",
+    rejectSubmit: isAdvanceSettlement ? "Rechazar rendición" : "Rechazar solicitud",
+  };
 
   async function handleObserve(): Promise<void> {
     if (!request) return;
@@ -187,9 +208,9 @@ export function RequestDetailPage() {
         <Card>
           <CardHeader><CardTitle>Acciones de revisión</CardTitle></CardHeader>
           <CardContent className="flex flex-col gap-3 sm:flex-row">
-            <Button variant="outline" onClick={() => setObserveOpen(true)}>Observar</Button>
-            <Button onClick={() => setApproveOpen(true)}>Aprobar</Button>
-            <Button variant="destructive" onClick={() => setRejectOpen(true)}>Rechazar</Button>
+            <Button variant="outline" onClick={() => setObserveOpen(true)}>{reviewCopy.observeAction}</Button>
+            <Button onClick={() => setApproveOpen(true)}>{reviewCopy.approveAction}</Button>
+            <Button variant="destructive" onClick={() => setRejectOpen(true)}>{reviewCopy.rejectAction}</Button>
           </CardContent>
         </Card>
       )}
@@ -327,8 +348,8 @@ export function RequestDetailPage() {
       <Dialog open={observeOpen} onOpenChange={setObserveOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Observar solicitud</DialogTitle>
-            <DialogDescription>Indica qué debe corregir el solicitante antes de reenviar la solicitud.</DialogDescription>
+            <DialogTitle>{reviewCopy.observeTitle}</DialogTitle>
+            <DialogDescription>{reviewCopy.observeDescription}</DialogDescription>
           </DialogHeader>
           <div className="space-y-3">
             <div className="space-y-2">
@@ -342,7 +363,7 @@ export function RequestDetailPage() {
           </div>
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => setObserveOpen(false)} disabled={observing}>Cancelar</Button>
-            <Button type="button" onClick={() => void handleObserve()} disabled={observing}>{observing ? "Registrando..." : "Registrar observación"}</Button>
+            <Button type="button" onClick={() => void handleObserve()} disabled={observing}>{observing ? "Registrando..." : reviewCopy.observeSubmit}</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -350,13 +371,13 @@ export function RequestDetailPage() {
       <Dialog open={approveOpen} onOpenChange={setApproveOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Aprobar solicitud</DialogTitle>
-            <DialogDescription>Confirma que la solicitud fue revisada y puede continuar el proceso.</DialogDescription>
+            <DialogTitle>{reviewCopy.approveTitle}</DialogTitle>
+            <DialogDescription>{reviewCopy.approveDescription}</DialogDescription>
           </DialogHeader>
           <Textarea value={approveComment} onChange={(event) => setApproveComment(event.target.value)} rows={3} placeholder="Comentario opcional" />
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => setApproveOpen(false)} disabled={approving}>Cancelar</Button>
-            <Button type="button" onClick={() => void handleApprove()} disabled={approving}>{approving ? "Aprobando..." : "Aprobar solicitud"}</Button>
+            <Button type="button" onClick={() => void handleApprove()} disabled={approving}>{approving ? "Aprobando..." : reviewCopy.approveSubmit}</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -364,13 +385,13 @@ export function RequestDetailPage() {
       <Dialog open={rejectOpen} onOpenChange={setRejectOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Rechazar solicitud</DialogTitle>
-            <DialogDescription>El rechazo cierra la revisión de esta solicitud. Ingresa un motivo claro.</DialogDescription>
+            <DialogTitle>{reviewCopy.rejectTitle}</DialogTitle>
+            <DialogDescription>{reviewCopy.rejectDescription}</DialogDescription>
           </DialogHeader>
           <Textarea value={rejectReason} onChange={(event) => setRejectReason(event.target.value)} rows={4} placeholder="Motivo del rechazo *" />
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => setRejectOpen(false)} disabled={rejecting}>Cancelar</Button>
-            <Button type="button" variant="destructive" onClick={() => void handleReject()} disabled={rejecting}>{rejecting ? "Rechazando..." : "Rechazar solicitud"}</Button>
+            <Button type="button" variant="destructive" onClick={() => void handleReject()} disabled={rejecting}>{rejecting ? "Rechazando..." : reviewCopy.rejectSubmit}</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

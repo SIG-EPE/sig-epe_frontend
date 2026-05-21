@@ -11,7 +11,7 @@ import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { useRegisterPayment } from "@/hooks/use-requests";
-import { PAYMENT_PROOF_ACCEPT, formatRequestCurrency, getApiErrorMessage, validatePaymentProofFile } from "@/lib/requests";
+import { PAYMENT_PROOF_ACCEPT, PAYMENT_PROOF_ACCEPTED_FORMATS_LABEL, formatRequestCurrency, getApiErrorMessage, validatePaymentProofFile } from "@/lib/requests";
 import type { PaymentRequest, RegisterPaymentInput } from "@/types/requests";
 
 const registerPaymentSchema = z.object({
@@ -153,7 +153,7 @@ export function RegisterPaymentModal({ request, open, onOpenChange, onSuccess }:
               </FormItem>
             )} />
             <div className="space-y-2">
-              <label className="text-sm font-medium" htmlFor="payment-proof-input">Constancia PDF</label>
+              <label className="text-sm font-medium" htmlFor="payment-proof-input">Constancia de pago ({PAYMENT_PROOF_ACCEPTED_FORMATS_LABEL})</label>
               <Input
                 id="payment-proof-input"
                 type="file"

@@ -221,7 +221,17 @@ export const REQUEST_DOCUMENT_ALLOWED_MIME_TYPES = {
   XLSX: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
 } as const;
 
-export const PAYMENT_PROOF_ACCEPT = [REQUEST_DOCUMENT_ALLOWED_MIME_TYPES.PDF, ".pdf"].join(",");
+export const PAYMENT_PROOF_ACCEPT = [
+  REQUEST_DOCUMENT_ALLOWED_MIME_TYPES.PDF,
+  REQUEST_DOCUMENT_ALLOWED_MIME_TYPES.JPEG,
+  REQUEST_DOCUMENT_ALLOWED_MIME_TYPES.PNG,
+  ".pdf",
+  ".jpg",
+  ".jpeg",
+  ".png",
+].join(",");
+
+export const PAYMENT_PROOF_ACCEPTED_FORMATS_LABEL = "PDF, JPG o PNG";
 
 const REQUEST_DOCUMENT_EXCEL_EXTENSIONS = [".xls", ".xlsx"] as const;
 
@@ -311,11 +321,6 @@ export const REQUEST_REVIEW_QUEUE_CARDS: RequestReviewQueueCard[] = [
     value: REQUEST_REVIEW_QUEUE.OBSERVED_RETURNED,
     label: "Solicitudes devueltas/observadas",
     description: "Solicitudes observadas y devueltas al solicitante.",
-  },
-  {
-    value: REQUEST_REVIEW_QUEUE.BLOCKED,
-    label: "Colaboradores bloqueados",
-    description: "Funcionalidad en preparación para colaboradores bloqueados.",
   },
 ];
 
@@ -577,6 +582,18 @@ function isBaseDocumentMime(mimeType?: string | null): boolean {
     || mimeType === REQUEST_DOCUMENT_ALLOWED_MIME_TYPES.PNG;
 }
 
+function isPaymentProofMimeOrExtension(mimeType?: string | null, filename?: string | null): boolean {
+  const normalizedMime = mimeType?.toLowerCase();
+  const extension = filename ? getFileExtension(filename) : "";
+  return normalizedMime === REQUEST_DOCUMENT_ALLOWED_MIME_TYPES.PDF
+    || normalizedMime === REQUEST_DOCUMENT_ALLOWED_MIME_TYPES.JPEG
+    || normalizedMime === REQUEST_DOCUMENT_ALLOWED_MIME_TYPES.PNG
+    || extension === ".pdf"
+    || extension === ".jpg"
+    || extension === ".jpeg"
+    || extension === ".png";
+}
+
 export function getRequestDocumentAccept(category?: RequestDocumentCategory | null): string {
   return isExcelDocumentCategory(category) ? REQUEST_DOCUMENT_EXCEL_ACCEPT : REQUEST_DOCUMENT_ACCEPT;
 }
@@ -603,12 +620,11 @@ export function validateRequestDocumentFile(file: File | null, category?: Reques
 }
 
 export function validatePaymentProofFile(file: File | null): string | null {
-  if (!file) return "Adjunta la constancia de pago en PDF.";
-  if (file.size === 0) return "La constancia está vacía. Adjunta un PDF válido.";
+  if (!file) return `Adjunta la constancia de pago en ${PAYMENT_PROOF_ACCEPTED_FORMATS_LABEL}.`;
+  if (file.size === 0) return `La constancia está vacía. Adjunta un archivo ${PAYMENT_PROOF_ACCEPTED_FORMATS_LABEL} válido.`;
   if (file.size > REQUEST_DOCUMENT_MAX_FILE_SIZE_BYTES) return "La constancia supera el máximo permitido de 10 MB.";
-  const extension = getFileExtension(file.name);
-  if (file.type !== REQUEST_DOCUMENT_ALLOWED_MIME_TYPES.PDF && extension !== ".pdf") {
-    return "Formato no permitido. Adjunta una constancia en PDF.";
+  if (!isPaymentProofMimeOrExtension(file.type, file.name)) {
+    return `Formato no permitido. Adjunta una constancia en ${PAYMENT_PROOF_ACCEPTED_FORMATS_LABEL}.`;
   }
   return null;
 }
@@ -841,7 +857,26 @@ const REQUIRED_DOCUMENT_RULES: Record<RequestType, Omit<RequiredDocumentChecklis
     acceptedFormatsLabel: "PDF, JPG o PNG",
     missingMessage: "Falta adjuntar comprobante factura/RH.",
   }],
-  [REQUEST_TYPE.ADVANCE_SETTLEMENT]: [],
+  [REQUEST_TYPE.ADVANCE_SETTLEMENT]: [
+    {
+      key: "advance-settlement-report",
+      category: REQUEST_DOCUMENT_CATEGORY.SETTLEMENT_REPORT,
+      label: "Informe de rendición REXAN Excel",
+      description: "Adjunta el informe de rendición del anticipo en XLS o XLSX.",
+      required: true,
+      acceptedFormatsLabel: "XLS o XLSX",
+      missingMessage: "Falta adjuntar informe de rendición REXAN Excel.",
+    },
+    {
+      key: "advance-settlement-receipt",
+      category: REQUEST_DOCUMENT_CATEGORY.RECEIPT,
+      label: "Comprobante de la rendición",
+      description: "Adjunta al menos un comprobante de gasto asociado a la rendición del anticipo.",
+      required: true,
+      acceptedFormatsLabel: "PDF, JPG o PNG",
+      missingMessage: "Falta adjuntar comprobante de la rendición.",
+    },
+  ],
 };
 
 const SUPPLIER_PAYMENT_CONDITIONAL_NOTES: ConditionalDocumentChecklistNote[] = [
@@ -883,7 +918,7 @@ export function getMissingDocumentMessagesFromError(error: unknown): string[] {
 export function getRequestDocumentPermissionMessage(
   roleCode: string | null | undefined,
   status: RequestStatus,
-  request: Pick<PaymentRequest, "requester_id">,
+  request: Pick<PaymentRequest, "requester_id" | "request_type">,
   currentUserId?: string | null,
 ): string | null {
   if (canManageRequestDocuments(roleCode, status, request, currentUserId)) return null;
@@ -892,6 +927,9 @@ export function getRequestDocumentPermissionMessage(
   }
   if (roleCode === ROLE_CODE.SOLICITANTE_EPE && request.requester_id !== currentUserId) {
     return "Solo el solicitante titular puede modificar documentos en esta solicitud.";
+  }
+  if (roleCode === ROLE_CODE.GIOF_GESTOR && request.request_type === REQUEST_TYPE.ADVANCE_SETTLEMENT && status === REQUEST_STATUS.OBSERVED) {
+    return "GIOF solo puede revisar los documentos de una rendición observada; el solicitante titular debe corregirlos.";
   }
   return "Tu rol no tiene permisos para cargar o eliminar documentos en este estado.";
 }
@@ -1106,13 +1144,15 @@ export function canEditRequest(roleCode: string | null | undefined, status: Requ
 export function canManageRequestDocuments(
   roleCode: string | null | undefined,
   status: RequestStatus,
-  request: Pick<PaymentRequest, "requester_id">,
+  request: Pick<PaymentRequest, "requester_id" | "request_type">,
   currentUserId?: string | null,
 ): boolean {
   const isEditable = status === REQUEST_STATUS.DRAFT || status === REQUEST_STATUS.OBSERVED;
   if (!isEditable) return false;
   if (roleCode === ROLE_CODE.ADMIN_SISTEMA) return true;
-  if (roleCode === ROLE_CODE.GIOF_GESTOR) return status === REQUEST_STATUS.OBSERVED;
+  if (roleCode === ROLE_CODE.GIOF_GESTOR) {
+    return status === REQUEST_STATUS.OBSERVED && request.request_type !== REQUEST_TYPE.ADVANCE_SETTLEMENT;
+  }
   return roleCode === ROLE_CODE.SOLICITANTE_EPE && Boolean(currentUserId) && request.requester_id === currentUserId;
 }
 

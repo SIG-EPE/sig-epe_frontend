@@ -2,24 +2,20 @@
 
 import { useEffect } from "react";
 import { Loader2 } from "lucide-react";
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 
 import { getRoleHomePath } from "@/lib/auth/role-redirect";
-import type { RoleCode } from "@/lib/constants";
+import { canAccessRoute } from "@/lib/auth/route-access";
 import { ROUTES } from "@/lib/constants";
 import { useAuthStore } from "@/stores/auth-store";
 
-interface RoleGuardProps {
-  allowedRoles: RoleCode[];
-  children: React.ReactNode;
-}
-
-export function RoleGuard({ allowedRoles, children }: RoleGuardProps) {
+export function RouteAccessGuard({ children }: { children: React.ReactNode }) {
+  const pathname = usePathname();
   const router = useRouter();
   const user = useAuthStore((state) => state.user);
   const isLoading = useAuthStore((state) => state.isLoading);
-  const roleCode = user?.role?.code as RoleCode | undefined;
-  const isAllowed = Boolean(roleCode && allowedRoles.includes(roleCode));
+  const roleCode = user?.role?.code;
+  const access = canAccessRoute(pathname, roleCode);
 
   useEffect(() => {
     if (isLoading) return;
@@ -29,12 +25,12 @@ export function RoleGuard({ allowedRoles, children }: RoleGuardProps) {
       return;
     }
 
-    if (!isAllowed) {
+    if (access.isProtectedRoute && !access.isAllowed) {
       router.replace(getRoleHomePath(roleCode ?? "") as Parameters<typeof router.replace>[0]);
     }
-  }, [isAllowed, isLoading, roleCode, router, user]);
+  }, [access.isAllowed, access.isProtectedRoute, isLoading, roleCode, router, user]);
 
-  if (isLoading || !user || !isAllowed) {
+  if (isLoading || !user || (access.isProtectedRoute && !access.isAllowed)) {
     return (
       <div className="flex min-h-[200px] items-center justify-center">
         <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />

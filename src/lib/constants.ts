@@ -64,7 +64,6 @@ export const ROLE_MENU_MAP: Record<RoleCode, MenuItem[]> = {
     { label: "Bandeja de Revisión", href: ROUTES.REQUESTS, icon: "FileText" },
     { label: "Cola de Pagos", href: ROUTES.PAYMENTS, icon: "CreditCard" },
     { label: "Bandeja de Rendiciones", href: ROUTES.RENDITIONS, icon: "Receipt" },
-    { label: "Resumen de Saldos", href: ROUTES.BUDGET, icon: "DollarSign" },
     { label: "Años Fiscales", href: ROUTES.BUDGET_FISCAL_YEARS, icon: "CalendarDays" },
     { label: "Plan Operativo (POA)", href: ROUTES.BUDGET_PLANNING, icon: "ListChecks" },
     { label: "Aportes de Socios", href: ROUTES.BUDGET_ALLOCATIONS, icon: "Handshake" },
@@ -72,14 +71,11 @@ export const ROLE_MENU_MAP: Record<RoleCode, MenuItem[]> = {
     { label: "Usuarios", href: ROUTES.ADMIN_USERS, icon: "Users" },
   ],
   AUDITOR_DIRECCION: [
-    { label: "Reportes", href: ROUTES.REPORTS, icon: "BarChart3" },
-    { label: "Dashboard", href: ROUTES.DASHBOARD, icon: "LayoutDashboard" },
   ],
   ADMIN_SISTEMA: [
     { label: "Bandeja de Revisión", href: ROUTES.REQUESTS, icon: "FileText" },
     { label: "Bandeja de Rendiciones", href: ROUTES.RENDITIONS, icon: "Receipt" },
     { label: "Usuarios", href: ROUTES.ADMIN_USERS, icon: "Users" },
-    { label: "Configuración", href: ROUTES.ADMIN_CONFIG, icon: "Settings" },
     { label: "Log de auditoría", href: ROUTES.ADMIN_AUDIT_LOGS, icon: "ClipboardList" },
   ],
 };

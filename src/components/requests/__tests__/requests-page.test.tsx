@@ -114,7 +114,7 @@ describe("RequestsPage", () => {
     expect(screen.getByText("Pendientes Nivel 1")).toBeInTheDocument();
     expect(screen.getByText("Pendientes Nivel 2")).toBeInTheDocument();
     expect(screen.getByText("Solicitudes devueltas/observadas")).toBeInTheDocument();
-    expect(screen.getByText("Colaboradores bloqueados")).toBeInTheDocument();
+    expect(screen.queryByText("Colaboradores bloqueados")).not.toBeInTheDocument();
 
     await user.click(screen.getByTestId(`requests-review-queue-card-${REQUEST_REVIEW_QUEUE.PENDING_LEVEL_2}`));
 
@@ -133,13 +133,10 @@ describe("RequestsPage", () => {
     expect(replaceMock).not.toHaveBeenCalled();
   });
 
-  it("muestra placeholder controlado para la cola de bloqueados sin listar solicitudes no relacionadas", async () => {
-    const user = userEvent.setup();
+  it("oculta la tarjeta no soportada de colaboradores bloqueados", () => {
     render(<RequestsPage />);
 
-    await user.click(screen.getByTestId(`requests-review-queue-card-${REQUEST_REVIEW_QUEUE.BLOCKED}`));
-
-    expect(screen.getByTestId("requests-review-queue-note")).toHaveTextContent("Funcionalidad en preparación");
-    expect(screen.getByText("Aún no hay solicitudes registradas.")).toBeInTheDocument();
+    expect(screen.queryByTestId(`requests-review-queue-card-${REQUEST_REVIEW_QUEUE.BLOCKED}`)).not.toBeInTheDocument();
+    expect(screen.queryByTestId("requests-review-queue-note")).not.toBeInTheDocument();
   });
 });
