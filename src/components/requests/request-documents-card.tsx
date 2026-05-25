@@ -1,6 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import { CheckCircle2, ExternalLink, FileText, Info, Trash2, Upload, XCircle } from "lucide-react";
 import { toast } from "sonner";
 
@@ -158,8 +159,16 @@ export function RequestDocumentsCard({ request, backendMissingMessages = [] }: R
   const [documentToDelete, setDocumentToDelete] = useState<string | null>(null);
   const [receiptToReview, setReceiptToReview] = useState<RequestReceiptReview | null>(null);
   const [receiptForm, setReceiptForm] = useState<ReceiptReviewFormState | null>(null);
+  const uploaderRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const checklist = getRequiredDocumentChecklist(request.request_type, documents);
   const acceptedFormatsLabel = getRequestDocumentAcceptedFormatsLabel(category);
+
+  function focusUploaderFileInput(): void {
+    uploaderRef.current?.scrollIntoView?.({ behavior: "smooth", block: "center" });
+    fileInputRef.current?.focus();
+    fileInputRef.current?.click();
+  }
 
   function handleFileChange(nextFile: File | null): void {
     setFile(nextFile);
@@ -171,6 +180,15 @@ export function RequestDocumentsCard({ request, backendMissingMessages = [] }: R
     const nextCategory = value as RequestDocumentCategory;
     setCategory(nextCategory);
     setValidationError(validateRequestDocumentFile(file, nextCategory));
+  }
+
+  function handleChecklistAttach(nextCategory: RequestDocumentCategory): void {
+    flushSync(() => {
+      setCategory(nextCategory);
+      setValidationError(validateRequestDocumentFile(file, nextCategory));
+      setSuccessMessage(null);
+    });
+    focusUploaderFileInput();
   }
 
   async function handleUpload(): Promise<void> {
@@ -270,16 +288,24 @@ export function RequestDocumentsCard({ request, backendMissingMessages = [] }: R
             {checklist.items.length === 0 ? (
               <p className="text-sm text-muted-foreground">No hay documentos obligatorios configurados para este tipo de solicitud.</p>
             ) : checklist.items.map((item) => (
-              <div key={item.key} className="flex gap-3 rounded-md border p-3">
-                {item.satisfied ? <CheckCircle2 className="mt-0.5 size-5 text-emerald-600" /> : <XCircle className="mt-0.5 size-5 text-destructive" />}
-                <div className="space-y-1">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <p className="text-sm font-medium">{item.label}</p>
-                    <Badge variant={item.satisfied ? "secondary" : "destructive"}>{item.satisfied ? "Adjunto" : "Pendiente"}</Badge>
+              <div key={item.key} className="flex flex-col gap-3 rounded-md border p-3 sm:flex-row sm:items-center sm:justify-between">
+                <div className="flex gap-3">
+                  {item.satisfied ? <CheckCircle2 className="mt-0.5 size-5 text-emerald-600" /> : <XCircle className="mt-0.5 size-5 text-destructive" />}
+                  <div className="space-y-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <p className="text-sm font-medium">{item.label}</p>
+                      <Badge variant={item.satisfied ? "secondary" : "destructive"}>{item.satisfied ? "Adjunto" : "Pendiente"}</Badge>
+                    </div>
+                    <p className="text-xs text-muted-foreground">{item.description}</p>
+                    <p className="text-xs text-muted-foreground">Formatos esperados: {item.acceptedFormatsLabel}.</p>
                   </div>
-                  <p className="text-xs text-muted-foreground">{item.description}</p>
-                  <p className="text-xs text-muted-foreground">Formatos esperados: {item.acceptedFormatsLabel}.</p>
                 </div>
+                {!item.satisfied && canManage && (
+                  <Button type="button" variant="outline" size="sm" className="self-start sm:self-center" onClick={() => handleChecklistAttach(item.category)}>
+                    <Upload className="size-4" />
+                    Adjuntar {item.label}
+                  </Button>
+                )}
               </div>
             ))}
           </div>
@@ -306,7 +332,7 @@ export function RequestDocumentsCard({ request, backendMissingMessages = [] }: R
         </div>
 
         {canManage ? (
-          <div className="rounded-md border p-4">
+          <div ref={uploaderRef} className="rounded-md border p-4">
             <div className="grid gap-3 md:grid-cols-[220px_1fr_auto] md:items-end">
               <div className="space-y-2">
                 <label className="text-sm font-medium" htmlFor="document-category">Categoría</label>
@@ -323,6 +349,7 @@ export function RequestDocumentsCard({ request, backendMissingMessages = [] }: R
                 <label className="text-sm font-medium" htmlFor="request-document-file">Archivo</label>
                 <Input
                   id="request-document-file"
+                  ref={fileInputRef}
                   key={file ? "selected" : "empty"}
                   type="file"
                   accept={getRequestDocumentAccept(category)}

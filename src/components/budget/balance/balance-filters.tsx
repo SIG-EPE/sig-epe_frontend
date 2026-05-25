@@ -91,6 +91,7 @@ function TerritorySelectCascade() {
       <TerritorySelector
         value={filters.territory_id || undefined}
         onChange={(val) => setFilter("territory_id", val ?? "")}
+        mode="filter"
         showLabel={false}
         className="col-span-full"
       />

@@ -420,6 +420,7 @@ export function NewPlanningLineForm() {
         <TerritorySelector
           value={form.territory_id || undefined}
           onChange={(val) => setForm((f) => ({ ...f, territory_id: val ?? "" }))}
+          mode="persisted"
           disabled={creating}
           showLabel={false}
         />

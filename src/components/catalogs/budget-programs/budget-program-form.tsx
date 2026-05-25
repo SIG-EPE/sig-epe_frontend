@@ -156,6 +156,7 @@ export function BudgetProgramForm({ item, onClose, onSuccess }: BudgetProgramFor
         <TerritorySelector
           value={form.territory_id}
           onChange={(val) => setForm((f) => ({ ...f, territory_id: val || undefined }))}
+          mode="persisted"
           showLabel={true}
         />
       </div>

@@ -6,7 +6,7 @@
 // Estrategia: carga todos los territorios una vez, filtra en cliente.
 // -------------------------------------------------------
 
-import { useState, useEffect, useMemo, useRef } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Label } from "@/components/ui/label";
 import {
   Select,
@@ -23,6 +23,18 @@ import { useTerritories } from "@/hooks/use-budget";
 
 const NONE_VALUE = "__none__";
 
+const TERRITORY_SELECTOR_MODE = {
+  FILTER: "filter",
+  PERSISTED: "persisted",
+} as const;
+
+type TerritorySelectorMode = (typeof TERRITORY_SELECTOR_MODE)[keyof typeof TERRITORY_SELECTOR_MODE];
+
+const SYNTHETIC_TERRITORY_CODES = {
+  MULTIPROVINCIAL: "MULTIPROVINCIAL",
+  MULTIDISTRITAL: "MULTIDISTRITAL",
+} as const;
+
 // -------------------------------------------------------
 // Props
 // -------------------------------------------------------
@@ -32,6 +44,8 @@ interface TerritorySelectorProps {
   value?: string;
   /** Callback cuando cambia la selección — undefined si se deselecciona todo */
   onChange: (value: string | undefined) => void;
+  /** Contexto semántico: filtros usan "Sin filtro"; formularios persisten territorios explícitos. */
+  mode?: TerritorySelectorMode;
   /** Si el campo es obligatorio */
   required?: boolean;
   /** Deshabilitar todos los selects */
@@ -49,6 +63,7 @@ interface TerritorySelectorProps {
 export function TerritorySelector({
   value,
   onChange,
+  mode = TERRITORY_SELECTOR_MODE.PERSISTED,
   required = false,
   disabled = false,
   showLabel = true,
@@ -62,31 +77,26 @@ export function TerritorySelector({
   const [provinceId, setProvinceId] = useState<string>("");
   const [districtId, setDistrictId] = useState<string>("");
 
+  const isFilterMode = mode === TERRITORY_SELECTOR_MODE.FILTER;
+
   // Listas derivadas filtradas en cliente
-  const regions = useMemo(
-    () => allTerritories?.filter((t) => t.level === "REGION") ?? [],
-    [allTerritories]
-  );
+  const regions = allTerritories?.filter((t) => t.level === "REGION") ?? [];
 
-  const provinces = useMemo(
-    () =>
-      regionId
-        ? (allTerritories?.filter(
-            (t) => t.level === "PROVINCIA" && t.parent_id === regionId
-          ) ?? [])
-        : [],
-    [allTerritories, regionId]
-  );
+  const provinces = regionId
+    ? (allTerritories?.filter(
+        (t) =>
+          t.level === "PROVINCIA" &&
+          (t.parent_id === regionId || t.code === SYNTHETIC_TERRITORY_CODES.MULTIPROVINCIAL)
+      ) ?? [])
+    : [];
 
-  const districts = useMemo(
-    () =>
-      provinceId
-        ? (allTerritories?.filter(
-            (t) => t.level === "DISTRITO" && t.parent_id === provinceId
-          ) ?? [])
-        : [],
-    [allTerritories, provinceId]
-  );
+  const districts = provinceId
+    ? (allTerritories?.filter(
+        (t) =>
+          t.level === "DISTRITO" &&
+          (t.parent_id === provinceId || t.code === SYNTHETIC_TERRITORY_CODES.MULTIDISTRITAL)
+      ) ?? [])
+    : [];
 
   // -------------------------------------------------------
   // Inicialización: cuando llega un `value` externo y ya cargaron los datos
@@ -148,6 +158,20 @@ export function TerritorySelector({
     onChange(newId || provinceId || regionId || undefined);
   }
 
+  function getRegionNoneLabel() {
+    return isFilterMode ? "Sin filtro territorial" : "Sin territorio asignado";
+  }
+
+  function getProvinceNoneLabel() {
+    if (!regionId) return isFilterMode ? "Sin filtro de provincia" : "Seleccionar provincia...";
+    return isFilterMode ? "Filtrar solo por región" : "Usar región seleccionada";
+  }
+
+  function getDistrictNoneLabel() {
+    if (!provinceId) return isFilterMode ? "Sin filtro de distrito" : "Seleccionar distrito...";
+    return isFilterMode ? "Filtrar solo por provincia" : "Usar provincia seleccionada";
+  }
+
   // -------------------------------------------------------
   // Render
   // -------------------------------------------------------
@@ -175,7 +199,7 @@ export function TerritorySelector({
               <SelectValue placeholder="Seleccionar región..." />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value={NONE_VALUE}>Todas las regiones</SelectItem>
+              <SelectItem value={NONE_VALUE}>{getRegionNoneLabel()}</SelectItem>
               {regions.map((r) => (
                 <SelectItem key={r.id} value={r.id}>
                   {r.name}
@@ -199,7 +223,7 @@ export function TerritorySelector({
               <SelectValue placeholder="Seleccionar provincia..." />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value={NONE_VALUE}>Todas las provincias</SelectItem>
+              <SelectItem value={NONE_VALUE}>{getProvinceNoneLabel()}</SelectItem>
               {provinces.map((p) => (
                 <SelectItem key={p.id} value={p.id}>
                   {p.name}
@@ -223,7 +247,7 @@ export function TerritorySelector({
               <SelectValue placeholder="Seleccionar distrito..." />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value={NONE_VALUE}>Todos los distritos</SelectItem>
+              <SelectItem value={NONE_VALUE}>{getDistrictNoneLabel()}</SelectItem>
               {districts.map((d) => (
                 <SelectItem key={d.id} value={d.id}>
                   {d.name}
