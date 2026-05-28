@@ -11,6 +11,7 @@ import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { useRegisterPayment } from "@/hooks/use-requests";
+import { getBusinessDateTimeLocalValue, parseBusinessDateTimeLocalToIso } from "@/lib/business-timezone";
 import { PAYMENT_PROOF_ACCEPT, PAYMENT_PROOF_ACCEPTED_FORMATS_LABEL, formatRequestCurrency, getApiErrorMessage, validatePaymentProofFile } from "@/lib/requests";
 import type { PaymentRequest, RegisterPaymentInput } from "@/types/requests";
 
@@ -32,9 +33,7 @@ interface RegisterPaymentModalProps {
 }
 
 function getDefaultPaidAtValue(): string {
-  const now = new Date();
-  now.setMinutes(now.getMinutes() - now.getTimezoneOffset());
-  return now.toISOString().slice(0, 16);
+  return getBusinessDateTimeLocalValue();
 }
 
 export function RegisterPaymentModal({ request, open, onOpenChange, onSuccess }: RegisterPaymentModalProps) {
@@ -79,7 +78,7 @@ export function RegisterPaymentModal({ request, open, onOpenChange, onSuccess }:
     if (!request || !proofFile || nextProofError) return;
 
     const input: RegisterPaymentInput = {
-      paid_at: new Date(values.paid_at).toISOString(),
+      paid_at: parseBusinessDateTimeLocalToIso(values.paid_at),
       operation_reference: values.operation_reference.trim(),
       amount_paid: values.amount_paid,
       bank_commission: values.bank_commission,
@@ -118,7 +117,7 @@ export function RegisterPaymentModal({ request, open, onOpenChange, onSuccess }:
             <div className="grid gap-4 md:grid-cols-2">
               <FormField control={form.control} name="paid_at" render={({ field }) => (
                 <FormItem>
-                  <FormLabel>Fecha y hora de pago</FormLabel>
+                  <FormLabel>Fecha y hora de pago (hora Perú)</FormLabel>
                   <FormControl><Input type="datetime-local" {...field} data-testid="payment-paid-at-input" /></FormControl>
                   <FormMessage />
                 </FormItem>
