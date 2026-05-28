@@ -189,6 +189,17 @@ export interface RequestProgramSummary {
 export interface RequestActionSummary {
   id: string;
   name: string;
+  component?: RequestComponentSummary | null;
+}
+
+export interface RequestComponentSummary {
+  id: string;
+  name: string;
+}
+
+export interface RequestTerritorySummary {
+  id: string;
+  name: string;
 }
 
 export interface RequestPlanningLineMonthlySummary {
@@ -203,6 +214,8 @@ export interface RequestPlanningLineLookupItem {
   resource_description: string;
   planning_type?: string | null;
   type_resource?: string | null;
+  unit_price?: number | null;
+  quantity?: number | null;
   total_cost: number;
   status: string;
   fiscal_year: RequestFiscalYearSummary | null;
@@ -210,6 +223,7 @@ export interface RequestPlanningLineLookupItem {
   category: RequestCategorySummary | null;
   program: RequestProgramSummary | null;
   action: RequestActionSummary | null;
+  territory?: RequestTerritorySummary | null;
   monthly_summary: RequestPlanningLineMonthlySummary[];
 }
 
@@ -220,7 +234,7 @@ export interface RequestPlanningLineLookupResponse {
 
 export interface RequestBudgetPreview {
   planning_line: RequestPlanningLineLookupItem;
-  month: number;
+  month: number | null;
   amount: number;
   org_unit: RequestOrgUnitSummary | null;
   org_unit_ceiling: number | null;
@@ -242,9 +256,17 @@ export interface PaymentRequestPlanningLine {
   id: string;
   line_code?: string | null;
   resource_description?: string | null;
+  planning_type?: string | null;
+  type_resource?: string | null;
+  unit_price?: number | null;
+  quantity?: number | null;
+  total_cost?: number | null;
   fiscalYear?: RequestFiscalYearSummary | null;
   organizationalUnit?: RequestOrgUnitSummary | null;
   budgetCategory?: RequestCategorySummary | null;
+  territory?: RequestTerritorySummary | null;
+  program?: RequestProgramSummary | null;
+  operativeAction?: RequestActionSummary | null;
 }
 
 export interface RequesterSummary {
@@ -573,7 +595,6 @@ export interface RegisterPaymentInput {
 export interface CreateRequestDto {
   request_type: RequestType;
   budget_planning_line_id: string;
-  budget_month: number;
   requested_amount: number;
   currency?: RequestCurrency;
   concept: string;

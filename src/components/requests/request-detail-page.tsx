@@ -177,8 +177,8 @@ export function RequestDetailPage() {
         <Card>
           <CardHeader><CardTitle>Borrador editable</CardTitle></CardHeader>
           <CardContent className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-            <p className="text-sm text-muted-foreground">Esta solicitud todavía no fue enviada. Puedes continuar editando el borrador.</p>
-            <Button onClick={() => router.push(editHref as Parameters<typeof router.push>[0])}>Editar borrador</Button>
+            <p className="text-sm text-muted-foreground">Esta solicitud todavía no fue enviada. Ingresa a editar el borrador para adjuntar documentos, revisar la información y enviarla.</p>
+            <Button onClick={() => router.push(editHref as Parameters<typeof router.push>[0])}>Continuar edición</Button>
           </CardContent>
         </Card>
       )}
@@ -274,7 +274,7 @@ export function RequestDetailPage() {
         </Card>
       )}
 
-      <RequestDocumentsCard request={request} />
+      <RequestDocumentsCard request={request} readOnly />
 
       <Card>
         <CardHeader><CardTitle>Datos principales</CardTitle></CardHeader>

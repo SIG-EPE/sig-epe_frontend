@@ -16,6 +16,7 @@ import {
   canEditRequest,
   canCorrectObservedRequest,
   canReviewRequest,
+  formatRequestDate,
   formatRequestDateTime,
   getBeneficiaryDocumentHelp,
   getBeneficiaryDocumentInputMode,
@@ -37,11 +38,17 @@ import {
   getRequestDocumentUploadStatusLabel,
   getRequestEditStep,
   getRequestEditStepperItems,
+  getRequestReviewNavigationIssues,
   getRequiredDocumentChecklist,
+  isBankCciRequired,
+  isBcpBank,
   getRequestReviewQueueCount,
   getRequestReviewQueueFilter,
   validateRequestDocumentFile,
   validatePaymentProofFile,
+  validateRequestDataForSubmit,
+  validateRequestDataForSubmitIssues,
+  REQUEST_SUBMIT_FIELD,
   getPaymentRequestParty,
   getPaymentQueueStatusLabel,
   getPaymentRequestRenditionStatus,
@@ -64,7 +71,7 @@ import {
   REQUEST_EDIT_STEP,
 } from "@/lib/requests";
 import { ROLE_CODE } from "@/lib/constants";
-import { BENEFICIARY_DOCUMENT_TYPE, RENDITION_SORT_DIRECTION, RENDITION_SORT_FIELD, RENDITION_STATUS, REQUEST_CURRENCY, REQUEST_DOCUMENT_CATEGORY, REQUEST_DOCUMENT_STORAGE_PROVIDER, REQUEST_DOCUMENT_UPLOAD_STATUS, REQUEST_STATUS, REQUEST_TYPE, type PaymentRequest, type RenditionInboxCounts, type RenditionInboxRow, type RequestBudgetPreview, type RequestDocument, type RequestStatusHistoryItem } from "@/types/requests";
+import { ACCOUNT_TYPE, BANK_CODE, BENEFICIARY_DOCUMENT_TYPE, RENDITION_SORT_DIRECTION, RENDITION_SORT_FIELD, RENDITION_STATUS, REQUEST_CURRENCY, REQUEST_DOCUMENT_CATEGORY, REQUEST_DOCUMENT_STORAGE_PROVIDER, REQUEST_DOCUMENT_UPLOAD_STATUS, REQUEST_STATUS, REQUEST_TYPE, type PaymentRequest, type RenditionInboxCounts, type RenditionInboxRow, type RequestBudgetPreview, type RequestDocument, type RequestStatusHistoryItem } from "@/types/requests";
 
 function makeHistoryItem(overrides: Partial<RequestStatusHistoryItem>): RequestStatusHistoryItem {
   return {
@@ -206,6 +213,19 @@ describe("requests helpers", () => {
       REQUEST_TYPE.ADVANCE_SETTLEMENT,
     ]);
     expect(REQUEST_TYPE_OPTIONS.map((option) => option.value)).not.toContain(REQUEST_TYPE.ADVANCE_SETTLEMENT);
+  });
+
+  it("ordena las opciones de tipo de solicitud para el formulario", () => {
+    expect(REQUEST_TYPE_OPTIONS.map((option) => option.label)).toEqual([
+      "Anticipo",
+      "Pago a Proveedor",
+      "Reembolso",
+    ]);
+    expect(REQUEST_TYPE_OPTIONS.map((option) => option.value)).toEqual([
+      REQUEST_TYPE.ADVANCE,
+      REQUEST_TYPE.SUPPLIER_PAYMENT,
+      REQUEST_TYPE.REIMBURSEMENT,
+    ]);
   });
 
   it("extrae mensajes de ApiRequestError", () => {
@@ -351,6 +371,14 @@ describe("requests helpers", () => {
     }
   });
 
+  it("formats request dates and due labels in Lima business time", () => {
+    expect(formatRequestDate("2026-06-01T04:59:59.000Z")).toContain("31 may");
+    expect(formatRequestDateTime("2026-06-01T05:00:00.000Z")).toContain("1 jun");
+
+    const pendingDueToday = makeRenditionRow({ scheduled_rendition_at: "2026-05-31" });
+    expect(getRenditionDueLabel(pendingDueToday, new Date("2026-06-01T04:59:59.000Z"))).toBe("Vence hoy");
+  });
+
   it("aplica mensaje de bloqueo de nuevo anticipo sin bloquear corrección REXAN", () => {
     const backendError = new ApiRequestError(400, {
       statusCode: 400,
@@ -449,6 +477,311 @@ describe("requests helpers", () => {
     const steps = getRequestEditStepperItems(REQUEST_EDIT_STEP.REVIEW);
     expect(steps.map((step) => step.label)).toEqual(["Datos", "Documentos", "Revisión/Envío"]);
     expect(steps.map((step) => step.state)).toEqual(["completed", "completed", "current"]);
+  });
+
+  it("no marca Datos como completado si faltan datos requeridos para envío", () => {
+    const steps = getRequestEditStepperItems(REQUEST_EDIT_STEP.DOCUMENTS, { isDataComplete: false });
+
+    expect(steps.map((step) => step.state)).toEqual(["pending", "current", "pending"]);
+  });
+
+  it("valida datos obligatorios de beneficiario y banco antes de revisión/envío", () => {
+    const messages = validateRequestDataForSubmit(makeRequest({
+      budget_planning_line_id: "line-1",
+      beneficiary_name: "Ana Solicitante",
+      beneficiary_document_type: BENEFICIARY_DOCUMENT_TYPE.DNI,
+      beneficiary_document_number: "12345678",
+      account_type: ACCOUNT_TYPE.SAVINGS,
+      bank_account: "1234567890",
+      bank_code: null,
+      bank_cci: "stale-invalid-cci",
+    }));
+
+    expect(messages).toEqual(["Selecciona el banco del beneficiario."]);
+  });
+
+  it("valida todos los datos base requeridos por backend antes de revisión/envío", () => {
+    const messages = validateRequestDataForSubmit(makeRequest({
+      budget_planning_line_id: null,
+      requested_amount: 0,
+      concept: "   ",
+      beneficiary_name: " ",
+      beneficiary_document_type: null,
+      beneficiary_document_number: null,
+      bank_code: null,
+      account_type: null,
+      bank_account: null,
+      bank_cci: "123",
+    }));
+
+    expect(messages).toEqual([
+      "Selecciona una línea POA.",
+      "Ingresa un monto mayor a cero.",
+      "Describe el concepto o justificación.",
+      "Ingresa el nombre del beneficiario.",
+      "Selecciona el tipo de documento del beneficiario.",
+      "Ingresa el número de documento del beneficiario.",
+      "Selecciona el banco del beneficiario.",
+      "Selecciona el tipo de cuenta bancaria.",
+      "Ingresa una cuenta bancaria de 6 a 30 dígitos.",
+    ]);
+  });
+
+  it("impide entrar a revisión cuando faltan datos obligatorios", () => {
+    const checklist = getRequiredDocumentChecklist(REQUEST_TYPE.ADVANCE, [
+      makeDocument({
+        document_category: REQUEST_DOCUMENT_CATEGORY.PXQ,
+        original_filename: "pxq.xlsx",
+        safe_filename: "pxq.xlsx",
+        mime_type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      }),
+    ]);
+
+    const result = getRequestReviewNavigationIssues(makeRequest({
+      budget_planning_line_id: null,
+      beneficiary_name: " ",
+      beneficiary_document_type: null,
+      beneficiary_document_number: null,
+      bank_code: null,
+      account_type: null,
+      bank_account: null,
+    }), checklist);
+
+    expect(result.canEnterReview).toBe(false);
+    expect(result.documentMessages).toEqual([]);
+    expect(result.dataIssues.map((issue) => issue.message)).toEqual(expect.arrayContaining([
+      "Selecciona una línea POA.",
+      "Ingresa el nombre del beneficiario.",
+      "Selecciona el banco del beneficiario.",
+    ]));
+  });
+
+  it("impide entrar a revisión cuando faltan documentos requeridos", () => {
+    const checklist = getRequiredDocumentChecklist(REQUEST_TYPE.REIMBURSEMENT, []);
+    const result = getRequestReviewNavigationIssues(makeRequest({
+      request_type: REQUEST_TYPE.REIMBURSEMENT,
+      budget_planning_line_id: "line-1",
+      requested_amount: 100,
+      concept: "Solicitud completa",
+      beneficiary_name: "Ana Solicitante",
+      beneficiary_document_type: BENEFICIARY_DOCUMENT_TYPE.DNI,
+      beneficiary_document_number: "12345678",
+      bank_code: BANK_CODE.BCP,
+      account_type: ACCOUNT_TYPE.SAVINGS,
+      bank_account: "1234567890",
+    }), checklist);
+
+    expect(result.canEnterReview).toBe(false);
+    expect(result.dataIssues).toEqual([]);
+    expect(result.documentMessages).toEqual([
+      "Falta adjuntar informe de rendición Excel.",
+      "Falta adjuntar comprobante.",
+    ]);
+  });
+
+  it("permite entrar a revisión cuando datos y documentos están completos", () => {
+    const checklist = getRequiredDocumentChecklist(REQUEST_TYPE.SUPPLIER_PAYMENT, [
+      makeDocument({ document_category: REQUEST_DOCUMENT_CATEGORY.RECEIPT }),
+    ]);
+    const result = getRequestReviewNavigationIssues(makeRequest({
+      request_type: REQUEST_TYPE.SUPPLIER_PAYMENT,
+      budget_planning_line_id: "line-1",
+      requested_amount: 100,
+      concept: "Solicitud completa",
+      beneficiary_name: "Ana Solicitante",
+      beneficiary_document_type: BENEFICIARY_DOCUMENT_TYPE.DNI,
+      beneficiary_document_number: "12345678",
+      bank_code: BANK_CODE.BCP,
+      account_type: ACCOUNT_TYPE.SAVINGS,
+      bank_account: "1234567890",
+    }), checklist);
+
+    expect(result).toEqual({
+      canEnterReview: true,
+      dataIssues: [],
+      documentMessages: [],
+    });
+  });
+
+  it("valida CCI cuando el banco lo requiere", () => {
+    expect(validateRequestDataForSubmit(makeRequest({
+      budget_planning_line_id: "line-1",
+      beneficiary_name: "Ana Solicitante",
+      beneficiary_document_type: BENEFICIARY_DOCUMENT_TYPE.DNI,
+      beneficiary_document_number: "12345678",
+      bank_code: BANK_CODE.BBVA,
+      account_type: ACCOUNT_TYPE.SAVINGS,
+      bank_account: "1234567890",
+      bank_cci: "123",
+    }))).toContain("El CCI debe tener exactamente 20 dígitos.");
+
+    expect(validateRequestDataForSubmit(makeRequest({
+      budget_planning_line_id: "line-1",
+      beneficiary_name: "Ana Solicitante",
+      beneficiary_document_type: BENEFICIARY_DOCUMENT_TYPE.DNI,
+      beneficiary_document_number: "12345678",
+      bank_code: BANK_CODE.BBVA,
+      account_type: ACCOUNT_TYPE.SAVINGS,
+      bank_account: "1234567890",
+      bank_cci: null,
+    }))).toContain("Ingresa el CCI de 20 dígitos.");
+  });
+
+  it("expone validaciones con campo y paso para mostrarlas cerca del formulario", () => {
+    const issues = validateRequestDataForSubmitIssues(makeRequest({
+      budget_planning_line_id: null,
+      bank_code: null,
+      bank_account: null,
+    }));
+
+    expect(issues).toEqual(expect.arrayContaining([
+      {
+        field: REQUEST_SUBMIT_FIELD.BUDGET_PLANNING_LINE_ID,
+        step: "data",
+        message: "Selecciona una línea POA.",
+      },
+      {
+        field: REQUEST_SUBMIT_FIELD.BANK_CODE,
+        step: "data",
+        message: "Selecciona el banco del beneficiario.",
+      },
+      {
+        field: REQUEST_SUBMIT_FIELD.BANK_ACCOUNT,
+        step: "data",
+        message: "Ingresa una cuenta bancaria de 6 a 30 dígitos.",
+      },
+    ]));
+  });
+
+  it("acepta los datos requeridos por backend para todos los tipos de solicitud", () => {
+    for (const requestType of Object.values(REQUEST_TYPE)) {
+      expect(validateRequestDataForSubmit(makeRequest({
+        request_type: requestType,
+        budget_planning_line_id: "line-1",
+        requested_amount: 100,
+        concept: "Solicitud completa",
+        beneficiary_name: "Ana Solicitante",
+        beneficiary_document_type: BENEFICIARY_DOCUMENT_TYPE.DNI,
+        beneficiary_document_number: "12345678",
+        bank_code: BANK_CODE.BCP,
+        account_type: ACCOUNT_TYPE.SAVINGS,
+        bank_account: "1234567890",
+      }))).toEqual([]);
+    }
+  });
+
+  it("requiere CCI para bancos distintos a BCP y no para BCP", () => {
+    expect(validateRequestDataForSubmit(makeRequest({
+      budget_planning_line_id: "line-1",
+      beneficiary_name: "Ana Solicitante",
+      beneficiary_document_type: BENEFICIARY_DOCUMENT_TYPE.DNI,
+      beneficiary_document_number: "12345678",
+      bank_code: BANK_CODE.BCP,
+      account_type: ACCOUNT_TYPE.SAVINGS,
+      bank_account: "1234567890",
+      bank_cci: null,
+    }))).not.toContain("El CCI debe tener exactamente 20 dígitos.");
+
+    expect(validateRequestDataForSubmit(makeRequest({
+      budget_planning_line_id: "line-1",
+      beneficiary_name: "Ana Solicitante",
+      beneficiary_document_type: BENEFICIARY_DOCUMENT_TYPE.DNI,
+      beneficiary_document_number: "12345678",
+      bank_code: BANK_CODE.BBVA,
+      account_type: ACCOUNT_TYPE.SAVINGS,
+      bank_account: "1234567890",
+      bank_cci: null,
+    }))).toContain("Ingresa el CCI de 20 dígitos.");
+  });
+
+  it("determina la regla de CCI por código canónico de banco", () => {
+    expect(isBcpBank(BANK_CODE.BCP)).toBe(true);
+    expect(isBankCciRequired(BANK_CODE.BCP)).toBe(false);
+    expect(isBankCciRequired(BANK_CODE.BBVA)).toBe(true);
+    expect(isBankCciRequired(BANK_CODE.PICHINCHA)).toBe(true);
+    expect(isBankCciRequired(null)).toBe(false);
+  });
+
+  it("valida formato de documento de beneficiario requerido por backend", () => {
+    expect(validateRequestDataForSubmit(makeRequest({
+      budget_planning_line_id: "line-1",
+      beneficiary_name: "Ana Solicitante",
+      beneficiary_document_type: BENEFICIARY_DOCUMENT_TYPE.RUC,
+      beneficiary_document_number: "12345678",
+      bank_code: BANK_CODE.BCP,
+      account_type: ACCOUNT_TYPE.SAVINGS,
+      bank_account: "1234567890",
+    }))).toContain("El RUC del beneficiario debe tener 11 dígitos.");
+
+    expect(validateRequestDataForSubmit(makeRequest({
+      budget_planning_line_id: "line-1",
+      beneficiary_name: "Ana Solicitante",
+      beneficiary_document_type: BENEFICIARY_DOCUMENT_TYPE.CE,
+      beneficiary_document_number: "ABC",
+      bank_code: BANK_CODE.BCP,
+      account_type: ACCOUNT_TYPE.SAVINGS,
+      bank_account: "1234567890",
+    }))).toContain("El carné de extranjería del beneficiario debe tener de 6 a 12 letras o números.");
+  });
+
+  it("traduce validaciones del backend a mensajes empresariales", () => {
+    const error = new ApiRequestError(400, {
+      statusCode: 400,
+      message: [
+        "budget_planning_line_id is required",
+        "requested_amount must be greater than 0",
+        "concept is required",
+        "beneficiary_name is required",
+        "beneficiary_document_type is required",
+        "beneficiary_document_number is required",
+        "beneficiary_document_number must contain exactly 8 digits for DNI",
+        "beneficiary_document_number must contain exactly 11 digits for RUC",
+        "beneficiary_document_number must contain 6 to 12 alphanumeric characters for CE",
+        "bank_code is required",
+        "account_type is required",
+        "bank_account must contain 6 to 30 digits",
+        "bank_cci must contain exactly 20 digits",
+      ],
+      error: "Bad Request",
+      timestamp: "2026-05-01T10:00:00.000Z",
+      path: "/requests/req-1/submit",
+    });
+
+    expect(getApiErrorMessages(error)).toEqual([
+      "Selecciona una línea POA.",
+      "Ingresa un monto mayor a cero.",
+      "Describe el concepto o justificación.",
+      "Ingresa el nombre del beneficiario.",
+      "Selecciona el tipo de documento del beneficiario.",
+      "Ingresa el número de documento del beneficiario.",
+      "El DNI del beneficiario debe tener 8 dígitos.",
+      "El RUC del beneficiario debe tener 11 dígitos.",
+      "El carné de extranjería del beneficiario debe tener de 6 a 12 letras o números.",
+      "Selecciona el banco del beneficiario.",
+      "Selecciona el tipo de cuenta bancaria.",
+      "Ingresa una cuenta bancaria de 6 a 30 dígitos.",
+      "El CCI debe tener exactamente 20 dígitos.",
+    ]);
+  });
+
+  it("oculta mensajes técnicos de validación no mapeados", () => {
+    const error = new ApiRequestError(400, {
+      statusCode: 400,
+      message: "unknown_backend_field must be a UUID",
+      error: "Bad Request",
+      timestamp: "2026-05-01T10:00:00.000Z",
+      path: "/requests/req-1/submit",
+    });
+
+    expect(getApiErrorMessages(error)).toEqual([
+      "Revisa los datos ingresados. Hay un campo obligatorio o con formato inválido.",
+    ]);
+  });
+
+  it("aplica salida segura para errores técnicos desconocidos fuera de ApiRequestError", () => {
+    expect(getApiErrorMessages(new Error("raw_backend_field should not be empty"))).toEqual([
+      "Revisa los datos ingresados. Hay un campo obligatorio o con formato inválido.",
+    ]);
   });
 
   it("evalúa checklist de documentos requeridos por tipo", () => {
@@ -720,7 +1053,7 @@ describe("requests helpers", () => {
     expect(getRequestListActions(ROLE_CODE.GIOF_GESTOR, REQUEST_STATUS.SUBMITTED, "req-1").map((action) => action.label)).toEqual(["Gestionar"]);
     expect(getRequestListActions(ROLE_CODE.ADMIN_SISTEMA, REQUEST_STATUS.APPROVED, "req-1").map((action) => action.label)).toEqual(["Ver detalle"]);
     expect(getRequestListActions(ROLE_CODE.ADMIN_SISTEMA, REQUEST_STATUS.REJECTED, "req-1").map((action) => action.label)).toEqual(["Ver detalle"]);
-    expect(getRequestListActions(ROLE_CODE.SOLICITANTE_EPE, REQUEST_STATUS.DRAFT, "req-1").map((action) => action.label)).toEqual(["Editar", "Ver"]);
+    expect(getRequestListActions(ROLE_CODE.SOLICITANTE_EPE, REQUEST_STATUS.DRAFT, "req-1").map((action) => action.label)).toEqual(["Continuar edición"]);
     expect(getRequestListActions(ROLE_CODE.SOLICITANTE_EPE, REQUEST_STATUS.OBSERVED, "req-1").map((action) => action.label)).toEqual(["Corregir", "Ver"]);
   });
 });

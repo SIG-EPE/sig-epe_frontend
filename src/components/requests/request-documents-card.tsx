@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState, type ChangeEvent } from "react";
 import { flushSync } from "react-dom";
 import { CheckCircle2, ExternalLink, FileText, Info, Trash2, Upload, XCircle } from "lucide-react";
 import { toast } from "sonner";
@@ -41,6 +41,7 @@ import {
   type PaymentRequest,
   type RequestDocument,
   type RequestDocumentCategory,
+  type RequiredDocumentChecklistItem,
   type RequestReceiptReview,
   type UpdateRequestReceiptReviewInput,
 } from "@/types/requests";
@@ -48,6 +49,11 @@ import {
 interface RequestDocumentsCardProps {
   request: PaymentRequest;
   backendMissingMessages?: string[];
+  readOnly?: boolean;
+  documents?: RequestDocument[];
+  documentsLoading?: boolean;
+  documentsError?: Error | null;
+  onDocumentsChanged?: () => Promise<void> | void;
 }
 
 interface ReceiptReviewFormState {
@@ -60,18 +66,58 @@ interface ReceiptReviewFormState {
   currency: string;
 }
 
+interface ChecklistAttachButtonProps {
+  item: RequiredDocumentChecklistItem;
+  disabled: boolean;
+  onAttach: (category: RequestDocumentCategory, file: File) => void;
+}
+
+function ChecklistAttachButton({ item, disabled, onAttach }: ChecklistAttachButtonProps) {
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  function handleInputChange(event: ChangeEvent<HTMLInputElement>): void {
+    const selectedFile = event.target.files?.[0] ?? null;
+    event.target.value = "";
+    if (selectedFile) onAttach(item.category, selectedFile);
+  }
+
+  return (
+    <>
+      <input
+        ref={inputRef}
+        type="file"
+        className="sr-only"
+        accept={getRequestDocumentAccept(item.category)}
+        aria-label={`Seleccionar ${item.label}`}
+        disabled={disabled}
+        onChange={handleInputChange}
+      />
+      <Button type="button" variant="outline" size="sm" className="self-start sm:self-center" disabled={disabled} onClick={() => inputRef.current?.click()}>
+        <Upload className="size-4" />
+        {disabled ? "Subiendo..." : `Adjuntar ${item.label}`}
+      </Button>
+    </>
+  );
+}
+
 function getRequestDocumentWebUrl(document: RequestDocument): string | null {
   const webUrl = document.drive_web_url?.trim();
 
   return webUrl && webUrl.length > 0 ? webUrl : null;
 }
 
-function getDefaultDocumentCategory(request: PaymentRequest): RequestDocumentCategory {
-  if (request.request_type === REQUEST_TYPE.ADVANCE) return REQUEST_DOCUMENT_CATEGORY.PXQ;
-  if (request.request_type === REQUEST_TYPE.REIMBURSEMENT) return REQUEST_DOCUMENT_CATEGORY.SETTLEMENT_REPORT;
-  if (request.request_type === REQUEST_TYPE.ADVANCE_SETTLEMENT) return REQUEST_DOCUMENT_CATEGORY.SETTLEMENT_REPORT;
-  if (request.request_type === REQUEST_TYPE.SUPPLIER_PAYMENT) return REQUEST_DOCUMENT_CATEGORY.RECEIPT;
-  return REQUEST_DOCUMENT_CATEGORY.REQUEST_SUPPORT;
+function getPendingRequiredDocumentCategories(checklist: RequiredDocumentChecklistItem[]): Set<RequestDocumentCategory> {
+  return new Set(checklist.filter((item) => item.required && !item.satisfied).map((item) => item.category));
+}
+
+function getOptionalDocumentCategoryOptions(checklist: RequiredDocumentChecklistItem[]): typeof REQUEST_DOCUMENT_CATEGORY_OPTIONS {
+  const pendingRequiredCategories = getPendingRequiredDocumentCategories(checklist);
+
+  return REQUEST_DOCUMENT_CATEGORY_OPTIONS.filter((option) => !pendingRequiredCategories.has(option.value));
+}
+
+function getDefaultOptionalDocumentCategory(options: typeof REQUEST_DOCUMENT_CATEGORY_OPTIONS): RequestDocumentCategory | "" {
+  return options.find((option) => option.value === REQUEST_DOCUMENT_CATEGORY.REQUEST_SUPPORT)?.value ?? options[0]?.value ?? "";
 }
 
 function getReceiptStatusLabel(receiptReview?: RequestReceiptReview): string {
@@ -140,18 +186,31 @@ function getReceiptValueSummary(receiptReview: RequestReceiptReview): string {
   return `${provider} · ${serieNumber} · ${amount}`;
 }
 
-export function RequestDocumentsCard({ request, backendMissingMessages = [] }: RequestDocumentsCardProps) {
+export function RequestDocumentsCard({
+  request,
+  backendMissingMessages = [],
+  readOnly = false,
+  documents: controlledDocuments,
+  documentsLoading,
+  documentsError,
+  onDocumentsChanged,
+}: RequestDocumentsCardProps) {
   const user = useAuthStore((state) => state.user);
   const roleCode = user?.role?.code;
   const canManage = canManageRequestDocuments(roleCode, request.status, request, user?.id);
+  const canManageActions = canManage && !readOnly;
   const permissionMessage = getRequestDocumentPermissionMessage(roleCode, request.status, request, user?.id);
-  const { documents, isLoading, error, refetch } = useRequestDocuments(request.id);
+  const internalDocuments = useRequestDocuments(request.id);
+  const documents = controlledDocuments ?? internalDocuments.documents;
+  const isLoading = documentsLoading ?? internalDocuments.isLoading;
+  const error = documentsError ?? internalDocuments.error;
+  const refetch = onDocumentsChanged ?? internalDocuments.refetch;
   const { receipts, isLoading: receiptsLoading, error: receiptsError, refetch: refetchReceipts } = useRequestReceiptReviews(request.id);
   const { uploadDocument, isLoading: uploading } = useUploadRequestDocument();
   const { deleteDocument, isLoading: deleting } = useDeleteRequestDocument();
   const { updateReceiptReview, isLoading: updatingReceipt } = useUpdateRequestReceiptReview();
   const { confirmReceiptReview, isLoading: confirmingReceipt } = useConfirmRequestReceiptReview();
-  const [category, setCategory] = useState<RequestDocumentCategory>(getDefaultDocumentCategory(request));
+  const [category, setCategory] = useState<RequestDocumentCategory | "">(REQUEST_DOCUMENT_CATEGORY.REQUEST_SUPPORT);
   const [file, setFile] = useState<File | null>(null);
   const [validationError, setValidationError] = useState<string | null>(null);
   const [operationError, setOperationError] = useState<string | null>(null);
@@ -159,20 +218,22 @@ export function RequestDocumentsCard({ request, backendMissingMessages = [] }: R
   const [documentToDelete, setDocumentToDelete] = useState<string | null>(null);
   const [receiptToReview, setReceiptToReview] = useState<RequestReceiptReview | null>(null);
   const [receiptForm, setReceiptForm] = useState<ReceiptReviewFormState | null>(null);
-  const uploaderRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const checklist = getRequiredDocumentChecklist(request.request_type, documents);
-  const acceptedFormatsLabel = getRequestDocumentAcceptedFormatsLabel(category);
+  const optionalCategoryOptions = getOptionalDocumentCategoryOptions(checklist.items);
+  const hasOptionalCategoryOptions = optionalCategoryOptions.length > 0;
+  const acceptedFormatsLabel = category ? getRequestDocumentAcceptedFormatsLabel(category) : "selecciona una categoría";
 
-  function focusUploaderFileInput(): void {
-    uploaderRef.current?.scrollIntoView?.({ behavior: "smooth", block: "center" });
-    fileInputRef.current?.focus();
-    fileInputRef.current?.click();
-  }
+  useEffect(() => {
+    if (optionalCategoryOptions.some((option) => option.value === category)) return;
+    setCategory(getDefaultOptionalDocumentCategory(optionalCategoryOptions));
+    setFile(null);
+    setValidationError(null);
+  }, [category, optionalCategoryOptions]);
 
   function handleFileChange(nextFile: File | null): void {
     setFile(nextFile);
-    setValidationError(validateRequestDocumentFile(nextFile, category));
+    setValidationError(category ? validateRequestDocumentFile(nextFile, category) : "Selecciona una categoría para adjuntar el documento.");
     setSuccessMessage(null);
   }
 
@@ -182,25 +243,16 @@ export function RequestDocumentsCard({ request, backendMissingMessages = [] }: R
     setValidationError(validateRequestDocumentFile(file, nextCategory));
   }
 
-  function handleChecklistAttach(nextCategory: RequestDocumentCategory): void {
-    flushSync(() => {
-      setCategory(nextCategory);
-      setValidationError(validateRequestDocumentFile(file, nextCategory));
-      setSuccessMessage(null);
-    });
-    focusUploaderFileInput();
-  }
-
-  async function handleUpload(): Promise<void> {
-    const fileError = validateRequestDocumentFile(file, category);
-    if (fileError || !file) {
+  async function uploadSelectedFile(selectedFile: File, selectedCategory: RequestDocumentCategory): Promise<void> {
+    const fileError = validateRequestDocumentFile(selectedFile, selectedCategory);
+    if (fileError) {
       setValidationError(fileError);
       return;
     }
 
     try {
       setOperationError(null);
-      await uploadDocument(request.id, { file, document_category: category });
+      await uploadDocument(request.id, { file: selectedFile, document_category: selectedCategory });
       toast.success(REQUEST_DOCUMENT_UPLOAD_SUCCESS_MESSAGE);
       setSuccessMessage(REQUEST_DOCUMENT_UPLOAD_SUCCESS_MESSAGE);
       setFile(null);
@@ -212,6 +264,29 @@ export function RequestDocumentsCard({ request, backendMissingMessages = [] }: R
       toast.error(message);
       await Promise.all([refetch(), refetchReceipts()]);
     }
+  }
+
+  async function handleUpload(): Promise<void> {
+    if (!category) {
+      setValidationError("Selecciona una categoría para adjuntar el documento.");
+      return;
+    }
+
+    if (!file) {
+      setValidationError(validateRequestDocumentFile(file, category));
+      return;
+    }
+
+    await uploadSelectedFile(file, category);
+  }
+
+  function handleChecklistAttach(nextCategory: RequestDocumentCategory, nextFile: File): void {
+    flushSync(() => {
+      setCategory(nextCategory);
+      setFile(nextFile);
+      setSuccessMessage(null);
+    });
+    void uploadSelectedFile(nextFile, nextCategory);
   }
 
   async function handleDelete(documentId: string): Promise<void> {
@@ -276,13 +351,21 @@ export function RequestDocumentsCard({ request, backendMissingMessages = [] }: R
     <Card>
       <CardHeader>
         <CardTitle>Documentos adjuntos</CardTitle>
-        <CardDescription>Adjunta sustentos en PDF, JPG, PNG y Excel cuando la categoría lo requiera. Podrás abrir los documentos compartidos cuando el acceso haya sido habilitado.</CardDescription>
+        <CardDescription>
+          {readOnly
+            ? "Consulta los sustentos adjuntos y el estado del checklist. Para cambiar documentos, ingresa al flujo de edición del borrador."
+            : "Adjunta sustentos en PDF, JPG, PNG y Excel cuando la categoría lo requiera. Podrás abrir los documentos compartidos cuando el acceso haya sido habilitado."}
+        </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
         <div className="rounded-md border p-4">
           <div className="space-y-1">
             <h3 className="text-sm font-semibold">Checklist de documentos requeridos</h3>
-            <p className="text-xs text-muted-foreground">Completa los documentos requeridos para continuar con el envío. La validación final se realizará al enviar la solicitud.</p>
+            <p className="text-xs text-muted-foreground">
+              {readOnly
+                ? "Estado de los documentos requeridos para esta solicitud. Esta vista no permite adjuntar ni eliminar archivos."
+                : "Completa los documentos requeridos para continuar con el envío. La validación final se realizará al enviar la solicitud."}
+            </p>
           </div>
           <div className="mt-3 space-y-3">
             {checklist.items.length === 0 ? (
@@ -300,11 +383,8 @@ export function RequestDocumentsCard({ request, backendMissingMessages = [] }: R
                     <p className="text-xs text-muted-foreground">Formatos esperados: {item.acceptedFormatsLabel}.</p>
                   </div>
                 </div>
-                {!item.satisfied && canManage && (
-                  <Button type="button" variant="outline" size="sm" className="self-start sm:self-center" onClick={() => handleChecklistAttach(item.category)}>
-                    <Upload className="size-4" />
-                    Adjuntar {item.label}
-                  </Button>
+                {!item.satisfied && canManageActions && (
+                  <ChecklistAttachButton item={item} disabled={uploading} onAttach={handleChecklistAttach} />
                 )}
               </div>
             ))}
@@ -331,15 +411,20 @@ export function RequestDocumentsCard({ request, backendMissingMessages = [] }: R
           )}
         </div>
 
-        {canManage ? (
-          <div ref={uploaderRef} className="rounded-md border p-4">
+        {canManageActions ? (
+          <div className="rounded-md border p-4">
+            <div className="mb-3 space-y-1">
+              <h3 className="text-sm font-semibold">Otros documentos</h3>
+              <p className="text-xs text-muted-foreground">Usa este cargador solo para documentos adicionales que no se solicitan en el checklist. Para documentos requeridos pendientes, usa el botón de su fila. Este cargador adjunta un archivo por vez.</p>
+            </div>
+            {hasOptionalCategoryOptions ? (
             <div className="grid gap-3 md:grid-cols-[220px_1fr_auto] md:items-end">
               <div className="space-y-2">
                 <label className="text-sm font-medium" htmlFor="document-category">Categoría</label>
                 <Select value={category} onValueChange={handleCategoryChange}>
                   <SelectTrigger id="document-category"><SelectValue placeholder="Selecciona categoría" /></SelectTrigger>
                   <SelectContent>
-                    {REQUEST_DOCUMENT_CATEGORY_OPTIONS.map((option) => (
+                    {optionalCategoryOptions.map((option) => (
                       <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
                     ))}
                   </SelectContent>
@@ -352,16 +437,19 @@ export function RequestDocumentsCard({ request, backendMissingMessages = [] }: R
                   ref={fileInputRef}
                   key={file ? "selected" : "empty"}
                   type="file"
-                  accept={getRequestDocumentAccept(category)}
+                  accept={category ? getRequestDocumentAccept(category) : undefined}
                   onChange={(event) => handleFileChange(event.target.files?.[0] ?? null)}
                 />
-                <p className="text-xs text-muted-foreground">Máximo 10 MB. Formatos permitidos para esta categoría: {acceptedFormatsLabel}.</p>
+                <p className="text-xs text-muted-foreground">Máximo 10 MB. Formatos permitidos para esta categoría: {acceptedFormatsLabel}. Selecciona un solo archivo por carga.</p>
               </div>
               <Button type="button" onClick={() => void handleUpload()} disabled={uploading || Boolean(validationError) || !file}>
                 <Upload className="size-4" />
                 {uploading ? "Subiendo..." : "Adjuntar"}
               </Button>
             </div>
+            ) : (
+              <p className="text-sm text-muted-foreground">No hay categorías opcionales disponibles por ahora. Completa los documentos requeridos desde el checklist.</p>
+            )}
             {file && (
               <div className="mt-3 rounded-md bg-muted p-3 text-sm">
                 <p className="font-medium">Archivo seleccionado</p>
@@ -373,7 +461,9 @@ export function RequestDocumentsCard({ request, backendMissingMessages = [] }: R
             {validationError && <p className="mt-2 text-sm text-destructive">{validationError}</p>}
           </div>
         ) : (
-          <p className="text-sm text-muted-foreground">{permissionMessage}</p>
+          <p className="text-sm text-muted-foreground">
+            {readOnly ? "Vista de solo lectura: los documentos se gestionan desde el flujo de edición del borrador." : permissionMessage}
+          </p>
         )}
 
         {successMessage && (
@@ -463,17 +553,17 @@ export function RequestDocumentsCard({ request, backendMissingMessages = [] }: R
                     ) : (
                       <p className="text-xs text-muted-foreground">Enlace no disponible</p>
                     )}
-                    {receiptReview && canManage && (
+                    {receiptReview && canManageActions && (
                       <Button type="button" variant="outline" size="sm" onClick={() => openReceiptReview(receiptReview)}>
                         Revisar datos
                       </Button>
                     )}
-                    {receiptReview && canManage && canConfirmReceiptReview(receiptReview) && (
+                    {receiptReview && canManageActions && canConfirmReceiptReview(receiptReview) && (
                       <Button type="button" size="sm" onClick={() => void handleConfirmReceiptReview(receiptReview)} disabled={confirmingReceipt}>
                         {confirmingReceipt ? "Confirmando..." : "Confirmar datos"}
                       </Button>
                     )}
-                    {canManage && (
+                    {canManageActions && (
                       <Button type="button" variant="outline" size="sm" onClick={() => setDocumentToDelete(document.id)} disabled={deleting}>
                         <Trash2 className="size-4" />
                         {deleting && documentToDelete === document.id ? "Eliminando..." : "Eliminar"}

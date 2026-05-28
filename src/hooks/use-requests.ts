@@ -507,37 +507,66 @@ export function useDeleteRequestDocument() {
   return { deleteDocument, isLoading, error };
 }
 
-export function useRequestPlanningLines(search?: string) {
+interface RequestPlanningLineLookupFilters {
+  search?: string;
+  fiscal_year_id?: string;
+  org_unit_id?: string;
+  planning_type?: string;
+  program_id?: string;
+  component_id?: string;
+  operative_action_id?: string;
+  category_id?: string;
+  territory_id?: string;
+}
+
+function appendPlanningLineLookupParam(params: URLSearchParams, key: keyof RequestPlanningLineLookupFilters, value?: string): void {
+  const normalized = value?.trim();
+  if (normalized) params.set(key, normalized);
+}
+
+export function useRequestPlanningLines(filters?: RequestPlanningLineLookupFilters | string) {
   const [data, setData] = useState<RequestPlanningLineLookupResponse | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<Error | null>(null);
 
   const authIsLoading = useAuthStore((state) => state.isLoading);
   const accessToken = useAuthStore((state) => state.accessToken);
+  const lookupFilters: RequestPlanningLineLookupFilters = typeof filters === "string" ? { search: filters } : filters ?? {};
 
   const refetch = useCallback(async () => {
     if (authIsLoading || !accessToken) return;
     setIsLoading(true);
     setError(null);
     try {
-      const result = await api.get<RequestPlanningLineLookupResponse>("/requests/lookups/planning-lines");
+      const params = new URLSearchParams();
+      appendPlanningLineLookupParam(params, "search", lookupFilters.search);
+      appendPlanningLineLookupParam(params, "fiscal_year_id", lookupFilters.fiscal_year_id);
+      appendPlanningLineLookupParam(params, "org_unit_id", lookupFilters.org_unit_id);
+      appendPlanningLineLookupParam(params, "planning_type", lookupFilters.planning_type);
+      appendPlanningLineLookupParam(params, "program_id", lookupFilters.program_id);
+      appendPlanningLineLookupParam(params, "component_id", lookupFilters.component_id);
+      appendPlanningLineLookupParam(params, "operative_action_id", lookupFilters.operative_action_id);
+      appendPlanningLineLookupParam(params, "category_id", lookupFilters.category_id);
+      appendPlanningLineLookupParam(params, "territory_id", lookupFilters.territory_id);
+      const query = params.toString();
+      const result = await api.get<RequestPlanningLineLookupResponse>(`/requests/lookups/planning-lines${query ? `?${query}` : ""}`);
       setData(result);
     } catch (e) {
       setError(e instanceof Error ? e : new Error("Error al cargar líneas POA"));
     } finally {
       setIsLoading(false);
     }
-  }, [accessToken, authIsLoading]);
+  }, [accessToken, authIsLoading, lookupFilters.category_id, lookupFilters.component_id, lookupFilters.fiscal_year_id, lookupFilters.operative_action_id, lookupFilters.org_unit_id, lookupFilters.planning_type, lookupFilters.program_id, lookupFilters.search, lookupFilters.territory_id]);
 
   useEffect(() => {
     if (authIsLoading || !accessToken) return;
     void refetch();
   }, [accessToken, authIsLoading, refetch]);
 
-  const normalizedSearch = search?.trim().toLowerCase() ?? "";
+  const normalizedSearch = lookupFilters.search?.trim().toLowerCase() ?? "";
   const lines = (data?.lines ?? []).filter((line) => {
     if (!normalizedSearch) return true;
-    return [line.line_code, line.resource_description, line.org_unit?.name, line.program?.name]
+    return [line.line_code, line.resource_description, line.org_unit?.name, line.program?.name, line.action?.name, line.action?.component?.name, line.category?.name, line.territory?.name]
       .filter((value): value is string => typeof value === "string")
       .some((value) => value.toLowerCase().includes(normalizedSearch));
   });
@@ -554,17 +583,18 @@ export function useBudgetPreview(input: BudgetPreviewInput) {
   const accessToken = useAuthStore((state) => state.accessToken);
 
   const hasValidInput = Boolean(
-    input.planningLineId && input.month && input.month >= 1 && input.month <= 12 && input.amount && input.amount > 0,
+    input.planningLineId && input.amount && input.amount > 0,
   );
 
   const refetch = useCallback(async () => {
-    if (!hasValidInput || !input.planningLineId || !input.month || !input.amount || authIsLoading || !accessToken) {
+    if (!hasValidInput || !input.planningLineId || !input.amount || authIsLoading || !accessToken) {
       return;
     }
     setIsLoading(true);
     setError(null);
     try {
-      const params = new URLSearchParams({ month: String(input.month), amount: String(input.amount) });
+      const params = new URLSearchParams({ amount: String(input.amount) });
+      if (input.month) params.set("month", String(input.month));
       const result = await api.get<RequestBudgetPreview>(
         `/requests/lookups/planning-lines/${input.planningLineId}/budget-preview?${params.toString()}`,
       );

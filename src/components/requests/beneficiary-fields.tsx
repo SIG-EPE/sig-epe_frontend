@@ -12,11 +12,14 @@ import {
   getBeneficiaryDocumentHelp,
   getBeneficiaryDocumentMaxLength,
   getBeneficiaryDocumentPlaceholder,
+  isBcpBank,
+  isBankCciRequired,
+  isKnownBankCode,
   sanitizeBeneficiaryDocumentNumber,
   sanitizeDigits,
 } from "@/lib/requests";
 import type { AuthUser } from "@/types/auth";
-import { BENEFICIARY_DOCUMENT_TYPE, type BeneficiaryDocumentType } from "@/types/requests";
+import { BENEFICIARY_DOCUMENT_TYPE, type BankCode, type BeneficiaryDocumentType } from "@/types/requests";
 import type { RequestFormValues } from "./request-form";
 
 interface BeneficiaryFieldsProps {
@@ -29,6 +32,9 @@ interface BeneficiaryFieldsProps {
 export function BeneficiaryFields({ control, user, setValue, watch }: BeneficiaryFieldsProps) {
   const documentType = watch("beneficiary_document_type") as BeneficiaryDocumentType | "" | undefined;
   const documentNumber = watch("beneficiary_document_number") ?? "";
+  const selectedBankCode = watch("bank_code") as BankCode | "" | undefined;
+  const normalizedBankCode: BankCode | null = selectedBankCode && isKnownBankCode(selectedBankCode) ? selectedBankCode : null;
+  const cciRequired = isBankCciRequired(normalizedBankCode);
 
   function useRequesterAsBeneficiary(): void {
     const fullName = [user?.firstName, user?.lastName].filter((value): value is string => Boolean(value?.trim())).join(" ");
@@ -42,6 +48,14 @@ export function BeneficiaryFields({ control, user, setValue, watch }: Beneficiar
     setValue("beneficiary_document_number", sanitizeBeneficiaryDocumentNumber(documentNumber, nextDocumentType), { shouldDirty: true, shouldValidate: true });
   }
 
+  function changeBank(nextBankCode: string): void {
+    if (!isKnownBankCode(nextBankCode)) return;
+    setValue("bank_code", nextBankCode, { shouldDirty: true, shouldValidate: true });
+    if (isBcpBank(nextBankCode)) {
+      setValue("bank_cci", "", { shouldDirty: true, shouldValidate: true });
+    }
+  }
+
   return (
     <section className="space-y-4">
       <div className="flex flex-col gap-3 border-b pb-2 sm:flex-row sm:items-center sm:justify-between">
@@ -53,7 +67,7 @@ export function BeneficiaryFields({ control, user, setValue, watch }: Beneficiar
       <div className="grid gap-4 md:grid-cols-2">
         <FormField control={control} name="beneficiary_document_type" render={({ field }) => (
           <FormItem>
-            <FormLabel>Tipo de documento</FormLabel>
+            <FormLabel>Tipo de documento *</FormLabel>
             <Select value={field.value ?? ""} onValueChange={changeDocumentType}>
               <FormControl><SelectTrigger><SelectValue placeholder="Selecciona tipo" /></SelectTrigger></FormControl>
               <SelectContent>
@@ -67,7 +81,7 @@ export function BeneficiaryFields({ control, user, setValue, watch }: Beneficiar
         )} />
         <FormField control={control} name="beneficiary_document_number" render={({ field }) => (
           <FormItem>
-            <FormLabel>Número de documento</FormLabel>
+            <FormLabel>Número de documento *</FormLabel>
             <FormControl>
               <Input
                 {...field}
@@ -83,15 +97,15 @@ export function BeneficiaryFields({ control, user, setValue, watch }: Beneficiar
         )} />
         <FormField control={control} name="beneficiary_name" render={({ field }) => (
           <FormItem>
-            <FormLabel>Nombre del beneficiario</FormLabel>
+            <FormLabel>Nombre del beneficiario *</FormLabel>
             <FormControl><Input {...field} placeholder="Nombre completo o razón social" /></FormControl>
             <FormMessage />
           </FormItem>
         )} />
         <FormField control={control} name="bank_code" render={({ field }) => (
           <FormItem>
-            <FormLabel>Banco</FormLabel>
-            <Select value={field.value ?? ""} onValueChange={field.onChange}>
+            <FormLabel>Banco *</FormLabel>
+            <Select value={field.value ?? ""} onValueChange={changeBank}>
               <FormControl><SelectTrigger data-testid="request-bank-select"><SelectValue placeholder="Selecciona banco" /></SelectTrigger></FormControl>
               <SelectContent>
                 {BANK_OPTIONS.map((option) => (
@@ -104,7 +118,7 @@ export function BeneficiaryFields({ control, user, setValue, watch }: Beneficiar
         )} />
         <FormField control={control} name="account_type" render={({ field }) => (
           <FormItem>
-            <FormLabel>Tipo de cuenta</FormLabel>
+            <FormLabel>Tipo de cuenta *</FormLabel>
             <Select value={field.value ?? ""} onValueChange={field.onChange}>
               <FormControl><SelectTrigger data-testid="request-account-type-select"><SelectValue placeholder="Selecciona tipo" /></SelectTrigger></FormControl>
               <SelectContent>
@@ -118,7 +132,7 @@ export function BeneficiaryFields({ control, user, setValue, watch }: Beneficiar
         )} />
         <FormField control={control} name="bank_account" render={({ field }) => (
           <FormItem>
-            <FormLabel>Cuenta bancaria</FormLabel>
+            <FormLabel>Cuenta bancaria *</FormLabel>
             <FormControl>
               <Input
                 {...field}
@@ -132,22 +146,25 @@ export function BeneficiaryFields({ control, user, setValue, watch }: Beneficiar
             <FormMessage />
           </FormItem>
         )} />
-        <FormField control={control} name="bank_cci" render={({ field }) => (
-          <FormItem>
-            <FormLabel>CCI</FormLabel>
-            <FormControl>
-              <Input
-                {...field}
-                inputMode="numeric"
-                maxLength={20}
-                placeholder="20 dígitos"
-                data-testid="request-bank-cci-input"
-                onChange={(event) => field.onChange(sanitizeDigits(event.target.value, 20))}
-              />
-            </FormControl>
-            <FormMessage />
-          </FormItem>
-        )} />
+        {cciRequired && (
+          <FormField control={control} name="bank_cci" render={({ field }) => (
+            <FormItem>
+              <FormLabel>CCI *</FormLabel>
+              <FormControl>
+                <Input
+                  {...field}
+                  inputMode="numeric"
+                  maxLength={20}
+                  placeholder="20 dígitos"
+                  data-testid="request-bank-cci-input"
+                  onChange={(event) => field.onChange(sanitizeDigits(event.target.value, 20))}
+                />
+              </FormControl>
+              <FormDescription>Requerido para bancos distintos a BCP.</FormDescription>
+              <FormMessage />
+            </FormItem>
+          )} />
+        )}
       </div>
     </section>
   );

@@ -12,22 +12,28 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { useBudgetPreview, useCreateRequest, useRequestDocuments, useSubmitRequest, useUpdateRequest } from "@/hooks/use-requests";
+import { getBusinessDateString } from "@/lib/business-timezone";
 import { ROUTES } from "@/lib/constants";
 import {
-  MONTH_OPTIONS,
   REQUEST_EDIT_STEP,
   getApiErrorMessage,
   getMissingDocumentMessagesFromError,
   getNewAdvancePendingSettlementBlockMessage,
+  getRequestReviewNavigationIssues,
   getRequestEditStepperItems,
   getRequiredDocumentChecklist,
   REQUEST_TYPE_LABELS,
   isBudgetPreviewBlocking,
+  isBankCciRequired,
+  isBcpBank,
   isKnownBankCode,
+  validateRequestDataForSubmit,
+  validateRequestDataForSubmitIssues,
+  type RequestSubmitData,
   type RequestEditStep,
+  type RequestSubmitValidationIssue,
 } from "@/lib/requests";
 import { useAuthStore } from "@/stores/auth-store";
 import {
@@ -37,6 +43,7 @@ import {
   REQUEST_CURRENCY,
   REQUEST_TYPE,
   type AccountType,
+  type BankCode,
   type BeneficiaryDocumentType,
   type CreateRequestDto,
   type PaymentRequest,
@@ -51,7 +58,7 @@ import { RequestTypeSelector } from "./request-type-selector";
 import { RequestDocumentsCard } from "./request-documents-card";
 import { SupplierFields } from "./supplier-fields";
 
-const requestFormSchema = z.object({
+export const requestFormSchema = z.object({
   request_type: z.enum([
     REQUEST_TYPE.ADVANCE,
     REQUEST_TYPE.REIMBURSEMENT,
@@ -59,7 +66,6 @@ const requestFormSchema = z.object({
     REQUEST_TYPE.ADVANCE_SETTLEMENT,
   ], { errorMap: () => ({ message: "Selecciona un tipo de solicitud válido" }) }),
   budget_planning_line_id: z.string().min(1, "Selecciona una línea POA"),
-  budget_month: z.coerce.number().int().min(1, "Selecciona un mes").max(12, "Selecciona un mes válido"),
   requested_amount: z.coerce.number().positive("Ingresa un monto mayor a cero"),
   concept: z.string().min(5, "Describe el concepto o justificación"),
   scheduled_rendition_at: z.string().optional(),
@@ -89,6 +95,11 @@ const requestFormSchema = z.object({
   supplier_ruc: z.string().optional(),
   supplier_name: z.string().optional(),
 }).superRefine((value, ctx) => {
+  const scheduledRenditionAt = value.scheduled_rendition_at?.trim();
+  if (value.request_type === REQUEST_TYPE.ADVANCE && scheduledRenditionAt && scheduledRenditionAt < getScheduledRenditionMinDate()) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["scheduled_rendition_at"], message: "La fecha límite de rendición no puede ser anterior a hoy" });
+  }
+}).superRefine((value, ctx) => {
   if (value.request_type !== REQUEST_TYPE.SUPPLIER_PAYMENT) return;
   if (!value.supplier_ruc?.trim()) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["supplier_ruc"], message: "El RUC del proveedor es requerido" });
@@ -114,15 +125,23 @@ const requestFormSchema = z.object({
   if (documentType === BENEFICIARY_DOCUMENT_TYPE.CE && !/^[A-Z0-9]{6,12}$/.test(documentNumber)) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["beneficiary_document_number"], message: "El CE debe tener de 6 a 12 letras o números" });
   }
+  const bankCode = value.bank_code && isKnownBankCode(value.bank_code) ? value.bank_code : null;
+  const bankCci = value.bank_cci?.trim() ?? "";
   if (value.bank_account?.trim() && !/^\d{6,30}$/.test(value.bank_account.trim())) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["bank_account"], message: "La cuenta debe tener entre 6 y 30 dígitos" });
   }
-  if (value.bank_cci?.trim() && !/^\d{20}$/.test(value.bank_cci.trim())) {
+  if (isBankCciRequired(bankCode) && !bankCci) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["bank_cci"], message: "Ingresa el CCI de 20 dígitos." });
+  } else if (isBankCciRequired(bankCode) && !/^\d{20}$/.test(bankCci)) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["bank_cci"], message: "El CCI debe tener exactamente 20 dígitos" });
   }
 });
 
 export type RequestFormValues = z.infer<typeof requestFormSchema>;
+
+export function getScheduledRenditionMinDate(): string {
+  return getBusinessDateString();
+}
 
 function emptyToUndefined(value?: string): string | undefined {
   const trimmed = value?.trim();
@@ -139,12 +158,20 @@ function optionalAccountType(value?: string): AccountType | undefined {
   return value === ACCOUNT_TYPE.SAVINGS || value === ACCOUNT_TYPE.CHECKING ? value : undefined;
 }
 
+function optionalBankCode(value?: string): BankCode | undefined {
+  return value && isKnownBankCode(value) ? value : undefined;
+}
+
+function conditionalBankCci(bankCode: BankCode | undefined, value?: string): string | undefined {
+  return bankCode && !isBcpBank(bankCode) ? emptyToUndefined(value) : undefined;
+}
+
 export function toCreateRequestDto(values: RequestFormValues): CreateRequestDto {
-  const bankCode = values.bank_code && isKnownBankCode(values.bank_code) ? values.bank_code : undefined;
+  const bankCode = optionalBankCode(values.bank_code);
+  const bankCci = conditionalBankCci(bankCode, values.bank_cci);
   const dto: CreateRequestDto = {
     request_type: values.request_type,
     budget_planning_line_id: values.budget_planning_line_id,
-    budget_month: values.budget_month,
     requested_amount: values.requested_amount,
     currency: REQUEST_CURRENCY.PEN,
     concept: values.concept.trim(),
@@ -156,9 +183,10 @@ export function toCreateRequestDto(values: RequestFormValues): CreateRequestDto 
     bank_code: bankCode,
     bank_name: emptyToUndefined(values.bank_name),
     bank_account: emptyToUndefined(values.bank_account),
-    bank_cci: emptyToUndefined(values.bank_cci),
     account_type: optionalAccountType(values.account_type),
   };
+
+  if (bankCci) dto.bank_cci = bankCci;
 
   if (values.request_type === REQUEST_TYPE.ADVANCE) {
     dto.scheduled_rendition_at = emptyToUndefined(values.scheduled_rendition_at);
@@ -168,11 +196,11 @@ export function toCreateRequestDto(values: RequestFormValues): CreateRequestDto 
 }
 
 export function toUpdateRequestDto(values: RequestFormValues, currentRequestType?: RequestType | null): UpdateRequestDto {
-  const bankCode = values.bank_code && isKnownBankCode(values.bank_code) ? values.bank_code : undefined;
+  const bankCode = optionalBankCode(values.bank_code);
+  const bankCci = conditionalBankCci(bankCode, values.bank_cci);
   const effectiveRequestType = currentRequestType ?? values.request_type;
   const dto: UpdateRequestDto = {
     budget_planning_line_id: values.budget_planning_line_id,
-    budget_month: values.budget_month,
     requested_amount: values.requested_amount,
     currency: REQUEST_CURRENCY.PEN,
     concept: values.concept.trim(),
@@ -184,15 +212,31 @@ export function toUpdateRequestDto(values: RequestFormValues, currentRequestType
     bank_code: bankCode,
     bank_name: emptyToUndefined(values.bank_name),
     bank_account: emptyToUndefined(values.bank_account),
-    bank_cci: emptyToUndefined(values.bank_cci),
     account_type: optionalAccountType(values.account_type),
   };
+
+  if (bankCci) dto.bank_cci = bankCci;
 
   if (effectiveRequestType === REQUEST_TYPE.ADVANCE) {
     dto.scheduled_rendition_at = emptyToUndefined(values.scheduled_rendition_at);
   }
 
   return dto;
+}
+
+function toRequestSubmitData(values: RequestFormValues): RequestSubmitData {
+  return {
+    budget_planning_line_id: values.budget_planning_line_id,
+    requested_amount: values.requested_amount,
+    concept: values.concept,
+    beneficiary_name: values.beneficiary_name ?? null,
+    beneficiary_document_type: optionalDocumentType(values.beneficiary_document_type) ?? null,
+    beneficiary_document_number: values.beneficiary_document_number ?? null,
+    bank_code: values.bank_code && isKnownBankCode(values.bank_code) ? values.bank_code : null,
+    account_type: optionalAccountType(values.account_type) ?? null,
+    bank_account: values.bank_account ?? null,
+    bank_cci: values.bank_cci ?? null,
+  };
 }
 
 interface RequestFormProps {
@@ -207,21 +251,27 @@ export function RequestForm({ initialRequest, mode = "create", activeStep = REQU
   const [draftId, setDraftId] = useState<string | null>(initialRequest?.id ?? null);
   const [currentRequest, setCurrentRequest] = useState<PaymentRequest | null>(initialRequest ?? null);
   const [submitErrors, setSubmitErrors] = useState<string[]>([]);
+  const [documentStepErrors, setDocumentStepErrors] = useState<string[]>([]);
+  const [isNavigatingStep, setIsNavigatingStep] = useState(false);
+  const [pendingAction, setPendingAction] = useState<"save" | "submit" | null>(null);
   const [selectedLine, setSelectedLine] = useState<RequestPlanningLineLookupItem | null>(
     initialRequest?.budgetPlanningLine
       ? {
           id: initialRequest.budgetPlanningLine.id,
           line_code: initialRequest.budgetPlanningLine.line_code,
           resource_description: initialRequest.budgetPlanningLine.resource_description ?? "Línea POA seleccionada",
-          planning_type: null,
-          type_resource: null,
-          total_cost: 0,
+          planning_type: initialRequest.budgetPlanningLine.planning_type ?? null,
+          type_resource: initialRequest.budgetPlanningLine.type_resource ?? null,
+          unit_price: initialRequest.budgetPlanningLine.unit_price ?? null,
+          quantity: initialRequest.budgetPlanningLine.quantity ?? null,
+          total_cost: Number(initialRequest.budgetPlanningLine.total_cost ?? 0),
           status: "APPROVED",
           fiscal_year: initialRequest.budgetPlanningLine.fiscalYear ?? null,
           org_unit: initialRequest.budgetPlanningLine.organizationalUnit ?? null,
           category: initialRequest.budgetPlanningLine.budgetCategory ?? null,
-          program: null,
-          action: null,
+          territory: initialRequest.budgetPlanningLine.territory ?? null,
+          program: initialRequest.budgetPlanningLine.program ?? null,
+          action: initialRequest.budgetPlanningLine.operativeAction ?? null,
           monthly_summary: [],
         }
       : null,
@@ -232,7 +282,6 @@ export function RequestForm({ initialRequest, mode = "create", activeStep = REQU
     defaultValues: {
       request_type: initialRequest?.request_type ?? REQUEST_TYPE.ADVANCE,
       budget_planning_line_id: initialRequest?.budget_planning_line_id ?? "",
-      budget_month: initialRequest?.budget_month ?? new Date().getMonth() + 1,
       requested_amount: Number(initialRequest?.requested_amount ?? 0),
       concept: initialRequest?.concept ?? "",
       scheduled_rendition_at: initialRequest?.request_type === REQUEST_TYPE.ADVANCE ? initialRequest.scheduled_rendition_at ?? "" : "",
@@ -252,12 +301,11 @@ export function RequestForm({ initialRequest, mode = "create", activeStep = REQU
   const requestType = form.watch("request_type");
   const effectiveRequestType = currentRequest?.request_type ?? initialRequest?.request_type ?? requestType;
   const planningLineId = form.watch("budget_planning_line_id");
-  const budgetMonth = form.watch("budget_month");
   const requestedAmount = form.watch("requested_amount");
+  const scheduledRenditionMinDate = getScheduledRenditionMinDate();
 
   const preview = useBudgetPreview({
     planningLineId,
-    month: Number(budgetMonth),
     amount: Number(requestedAmount),
   });
   const { createRequest, isLoading: creating } = useCreateRequest();
@@ -265,10 +313,33 @@ export function RequestForm({ initialRequest, mode = "create", activeStep = REQU
   const { submitRequest, isLoading: submitting } = useSubmitRequest();
   const reviewDocuments = useRequestDocuments(draftId ?? undefined);
 
-  const isSaving = creating || updating;
-  const stepperItems = getRequestEditStepperItems(mode === "create" ? REQUEST_EDIT_STEP.DATA : activeStep);
+  const isSaving = creating || updating || pendingAction === "save" || pendingAction === "submit";
+  const isSubmitting = submitting || pendingAction === "submit";
+  const isBusy = isSaving || isSubmitting || isNavigatingStep;
   const checklist = getRequiredDocumentChecklist(effectiveRequestType, reviewDocuments.documents);
-  const canSubmitReview = checklist.isComplete && !isBudgetPreviewBlocking(preview.data);
+  const areDocumentsReady = !reviewDocuments.isLoading;
+  const currentRequestDataIssues = currentRequest ? validateRequestDataForSubmitIssues(currentRequest) : [];
+  const currentRequestDataErrors = currentRequestDataIssues.length > 0 ? getDataValidationMessages(currentRequestDataIssues) : [];
+  const hasCompleteRequestData = currentRequestDataErrors.length === 0;
+  const dataStepBlockingMessages = submitErrors.length > 0 ? submitErrors : currentRequestDataErrors;
+  const stepperItems = getRequestEditStepperItems(mode === "create" ? REQUEST_EDIT_STEP.DATA : activeStep, {
+    isDataComplete: hasCompleteRequestData,
+    isDocumentsComplete: checklist.isComplete,
+  });
+  const reviewNavigationIssues = currentRequest ? getRequestReviewNavigationIssues(currentRequest, checklist) : null;
+  const canSubmitReview = hasCompleteRequestData && areDocumentsReady && checklist.isComplete && !isBudgetPreviewBlocking(preview.data);
+
+  useEffect(() => {
+    setIsNavigatingStep(false);
+  }, [activeStep]);
+
+  useEffect(() => {
+    const initialBankCode = form.getValues("bank_code");
+    const shouldClearHiddenCci = !initialBankCode || !isKnownBankCode(initialBankCode) || isBcpBank(initialBankCode);
+    if (shouldClearHiddenCci && form.getValues("bank_cci")?.trim()) {
+      form.setValue("bank_cci", "", { shouldDirty: false, shouldValidate: false });
+    }
+  }, [form]);
 
   useEffect(() => {
     if (activeStep === REQUEST_EDIT_STEP.REVIEW && draftId) {
@@ -276,9 +347,103 @@ export function RequestForm({ initialRequest, mode = "create", activeStep = REQU
     }
   }, [activeStep, draftId, reviewDocuments.refetch]);
 
+  useEffect(() => {
+    if (mode !== "edit" || activeStep !== REQUEST_EDIT_STEP.REVIEW || !currentRequest || !reviewNavigationIssues || isNavigatingStep || !areDocumentsReady) return;
+    if (reviewNavigationIssues.canEnterReview) return;
+
+    if (reviewNavigationIssues.dataIssues.length > 0) {
+      showDataValidationIssues(reviewNavigationIssues.dataIssues);
+      toast.error("Completa los datos obligatorios antes de pasar a revisión.");
+      navigateToStep(REQUEST_EDIT_STEP.DATA, currentRequest.id);
+      return;
+    }
+
+    setDocumentStepErrors(reviewNavigationIssues.documentMessages);
+    toast.error("Adjunta los documentos requeridos antes de pasar a revisión.");
+    navigateToStep(REQUEST_EDIT_STEP.DOCUMENTS, currentRequest.id);
+  }, [activeStep, areDocumentsReady, currentRequest, isNavigatingStep, mode, reviewNavigationIssues]);
+
+  useEffect(() => {
+    if (activeStep !== REQUEST_EDIT_STEP.DATA || !currentRequest) return;
+    const dataIssues = validateRequestDataForSubmitIssues(currentRequest);
+    if (dataIssues.length === 0) return;
+    showDataValidationIssues(dataIssues);
+  }, [activeStep, currentRequest]);
+
+  function getDataValidationMessages(issues: RequestSubmitValidationIssue[]): string[] {
+    return Array.from(new Set(issues.map((issue) => issue.message)));
+  }
+
+  function showDataValidationIssues(issues: RequestSubmitValidationIssue[]): void {
+    const messages = getDataValidationMessages(issues);
+    setSubmitErrors(messages);
+    issues.forEach((issue) => {
+      form.setError(issue.field, { type: "manual", message: issue.message });
+    });
+  }
+
   function navigateToStep(step: RequestEditStep, requestId = draftId): void {
     if (!requestId) return;
+    setIsNavigatingStep(true);
     router.push(`${ROUTES.REQUESTS}/${requestId}/edit?step=${step}` as Parameters<typeof router.push>[0]);
+  }
+
+  function validateStepNavigation(step: RequestEditStep): boolean {
+    if (step === REQUEST_EDIT_STEP.REVIEW) {
+      if (!areDocumentsReady) {
+        toast.error("Estamos validando los documentos adjuntos. Intenta nuevamente en unos segundos.");
+        return false;
+      }
+
+      if (currentRequest && reviewNavigationIssues?.dataIssues.length) {
+        showDataValidationIssues(reviewNavigationIssues.dataIssues);
+        toast.error("Completa los datos obligatorios antes de pasar a revisión.");
+        navigateToStep(REQUEST_EDIT_STEP.DATA, currentRequest.id);
+        return false;
+      }
+
+      if (reviewNavigationIssues && reviewNavigationIssues.documentMessages.length > 0) {
+        setDocumentStepErrors(reviewNavigationIssues.documentMessages);
+        toast.error("Adjunta los documentos requeridos antes de pasar a revisión.");
+        navigateToStep(REQUEST_EDIT_STEP.DOCUMENTS);
+        return false;
+      }
+    }
+
+    return true;
+  }
+
+  function handleStepperNavigation(step: RequestEditStep): void {
+    if (isBusy) return;
+    if (!validateStepNavigation(step)) return;
+    setSubmitErrors([]);
+    if (step !== REQUEST_EDIT_STEP.DOCUMENTS) setDocumentStepErrors([]);
+    navigateToStep(step);
+  }
+
+  function handleContinueToReview(): void {
+    if (!currentRequest || isBusy) return;
+    if (!areDocumentsReady) {
+      toast.error("Estamos validando los documentos adjuntos. Intenta nuevamente en unos segundos.");
+      return;
+    }
+
+    const navigationIssues = getRequestReviewNavigationIssues(currentRequest, checklist);
+    if (navigationIssues.dataIssues.length > 0) {
+      showDataValidationIssues(navigationIssues.dataIssues);
+      toast.error("Completa los datos obligatorios antes de pasar a revisión.");
+      navigateToStep(REQUEST_EDIT_STEP.DATA, currentRequest.id);
+      return;
+    }
+
+    if (navigationIssues.documentMessages.length > 0) {
+      setDocumentStepErrors(navigationIssues.documentMessages);
+      toast.error("Adjunta los documentos requeridos antes de pasar a revisión.");
+      return;
+    }
+
+    setDocumentStepErrors([]);
+    navigateToStep(REQUEST_EDIT_STEP.REVIEW, currentRequest.id);
   }
 
   async function saveDraft(values: RequestFormValues): Promise<PaymentRequest> {
@@ -291,31 +456,59 @@ export function RequestForm({ initialRequest, mode = "create", activeStep = REQU
   }
 
   async function handleSaveDraft(values: RequestFormValues): Promise<void> {
+    if (isBusy) return;
     const requestTypeForBlocking = effectiveRequestType;
+    setPendingAction("save");
+    setSubmitErrors([]);
+    const dataIssues = validateRequestDataForSubmitIssues(toRequestSubmitData(values));
+    if (dataIssues.length > 0) {
+      showDataValidationIssues(dataIssues);
+      toast.error("Completa los datos obligatorios antes de continuar a documentos.");
+      setPendingAction(null);
+      return;
+    }
+
     try {
       const saved = await saveDraft(values);
       toast.success(`Borrador guardado: ${saved.request_code ?? saved.sequential_number ?? saved.id}`);
       if (mode === "create") {
+        setIsNavigatingStep(true);
         router.push(`${ROUTES.REQUESTS}/${saved.id}/edit?step=${REQUEST_EDIT_STEP.DOCUMENTS}` as Parameters<typeof router.push>[0]);
         return;
       }
       navigateToStep(REQUEST_EDIT_STEP.DOCUMENTS, saved.id);
     } catch (error) {
       toast.error(getNewAdvancePendingSettlementBlockMessage(requestTypeForBlocking, error) ?? getApiErrorMessage(error));
+    } finally {
+      setPendingAction(null);
     }
   }
 
   async function handleSubmitDraft(values: RequestFormValues): Promise<void> {
+    if (isBusy) return;
     const requestTypeForBlocking = effectiveRequestType;
+    setPendingAction("submit");
     setSubmitErrors([]);
+    const dataIssues = validateRequestDataForSubmitIssues(toRequestSubmitData(values));
+    if (dataIssues.length > 0) {
+      showDataValidationIssues(dataIssues);
+      toast.error("Completa los datos obligatorios antes de enviar la solicitud.");
+      navigateToStep(REQUEST_EDIT_STEP.DATA);
+      setPendingAction(null);
+      return;
+    }
+
     if (isBudgetPreviewBlocking(preview.data)) {
       toast.error("El techo de la unidad orgánica bloquea el envío. Puedes guardar el borrador para corregirlo luego.");
+      setPendingAction(null);
       return;
     }
 
     if (!checklist.isComplete) {
       setSubmitErrors(checklist.missingMessages);
+      setDocumentStepErrors(checklist.missingMessages);
       toast.error("Adjunta los documentos requeridos antes de enviar. La validación final se realizará al enviar la solicitud.");
+      setPendingAction(null);
       return;
     }
 
@@ -325,12 +518,14 @@ export function RequestForm({ initialRequest, mode = "create", activeStep = REQU
       toast.success("Borrador guardado. Enviando solicitud...");
     } catch (error) {
       toast.error(getNewAdvancePendingSettlementBlockMessage(requestTypeForBlocking, error) ?? getApiErrorMessage(error));
+      setPendingAction(null);
       return;
     }
 
     try {
       const submitted = await submitRequest(saved.id);
       toast.success(mode === "edit" ? "Solicitud reenviada correctamente" : "Solicitud enviada correctamente");
+      setIsNavigatingStep(true);
       router.push(`${ROUTES.REQUESTS}/${submitted.id}`);
     } catch (error) {
       const missingMessages = getMissingDocumentMessagesFromError(error);
@@ -338,6 +533,7 @@ export function RequestForm({ initialRequest, mode = "create", activeStep = REQU
       const message = pendingSettlementMessage ?? getApiErrorMessage(error);
       setSubmitErrors(missingMessages.length > 0 ? missingMessages : [message]);
       toast.error(`El borrador fue guardado, pero el envío falló: ${message}`);
+      setPendingAction(null);
     }
   }
 
@@ -351,7 +547,8 @@ export function RequestForm({ initialRequest, mode = "create", activeStep = REQU
             key={item.step}
             type="button"
             className="rounded-md border p-3 text-left transition hover:bg-muted"
-            onClick={() => navigateToStep(item.step)}
+            onClick={() => handleStepperNavigation(item.step)}
+            disabled={isBusy}
             data-testid={`request-edit-step-${item.step}`}
           >
             <span className="text-xs font-medium text-muted-foreground">Paso {index + 1}</span>
@@ -370,9 +567,19 @@ export function RequestForm({ initialRequest, mode = "create", activeStep = REQU
       <>
         <Card>
           <CardContent className="space-y-6 pt-6">
+            {dataStepBlockingMessages.length > 0 && activeStep === REQUEST_EDIT_STEP.DATA && (
+              <Alert variant="destructive">
+                <AlertDescription>
+                  <p className="font-medium">Completa los datos obligatorios para continuar</p>
+                  <ul className="mt-2 list-disc space-y-1 pl-5">
+                    {dataStepBlockingMessages.map((message) => <li key={message}>{message}</li>)}
+                  </ul>
+                </AlertDescription>
+              </Alert>
+            )}
             <section className="space-y-4">
               <h2 className="border-b pb-2 text-base font-semibold">1. Datos de la solicitud</h2>
-              <div className="grid gap-4 md:grid-cols-2">
+              <div className="max-w-xl">
                 {effectiveRequestType === REQUEST_TYPE.ADVANCE_SETTLEMENT ? (
                   <div className="rounded-md border bg-muted/40 p-3">
                     <p className="text-sm font-medium">Tipo de solicitud</p>
@@ -380,20 +587,6 @@ export function RequestForm({ initialRequest, mode = "create", activeStep = REQU
                     <p className="mt-1 text-xs text-muted-foreground">La rendición se origina desde un anticipo pagado y no se cambia a anticipo durante la edición.</p>
                   </div>
                 ) : <RequestTypeSelector control={form.control} />}
-                <FormField control={form.control} name="budget_month" render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Mes presupuestal *</FormLabel>
-                    <Select value={String(field.value)} onValueChange={(value) => field.onChange(Number(value))}>
-                      <FormControl><SelectTrigger data-testid="request-month-select"><SelectValue placeholder="Selecciona mes" /></SelectTrigger></FormControl>
-                      <SelectContent>
-                        {MONTH_OPTIONS.map((option) => (
-                          <SelectItem key={option.value} value={String(option.value)}>{option.label}</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                    <FormMessage />
-                  </FormItem>
-                )} />
               </div>
               <PlanningLineSelector control={form.control} selectedLine={selectedLine} onSelectedLineChange={setSelectedLine} />
             </section>
@@ -413,7 +606,7 @@ export function RequestForm({ initialRequest, mode = "create", activeStep = REQU
                 <FormField control={form.control} name="scheduled_rendition_at" render={({ field }) => (
                   <FormItem>
                     <FormLabel>Fecha límite de rendición</FormLabel>
-                    <FormControl><Input type="date" data-testid="request-scheduled-rendition-input" {...field} /></FormControl>
+                    <FormControl><Input type="date" min={scheduledRenditionMinDate} data-testid="request-scheduled-rendition-input" {...field} /></FormControl>
                     <p className="text-xs text-muted-foreground">Opcional. Se usará para dar seguimiento a la rendición del anticipo pagado.</p>
                     <FormMessage />
                   </FormItem>
@@ -442,8 +635,8 @@ export function RequestForm({ initialRequest, mode = "create", activeStep = REQU
         </Card>
 
         <div className="flex flex-col-reverse gap-3 border-t pt-4 sm:flex-row sm:justify-end">
-          <Button type="button" variant="outline" onClick={() => router.push(ROUTES.REQUESTS)} disabled={isSaving || submitting}>Cancelar</Button>
-          <Button type="button" onClick={form.handleSubmit(handleSaveDraft)} disabled={isSaving || submitting} data-testid="request-save-draft-button">
+          <Button type="button" variant="outline" onClick={() => router.push(ROUTES.REQUESTS)} disabled={isBusy}>Cancelar</Button>
+          <Button type="button" onClick={form.handleSubmit(handleSaveDraft)} disabled={isBusy} data-testid="request-save-draft-button">
             {isSaving ? "Guardando..." : mode === "edit" ? "Guardar cambios y continuar" : "Guardar borrador y continuar"}
           </Button>
         </div>
@@ -456,10 +649,39 @@ export function RequestForm({ initialRequest, mode = "create", activeStep = REQU
 
     return (
       <>
-        <RequestDocumentsCard request={currentRequest} />
+        <RequestDocumentsCard
+          request={currentRequest}
+          documents={reviewDocuments.documents}
+          documentsLoading={reviewDocuments.isLoading}
+          documentsError={reviewDocuments.error}
+          onDocumentsChanged={reviewDocuments.refetch}
+        />
+        {documentStepErrors.length > 0 && (
+          <Alert variant="destructive">
+            <AlertDescription>
+              <p className="font-medium">Completa los documentos requeridos para continuar</p>
+              <ul className="mt-2 list-disc space-y-1 pl-5">
+                {documentStepErrors.map((message) => <li key={message}>{message}</li>)}
+              </ul>
+            </AlertDescription>
+          </Alert>
+        )}
+        {currentRequestDataErrors.length > 0 && (
+          <Alert variant="destructive">
+            <AlertDescription>
+              <p className="font-medium">No se puede pasar a revisión todavía</p>
+              <p className="mt-1">Completa primero los datos obligatorios de la solicitud:</p>
+              <ul className="mt-2 list-disc space-y-1 pl-5">
+                {currentRequestDataErrors.map((message) => <li key={message}>{message}</li>)}
+              </ul>
+            </AlertDescription>
+          </Alert>
+        )}
         <div className="flex flex-col-reverse gap-3 border-t pt-4 sm:flex-row sm:justify-between">
-          <Button type="button" variant="outline" onClick={() => navigateToStep(REQUEST_EDIT_STEP.DATA)}>Volver a datos</Button>
-          <Button type="button" onClick={() => navigateToStep(REQUEST_EDIT_STEP.REVIEW)}>Continuar a revisión</Button>
+          <Button type="button" variant="outline" onClick={() => navigateToStep(REQUEST_EDIT_STEP.DATA)} disabled={isBusy}>Volver a datos</Button>
+          <Button type="button" onClick={handleContinueToReview} disabled={isBusy || !areDocumentsReady}>
+            {isNavigatingStep || !areDocumentsReady ? "Validando..." : currentRequestDataErrors.length > 0 ? "Corregir datos" : !checklist.isComplete ? "Adjuntar documentos para continuar" : "Continuar a revisión"}
+          </Button>
         </div>
       </>
     );
@@ -492,11 +714,18 @@ export function RequestForm({ initialRequest, mode = "create", activeStep = REQU
             </AlertDescription>
           </Alert>
         )}
-        <RequestDocumentsCard request={currentRequest} backendMissingMessages={submitErrors} />
+        <RequestDocumentsCard
+          request={currentRequest}
+          backendMissingMessages={submitErrors}
+          documents={reviewDocuments.documents}
+          documentsLoading={reviewDocuments.isLoading}
+          documentsError={reviewDocuments.error}
+          onDocumentsChanged={reviewDocuments.refetch}
+        />
         <div className="flex flex-col-reverse gap-3 border-t pt-4 sm:flex-row sm:justify-between">
-          <Button type="button" variant="outline" onClick={() => navigateToStep(REQUEST_EDIT_STEP.DOCUMENTS)} disabled={isSaving || submitting}>Volver a documentos</Button>
-          <Button type="button" onClick={form.handleSubmit(handleSubmitDraft)} disabled={isSaving || submitting || !canSubmitReview}>
-            {submitting ? "Enviando..." : mode === "edit" ? "Reenviar solicitud" : "Enviar solicitud"}
+          <Button type="button" variant="outline" onClick={() => navigateToStep(REQUEST_EDIT_STEP.DOCUMENTS)} disabled={isBusy}>Volver a documentos</Button>
+          <Button type="button" onClick={form.handleSubmit(handleSubmitDraft)} disabled={isBusy || !canSubmitReview}>
+            {isSaving && !isSubmitting ? "Guardando..." : isSubmitting ? "Enviando..." : mode === "edit" ? "Reenviar solicitud" : "Enviar solicitud"}
           </Button>
         </div>
       </>
