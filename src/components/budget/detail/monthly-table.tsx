@@ -16,6 +16,7 @@ import {
 } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { formatBusinessDate } from "@/lib/business-timezone";
 import { ROUTES } from "@/lib/constants";
 import { useUpsertMonthly, useManualExecutions } from "@/hooks/use-budget";
 import { useAuthStore } from "@/stores/auth-store";
@@ -43,8 +44,7 @@ function formatCurrency(amount: number): string {
 }
 
 function formatExecutionDate(value?: string | null): string {
-  if (!value) return "Sin fecha";
-  return new Intl.DateTimeFormat("es-PE", { dateStyle: "short" }).format(new Date(value));
+  return formatBusinessDate(value, { dateStyle: "short" }).replace("—", "Sin fecha");
 }
 
 function getExecutionDetailLabel(detail: MonthlyExecutionDetail): string {
