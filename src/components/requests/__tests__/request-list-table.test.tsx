@@ -57,13 +57,13 @@ describe("RequestListTable", () => {
 
     expect(screen.getByRole("columnheader", { name: "Acciones" })).toBeInTheDocument();
     expect(screen.getByTitle("Más acciones de solicitud")).toBeInTheDocument();
-    expect(screen.queryByRole("link", { name: "Editar" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Continuar edición" })).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "Ver" })).not.toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Más acciones de solicitud" }));
 
-    expect(await screen.findByRole("menuitem", { name: "Editar" })).toBeInTheDocument();
-    expect(await screen.findByRole("menuitem", { name: "Ver" })).toBeInTheDocument();
+    expect(await screen.findByRole("menuitem", { name: "Continuar edición" })).toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: "Ver" })).not.toBeInTheDocument();
   });
 
   it("mantiene la acción de gestión accesible desde el menú para GIOF", async () => {
