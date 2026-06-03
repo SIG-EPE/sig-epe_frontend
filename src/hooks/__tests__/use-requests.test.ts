@@ -1,14 +1,20 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
-import { getPaymentQueuePath, getRenditionCountsPath, getRenditionsPath, getRequestsPath, getStartAdvanceSettlementPath, useStartAdvanceSettlement } from "@/hooks/use-requests";
+import { getPaymentQueuePath, getRenditionCountsPath, getRenditionsPath, getRequestsPath, getSettlementContextPath, getStartAdvanceSettlementPath, useBulkMarkPaid, useCompletePaymentDetails, useSettlementContext, useStartAdvanceSettlement } from "@/hooks/use-requests";
 import { api } from "@/lib/api-client";
 import { RENDITION_SORT_DIRECTION, RENDITION_SORT_FIELD, RENDITION_STATUS, REQUEST_CURRENCY, REQUEST_STATUS, REQUEST_TYPE, type PaymentRequest } from "@/types/requests";
 
 vi.mock("@/lib/api-client", () => ({
   api: {
+    get: vi.fn(),
     post: vi.fn(),
+    patchForm: vi.fn(),
   },
+}));
+
+vi.mock("@/stores/auth-store", () => ({
+  useAuthStore: (selector: (state: { isLoading: boolean; accessToken: string | null }) => unknown) => selector({ isLoading: false, accessToken: "token" }),
 }));
 
 function makeRequest(overrides: Partial<PaymentRequest> = {}): PaymentRequest {
@@ -68,8 +74,16 @@ describe("request hook URL helpers", () => {
     expect(getPaymentQueuePath({ status: REQUEST_STATUS.PAID, page: 1, limit: 20 })).toBe("/requests/payment-queue?page=1&limit=20&status=PAID");
   });
 
+  it("serializa filtros de datos pendientes de pago", () => {
+    expect(getPaymentQueuePath({ status: REQUEST_STATUS.PAID, pending_proof: true, pending_details: false, page: 1, limit: 20 })).toBe("/requests/payment-queue?page=1&limit=20&status=PAID&pending_proof=true&pending_details=false");
+  });
+
   it("construye la ruta para iniciar una rendición de anticipo", () => {
     expect(getStartAdvanceSettlementPath("advance-1")).toBe("/requests/advance-1/start-advance-settlement");
+  });
+
+  it("construye la ruta para cargar contexto de rendición", () => {
+    expect(getSettlementContextPath("settlement-1")).toBe("/requests/settlement-1/settlement-context");
   });
 
   it("serializa filtros de bandeja de rendiciones y resumen", () => {
@@ -96,5 +110,70 @@ describe("request hook URL helpers", () => {
 
     await waitFor(() => expect(result.current.isLoading).toBe(false));
     expect(api.post).toHaveBeenCalledWith("/requests/advance-1/start-advance-settlement");
+  });
+
+  it("carga contexto de rendición solo cuando está habilitado", async () => {
+    vi.mocked(api.get).mockResolvedValueOnce({ settlement: { id: "settlement-1" } });
+    const { result } = renderHook(() => useSettlementContext("settlement-1", true));
+
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+    expect(api.get).toHaveBeenCalledWith("/requests/settlement-1/settlement-context");
+    expect(result.current.context).toMatchObject({ settlement: { id: "settlement-1" } });
+  });
+
+  it("no carga contexto de rendición cuando el flujo no es REXAN", () => {
+    renderHook(() => useSettlementContext("request-1", false));
+
+    expect(api.get).not.toHaveBeenCalledWith("/requests/request-1/settlement-context");
+  });
+
+  it("ejecuta marcado masivo pagado con contrato JSON confirmado", async () => {
+    vi.mocked(api.post).mockResolvedValueOnce({
+      batch_id: "batch-1",
+      item_count: 2,
+      success_count: 2,
+      failed_count: 0,
+      total_amount: 150,
+      results: [],
+    });
+    const { result } = renderHook(() => useBulkMarkPaid());
+
+    await act(async () => {
+      await expect(result.current.bulkMarkPaid({
+        request_ids: ["req-1", "req-2"],
+        paid_at: "2026-05-30T10:00:00.000Z",
+        operation_reference: "OP-1",
+        notes: "Pagado por lote",
+      })).resolves.toMatchObject({ batch_id: "batch-1" });
+    });
+
+    expect(api.post).toHaveBeenCalledWith("/requests/bulk/mark-paid", {
+      request_ids: ["req-1", "req-2"],
+      paid_at: "2026-05-30T10:00:00.000Z",
+      operation_reference: "OP-1",
+      notes: "Pagado por lote",
+    });
+  });
+
+  it("ejecuta completado de datos de pago como multipart sin monto ni fecha", async () => {
+    vi.mocked(api.patchForm).mockResolvedValueOnce({ id: "payment-1" });
+    const { result } = renderHook(() => useCompletePaymentDetails());
+
+    await act(async () => {
+      await result.current.completePaymentDetails("payment-1", {
+        proof: new File(["proof"], "constancia.pdf", { type: "application/pdf" }),
+        operation_reference: " OP-2 ",
+        bank_commission: 1.5,
+        notes: "Listo",
+      });
+    });
+
+    expect(api.patchForm).toHaveBeenCalledWith("/request-payments/payment-1/details", expect.any(FormData));
+    const formData = vi.mocked(api.patchForm).mock.calls.at(-1)?.[1] as FormData;
+    expect(formData.get("operation_reference")).toBe("OP-2");
+    expect(formData.get("bank_commission")).toBe("1.5");
+    expect(formData.has("amount_paid")).toBe(false);
+    expect(formData.has("paid_at")).toBe(false);
   });
 });

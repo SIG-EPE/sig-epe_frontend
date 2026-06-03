@@ -37,7 +37,7 @@ export function RequestStatusStepper({ request }: RequestStatusStepperProps) {
     approved_at: request.approved_at,
     rejected_at: request.rejected_at,
     paid_at: request.paid_at,
-  });
+  }, request);
 
   return (
     <Card>

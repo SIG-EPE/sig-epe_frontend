@@ -11,7 +11,8 @@ import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { useRegisterPayment } from "@/hooks/use-requests";
-import { PAYMENT_PROOF_ACCEPT, PAYMENT_PROOF_ACCEPTED_FORMATS_LABEL, formatRequestCurrency, getApiErrorMessage, validatePaymentProofFile } from "@/lib/requests";
+import { getBusinessDateTimeLocalValue, parseBusinessDateTimeLocalToIso } from "@/lib/business-timezone";
+import { PAYMENT_PROOF_ACCEPT, PAYMENT_PROOF_ACCEPTED_FORMATS_LABEL, formatRequestCurrency, getApiErrorMessage, getRequestPayableAmount, isRexanExcessRequest, toMoneyCents, validatePaymentProofFile } from "@/lib/requests";
 import type { PaymentRequest, RegisterPaymentInput } from "@/types/requests";
 
 const registerPaymentSchema = z.object({
@@ -32,9 +33,7 @@ interface RegisterPaymentModalProps {
 }
 
 function getDefaultPaidAtValue(): string {
-  const now = new Date();
-  now.setMinutes(now.getMinutes() - now.getTimezoneOffset());
-  return now.toISOString().slice(0, 16);
+  return getBusinessDateTimeLocalValue();
 }
 
 export function RegisterPaymentModal({ request, open, onOpenChange, onSuccess }: RegisterPaymentModalProps) {
@@ -47,11 +46,13 @@ export function RegisterPaymentModal({ request, open, onOpenChange, onSuccess }:
     defaultValues: {
       paid_at: getDefaultPaidAtValue(),
       operation_reference: "",
-      amount_paid: request?.requested_amount ?? 0,
+      amount_paid: request ? getRequestPayableAmount(request) : 0,
       bank_commission: undefined,
       notes: "",
     },
   });
+  const isRexanExcess = request ? isRexanExcessRequest(request) : false;
+  const payableAmount = request ? getRequestPayableAmount(request) : 0;
 
   function handleProofChange(file: File | null) {
     setProofFile(file);
@@ -63,7 +64,7 @@ export function RegisterPaymentModal({ request, open, onOpenChange, onSuccess }:
     form.reset({
       paid_at: getDefaultPaidAtValue(),
       operation_reference: "",
-      amount_paid: request.requested_amount,
+      amount_paid: getRequestPayableAmount(request),
       bank_commission: undefined,
       notes: "",
     });
@@ -77,9 +78,13 @@ export function RegisterPaymentModal({ request, open, onOpenChange, onSuccess }:
     setProofError(nextProofError);
     setSubmitError(null);
     if (!request || !proofFile || nextProofError) return;
+    if (isRexanExcessRequest(request) && toMoneyCents(values.amount_paid) !== toMoneyCents(getRequestPayableAmount(request))) {
+      setSubmitError("El monto pagado debe coincidir con el saldo aprobado para esta rendición.");
+      return;
+    }
 
     const input: RegisterPaymentInput = {
-      paid_at: new Date(values.paid_at).toISOString(),
+      paid_at: parseBusinessDateTimeLocalToIso(values.paid_at),
       operation_reference: values.operation_reference.trim(),
       amount_paid: values.amount_paid,
       bank_commission: values.bank_commission,
@@ -93,7 +98,7 @@ export function RegisterPaymentModal({ request, open, onOpenChange, onSuccess }:
       form.reset({
         paid_at: getDefaultPaidAtValue(),
         operation_reference: "",
-        amount_paid: request.requested_amount,
+        amount_paid: getRequestPayableAmount(request),
         bank_commission: undefined,
         notes: "",
       });
@@ -110,7 +115,7 @@ export function RegisterPaymentModal({ request, open, onOpenChange, onSuccess }:
         <DialogHeader>
           <DialogTitle>Registrar pago</DialogTitle>
           <DialogDescription>
-            {request ? `Solicitud ${request.request_code ?? request.sequential_number ?? request.id} por ${formatRequestCurrency(Number(request.requested_amount), request.currency)}` : "Completa los datos del telecrédito."}
+            {request ? `Solicitud ${request.request_code ?? request.sequential_number ?? request.id} por ${formatRequestCurrency(payableAmount, request.currency)}${isRexanExcess ? " · Saldo REXAN" : ""}` : "Completa los datos del telecrédito."}
           </DialogDescription>
         </DialogHeader>
         <Form {...form}>
@@ -118,7 +123,7 @@ export function RegisterPaymentModal({ request, open, onOpenChange, onSuccess }:
             <div className="grid gap-4 md:grid-cols-2">
               <FormField control={form.control} name="paid_at" render={({ field }) => (
                 <FormItem>
-                  <FormLabel>Fecha y hora de pago</FormLabel>
+                  <FormLabel>Fecha y hora de pago (hora Perú)</FormLabel>
                   <FormControl><Input type="datetime-local" {...field} data-testid="payment-paid-at-input" /></FormControl>
                   <FormMessage />
                 </FormItem>
@@ -133,7 +138,8 @@ export function RegisterPaymentModal({ request, open, onOpenChange, onSuccess }:
               <FormField control={form.control} name="amount_paid" render={({ field }) => (
                 <FormItem>
                   <FormLabel>Monto pagado</FormLabel>
-                  <FormControl><Input type="number" min="0" step="0.01" {...field} data-testid="payment-amount-input" /></FormControl>
+                  <FormControl><Input type="number" min="0" step="0.01" {...field} readOnly={isRexanExcess} data-testid="payment-amount-input" /></FormControl>
+                  {isRexanExcess && <p className="text-xs text-muted-foreground">El pago debe coincidir con el saldo aprobado de la rendición.</p>}
                   <FormMessage />
                 </FormItem>
               )} />

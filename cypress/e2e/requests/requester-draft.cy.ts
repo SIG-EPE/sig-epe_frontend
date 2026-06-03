@@ -41,7 +41,7 @@ describe("Solicitudes Sprint 3 - solicitante crea borrador", () => {
     cy.url().should("include", "/requests/new");
 
     cy.get('[data-testid="request-type-select"]').should("contain", "Anticipo");
-    selectOption("request-month-select", "Junio");
+    cy.contains("Se asignará automáticamente al registrar el pago.").should("be.visible");
 
     cy.get('[data-testid="request-planning-line-trigger"]', { timeout: 15000 })
       .should("not.be.disabled")

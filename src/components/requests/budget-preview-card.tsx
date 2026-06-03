@@ -16,7 +16,7 @@ interface BudgetPreviewCardProps {
 
 export function BudgetPreviewCard({ preview, isLoading, error, canPreview, onRetry }: BudgetPreviewCardProps) {
   if (!canPreview) {
-    return <p className="rounded-md border p-4 text-sm text-muted-foreground">Selecciona línea POA, mes y monto válido para calcular la vista previa presupuestal.</p>;
+    return <p className="rounded-md border p-4 text-sm text-muted-foreground">Selecciona línea POA y monto válido para calcular la vista previa presupuestal.</p>;
   }
 
   if (isLoading) {
@@ -60,6 +60,10 @@ export function BudgetPreviewCard({ preview, isLoading, error, canPreview, onRet
             <p className="font-semibold">{preview.remaining_ceiling === null ? "Sin techo" : formatRequestCurrency(preview.remaining_ceiling)}</p>
           </div>
         </div>
+
+        {preview.month === null && (
+          <p className="text-sm text-muted-foreground">El mes presupuestal se definirá con la fecha de pago. Antes del pago, esta vista previa solo evalúa el techo disponible de la unidad orgánica.</p>
+        )}
 
         {preview.lineWarning && (
           <Alert>

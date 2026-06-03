@@ -60,7 +60,14 @@ export function RenditionsTable({ renditions, isLoading }: RenditionsTableProps)
               <TableCell className="whitespace-nowrap">{formatRequestDate(row.scheduled_rendition_at)}</TableCell>
               <TableCell className="whitespace-nowrap">{getRenditionDueLabel(row)}</TableCell>
               <TableCell>
-                <Badge variant={getRenditionStatusTone(row.rendition_status)}>{getRenditionStatusLabel(row.rendition_status)}</Badge>
+                <div className="flex flex-col gap-1">
+                  <Badge variant={getRenditionStatusTone(row.rendition_status)}>{getRenditionStatusLabel(row.rendition_status)}</Badge>
+                  {row.settlement_request_id && (
+                    <span className="text-xs text-muted-foreground">
+                      {row.settlement_documents_complete ? "Sustentos completos" : "Faltan documentos"}
+                    </span>
+                  )}
+                </div>
               </TableCell>
               <TableCell className="text-right">
                 <Button asChild size="sm" variant={row.settlement_request_id ? "default" : "outline"}>

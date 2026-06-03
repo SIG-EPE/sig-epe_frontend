@@ -5,31 +5,42 @@ import { useParams, useRouter } from "next/navigation";
 import { toast } from "sonner";
 
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-import { useApproveRequest, useObserveRequest, useRejectRequest, useRequest, useStartAdvanceSettlement } from "@/hooks/use-requests";
+import { useApproveRequest, useObserveRequest, useRejectRequest, useRequest, useRequestDocuments, useStartAdvanceSettlement } from "@/hooks/use-requests";
 import { ROUTES } from "@/lib/constants";
 import {
   canCorrectObservedRequest,
   canEditDraftRequest,
   canReviewRequest,
+  deriveRexanApprovalPreview,
+  deriveRexanPreviewOutcome,
   formatRequestCurrency,
   formatRequestDate,
   getAdvanceSettlementCta,
   getApiErrorMessage,
   getPaymentRequestRenditionStatus,
+  getRequestDocumentDisplayName,
   getRequestDisplayCode,
   getPlanningLineDisplay,
   getRenditionStatusLabel,
+  getReturnProofDocuments,
+  getRexanOutcomeBadgeTone,
+  getRexanOutcomeDescription,
+  getRexanOutcomeLabel,
   getRequestMonthLabel,
   getRequestObserverName,
+  normalizeMoneyAmount,
   REQUEST_TYPE_LABELS,
+  validateRexanReturnProofSelection,
 } from "@/lib/requests";
 import { useAuthStore } from "@/stores/auth-store";
-import { ADVANCE_SETTLEMENT_CTA_STATE, REQUEST_TYPE } from "@/types/requests";
+import { ADVANCE_SETTLEMENT_CTA_STATE, REQUEST_TYPE, REXAN_OUTCOME, type ApproveRequestDto } from "@/types/requests";
 import { RequestStatusStepper } from "./request-status-stepper";
 import { RequestDocumentsCard } from "./request-documents-card";
 import { StatusBadge } from "./status-badge";
@@ -38,6 +49,7 @@ export function RequestDetailPage() {
   const params = useParams<{ id: string }>();
   const router = useRouter();
   const { request, isLoading, error, refetch } = useRequest(params.id);
+  const requestDocuments = useRequestDocuments(params.id);
   const user = useAuthStore((state) => state.user);
   const roleCode = user?.role?.code;
   const [observeOpen, setObserveOpen] = useState(false);
@@ -46,6 +58,8 @@ export function RequestDetailPage() {
   const [observeComment, setObserveComment] = useState("");
   const [fieldReference, setFieldReference] = useState("");
   const [approveComment, setApproveComment] = useState("");
+  const [validatedSpentAmount, setValidatedSpentAmount] = useState("");
+  const [returnProofDocumentId, setReturnProofDocumentId] = useState("");
   const [rejectReason, setRejectReason] = useState("");
   const { observeRequest, isLoading: observing } = useObserveRequest();
   const { approveRequest, isLoading: approving } = useApproveRequest();
@@ -74,6 +88,21 @@ export function RequestDetailPage() {
   const renditionStatus = getPaymentRequestRenditionStatus(request);
   const editHref = `${ROUTES.REQUESTS}/${request.id}/edit`;
   const isAdvanceSettlement = request.request_type === REQUEST_TYPE.ADVANCE_SETTLEMENT;
+  const returnProofDocuments = getReturnProofDocuments(requestDocuments.documents);
+  const parsedValidatedSpentAmount = validatedSpentAmount.trim() === "" ? null : Number(validatedSpentAmount);
+  const rexanPreviewOutcome = isAdvanceSettlement && parsedValidatedSpentAmount !== null && Number.isFinite(parsedValidatedSpentAmount)
+    ? deriveRexanPreviewOutcome(request.requested_amount, parsedValidatedSpentAmount)
+    : null;
+  const rexanApprovalPreview = isAdvanceSettlement && parsedValidatedSpentAmount !== null && Number.isFinite(parsedValidatedSpentAmount)
+    ? deriveRexanApprovalPreview(request.requested_amount, parsedValidatedSpentAmount, request.currency)
+    : null;
+  const storedRexanOutcome = request.rexan_outcome ?? null;
+  const shouldShowRexanSummary = isAdvanceSettlement && (
+    storedRexanOutcome !== null
+    || request.rexan_spent_amount != null
+    || request.rexan_balance_amount != null
+    || request.rexan_return_proof_document_id != null
+  );
   const reviewCopy = {
     observeAction: isAdvanceSettlement ? "Observar rendición" : "Observar",
     approveAction: isAdvanceSettlement ? "Aprobar rendición" : "Aprobar",
@@ -94,6 +123,14 @@ export function RequestDetailPage() {
     approveSubmit: isAdvanceSettlement ? "Aprobar rendición" : "Aprobar solicitud",
     rejectSubmit: isAdvanceSettlement ? "Rechazar rendición" : "Rechazar solicitud",
   };
+
+  function openApproveDialog(): void {
+    if (!request) return;
+    setApproveComment("");
+    setValidatedSpentAmount(request.rexan_spent_amount === null || request.rexan_spent_amount === undefined ? "" : String(request.rexan_spent_amount));
+    setReturnProofDocumentId(request.rexan_return_proof_document_id ?? returnProofDocuments[0]?.id ?? "");
+    setApproveOpen(true);
+  }
 
   async function handleObserve(): Promise<void> {
     if (!request) return;
@@ -119,12 +156,31 @@ export function RequestDetailPage() {
 
   async function handleApprove(): Promise<void> {
     if (!request) return;
+    const payload: ApproveRequestDto = { comment: approveComment.trim() || undefined };
+    if (isAdvanceSettlement) {
+      if (parsedValidatedSpentAmount === null || !Number.isFinite(parsedValidatedSpentAmount) || parsedValidatedSpentAmount < 0) {
+        toast.error("Ingresa el gasto validado de la rendición.");
+        return;
+      }
+      const returnProofError = validateRexanReturnProofSelection(rexanPreviewOutcome, returnProofDocumentId, requestDocuments.documents);
+      if (returnProofError) {
+        toast.error(returnProofError);
+        return;
+      }
+      payload.validated_spent_amount = parsedValidatedSpentAmount;
+      if (rexanPreviewOutcome === REXAN_OUTCOME.DEVOLUCION) {
+        payload.return_proof_document_id = returnProofDocumentId;
+      }
+    }
     try {
-      await approveRequest(request.id, { comment: approveComment.trim() || undefined });
-      toast.success("Solicitud aprobada correctamente");
+      await approveRequest(request.id, payload);
+      toast.success(isAdvanceSettlement && rexanPreviewOutcome !== REXAN_OUTCOME.EXCESS ? "Rendición aprobada correctamente" : "Solicitud enviada a gestión de pago");
       setApproveOpen(false);
       setApproveComment("");
+      setValidatedSpentAmount("");
+      setReturnProofDocumentId("");
       await refetch();
+      await requestDocuments.refetch();
     } catch (reviewError) {
       toast.error(getApiErrorMessage(reviewError));
     }
@@ -168,7 +224,7 @@ export function RequestDetailPage() {
           <p className="text-muted-foreground">Detalle y estado de la solicitud.</p>
         </div>
         <div className="flex items-center gap-2">
-          <StatusBadge status={request.status} />
+          <StatusBadge status={request.status} context={request} />
           <Button variant="outline" onClick={() => router.push(ROUTES.REQUESTS)}>Volver</Button>
         </div>
       </div>
@@ -177,8 +233,8 @@ export function RequestDetailPage() {
         <Card>
           <CardHeader><CardTitle>Borrador editable</CardTitle></CardHeader>
           <CardContent className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-            <p className="text-sm text-muted-foreground">Esta solicitud todavía no fue enviada. Puedes continuar editando el borrador.</p>
-            <Button onClick={() => router.push(editHref as Parameters<typeof router.push>[0])}>Editar borrador</Button>
+            <p className="text-sm text-muted-foreground">Esta solicitud todavía no fue enviada. Ingresa a editar el borrador para adjuntar documentos, revisar la información y enviarla.</p>
+            <Button onClick={() => router.push(editHref as Parameters<typeof router.push>[0])}>Continuar edición</Button>
           </CardContent>
         </Card>
       )}
@@ -209,7 +265,7 @@ export function RequestDetailPage() {
           <CardHeader><CardTitle>Acciones de revisión</CardTitle></CardHeader>
           <CardContent className="flex flex-col gap-3 sm:flex-row">
             <Button variant="outline" onClick={() => setObserveOpen(true)}>{reviewCopy.observeAction}</Button>
-            <Button onClick={() => setApproveOpen(true)}>{reviewCopy.approveAction}</Button>
+            <Button onClick={openApproveDialog}>{reviewCopy.approveAction}</Button>
             <Button variant="destructive" onClick={() => setRejectOpen(true)}>{reviewCopy.rejectAction}</Button>
           </CardContent>
         </Card>
@@ -274,7 +330,22 @@ export function RequestDetailPage() {
         </Card>
       )}
 
-      <RequestDocumentsCard request={request} />
+      {shouldShowRexanSummary && (
+        <Card>
+          <CardHeader><CardTitle>Resultado de rendición</CardTitle></CardHeader>
+          <CardContent className="grid gap-4 md:grid-cols-2">
+            <div className="md:col-span-2">
+              <Badge variant={getRexanOutcomeBadgeTone(storedRexanOutcome)}>{getRexanOutcomeLabel(storedRexanOutcome)}</Badge>
+              <p className="mt-2 text-sm text-muted-foreground">{getRexanOutcomeDescription(storedRexanOutcome)}</p>
+            </div>
+            <div><p className="text-xs text-muted-foreground">Gasto validado</p><p className="font-medium">{formatRequestCurrency(normalizeMoneyAmount(request.rexan_spent_amount) ?? 0, request.currency)}</p></div>
+            <div><p className="text-xs text-muted-foreground">Saldo</p><p className="font-medium">{formatRequestCurrency(normalizeMoneyAmount(request.rexan_balance_amount) ?? 0, request.currency)}</p></div>
+            {request.rexan_return_proof_document_id && <div className="md:col-span-2"><p className="text-xs text-muted-foreground">Constancia de devolución</p><p className="font-medium">{returnProofDocuments.find((document) => document.id === request.rexan_return_proof_document_id) ? getRequestDocumentDisplayName(returnProofDocuments.find((document) => document.id === request.rexan_return_proof_document_id)!) : request.rexan_return_proof_document_id}</p></div>}
+          </CardContent>
+        </Card>
+      )}
+
+      <RequestDocumentsCard request={request} readOnly documents={requestDocuments.documents} documentsLoading={requestDocuments.isLoading} documentsError={requestDocuments.error} onDocumentsChanged={requestDocuments.refetch} />
 
       <Card>
         <CardHeader><CardTitle>Datos principales</CardTitle></CardHeader>
@@ -335,7 +406,7 @@ export function RequestDetailPage() {
             request.statusHistory?.map((item) => (
               <div key={item.id} className="rounded-md border p-3">
                 <div className="flex items-center justify-between gap-3">
-                  <StatusBadge status={item.to_status} />
+                  <StatusBadge status={item.to_status} context={request} />
                   <span className="text-xs text-muted-foreground">{formatRequestDate(item.created_at)}</span>
                 </div>
                 <p className="mt-2 text-sm text-muted-foreground">{item.comment ?? item.reason ?? "Cambio de estado"}</p>
@@ -374,7 +445,62 @@ export function RequestDetailPage() {
             <DialogTitle>{reviewCopy.approveTitle}</DialogTitle>
             <DialogDescription>{reviewCopy.approveDescription}</DialogDescription>
           </DialogHeader>
-          <Textarea value={approveComment} onChange={(event) => setApproveComment(event.target.value)} rows={3} placeholder="Comentario opcional" />
+          <div className="space-y-4">
+            {isAdvanceSettlement && (
+              <div className="space-y-4 rounded-md border p-4">
+                <div className="rounded-md bg-muted p-3 text-sm">
+                  <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Monto del anticipo</p>
+                  <p className="text-base font-semibold">{formatRequestCurrency(normalizeMoneyAmount(request.requested_amount) ?? 0, request.currency)}</p>
+                  <p className="mt-2 text-muted-foreground">
+                    Regla: se compara el gasto validado contra el monto del anticipo. Si es igual, la rendición se aprueba sin saldo; si es menor, se registra devolución; si es mayor, el saldo adicional pasa a Cola de Pagos.
+                  </p>
+                </div>
+                <div className="space-y-2">
+                  <label className="text-sm font-medium" htmlFor="validated-spent-amount">Gasto validado *</label>
+                  <Input id="validated-spent-amount" type="number" min="0" step="0.01" value={validatedSpentAmount} onChange={(event) => setValidatedSpentAmount(event.target.value)} placeholder="0.00" />
+                </div>
+                <div className="rounded-md border p-3 text-sm">
+                  <p className="font-medium">Ejemplos rápidos</p>
+                  <ul className="mt-2 list-disc space-y-1 pl-5 text-muted-foreground">
+                    <li>Gasto validado igual al anticipo: rendición exacta, sin saldo pendiente.</li>
+                    <li>Gasto validado menor al anticipo: devolución por la diferencia y constancia obligatoria.</li>
+                    <li>Gasto validado mayor al anticipo: saldo adicional por pagar en Cola de Pagos.</li>
+                  </ul>
+                </div>
+                {rexanApprovalPreview && (
+                  <div className="rounded-md border bg-muted p-3 text-sm" aria-live="polite">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="font-medium">Resultado previsto</span>
+                      <Badge variant={getRexanOutcomeBadgeTone(rexanApprovalPreview.outcome)}>{getRexanOutcomeLabel(rexanApprovalPreview.outcome)}</Badge>
+                    </div>
+                    <p className="mt-1 font-medium">{rexanApprovalPreview.message}</p>
+                    <p className="mt-1 text-muted-foreground">{getRexanOutcomeDescription(rexanApprovalPreview.outcome)}</p>
+                  </div>
+                )}
+                {rexanPreviewOutcome === REXAN_OUTCOME.DEVOLUCION && (
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium" htmlFor="return-proof-document">Constancia de devolución *</label>
+                    <p className="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
+                      Obligatorio para devolución: selecciona una constancia RETURN_PROOF por {rexanApprovalPreview ? formatRequestCurrency(rexanApprovalPreview.balanceAmount, request.currency) : "la diferencia"} antes de aprobar.
+                    </p>
+                    {returnProofDocuments.length > 0 ? (
+                      <Select value={returnProofDocumentId} onValueChange={setReturnProofDocumentId}>
+                        <SelectTrigger id="return-proof-document"><SelectValue placeholder="Selecciona constancia" /></SelectTrigger>
+                        <SelectContent>
+                          {returnProofDocuments.map((document) => (
+                            <SelectItem key={document.id} value={document.id}>{getRequestDocumentDisplayName(document)}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    ) : (
+                      <p className="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">Para aprobar una devolución, primero solicita o adjunta la constancia de devolución en PDF, JPG o PNG.</p>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+            <Textarea value={approveComment} onChange={(event) => setApproveComment(event.target.value)} rows={3} placeholder="Comentario opcional" />
+          </div>
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => setApproveOpen(false)} disabled={approving}>Cancelar</Button>
             <Button type="button" onClick={() => void handleApprove()} disabled={approving}>{approving ? "Aprobando..." : reviewCopy.approveSubmit}</Button>

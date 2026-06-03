@@ -158,6 +158,14 @@ export const api = {
     });
   },
 
+  patchForm<T>(path: string, body: FormData, options?: RequestInit): Promise<T> {
+    return apiFetch<T>(path, {
+      ...options,
+      method: "PATCH",
+      body,
+    });
+  },
+
   put<T>(path: string, body?: unknown, options?: RequestInit): Promise<T> {
     return apiFetch<T>(path, {
       ...options,

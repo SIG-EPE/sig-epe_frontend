@@ -16,7 +16,7 @@ const SECTIONS = [
     icon: PieChart,
     title: "Solicitudes por estado",
     description:
-      "Distribución de solicitudes por estado: pendientes, aprobadas, rechazadas.",
+      "Distribución de solicitudes por estado: en revisión, en gestión de pago, rechazadas.",
   },
   {
     icon: TrendingUp,

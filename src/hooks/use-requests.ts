@@ -6,6 +6,9 @@ import { api } from "@/lib/api-client";
 import { useAuthStore } from "@/stores/auth-store";
 import type {
   BudgetPreviewInput,
+  BulkMarkPaidInput,
+  BulkMarkPaidResponse,
+  CompletePaymentDetailsInput,
   ApproveRequestDto,
   CreateRequestDto,
   ObserveRequestDto,
@@ -25,10 +28,11 @@ import type {
   RejectRequestDto,
   RequestsListFilters,
   RequestsListResponse,
+  SettlementContextResponse,
   UpdateRequestDto,
 } from "@/types/requests";
 
-function appendIfPresent(params: URLSearchParams, key: string, value: string | number | undefined): void {
+function appendIfPresent(params: URLSearchParams, key: string, value: string | number | boolean | undefined): void {
   if (value !== undefined && value !== "") {
     params.set(key, String(value));
   }
@@ -55,6 +59,8 @@ export function getPaymentQueuePath(filters?: PaymentQueueFilters): string {
   appendIfPresent(params, "page", filters?.page);
   appendIfPresent(params, "limit", filters?.limit);
   appendIfPresent(params, "status", filters?.status);
+  appendIfPresent(params, "pending_proof", filters?.pending_proof);
+  appendIfPresent(params, "pending_details", filters?.pending_details);
   appendIfPresent(params, "search", filters?.search);
   const query = params.toString();
   return `/requests/payment-queue${query ? `?${query}` : ""}`;
@@ -87,6 +93,10 @@ export function getRenditionCountsPath(filters?: Omit<RenditionsInboxFilters, "s
 
 export function getStartAdvanceSettlementPath(requestId: string): string {
   return `/requests/${requestId}/start-advance-settlement`;
+}
+
+export function getSettlementContextPath(requestId: string): string {
+  return `/requests/${requestId}/settlement-context`;
 }
 
 export function useRequests(filters?: RequestsListFilters) {
@@ -155,6 +165,8 @@ export function usePaymentQueue(filters?: PaymentQueueFilters) {
   const pageFilter = filters?.page;
   const limitFilter = filters?.limit;
   const statusFilter = filters?.status;
+  const pendingProofFilter = filters?.pending_proof;
+  const pendingDetailsFilter = filters?.pending_details;
   const searchFilter = filters?.search;
 
   const authIsLoading = useAuthStore((state) => state.isLoading);
@@ -172,7 +184,7 @@ export function usePaymentQueue(filters?: PaymentQueueFilters) {
     } finally {
       setIsLoading(false);
     }
-  }, [accessToken, authIsLoading, pageFilter, limitFilter, statusFilter, searchFilter]);
+  }, [accessToken, authIsLoading, pageFilter, limitFilter, statusFilter, pendingProofFilter, pendingDetailsFilter, searchFilter]);
 
   useEffect(() => {
     if (authIsLoading || !accessToken) return;
@@ -305,6 +317,54 @@ export function useRegisterPayment() {
   return { registerPayment, isLoading, error };
 }
 
+export function useBulkMarkPaid() {
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<Error | null>(null);
+
+  const bulkMarkPaid = async (input: BulkMarkPaidInput): Promise<BulkMarkPaidResponse> => {
+    setIsLoading(true);
+    setError(null);
+    try {
+      return await api.post<BulkMarkPaidResponse>("/requests/bulk/mark-paid", input);
+    } catch (e) {
+      const nextError = e instanceof Error ? e : new Error("Error al marcar pagos");
+      setError(nextError);
+      throw e;
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  return { bulkMarkPaid, isLoading, error };
+}
+
+export function useCompletePaymentDetails() {
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<Error | null>(null);
+
+  const completePaymentDetails = async (paymentId: string, input: CompletePaymentDetailsInput): Promise<PaymentRequest> => {
+    setIsLoading(true);
+    setError(null);
+    try {
+      const formData = new FormData();
+      if (input.proof) formData.append("proof", input.proof);
+      if (input.operation_reference?.trim()) formData.append("operation_reference", input.operation_reference.trim());
+      if (input.bank_commission !== undefined) formData.append("bank_commission", String(input.bank_commission));
+      if (input.notes?.trim()) formData.append("notes", input.notes.trim());
+      if (input.proof_document_id?.trim()) formData.append("proof_document_id", input.proof_document_id.trim());
+      return await api.patchForm<PaymentRequest>(`/request-payments/${paymentId}/details`, formData);
+    } catch (e) {
+      const nextError = e instanceof Error ? e : new Error("Error al completar datos del pago");
+      setError(nextError);
+      throw e;
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  return { completePaymentDetails, isLoading, error };
+}
+
 export function useStartAdvanceSettlement() {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<Error | null>(null);
@@ -353,6 +413,41 @@ export function useRequest(id?: string) {
   }, [accessToken, authIsLoading, refetch]);
 
   return { request, isLoading, error, refetch };
+}
+
+export function useSettlementContext(requestId?: string, enabled = true) {
+  const [context, setContext] = useState<SettlementContextResponse | null>(null);
+  const [isLoading, setIsLoading] = useState(Boolean(requestId && enabled));
+  const [error, setError] = useState<Error | null>(null);
+
+  const authIsLoading = useAuthStore((state) => state.isLoading);
+  const accessToken = useAuthStore((state) => state.accessToken);
+
+  const refetch = useCallback(async () => {
+    if (!requestId || !enabled || authIsLoading || !accessToken) return;
+    setIsLoading(true);
+    setError(null);
+    try {
+      setContext(await api.get<SettlementContextResponse>(getSettlementContextPath(requestId)));
+    } catch (e) {
+      setError(e instanceof Error ? e : new Error("Error al cargar el contexto de rendición"));
+    } finally {
+      setIsLoading(false);
+    }
+  }, [accessToken, authIsLoading, enabled, requestId]);
+
+  useEffect(() => {
+    if (!requestId || !enabled) {
+      setContext(null);
+      setError(null);
+      setIsLoading(false);
+      return;
+    }
+    if (authIsLoading || !accessToken) return;
+    void refetch();
+  }, [accessToken, authIsLoading, enabled, refetch, requestId]);
+
+  return { context, isLoading, error, refetch };
 }
 
 export function useRequestDocuments(requestId?: string) {
@@ -507,37 +602,66 @@ export function useDeleteRequestDocument() {
   return { deleteDocument, isLoading, error };
 }
 
-export function useRequestPlanningLines(search?: string) {
+interface RequestPlanningLineLookupFilters {
+  search?: string;
+  fiscal_year_id?: string;
+  org_unit_id?: string;
+  planning_type?: string;
+  program_id?: string;
+  component_id?: string;
+  operative_action_id?: string;
+  category_id?: string;
+  territory_id?: string;
+}
+
+function appendPlanningLineLookupParam(params: URLSearchParams, key: keyof RequestPlanningLineLookupFilters, value?: string): void {
+  const normalized = value?.trim();
+  if (normalized) params.set(key, normalized);
+}
+
+export function useRequestPlanningLines(filters?: RequestPlanningLineLookupFilters | string) {
   const [data, setData] = useState<RequestPlanningLineLookupResponse | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<Error | null>(null);
 
   const authIsLoading = useAuthStore((state) => state.isLoading);
   const accessToken = useAuthStore((state) => state.accessToken);
+  const lookupFilters: RequestPlanningLineLookupFilters = typeof filters === "string" ? { search: filters } : filters ?? {};
 
   const refetch = useCallback(async () => {
     if (authIsLoading || !accessToken) return;
     setIsLoading(true);
     setError(null);
     try {
-      const result = await api.get<RequestPlanningLineLookupResponse>("/requests/lookups/planning-lines");
+      const params = new URLSearchParams();
+      appendPlanningLineLookupParam(params, "search", lookupFilters.search);
+      appendPlanningLineLookupParam(params, "fiscal_year_id", lookupFilters.fiscal_year_id);
+      appendPlanningLineLookupParam(params, "org_unit_id", lookupFilters.org_unit_id);
+      appendPlanningLineLookupParam(params, "planning_type", lookupFilters.planning_type);
+      appendPlanningLineLookupParam(params, "program_id", lookupFilters.program_id);
+      appendPlanningLineLookupParam(params, "component_id", lookupFilters.component_id);
+      appendPlanningLineLookupParam(params, "operative_action_id", lookupFilters.operative_action_id);
+      appendPlanningLineLookupParam(params, "category_id", lookupFilters.category_id);
+      appendPlanningLineLookupParam(params, "territory_id", lookupFilters.territory_id);
+      const query = params.toString();
+      const result = await api.get<RequestPlanningLineLookupResponse>(`/requests/lookups/planning-lines${query ? `?${query}` : ""}`);
       setData(result);
     } catch (e) {
       setError(e instanceof Error ? e : new Error("Error al cargar líneas POA"));
     } finally {
       setIsLoading(false);
     }
-  }, [accessToken, authIsLoading]);
+  }, [accessToken, authIsLoading, lookupFilters.category_id, lookupFilters.component_id, lookupFilters.fiscal_year_id, lookupFilters.operative_action_id, lookupFilters.org_unit_id, lookupFilters.planning_type, lookupFilters.program_id, lookupFilters.search, lookupFilters.territory_id]);
 
   useEffect(() => {
     if (authIsLoading || !accessToken) return;
     void refetch();
   }, [accessToken, authIsLoading, refetch]);
 
-  const normalizedSearch = search?.trim().toLowerCase() ?? "";
+  const normalizedSearch = lookupFilters.search?.trim().toLowerCase() ?? "";
   const lines = (data?.lines ?? []).filter((line) => {
     if (!normalizedSearch) return true;
-    return [line.line_code, line.resource_description, line.org_unit?.name, line.program?.name]
+    return [line.line_code, line.resource_description, line.org_unit?.name, line.program?.name, line.action?.name, line.action?.component?.name, line.category?.name, line.territory?.name]
       .filter((value): value is string => typeof value === "string")
       .some((value) => value.toLowerCase().includes(normalizedSearch));
   });
@@ -554,17 +678,18 @@ export function useBudgetPreview(input: BudgetPreviewInput) {
   const accessToken = useAuthStore((state) => state.accessToken);
 
   const hasValidInput = Boolean(
-    input.planningLineId && input.month && input.month >= 1 && input.month <= 12 && input.amount && input.amount > 0,
+    input.planningLineId && input.amount && input.amount > 0,
   );
 
   const refetch = useCallback(async () => {
-    if (!hasValidInput || !input.planningLineId || !input.month || !input.amount || authIsLoading || !accessToken) {
+    if (!hasValidInput || !input.planningLineId || !input.amount || authIsLoading || !accessToken) {
       return;
     }
     setIsLoading(true);
     setError(null);
     try {
-      const params = new URLSearchParams({ month: String(input.month), amount: String(input.amount) });
+      const params = new URLSearchParams({ amount: String(input.amount) });
+      if (input.month) params.set("month", String(input.month));
       const result = await api.get<RequestBudgetPreview>(
         `/requests/lookups/planning-lines/${input.planningLineId}/budget-preview?${params.toString()}`,
       );

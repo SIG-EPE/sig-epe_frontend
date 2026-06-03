@@ -131,6 +131,17 @@ function makeReceiptReview(overrides: Partial<RequestReceiptReview> = {}): Reque
   };
 }
 
+function createDeferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((promiseResolve, promiseReject) => {
+    resolve = promiseResolve;
+    reject = promiseReject;
+  });
+
+  return { promise, resolve, reject };
+}
+
 describe("RequestDocumentsCard", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -260,7 +271,7 @@ describe("RequestDocumentsCard", () => {
     });
     const formData = vi.mocked(api.postForm).mock.calls[0][1] as FormData;
     expect(formData.get("file")).toBe(file);
-    expect(formData.get("document_category")).toBe(REQUEST_DOCUMENT_CATEGORY.RECEIPT);
+    expect(formData.get("document_category")).toBe(REQUEST_DOCUMENT_CATEGORY.REQUEST_SUPPORT);
     expect(await screen.findByText(/puede enviar una notificación por correo/i)).toBeInTheDocument();
   });
 
@@ -347,11 +358,10 @@ describe("RequestDocumentsCard", () => {
     });
   });
 
-  it("muestra checklist requerido y permite Excel para PxQ", async () => {
+  it("muestra checklist requerido y permite Excel para PxQ desde su botón directo", async () => {
     vi.mocked(api.get).mockResolvedValue([]);
     vi.mocked(api.postForm).mockResolvedValue(makeDocument({ id: "doc-2", original_filename: "pxq.xlsx" }));
 
-    const user = userEvent.setup();
     render(<RequestDocumentsCard request={makeRequest({ request_type: REQUEST_TYPE.ADVANCE })} />);
 
     expect(await screen.findByText("Excel PxQ")).toBeInTheDocument();
@@ -359,8 +369,7 @@ describe("RequestDocumentsCard", () => {
     expect(screen.getByText(/formatos esperados: XLS o XLSX/i)).toBeInTheDocument();
 
     const file = new File(["contenido"], "pxq.xlsx", { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
-    fireEvent.change(screen.getByLabelText(/archivo/i), { target: { files: [file] } });
-    await user.click(screen.getByRole("button", { name: /^adjuntar$/i }));
+    fireEvent.change(screen.getByLabelText(/seleccionar excel pxq/i), { target: { files: [file] } });
 
     await waitFor(() => {
       expect(api.postForm).toHaveBeenCalledWith("/requests/req-1/documents", expect.any(FormData));
@@ -369,29 +378,88 @@ describe("RequestDocumentsCard", () => {
     expect(formData.get("document_category")).toBe(REQUEST_DOCUMENT_CATEGORY.PXQ);
   });
 
-  it("preselecciona la categoría del pendiente al adjuntar desde el checklist", async () => {
+  it("no usa PxQ pendiente como categoría inicial del cargador de otros documentos", async () => {
     vi.mocked(api.get).mockResolvedValue([]);
-    vi.mocked(api.postForm).mockResolvedValue(makeDocument({ id: "doc-2", original_filename: "comprobante.pdf" }));
+    vi.mocked(api.postForm).mockResolvedValue(makeDocument({ id: "doc-2", original_filename: "sustento.pdf" }));
 
     const user = userEvent.setup();
-    render(<RequestDocumentsCard request={makeRequest({ request_type: REQUEST_TYPE.REIMBURSEMENT })} />);
+    render(<RequestDocumentsCard request={makeRequest({ request_type: REQUEST_TYPE.ADVANCE })} />);
 
-    await user.click(await screen.findByRole("button", { name: /adjuntar comprobante/i }));
+    expect(await screen.findByText("Excel PxQ")).toBeInTheDocument();
+    expect(screen.getByText(/usa este cargador solo para documentos adicionales que no se solicitan en el checklist/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/archivo/i)).toHaveAttribute("accept", expect.stringContaining(".pdf"));
+    expect(screen.getByLabelText(/archivo/i)).not.toHaveAttribute("accept", expect.stringContaining(".xlsx"));
 
-    const fileInput = screen.getByLabelText(/archivo/i);
-    expect(fileInput).toHaveFocus();
-    expect(fileInput).toHaveAttribute("accept", expect.stringContaining(".pdf"));
-    expect(screen.getByText(/formatos permitidos para esta categoría: PDF, JPG o PNG/i)).toBeInTheDocument();
-
-    const file = new File(["contenido"], "comprobante.pdf", { type: "application/pdf" });
-    fireEvent.change(fileInput, { target: { files: [file] } });
+    const file = new File(["contenido"], "sustento.pdf", { type: "application/pdf" });
+    fireEvent.change(screen.getByLabelText(/archivo/i), { target: { files: [file] } });
     await user.click(screen.getByRole("button", { name: /^adjuntar$/i }));
 
     await waitFor(() => {
       expect(api.postForm).toHaveBeenCalledWith("/requests/req-1/documents", expect.any(FormData));
     });
     const formData = vi.mocked(api.postForm).mock.calls[0][1] as FormData;
+    expect(formData.get("document_category")).toBe(REQUEST_DOCUMENT_CATEGORY.REQUEST_SUPPORT);
+  });
+
+  it("sube directamente el archivo seleccionado desde el checklist requerido", async () => {
+    vi.mocked(api.get).mockResolvedValue([]);
+    vi.mocked(api.postForm).mockResolvedValue(makeDocument({ id: "doc-2", original_filename: "comprobante.pdf" }));
+
+    render(<RequestDocumentsCard request={makeRequest({ request_type: REQUEST_TYPE.REIMBURSEMENT })} />);
+
+    const file = new File(["contenido"], "comprobante.pdf", { type: "application/pdf" });
+    const checklistInput = await screen.findByLabelText(/seleccionar comprobante/i);
+    expect(checklistInput).toHaveAttribute("accept", expect.stringContaining(".pdf"));
+    fireEvent.change(checklistInput, { target: { files: [file] } });
+
+    await waitFor(() => {
+      expect(api.postForm).toHaveBeenCalledWith("/requests/req-1/documents", expect.any(FormData));
+    });
+    const formData = vi.mocked(api.postForm).mock.calls[0][1] as FormData;
     expect(formData.get("document_category")).toBe(REQUEST_DOCUMENT_CATEGORY.RECEIPT);
+  });
+
+  it("muestra Subiendo solo en la fila requerida que está cargando", async () => {
+    vi.mocked(api.get).mockResolvedValue([]);
+    const deferredUpload = createDeferred<RequestDocument>();
+    vi.mocked(api.postForm).mockReturnValue(deferredUpload.promise);
+
+    render(<RequestDocumentsCard request={makeRequest({ request_type: REQUEST_TYPE.REIMBURSEMENT })} />);
+
+    const file = new File(["contenido"], "comprobante.pdf", { type: "application/pdf" });
+    fireEvent.change(await screen.findByLabelText(/seleccionar comprobante/i), { target: { files: [file] } });
+
+    expect(await screen.findByRole("button", { name: /^subiendo/i })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /adjuntar informe de rendición excel/i })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /^adjuntar$/i })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: /subiendo.*informe/i })).not.toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: /^subiendo/i })).toHaveLength(1);
+
+    deferredUpload.resolve(makeDocument({ id: "doc-2", document_category: REQUEST_DOCUMENT_CATEGORY.RECEIPT }));
+  });
+
+  it("muestra Subiendo solo en el cargador genérico cuando se adjunta otro documento", async () => {
+    vi.mocked(api.get).mockResolvedValue([]);
+    const deferredUpload = createDeferred<RequestDocument>();
+    vi.mocked(api.postForm).mockReturnValue(deferredUpload.promise);
+
+    const user = userEvent.setup();
+    render(<RequestDocumentsCard request={makeRequest({ request_type: REQUEST_TYPE.REIMBURSEMENT })} />);
+
+    expect(await screen.findByText("Informe de rendición Excel")).toBeInTheDocument();
+
+    const file = new File(["contenido"], "sustento.pdf", { type: "application/pdf" });
+    fireEvent.change(screen.getByLabelText(/archivo/i), { target: { files: [file] } });
+    await user.click(screen.getByRole("button", { name: /^adjuntar$/i }));
+
+    expect(await screen.findByRole("button", { name: /^subiendo/i })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /adjuntar informe de rendición excel/i })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /adjuntar comprobante/i })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: /subiendo.*informe/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /subiendo.*comprobante/i })).not.toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: /^subiendo/i })).toHaveLength(1);
+
+    deferredUpload.resolve(makeDocument({ id: "doc-2", document_category: REQUEST_DOCUMENT_CATEGORY.REQUEST_SUPPORT }));
   });
 
   it("mantiene el botón de checklist solo para documentos requeridos pendientes", async () => {
@@ -404,8 +472,27 @@ describe("RequestDocumentsCard", () => {
 
     expect(await screen.findByText("Comprobante")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /adjuntar comprobante/i })).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: /adjuntar informe de rendición excel/i }));
-    expect(screen.getByLabelText(/archivo/i)).toHaveAttribute("accept", expect.stringContaining(".xlsx"));
+    expect(screen.getByLabelText(/seleccionar informe de rendición excel/i)).toHaveAttribute("accept", expect.stringContaining(".xlsx"));
+  });
+
+  it("aclara que el cargador genérico acepta un solo archivo por carga", async () => {
+    vi.mocked(api.get).mockResolvedValue([]);
+
+    render(<RequestDocumentsCard request={makeRequest()} />);
+
+    expect(await screen.findByText(/otros documentos/i)).toBeInTheDocument();
+    expect(screen.getByText(/este cargador adjunta un archivo por vez/i)).toBeInTheDocument();
+    expect(screen.getByText(/selecciona un solo archivo por carga/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/archivo/i)).not.toHaveAttribute("multiple");
+  });
+
+  it("muestra nombres UTF-8 cuando llegan con mojibake latin1", async () => {
+    vi.mocked(api.get).mockResolvedValue([makeDocument({ original_filename: "PlanificaciÃ³n aÃ±o.xlsx" })]);
+
+    render(<RequestDocumentsCard request={makeRequest()} />);
+
+    expect(await screen.findByText("Planificación año.xlsx")).toBeInTheDocument();
+    expect(screen.queryByText("PlanificaciÃ³n aÃ±o.xlsx")).not.toBeInTheDocument();
   });
 
   it("muestra mensajes faltantes de la validación final", async () => {
@@ -413,7 +500,7 @@ describe("RequestDocumentsCard", () => {
 
     render(<RequestDocumentsCard request={makeRequest()} backendMissingMessages={["Falta adjuntar Excel PxQ."]} />);
 
-    expect(await screen.findByText(/documentos requeridos pendientes/i)).toBeInTheDocument();
+    expect(await screen.findByText("Documentos requeridos pendientes")).toBeInTheDocument();
     expect(screen.getByText("Falta adjuntar Excel PxQ.")).toBeInTheDocument();
   });
 
@@ -439,5 +526,17 @@ describe("RequestDocumentsCard", () => {
     expect(screen.queryByRole("button", { name: /adjuntar/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /eliminar/i })).not.toBeInTheDocument();
     expect(screen.getByText(/borrador u observación/i)).toBeInTheDocument();
+  });
+
+  it("mantiene el detalle de un borrador en solo lectura cuando readOnly está activo", async () => {
+    vi.mocked(api.get).mockResolvedValue([makeDocument()]);
+
+    render(<RequestDocumentsCard request={makeRequest()} readOnly />);
+
+    expect(await screen.findByText("Sustento.pdf")).toBeInTheDocument();
+    expect(screen.getByText(/esta vista no permite adjuntar ni eliminar archivos/i)).toBeInTheDocument();
+    expect(screen.getByText(/los documentos se gestionan desde el flujo de edición del borrador/i)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /adjuntar/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /eliminar/i })).not.toBeInTheDocument();
   });
 });
