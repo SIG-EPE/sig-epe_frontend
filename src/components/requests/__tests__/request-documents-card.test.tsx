@@ -131,6 +131,17 @@ function makeReceiptReview(overrides: Partial<RequestReceiptReview> = {}): Reque
   };
 }
 
+function createDeferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((promiseResolve, promiseReject) => {
+    resolve = promiseResolve;
+    reject = promiseReject;
+  });
+
+  return { promise, resolve, reject };
+}
+
 describe("RequestDocumentsCard", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -406,6 +417,49 @@ describe("RequestDocumentsCard", () => {
     });
     const formData = vi.mocked(api.postForm).mock.calls[0][1] as FormData;
     expect(formData.get("document_category")).toBe(REQUEST_DOCUMENT_CATEGORY.RECEIPT);
+  });
+
+  it("muestra Subiendo solo en la fila requerida que está cargando", async () => {
+    vi.mocked(api.get).mockResolvedValue([]);
+    const deferredUpload = createDeferred<RequestDocument>();
+    vi.mocked(api.postForm).mockReturnValue(deferredUpload.promise);
+
+    render(<RequestDocumentsCard request={makeRequest({ request_type: REQUEST_TYPE.REIMBURSEMENT })} />);
+
+    const file = new File(["contenido"], "comprobante.pdf", { type: "application/pdf" });
+    fireEvent.change(await screen.findByLabelText(/seleccionar comprobante/i), { target: { files: [file] } });
+
+    expect(await screen.findByRole("button", { name: /^subiendo/i })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /adjuntar informe de rendición excel/i })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /^adjuntar$/i })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: /subiendo.*informe/i })).not.toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: /^subiendo/i })).toHaveLength(1);
+
+    deferredUpload.resolve(makeDocument({ id: "doc-2", document_category: REQUEST_DOCUMENT_CATEGORY.RECEIPT }));
+  });
+
+  it("muestra Subiendo solo en el cargador genérico cuando se adjunta otro documento", async () => {
+    vi.mocked(api.get).mockResolvedValue([]);
+    const deferredUpload = createDeferred<RequestDocument>();
+    vi.mocked(api.postForm).mockReturnValue(deferredUpload.promise);
+
+    const user = userEvent.setup();
+    render(<RequestDocumentsCard request={makeRequest({ request_type: REQUEST_TYPE.REIMBURSEMENT })} />);
+
+    expect(await screen.findByText("Informe de rendición Excel")).toBeInTheDocument();
+
+    const file = new File(["contenido"], "sustento.pdf", { type: "application/pdf" });
+    fireEvent.change(screen.getByLabelText(/archivo/i), { target: { files: [file] } });
+    await user.click(screen.getByRole("button", { name: /^adjuntar$/i }));
+
+    expect(await screen.findByRole("button", { name: /^subiendo/i })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /adjuntar informe de rendición excel/i })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /adjuntar comprobante/i })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: /subiendo.*informe/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /subiendo.*comprobante/i })).not.toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: /^subiendo/i })).toHaveLength(1);
+
+    deferredUpload.resolve(makeDocument({ id: "doc-2", document_category: REQUEST_DOCUMENT_CATEGORY.REQUEST_SUPPORT }));
   });
 
   it("mantiene el botón de checklist solo para documentos requeridos pendientes", async () => {

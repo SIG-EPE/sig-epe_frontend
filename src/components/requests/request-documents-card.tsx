@@ -69,10 +69,17 @@ interface ReceiptReviewFormState {
 interface ChecklistAttachButtonProps {
   item: RequiredDocumentChecklistItem;
   disabled: boolean;
+  isUploading: boolean;
   onAttach: (category: RequestDocumentCategory, file: File) => void;
 }
 
-function ChecklistAttachButton({ item, disabled, onAttach }: ChecklistAttachButtonProps) {
+const DOCUMENT_UPLOAD_ACTION = {
+  GENERIC: "generic",
+} as const;
+
+type DocumentUploadAction = RequestDocumentCategory | (typeof DOCUMENT_UPLOAD_ACTION)[keyof typeof DOCUMENT_UPLOAD_ACTION];
+
+function ChecklistAttachButton({ item, disabled, isUploading, onAttach }: ChecklistAttachButtonProps) {
   const inputRef = useRef<HTMLInputElement>(null);
 
   function handleInputChange(event: ChangeEvent<HTMLInputElement>): void {
@@ -94,7 +101,7 @@ function ChecklistAttachButton({ item, disabled, onAttach }: ChecklistAttachButt
       />
       <Button type="button" variant="outline" size="sm" className="self-start sm:self-center" disabled={disabled} onClick={() => inputRef.current?.click()}>
         <Upload className="size-4" />
-        {disabled ? "Subiendo..." : `Adjuntar ${item.label}`}
+        {isUploading ? "Subiendo..." : `Adjuntar ${item.label}`}
       </Button>
     </>
   );
@@ -218,11 +225,13 @@ export function RequestDocumentsCard({
   const [documentToDelete, setDocumentToDelete] = useState<string | null>(null);
   const [receiptToReview, setReceiptToReview] = useState<RequestReceiptReview | null>(null);
   const [receiptForm, setReceiptForm] = useState<ReceiptReviewFormState | null>(null);
+  const [activeUploadAction, setActiveUploadAction] = useState<DocumentUploadAction | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const checklist = getRequiredDocumentChecklist(request.request_type, documents);
   const optionalCategoryOptions = getOptionalDocumentCategoryOptions(checklist.items);
   const hasOptionalCategoryOptions = optionalCategoryOptions.length > 0;
   const acceptedFormatsLabel = category ? getRequestDocumentAcceptedFormatsLabel(category) : "selecciona una categoría";
+  const uploadActionsDisabled = uploading || activeUploadAction !== null;
 
   useEffect(() => {
     if (optionalCategoryOptions.some((option) => option.value === category)) return;
@@ -243,7 +252,7 @@ export function RequestDocumentsCard({
     setValidationError(validateRequestDocumentFile(file, nextCategory));
   }
 
-  async function uploadSelectedFile(selectedFile: File, selectedCategory: RequestDocumentCategory): Promise<void> {
+  async function uploadSelectedFile(selectedFile: File, selectedCategory: RequestDocumentCategory, action: DocumentUploadAction): Promise<void> {
     const fileError = validateRequestDocumentFile(selectedFile, selectedCategory);
     if (fileError) {
       setValidationError(fileError);
@@ -251,6 +260,7 @@ export function RequestDocumentsCard({
     }
 
     try {
+      setActiveUploadAction(action);
       setOperationError(null);
       await uploadDocument(request.id, { file: selectedFile, document_category: selectedCategory });
       toast.success(REQUEST_DOCUMENT_UPLOAD_SUCCESS_MESSAGE);
@@ -263,6 +273,8 @@ export function RequestDocumentsCard({
       setOperationError(message);
       toast.error(message);
       await Promise.all([refetch(), refetchReceipts()]);
+    } finally {
+      setActiveUploadAction(null);
     }
   }
 
@@ -277,7 +289,7 @@ export function RequestDocumentsCard({
       return;
     }
 
-    await uploadSelectedFile(file, category);
+    await uploadSelectedFile(file, category, DOCUMENT_UPLOAD_ACTION.GENERIC);
   }
 
   function handleChecklistAttach(nextCategory: RequestDocumentCategory, nextFile: File): void {
@@ -286,7 +298,7 @@ export function RequestDocumentsCard({
       setFile(nextFile);
       setSuccessMessage(null);
     });
-    void uploadSelectedFile(nextFile, nextCategory);
+    void uploadSelectedFile(nextFile, nextCategory, nextCategory);
   }
 
   async function handleDelete(documentId: string): Promise<void> {
@@ -384,7 +396,12 @@ export function RequestDocumentsCard({
                   </div>
                 </div>
                 {!item.satisfied && canManageActions && (
-                  <ChecklistAttachButton item={item} disabled={uploading} onAttach={handleChecklistAttach} />
+                  <ChecklistAttachButton
+                    item={item}
+                    disabled={uploadActionsDisabled}
+                    isUploading={activeUploadAction === item.category}
+                    onAttach={handleChecklistAttach}
+                  />
                 )}
               </div>
             ))}
@@ -422,7 +439,7 @@ export function RequestDocumentsCard({
               <div className="space-y-2">
                 <label className="text-sm font-medium" htmlFor="document-category">Categoría</label>
                 <Select value={category} onValueChange={handleCategoryChange}>
-                  <SelectTrigger id="document-category"><SelectValue placeholder="Selecciona categoría" /></SelectTrigger>
+                  <SelectTrigger id="document-category" disabled={uploadActionsDisabled}><SelectValue placeholder="Selecciona categoría" /></SelectTrigger>
                   <SelectContent>
                     {optionalCategoryOptions.map((option) => (
                       <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
@@ -438,13 +455,14 @@ export function RequestDocumentsCard({
                   key={file ? "selected" : "empty"}
                   type="file"
                   accept={category ? getRequestDocumentAccept(category) : undefined}
+                  disabled={uploadActionsDisabled}
                   onChange={(event) => handleFileChange(event.target.files?.[0] ?? null)}
                 />
                 <p className="text-xs text-muted-foreground">Máximo 10 MB. Formatos permitidos para esta categoría: {acceptedFormatsLabel}. Selecciona un solo archivo por carga.</p>
               </div>
-              <Button type="button" onClick={() => void handleUpload()} disabled={uploading || Boolean(validationError) || !file}>
+              <Button type="button" onClick={() => void handleUpload()} disabled={uploadActionsDisabled || Boolean(validationError) || !file}>
                 <Upload className="size-4" />
-                {uploading ? "Subiendo..." : "Adjuntar"}
+                {activeUploadAction === DOCUMENT_UPLOAD_ACTION.GENERIC ? "Subiendo..." : "Adjuntar"}
               </Button>
             </div>
             ) : (

@@ -1,13 +1,14 @@
 import { Badge } from "@/components/ui/badge";
-import { REQUEST_STATUS_LABELS } from "@/lib/requests";
+import { getRequestStatusLabel, type RequestStatusLabelContext } from "@/lib/requests";
 import { cn } from "@/lib/utils";
 import { REQUEST_STATUS, type RequestStatus } from "@/types/requests";
 
 interface StatusBadgeProps {
   status: RequestStatus;
+  context?: RequestStatusLabelContext | null;
 }
 
-export function StatusBadge({ status }: StatusBadgeProps) {
+export function StatusBadge({ status, context }: StatusBadgeProps) {
   return (
     <Badge
       variant="outline"
@@ -24,7 +25,7 @@ export function StatusBadge({ status }: StatusBadgeProps) {
         status === REQUEST_STATUS.VOIDED && "border-zinc-300 bg-zinc-50 text-zinc-700",
       )}
     >
-      {REQUEST_STATUS_LABELS[status]}
+      {getRequestStatusLabel(status, context)}
     </Badge>
   );
 }

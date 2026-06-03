@@ -4,10 +4,10 @@ import { useParams, useRouter, useSearchParams } from "next/navigation";
 
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
-import { useRequest } from "@/hooks/use-requests";
+import { useRequest, useSettlementContext } from "@/hooks/use-requests";
 import { ROUTES } from "@/lib/constants";
-import { getRequestEditStep } from "@/lib/requests";
-import { REQUEST_STATUS } from "@/types/requests";
+import { getRequestEditStep, REQUEST_EDIT_STEP } from "@/lib/requests";
+import { REQUEST_STATUS, REQUEST_TYPE } from "@/types/requests";
 import { RequestForm } from "./request-form";
 
 export function EditRequestPage() {
@@ -15,6 +15,8 @@ export function EditRequestPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { request, isLoading, error, refetch } = useRequest(params.id);
+  const isSettlement = request?.request_type === REQUEST_TYPE.ADVANCE_SETTLEMENT;
+  const settlementContext = useSettlementContext(params.id, Boolean(isSettlement));
 
   if (isLoading) {
     return <p className="rounded-md border p-6 text-sm text-muted-foreground">Cargando solicitud...</p>;
@@ -31,6 +33,7 @@ export function EditRequestPage() {
 
   const isDraft = request.status === REQUEST_STATUS.DRAFT;
   const isObserved = request.status === REQUEST_STATUS.OBSERVED;
+  const activeStep = getRequestEditStep(searchParams.get("step"));
 
   if (!isDraft && !isObserved) {
     return (
@@ -45,13 +48,34 @@ export function EditRequestPage() {
   }
 
   const openObservations = (request.observations ?? []).filter((observation) => !observation.is_resolved);
+  const originalAdvanceCode = settlementContext.context?.original_advance.request_code
+    ?? settlementContext.context?.original_advance.sequential_number
+    ?? request.relatedRequest?.request_code
+    ?? request.relatedRequest?.sequential_number
+    ?? request.related_request_id;
+  const pageTitle = isSettlement
+    ? activeStep === REQUEST_EDIT_STEP.REVIEW ? "Revisar rendición de anticipo" : "Preparar rendición de anticipo"
+    : activeStep === REQUEST_EDIT_STEP.REVIEW
+    ? isDraft ? "Revisar borrador antes del envío" : "Revisar corrección antes del envío"
+    : isDraft ? "Editar borrador" : "Corregir solicitud";
+  const pageSubtitle = isSettlement
+    ? originalAdvanceCode
+      ? `Rinde el anticipo ${originalAdvanceCode} con sus sustentos y revisa el resumen antes de enviarlo.`
+      : "Rinde el anticipo pagado con sus sustentos y revisa el resumen antes de enviarlo."
+    : activeStep === REQUEST_EDIT_STEP.REVIEW
+    ? isDraft
+      ? "Verifica la información y los documentos antes de enviar la solicitud a revisión."
+      : "Verifica la corrección y los documentos antes de enviarlos nuevamente a revisión."
+    : isDraft
+      ? "Actualiza la información del borrador antes de enviarlo a revisión."
+      : "Actualiza la información observada y prepara la corrección para revisión.";
 
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-bold tracking-tight">{isDraft ? "Editar borrador" : "Corregir solicitud"}</h1>
+        <h1 className="text-2xl font-bold tracking-tight">{pageTitle}</h1>
         <p className="text-muted-foreground">
-          {isDraft ? "Actualiza la información del borrador antes de enviarlo a revisión." : "Actualiza la información observada y reenvía la solicitud a revisión."}
+          {pageSubtitle}
         </p>
       </div>
 
@@ -68,7 +92,15 @@ export function EditRequestPage() {
         </Alert>
       )}
 
-      <RequestForm initialRequest={request} mode="edit" activeStep={getRequestEditStep(searchParams.get("step"))} />
+      <RequestForm
+        initialRequest={request}
+        mode="edit"
+        activeStep={activeStep}
+        settlementContext={settlementContext.context}
+        settlementContextError={settlementContext.error}
+        settlementContextLoading={settlementContext.isLoading}
+        onRetrySettlementContext={settlementContext.refetch}
+      />
     </div>
   );
 }

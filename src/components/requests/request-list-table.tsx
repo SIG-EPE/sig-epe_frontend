@@ -4,8 +4,8 @@ import { MoreHorizontal } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { REQUEST_TYPE_LABELS, formatRequestCurrency, formatRequestDateTime, getPlanningLineDisplay, getRequestListActions, getRequestMonthLabel, getRequestTimelineDate } from "@/lib/requests";
-import type { PaymentRequest } from "@/types/requests";
+import { REQUEST_TYPE_LABELS, formatRequestCurrency, formatRequestDateTime, getPlanningLineDisplay, getRequiredDocumentChecklist, getRequestListActions, getRequestMonthLabel, getRequestTimelineDate, getRequestTimelineLabel } from "@/lib/requests";
+import { REQUEST_TYPE, type PaymentRequest } from "@/types/requests";
 import { StatusBadge } from "./status-badge";
 
 interface RequestListTableProps {
@@ -41,13 +41,25 @@ export function RequestListTable({ requests, isLoading, roleCode }: RequestListT
         {requests.map((request) => {
           const actions = getRequestListActions(roleCode, request.status, request.id);
           const timelineDate = getRequestTimelineDate(request);
-          const timelineLabel = request.submitted_at ? "Envío" : "Creación";
+          const timelineLabel = getRequestTimelineLabel(request);
+          const documentsChecklist = request.request_type === REQUEST_TYPE.ADVANCE_SETTLEMENT
+            ? getRequiredDocumentChecklist(request.request_type, request.documents ?? [])
+            : null;
 
           return (
             <TableRow key={request.id} data-testid="request-list-row">
               <TableCell className="font-medium whitespace-nowrap">{request.request_code ?? request.sequential_number ?? "—"}</TableCell>
               <TableCell className="whitespace-nowrap">{REQUEST_TYPE_LABELS[request.request_type]}</TableCell>
-              <TableCell><StatusBadge status={request.status} /></TableCell>
+              <TableCell>
+                <div className="flex flex-col gap-1">
+                  <StatusBadge status={request.status} context={request} />
+                  {documentsChecklist && (
+                    <span className="text-xs text-muted-foreground">
+                      {documentsChecklist.isComplete ? "Sustentos completos" : "Faltan documentos"}
+                    </span>
+                  )}
+                </div>
+              </TableCell>
               <TableCell className="max-w-xs truncate">{getPlanningLineDisplay(request.budgetPlanningLine)}</TableCell>
               <TableCell className="whitespace-nowrap">{getRequestMonthLabel(request.budget_month)}</TableCell>
               <TableCell className="text-right font-medium">{formatRequestCurrency(Number(request.requested_amount), request.currency)}</TableCell>

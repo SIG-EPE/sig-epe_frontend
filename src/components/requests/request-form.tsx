@@ -9,7 +9,7 @@ import { z } from "zod";
 
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -25,6 +25,13 @@ import {
   getRequestEditStepperItems,
   getRequiredDocumentChecklist,
   REQUEST_TYPE_LABELS,
+  getRequestStatusLabel,
+  BENEFICIARY_DOCUMENT_TYPE_LABELS,
+  ACCOUNT_TYPE_LABELS,
+  formatRequestCurrency,
+  formatRequestDate,
+  getPlanningLineDisplay,
+  getRequestMonthLabel,
   isBudgetPreviewBlocking,
   isBankCciRequired,
   isBcpBank,
@@ -40,6 +47,7 @@ import {
   ACCOUNT_TYPE,
   BANK_CODE,
   BENEFICIARY_DOCUMENT_TYPE,
+  REQUEST_STATUS,
   REQUEST_CURRENCY,
   REQUEST_TYPE,
   type AccountType,
@@ -48,14 +56,17 @@ import {
   type CreateRequestDto,
   type PaymentRequest,
   type RequestPlanningLineLookupItem,
+  type RequestStatus,
   type RequestType,
   type UpdateRequestDto,
+  type SettlementContextResponse,
 } from "@/types/requests";
 import { BeneficiaryFields } from "./beneficiary-fields";
 import { BudgetPreviewCard } from "./budget-preview-card";
 import { PlanningLineSelector } from "./planning-line-selector";
 import { RequestTypeSelector } from "./request-type-selector";
 import { RequestDocumentsCard } from "./request-documents-card";
+import { SettlementContextCard } from "./settlement-context-card";
 import { SupplierFields } from "./supplier-fields";
 
 export const requestFormSchema = z.object({
@@ -166,6 +177,19 @@ function conditionalBankCci(bankCode: BankCode | undefined, value?: string): str
   return bankCode && !isBcpBank(bankCode) ? emptyToUndefined(value) : undefined;
 }
 
+function formatOptionalText(value?: string | number | null): string {
+  if (value === null || value === undefined) return "—";
+  const text = String(value).trim();
+  return text.length > 0 ? text : "—";
+}
+
+function formatOptionalCodeName(code?: string | null, name?: string | null): string {
+  const cleanCode = code?.trim();
+  const cleanName = name?.trim();
+  if (cleanCode && cleanName) return `${cleanCode} ${cleanName}`;
+  return cleanName ?? cleanCode ?? "—";
+}
+
 export function toCreateRequestDto(values: RequestFormValues): CreateRequestDto {
   const bankCode = optionalBankCode(values.bank_code);
   const bankCci = conditionalBankCci(bankCode, values.bank_cci);
@@ -196,9 +220,11 @@ export function toCreateRequestDto(values: RequestFormValues): CreateRequestDto 
 }
 
 export function toUpdateRequestDto(values: RequestFormValues, currentRequestType?: RequestType | null): UpdateRequestDto {
+  const effectiveRequestType = currentRequestType ?? values.request_type;
+  if (effectiveRequestType === REQUEST_TYPE.ADVANCE_SETTLEMENT) return {};
+
   const bankCode = optionalBankCode(values.bank_code);
   const bankCci = conditionalBankCci(bankCode, values.bank_cci);
-  const effectiveRequestType = currentRequestType ?? values.request_type;
   const dto: UpdateRequestDto = {
     budget_planning_line_id: values.budget_planning_line_id,
     requested_amount: values.requested_amount,
@@ -226,6 +252,7 @@ export function toUpdateRequestDto(values: RequestFormValues, currentRequestType
 
 function toRequestSubmitData(values: RequestFormValues): RequestSubmitData {
   return {
+    request_type: values.request_type,
     budget_planning_line_id: values.budget_planning_line_id,
     requested_amount: values.requested_amount,
     concept: values.concept,
@@ -239,13 +266,51 @@ function toRequestSubmitData(values: RequestFormValues): RequestSubmitData {
   };
 }
 
+function getRequestIdentifier(request: PaymentRequest): string {
+  return request.request_code ?? request.sequential_number ?? request.id;
+}
+
+export function getRequestSaveSuccessToast(request: PaymentRequest): string {
+  const identifier = getRequestIdentifier(request);
+  if (request.status === REQUEST_STATUS.OBSERVED) return `Corrección guardada: ${identifier}`;
+  if (request.status === REQUEST_STATUS.DRAFT) return `Borrador guardado: ${identifier}`;
+  return `Cambios guardados: ${identifier}`;
+}
+
+export function getRequestSubmitSavingToast(status?: RequestStatus | null): string {
+  if (status === REQUEST_STATUS.OBSERVED) return "Corrección guardada. Enviando corrección...";
+  return "Borrador guardado. Enviando solicitud...";
+}
+
+export function getRequestSubmitSuccessToast(status?: RequestStatus | null): string {
+  if (status === REQUEST_STATUS.OBSERVED) return "Corrección enviada a revisión";
+  return "Solicitud enviada a revisión";
+}
+
+export function getRequestSubmitFailureToast(message: string, status?: RequestStatus | null): string {
+  if (status === REQUEST_STATUS.OBSERVED) return `La corrección fue guardada, pero el envío falló: ${message}`;
+  return `El borrador fue guardado, pero el envío falló: ${message}`;
+}
+
 interface RequestFormProps {
   initialRequest?: PaymentRequest;
   mode?: "create" | "edit";
   activeStep?: RequestEditStep;
+  settlementContext?: SettlementContextResponse | null;
+  settlementContextError?: Error | null;
+  settlementContextLoading?: boolean;
+  onRetrySettlementContext?: () => Promise<void> | void;
 }
 
-export function RequestForm({ initialRequest, mode = "create", activeStep = REQUEST_EDIT_STEP.DATA }: RequestFormProps) {
+export function RequestForm({
+  initialRequest,
+  mode = "create",
+  activeStep = REQUEST_EDIT_STEP.DATA,
+  settlementContext = null,
+  settlementContextError = null,
+  settlementContextLoading = false,
+  onRetrySettlementContext,
+}: RequestFormProps) {
   const router = useRouter();
   const user = useAuthStore((state) => state.user);
   const [draftId, setDraftId] = useState<string | null>(initialRequest?.id ?? null);
@@ -300,13 +365,14 @@ export function RequestForm({ initialRequest, mode = "create", activeStep = REQU
 
   const requestType = form.watch("request_type");
   const effectiveRequestType = currentRequest?.request_type ?? initialRequest?.request_type ?? requestType;
+  const isAdvanceSettlement = effectiveRequestType === REQUEST_TYPE.ADVANCE_SETTLEMENT;
   const planningLineId = form.watch("budget_planning_line_id");
   const requestedAmount = form.watch("requested_amount");
   const scheduledRenditionMinDate = getScheduledRenditionMinDate();
 
   const preview = useBudgetPreview({
-    planningLineId,
-    amount: Number(requestedAmount),
+    planningLineId: isAdvanceSettlement ? "" : planningLineId,
+    amount: isAdvanceSettlement ? 0 : Number(requestedAmount),
   });
   const { createRequest, isLoading: creating } = useCreateRequest();
   const { updateRequest, isLoading: updating } = useUpdateRequest();
@@ -325,9 +391,10 @@ export function RequestForm({ initialRequest, mode = "create", activeStep = REQU
   const stepperItems = getRequestEditStepperItems(mode === "create" ? REQUEST_EDIT_STEP.DATA : activeStep, {
     isDataComplete: hasCompleteRequestData,
     isDocumentsComplete: checklist.isComplete,
+    requestType: effectiveRequestType,
   });
   const reviewNavigationIssues = currentRequest ? getRequestReviewNavigationIssues(currentRequest, checklist) : null;
-  const canSubmitReview = hasCompleteRequestData && areDocumentsReady && checklist.isComplete && !isBudgetPreviewBlocking(preview.data);
+  const canSubmitReview = hasCompleteRequestData && areDocumentsReady && checklist.isComplete && (isAdvanceSettlement || !isBudgetPreviewBlocking(preview.data));
 
   useEffect(() => {
     setIsNavigatingStep(false);
@@ -447,6 +514,8 @@ export function RequestForm({ initialRequest, mode = "create", activeStep = REQU
   }
 
   async function saveDraft(values: RequestFormValues): Promise<PaymentRequest> {
+    if (draftId && isAdvanceSettlement && currentRequest) return currentRequest;
+
     const saved = draftId
       ? await updateRequest(draftId, toUpdateRequestDto(values, effectiveRequestType))
       : await createRequest(toCreateRequestDto(values));
@@ -470,7 +539,7 @@ export function RequestForm({ initialRequest, mode = "create", activeStep = REQU
 
     try {
       const saved = await saveDraft(values);
-      toast.success(`Borrador guardado: ${saved.request_code ?? saved.sequential_number ?? saved.id}`);
+      toast.success(getRequestSaveSuccessToast(saved));
       if (mode === "create") {
         setIsNavigatingStep(true);
         router.push(`${ROUTES.REQUESTS}/${saved.id}/edit?step=${REQUEST_EDIT_STEP.DOCUMENTS}` as Parameters<typeof router.push>[0]);
@@ -498,7 +567,7 @@ export function RequestForm({ initialRequest, mode = "create", activeStep = REQU
       return;
     }
 
-    if (isBudgetPreviewBlocking(preview.data)) {
+    if (!isAdvanceSettlement && isBudgetPreviewBlocking(preview.data)) {
       toast.error("El techo de la unidad orgánica bloquea el envío. Puedes guardar el borrador para corregirlo luego.");
       setPendingAction(null);
       return;
@@ -515,7 +584,7 @@ export function RequestForm({ initialRequest, mode = "create", activeStep = REQU
     let saved: PaymentRequest;
     try {
       saved = await saveDraft(values);
-      toast.success("Borrador guardado. Enviando solicitud...");
+      toast.success(getRequestSubmitSavingToast(saved.status));
     } catch (error) {
       toast.error(getNewAdvancePendingSettlementBlockMessage(requestTypeForBlocking, error) ?? getApiErrorMessage(error));
       setPendingAction(null);
@@ -524,7 +593,7 @@ export function RequestForm({ initialRequest, mode = "create", activeStep = REQU
 
     try {
       const submitted = await submitRequest(saved.id);
-      toast.success(mode === "edit" ? "Solicitud reenviada correctamente" : "Solicitud enviada correctamente");
+      toast.success(getRequestSubmitSuccessToast(saved.status));
       setIsNavigatingStep(true);
       router.push(`${ROUTES.REQUESTS}/${submitted.id}`);
     } catch (error) {
@@ -532,7 +601,7 @@ export function RequestForm({ initialRequest, mode = "create", activeStep = REQU
       const pendingSettlementMessage = getNewAdvancePendingSettlementBlockMessage(saved.request_type, error);
       const message = pendingSettlementMessage ?? getApiErrorMessage(error);
       setSubmitErrors(missingMessages.length > 0 ? missingMessages : [message]);
-      toast.error(`El borrador fue guardado, pero el envío falló: ${message}`);
+      toast.error(getRequestSubmitFailureToast(message, saved.status));
       setPendingAction(null);
     }
   }
@@ -562,9 +631,57 @@ export function RequestForm({ initialRequest, mode = "create", activeStep = REQU
     );
   }
 
+  function renderSettlementContextState(): ReactNode {
+    if (effectiveRequestType !== REQUEST_TYPE.ADVANCE_SETTLEMENT) return null;
+    if (settlementContextLoading) {
+      return <p className="rounded-md border p-4 text-sm text-muted-foreground">Cargando contexto del anticipo original...</p>;
+    }
+    if (settlementContextError) {
+      return (
+        <Alert>
+          <AlertDescription className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+            <span>No se pudo cargar el contexto del anticipo original. Puedes continuar sin perder los datos de la rendición.</span>
+            {onRetrySettlementContext && <Button type="button" variant="outline" size="sm" onClick={() => void onRetrySettlementContext()}>Reintentar</Button>}
+          </AlertDescription>
+        </Alert>
+      );
+    }
+    if (!settlementContext) return null;
+    return <SettlementContextCard context={settlementContext} showDocuments={activeStep !== REQUEST_EDIT_STEP.REVIEW} />;
+  }
+
   function renderDataStep(): ReactNode {
+    if (isAdvanceSettlement) {
+      return (
+        <>
+          {renderSettlementContextState()}
+          <Card>
+            <CardContent className="space-y-4 pt-6">
+              <section className="space-y-3">
+                <h2 className="border-b pb-2 text-base font-semibold">Datos del anticipo</h2>
+                <div className="rounded-md border bg-muted/40 p-3">
+                  <p className="text-sm font-medium">{REQUEST_TYPE_LABELS[REQUEST_TYPE.ADVANCE_SETTLEMENT]} (REXAN)</p>
+                  <p className="mt-1 text-sm text-muted-foreground">
+                    Esta rendición usa los datos del anticipo original como contexto de solo lectura. El monto, beneficiario, banco, cuenta, CCI y POA no se editan desde este formulario.
+                  </p>
+                </div>
+              </section>
+            </CardContent>
+          </Card>
+
+          <div className="flex flex-col-reverse gap-3 border-t pt-4 sm:flex-row sm:justify-end">
+            <Button type="button" variant="outline" onClick={() => router.push(ROUTES.REQUESTS)} disabled={isBusy}>Cancelar</Button>
+            <Button type="button" onClick={form.handleSubmit(handleSaveDraft)} disabled={isBusy} data-testid="request-save-draft-button">
+              {isSaving ? "Validando..." : "Continuar a documentos"}
+            </Button>
+          </div>
+        </>
+      );
+    }
+
     return (
       <>
+        {renderSettlementContextState()}
         <Card>
           <CardContent className="space-y-6 pt-6">
             {dataStepBlockingMessages.length > 0 && activeStep === REQUEST_EDIT_STEP.DATA && (
@@ -580,13 +697,7 @@ export function RequestForm({ initialRequest, mode = "create", activeStep = REQU
             <section className="space-y-4">
               <h2 className="border-b pb-2 text-base font-semibold">1. Datos de la solicitud</h2>
               <div className="max-w-xl">
-                {effectiveRequestType === REQUEST_TYPE.ADVANCE_SETTLEMENT ? (
-                  <div className="rounded-md border bg-muted/40 p-3">
-                    <p className="text-sm font-medium">Tipo de solicitud</p>
-                    <p className="mt-1 text-sm">{REQUEST_TYPE_LABELS[REQUEST_TYPE.ADVANCE_SETTLEMENT]} (REXAN)</p>
-                    <p className="mt-1 text-xs text-muted-foreground">La rendición se origina desde un anticipo pagado y no se cambia a anticipo durante la edición.</p>
-                  </div>
-                ) : <RequestTypeSelector control={form.control} />}
+                <RequestTypeSelector control={form.control} />
               </div>
               <PlanningLineSelector control={form.control} selectedLine={selectedLine} onSelectedLineChange={setSelectedLine} />
             </section>
@@ -607,7 +718,7 @@ export function RequestForm({ initialRequest, mode = "create", activeStep = REQU
                   <FormItem>
                     <FormLabel>Fecha límite de rendición</FormLabel>
                     <FormControl><Input type="date" min={scheduledRenditionMinDate} data-testid="request-scheduled-rendition-input" {...field} /></FormControl>
-                    <p className="text-xs text-muted-foreground">Opcional. Se usará para dar seguimiento a la rendición del anticipo pagado.</p>
+                    <p className="text-xs text-muted-foreground">Fecha límite para presentar la rendición una vez pagado el anticipo.</p>
                     <FormMessage />
                   </FormItem>
                 )} />
@@ -649,6 +760,7 @@ export function RequestForm({ initialRequest, mode = "create", activeStep = REQU
 
     return (
       <>
+        {renderSettlementContextState()}
         <RequestDocumentsCard
           request={currentRequest}
           documents={reviewDocuments.documents}
@@ -687,6 +799,101 @@ export function RequestForm({ initialRequest, mode = "create", activeStep = REQU
     );
   }
 
+  function renderSummaryItem(label: string, value: ReactNode, className = ""): ReactNode {
+    return (
+      <div className={className}>
+        <p className="text-xs text-muted-foreground">{label}</p>
+        <p className="font-medium">{value}</p>
+      </div>
+    );
+  }
+
+  function renderReviewSummary(): ReactNode {
+    if (!currentRequest) return null;
+
+    if (currentRequest.request_type === REQUEST_TYPE.ADVANCE_SETTLEMENT) {
+      return (
+        <Card>
+          <CardHeader>
+            <CardTitle>Resumen de rendición</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <div className="grid gap-4 md:grid-cols-2">
+              {renderSummaryItem("Tipo", REQUEST_TYPE_LABELS[currentRequest.request_type])}
+              {renderSummaryItem("Estado actual", getRequestStatusLabel(currentRequest.status, currentRequest))}
+              {currentRequest.relatedRequest && renderSummaryItem("Anticipo original", `${currentRequest.relatedRequest.request_code ?? currentRequest.relatedRequest.sequential_number ?? currentRequest.relatedRequest.id} · ${formatRequestCurrency(Number(currentRequest.relatedRequest.requested_amount), currentRequest.relatedRequest.currency)}`, "md:col-span-2")}
+            </div>
+            <p className="text-sm text-muted-foreground">
+              Los datos económicos, beneficiario, pago y POA se muestran arriba como contexto del anticipo original y no se modifican en esta rendición.
+            </p>
+          </CardContent>
+        </Card>
+      );
+    }
+
+    const planningLine = currentRequest.budgetPlanningLine;
+    const orgUnit = planningLine?.organizationalUnit ?? currentRequest.organizationalUnit ?? null;
+    const beneficiaryDocument = currentRequest.beneficiary_document_type
+      ? `${BENEFICIARY_DOCUMENT_TYPE_LABELS[currentRequest.beneficiary_document_type]} ${formatOptionalText(currentRequest.beneficiary_document_number)}`
+      : formatOptionalText(currentRequest.beneficiary_document_number);
+    const accountType = currentRequest.account_type ? ACCOUNT_TYPE_LABELS[currentRequest.account_type] : "—";
+
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle>Resumen para revisión</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-6">
+          <section className="space-y-3">
+            <h3 className="border-b pb-2 text-sm font-semibold">Datos de la solicitud</h3>
+            <div className="grid gap-4 md:grid-cols-2">
+              {renderSummaryItem("Tipo", REQUEST_TYPE_LABELS[currentRequest.request_type])}
+              {renderSummaryItem("Estado actual", getRequestStatusLabel(currentRequest.status, currentRequest))}
+              {renderSummaryItem("Monto", formatRequestCurrency(Number(currentRequest.requested_amount), currentRequest.currency))}
+              {renderSummaryItem("Mes presupuestal", getRequestMonthLabel(currentRequest.budget_month))}
+              {currentRequest.request_type === REQUEST_TYPE.ADVANCE && renderSummaryItem("Fecha límite de rendición", formatRequestDate(currentRequest.scheduled_rendition_at))}
+              {renderSummaryItem("Concepto / justificación", formatOptionalText(currentRequest.concept), "md:col-span-2")}
+            </div>
+          </section>
+
+          <section className="space-y-3">
+            <h3 className="border-b pb-2 text-sm font-semibold">Planificación y POA</h3>
+            <div className="grid gap-4 md:grid-cols-2">
+              {renderSummaryItem("Línea POA", getPlanningLineDisplay(planningLine), "md:col-span-2")}
+              {renderSummaryItem("Unidad organizacional", formatOptionalCodeName(orgUnit?.code, orgUnit?.name))}
+              {renderSummaryItem("Año fiscal", planningLine?.fiscalYear?.year ?? currentRequest.fiscal_year)}
+              {renderSummaryItem("Categoría presupuestal", planningLine?.budgetCategory?.name ?? "—")}
+              {renderSummaryItem("Programa", planningLine?.program?.name ?? "—")}
+              {renderSummaryItem("Acción operativa", planningLine?.operativeAction?.name ?? "—")}
+              {renderSummaryItem("Territorio", planningLine?.territory?.name ?? "—")}
+            </div>
+          </section>
+
+          <section className="space-y-3">
+            <h3 className="border-b pb-2 text-sm font-semibold">Beneficiario y pago</h3>
+            <div className="grid gap-4 md:grid-cols-2">
+              {renderSummaryItem("Beneficiario", formatOptionalText(currentRequest.beneficiary_name))}
+              {renderSummaryItem("Documento", beneficiaryDocument)}
+              {renderSummaryItem("Banco", formatOptionalText(currentRequest.bank_name))}
+              {renderSummaryItem("Tipo de cuenta", accountType)}
+              {renderSummaryItem("Cuenta", formatOptionalText(currentRequest.bank_account))}
+              {renderSummaryItem("CCI", formatOptionalText(currentRequest.bank_cci))}
+              {currentRequest.request_type === REQUEST_TYPE.SUPPLIER_PAYMENT && renderSummaryItem("Proveedor", formatOptionalText(currentRequest.supplier_name))}
+              {currentRequest.request_type === REQUEST_TYPE.SUPPLIER_PAYMENT && renderSummaryItem("RUC proveedor", formatOptionalText(currentRequest.supplier_ruc))}
+              {currentRequest.relatedRequest && renderSummaryItem("Solicitud relacionada", `${currentRequest.relatedRequest.request_code ?? currentRequest.relatedRequest.sequential_number ?? currentRequest.relatedRequest.id} · ${formatRequestCurrency(Number(currentRequest.relatedRequest.requested_amount), currentRequest.relatedRequest.currency)}`, "md:col-span-2")}
+            </div>
+          </section>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  function getReviewSubmitLabel(): string {
+    if (currentRequest?.status === REQUEST_STATUS.OBSERVED) return "Enviar corrección";
+    if (currentRequest?.status === REQUEST_STATUS.DRAFT) return "Enviar a revisión";
+    return mode === "edit" ? "Enviar actualización" : "Enviar solicitud";
+  }
+
   function renderReviewStep(): ReactNode {
     if (!currentRequest) return null;
 
@@ -714,6 +921,8 @@ export function RequestForm({ initialRequest, mode = "create", activeStep = REQU
             </AlertDescription>
           </Alert>
         )}
+        {renderSettlementContextState()}
+        {renderReviewSummary()}
         <RequestDocumentsCard
           request={currentRequest}
           backendMissingMessages={submitErrors}
@@ -725,7 +934,7 @@ export function RequestForm({ initialRequest, mode = "create", activeStep = REQU
         <div className="flex flex-col-reverse gap-3 border-t pt-4 sm:flex-row sm:justify-between">
           <Button type="button" variant="outline" onClick={() => navigateToStep(REQUEST_EDIT_STEP.DOCUMENTS)} disabled={isBusy}>Volver a documentos</Button>
           <Button type="button" onClick={form.handleSubmit(handleSubmitDraft)} disabled={isBusy || !canSubmitReview}>
-            {isSaving && !isSubmitting ? "Guardando..." : isSubmitting ? "Enviando..." : mode === "edit" ? "Reenviar solicitud" : "Enviar solicitud"}
+            {isSaving && !isSubmitting ? "Guardando..." : isSubmitting ? "Enviando..." : getReviewSubmitLabel()}
           </Button>
         </div>
       </>

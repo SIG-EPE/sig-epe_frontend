@@ -37,6 +37,7 @@ export const RENDITION_STATUS = {
 export type RenditionStatus = (typeof RENDITION_STATUS)[keyof typeof RENDITION_STATUS];
 
 export const RENDITION_SORT_FIELD = {
+  LAST_ACTIVITY: "last_activity",
   DUE_DATE: "due_date",
   PAID_AT: "paid_at",
 } as const;
@@ -63,6 +64,7 @@ export const REQUEST_DOCUMENT_CATEGORY = {
   RECEIPT: "RECEIPT",
   CONTRACT: "CONTRACT",
   SETTLEMENT_REPORT: "SETTLEMENT_REPORT",
+  RETURN_PROOF: "RETURN_PROOF",
   PAYMENT_PROOF: "PAYMENT_PROOF",
   OTHER: "OTHER",
 } as const;
@@ -117,6 +119,14 @@ export const REQUEST_RECEIPT_TYPE = {
 } as const;
 
 export type RequestReceiptType = (typeof REQUEST_RECEIPT_TYPE)[keyof typeof REQUEST_RECEIPT_TYPE];
+
+export const REXAN_OUTCOME = {
+  EXACT: "EXACT",
+  DEVOLUCION: "DEVOLUCION",
+  EXCESS: "EXCESS",
+} as const;
+
+export type RexanOutcome = (typeof REXAN_OUTCOME)[keyof typeof REXAN_OUTCOME];
 
 export const BENEFICIARY_DOCUMENT_TYPE = {
   DNI: "DNI",
@@ -319,16 +329,91 @@ export interface RequestPayment {
   id: string;
   payment_request_id: string;
   paid_at: string;
-  operation_reference: string;
+  operation_reference: string | null;
   amount_paid: number;
   bank_commission: number | null;
   notes: string | null;
-  proof_document_id: string;
+  proof_document_id: string | null;
   proofDocument?: RequestDocument | null;
+  proof_pending?: boolean;
+  details_pending?: boolean;
+  payment_batch_id?: string | null;
+  completed_at?: string | null;
+  completed_by_id?: string | null;
+  completion_notes?: string | null;
   registered_by_id: string;
   registeredBy?: RequestPaymentUserSummary | null;
   created_at: string;
   updated_at: string;
+}
+
+export interface SettlementContextPayment {
+  paid_at: string | null;
+  amount_paid: number | string | null;
+  proof_document_id: string | null;
+  proof_pending: boolean;
+  details_pending: boolean;
+  operation_reference: string | null;
+}
+
+export interface SettlementContextDueDate {
+  scheduled_rendition_at: string | null;
+  due_date: string | null;
+  days_until_due: number | null;
+  is_overdue: boolean;
+}
+
+export interface SettlementContextRexan {
+  outcome: RexanOutcome | null;
+  spent_amount: number | string | null;
+  balance_amount: number | string | null;
+  balance_locked_at: string | null;
+  return_proof_document_id: string | null;
+  classified_by_id: string | null;
+}
+
+export interface SettlementContextOriginalAdvance {
+  id: string;
+  request_code: string | null;
+  sequential_number: string | null;
+  requested_amount: number | string | null;
+  currency: RequestCurrency;
+  concept: string | null;
+  requester_id: string | null;
+  beneficiary_name: string | null;
+  budget_planning_line_id: string | null;
+  scheduled_rendition_at: string | null;
+  paid_at: string | null;
+  disbursed_at: string | null;
+  amount_disbursed: number | string | null;
+  budgetPlanningLine?: PaymentRequestPlanningLine | null;
+  organizationalUnit?: RequestOrgUnitSummary | null;
+}
+
+export interface SettlementContextSettlement {
+  id: string;
+  request_code: string | null;
+  sequential_number: string | null;
+  request_type: RequestType;
+  status: RequestStatus;
+  requested_amount: number | string | null;
+  currency: RequestCurrency;
+  concept: string | null;
+  related_request_id: string | null;
+}
+
+export interface SettlementContextDocument extends RequestDocument {
+  read_only?: boolean;
+}
+
+export interface SettlementContextResponse {
+  settlement: SettlementContextSettlement;
+  original_advance: SettlementContextOriginalAdvance;
+  original_advance_documents: SettlementContextDocument[];
+  payment: SettlementContextPayment | null;
+  due_date: SettlementContextDueDate | null;
+  rexan: SettlementContextRexan | null;
+  settlement_documents: RequestDocument[];
 }
 
 export interface RelatedRequestSummary {
@@ -382,12 +467,26 @@ export interface PaymentRequest {
   paid_at: string | null;
   disbursed_at: string | null;
   amount_disbursed: number | null;
+  rexan_outcome?: RexanOutcome | null;
+  rexan_spent_amount?: number | string | null;
+  rexan_balance_amount?: number | string | null;
+  rexan_balance_locked_at?: string | null;
+  rexan_return_proof_document_id?: string | null;
+  rexan_classified_by_id?: string | null;
   notes: string | null;
   created_at: string;
   updated_at: string;
+  documents?: RequestDocument[];
   statusHistory?: RequestStatusHistoryItem[];
   observations?: RequestObservation[];
   payment?: RequestPayment | null;
+  payment_id?: string | null;
+  payment_batch_id?: string | null;
+  payment_batch_reference?: string | null;
+  payment_proof_pending?: boolean;
+  payment_details_pending?: boolean;
+  proof_pending?: boolean;
+  details_pending?: boolean;
   relatedRequest?: RelatedRequestSummary | null;
   advanceSettlements?: RelatedRequestSummary[];
 }
@@ -542,7 +641,84 @@ export interface PaymentQueueFilters {
   page?: number;
   limit?: number;
   status?: typeof REQUEST_STATUS.APPROVED | typeof REQUEST_STATUS.PAID;
+  pending_proof?: boolean;
+  pending_details?: boolean;
   search?: string;
+}
+
+export const BULK_PAYMENT_RESULT_STATUS = {
+  SUCCESS: "SUCCESS",
+  FAILED: "FAILED",
+} as const;
+
+export type BulkPaymentResultStatus = (typeof BULK_PAYMENT_RESULT_STATUS)[keyof typeof BULK_PAYMENT_RESULT_STATUS];
+
+export const PAYMENT_EMAIL_STATUS = {
+  QUEUED: "QUEUED",
+  SENT: "SENT",
+  FAILED: "FAILED",
+  SKIPPED: "SKIPPED",
+} as const;
+
+export type PaymentEmailStatus = (typeof PAYMENT_EMAIL_STATUS)[keyof typeof PAYMENT_EMAIL_STATUS] | string;
+
+export const PAYMENT_REXAN_STATUS = {
+  CREATED: "CREATED",
+  REUSED: "REUSED",
+  SKIPPED: "SKIPPED",
+  FAILED: "FAILED",
+} as const;
+
+export type PaymentRexanStatus = (typeof PAYMENT_REXAN_STATUS)[keyof typeof PAYMENT_REXAN_STATUS] | string;
+
+export interface BulkMarkPaidInput {
+  request_ids: string[];
+  paid_at?: string;
+  operation_reference?: string;
+  notes?: string;
+}
+
+export interface BulkPaymentRexanResult {
+  status?: PaymentRexanStatus | null;
+  settlement_id?: string | null;
+  settlement_request_id?: string | null;
+  request_id?: string | null;
+  id?: string | null;
+  request_code?: string | null;
+  sequential_number?: string | null;
+  link?: string | null;
+  href?: string | null;
+  error?: string | null;
+}
+
+export interface BulkPaymentItemResult {
+  request_id: string;
+  status: BulkPaymentResultStatus | string;
+  payment_id?: string | null;
+  amount_paid?: number | string | null;
+  paid_at?: string | null;
+  proof_pending?: boolean;
+  details_pending?: boolean;
+  email_status?: PaymentEmailStatus | null;
+  rexan?: BulkPaymentRexanResult | null;
+  error?: string | null;
+}
+
+export interface BulkMarkPaidResponse {
+  batch_id: string;
+  item_count: number;
+  success_count: number;
+  failed_count: number;
+  total_amount: number | string;
+  results: BulkPaymentItemResult[];
+}
+
+export interface CompletePaymentDetailsInput {
+  proof?: File;
+  operation_reference?: string;
+  bank_commission?: number;
+  notes?: string;
+  proof_document_id?: string;
 }
 
 export interface RenditionInboxRow {
@@ -559,7 +735,12 @@ export interface RenditionInboxRow {
   days_overdue: number | null;
   settlement_request_id: string | null;
   settlement_status: RequestStatus | null;
+  settlement_updated_at: string | null;
+  settlement_submitted_at: string | null;
+  settlement_document_count: number;
+  settlement_documents_complete: boolean;
   payment_proof_document_id: string | null;
+  last_activity_at: string | null;
 }
 
 export interface RenditionInboxCounts extends Record<RenditionStatus, number> {}
@@ -624,6 +805,8 @@ export interface ObserveRequestDto {
 
 export interface ApproveRequestDto {
   comment?: string;
+  validated_spent_amount?: number;
+  return_proof_document_id?: string;
 }
 
 export interface RejectRequestDto {
