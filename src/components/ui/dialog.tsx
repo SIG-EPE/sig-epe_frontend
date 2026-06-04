@@ -1,4 +1,7 @@
-import * as React from "react";
+"use client";
+
+import { createContext, useContext, useEffect, useId, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { buttonVariants } from "@/components/ui/button";
@@ -6,12 +9,13 @@ import { buttonVariants } from "@/components/ui/button";
 interface DialogContextValue {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  titleId?: string;
 }
 
-const DialogContext = React.createContext<DialogContextValue | null>(null);
+const DialogContext = createContext<DialogContextValue | null>(null);
 
 function useDialogContext() {
-  const context = React.useContext(DialogContext);
+  const context = useContext(DialogContext);
   if (!context) {
     throw new Error("Dialog sub-components must be used within a Dialog");
   }
@@ -23,26 +27,23 @@ function useDialogContext() {
 // -------------------------------------------------------
 
 interface DialogProps {
-  children: React.ReactNode;
+  children: ReactNode;
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
 }
 
 export function Dialog({ children, open: controlledOpen, onOpenChange }: DialogProps) {
-  const [uncontrolledOpen, setUncontrolledOpen] = React.useState(false);
+  const [uncontrolledOpen, setUncontrolledOpen] = useState(false);
   const isControlled = controlledOpen !== undefined;
   const open = isControlled ? controlledOpen : uncontrolledOpen;
 
-  const handleOpenChange = React.useCallback(
-    (newOpen: boolean) => {
-      if (isControlled) {
-        onOpenChange?.(newOpen);
-      } else {
-        setUncontrolledOpen(newOpen);
-      }
-    },
-    [isControlled, onOpenChange],
-  );
+  function handleOpenChange(newOpen: boolean) {
+    if (isControlled) {
+      onOpenChange?.(newOpen);
+    } else {
+      setUncontrolledOpen(newOpen);
+    }
+  }
 
   return (
     <DialogContext.Provider value={{ open, onOpenChange: handleOpenChange }}>
@@ -56,14 +57,20 @@ export function Dialog({ children, open: controlledOpen, onOpenChange }: DialogP
 // -------------------------------------------------------
 
 interface DialogContentProps {
-  children: React.ReactNode;
+  children: ReactNode;
   className?: string;
 }
 
 export function DialogContent({ children, className }: DialogContentProps) {
   const { open, onOpenChange } = useDialogContext();
+  const [mounted, setMounted] = useState(false);
+  const titleId = useId();
 
-  React.useEffect(() => {
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
+  useEffect(() => {
     if (!open) return;
     const handleEscape = (e: KeyboardEvent) => {
       if (e.key === "Escape") onOpenChange(false);
@@ -72,41 +79,45 @@ export function DialogContent({ children, className }: DialogContentProps) {
     return () => document.removeEventListener("keydown", handleEscape);
   }, [open, onOpenChange]);
 
-  if (!open) return null;
+  if (!open || !mounted) return null;
 
-  return (
-    <>
+  return createPortal(
+    <div className="fixed inset-0 z-50 flex min-h-dvh w-screen items-center justify-center overflow-y-auto p-4">
       {/* Backdrop */}
       <div
-        className="fixed inset-0 z-50 bg-black/50"
+        className="fixed inset-0 min-h-dvh w-screen bg-black/50"
         onClick={() => onOpenChange(false)}
         aria-hidden="true"
       />
       {/* Content */}
       <div
         className={cn(
-          "fixed left-1/2 top-1/2 z-50 w-full max-w-lg -translate-x-1/2 -translate-y-1/2",
+          "relative z-10 w-full max-w-lg",
           "rounded-lg border bg-background p-6 shadow-lg",
-          "flex flex-col gap-4",
+          "flex max-h-[calc(100dvh-2rem)] flex-col gap-4 overflow-y-auto",
           className,
         )}
         role="dialog"
         aria-modal="true"
+        aria-labelledby={titleId}
       >
-        {children}
-        <button
-          type="button"
-          onClick={() => onOpenChange(false)}
-          className={cn(
-            buttonVariants({ variant: "ghost" }),
-            "absolute right-4 top-4 h-8 w-8 p-0",
-          )}
-          aria-label="Cerrar"
-        >
-          <X className="h-4 w-4" />
-        </button>
+        <DialogContext.Provider value={{ open, onOpenChange, titleId }}>
+          {children}
+          <button
+            type="button"
+            onClick={() => onOpenChange(false)}
+            className={cn(
+              buttonVariants({ variant: "ghost" }),
+              "absolute right-4 top-4 h-8 w-8 shrink-0 p-0",
+            )}
+            aria-label="Cerrar"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </DialogContext.Provider>
       </div>
-    </>
+    </div>,
+    document.body,
   );
 }
 
@@ -115,7 +126,7 @@ export function DialogContent({ children, className }: DialogContentProps) {
 // -------------------------------------------------------
 
 interface DialogHeaderProps {
-  children: React.ReactNode;
+  children: ReactNode;
   className?: string;
 }
 
@@ -132,13 +143,15 @@ export function DialogHeader({ children, className }: DialogHeaderProps) {
 // -------------------------------------------------------
 
 interface DialogTitleProps {
-  children: React.ReactNode;
+  children: ReactNode;
   className?: string;
 }
 
 export function DialogTitle({ children, className }: DialogTitleProps) {
+  const { titleId } = useDialogContext();
+
   return (
-    <h2 className={cn("text-lg font-semibold", className)}>
+    <h2 id={titleId} className={cn("text-lg font-semibold", className)}>
       {children}
     </h2>
   );
@@ -149,7 +162,7 @@ export function DialogTitle({ children, className }: DialogTitleProps) {
 // -------------------------------------------------------
 
 interface DialogDescriptionProps {
-  children: React.ReactNode;
+  children: ReactNode;
   className?: string;
 }
 
@@ -166,7 +179,7 @@ export function DialogDescription({ children, className }: DialogDescriptionProp
 // -------------------------------------------------------
 
 interface DialogFooterProps {
-  children: React.ReactNode;
+  children: ReactNode;
   className?: string;
 }
 
@@ -188,7 +201,7 @@ export function DialogFooter({ children, className }: DialogFooterProps) {
 // -------------------------------------------------------
 
 interface DialogCloseProps {
-  children: React.ReactNode;
+  children: ReactNode;
   onClick?: () => void;
   className?: string;
 }
@@ -196,7 +209,7 @@ interface DialogCloseProps {
 export function DialogClose({ children, onClick, className }: DialogCloseProps) {
   const { onOpenChange } = useDialogContext();
 
-  function handleClick(e: React.MouseEvent<HTMLButtonElement>) {
+  function handleClick() {
     onClick?.();
     onOpenChange(false);
   }
