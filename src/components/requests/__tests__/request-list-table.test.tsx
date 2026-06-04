@@ -120,4 +120,18 @@ describe("RequestListTable", () => {
     expect(screen.getByText("Sustentos completos")).toBeInTheDocument();
     expect(screen.getByText("Modificación")).toBeInTheDocument();
   });
+
+  it("muestra el responsable en la bandeja de revisión", () => {
+    render(
+      <RequestListTable
+        requests={[makeRequest({ beneficiary_name: "María Responsable" })]}
+        isLoading={false}
+        roleCode={ROLE_CODE.GIOF_GESTOR}
+        showResponsible
+      />,
+    );
+
+    expect(screen.getByRole("columnheader", { name: "Responsable" })).toBeInTheDocument();
+    expect(screen.getByText("María Responsable")).toBeInTheDocument();
+  });
 });

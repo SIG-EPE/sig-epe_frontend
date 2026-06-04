@@ -150,23 +150,27 @@ describe("RequestDetailPage REXAN approval", () => {
     expect(payload).not.toHaveProperty("rexan_validation_note");
   });
 
-  it("bloquea DEVOLUCION sin constancia y muestra una indicación accionable", async () => {
+  it("bloquea DEVOLUCION sin constancia y guía a observar la rendición", async () => {
     const user = await openApproveDialogAndSetAmount("80");
 
     expect(screen.getByText(/Devolución: se debe registrar constancia por S\/\s*20\.00\./)).toBeInTheDocument();
-    expect(screen.getByText(/Obligatorio para devolución: selecciona una constancia RETURN_PROOF por S\/\s*20\.00 antes de aprobar\./)).toBeInTheDocument();
-    expect(screen.getByText("Para aprobar una devolución, primero solicita o adjunta la constancia de devolución en PDF, JPG o PNG.")).toBeInTheDocument();
-    await user.click(screen.getAllByRole("button", { name: "Aprobar rendición" }).at(-1)!);
+    expect(screen.getByText(/Obligatorio para devolución: selecciona una constancia de devolución por S\/\s*20\.00 antes de aprobar\./)).toBeInTheDocument();
+    expect(screen.getByText("Para aprobar una devolución, primero solicita al solicitante que adjunte la constancia de devolución en PDF, JPG o PNG.")).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: "Aprobar rendición" }).at(-1)!).toBeDisabled();
+
+    await user.click(screen.getByRole("button", { name: "Solicitar constancia" }));
 
     expect(mocks.approveRequest).not.toHaveBeenCalled();
-    expect(mocks.toastError).toHaveBeenCalledWith("Para aprobar una devolución, primero solicita o adjunta la constancia de devolución en PDF, JPG o PNG.");
+    expect(screen.getByLabelText("Campo relacionado")).toHaveValue("Constancia de devolución");
+    expect((screen.getByLabelText("Comentario *") as HTMLTextAreaElement).value).toMatch(/Por favor adjunta la constancia de devolución por S\/\s*20\.00 para continuar con la aprobación de la rendición\./);
   });
 
   it("envía la constancia RETURN_PROOF seleccionada para DEVOLUCION", async () => {
     mocks.useRequestDocuments.mockReturnValue({ documents: [makeDocument()], isLoading: false, error: null, refetch: mocks.documentsRefetch });
     const user = await openApproveDialogAndSetAmount("80");
 
-    expect(screen.getByText(/Obligatorio para devolución: selecciona una constancia RETURN_PROOF por S\/\s*20\.00 antes de aprobar\./)).toBeInTheDocument();
+    expect(screen.getByText(/Obligatorio para devolución: selecciona una constancia de devolución por S\/\s*20\.00 antes de aprobar\./)).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: "Aprobar rendición" }).at(-1)!).toBeEnabled();
     await user.click(screen.getAllByRole("button", { name: "Aprobar rendición" }).at(-1)!);
 
     await waitFor(() => {

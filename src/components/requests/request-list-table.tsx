@@ -4,7 +4,7 @@ import { MoreHorizontal } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { REQUEST_TYPE_LABELS, formatRequestCurrency, formatRequestDateTime, getPlanningLineDisplay, getRequiredDocumentChecklist, getRequestListActions, getRequestMonthLabel, getRequestTimelineDate, getRequestTimelineLabel } from "@/lib/requests";
+import { REQUEST_TYPE_LABELS, formatRequestCurrency, formatRequestDateTime, getPaymentRequestParty, getPlanningLineDisplay, getRequiredDocumentChecklist, getRequestListActions, getRequestMonthLabel, getRequestTimelineDate, getRequestTimelineLabel } from "@/lib/requests";
 import { REQUEST_TYPE, type PaymentRequest } from "@/types/requests";
 import { StatusBadge } from "./status-badge";
 
@@ -12,9 +12,10 @@ interface RequestListTableProps {
   requests: PaymentRequest[];
   isLoading: boolean;
   roleCode?: string | null;
+  showResponsible?: boolean;
 }
 
-export function RequestListTable({ requests, isLoading, roleCode }: RequestListTableProps) {
+export function RequestListTable({ requests, isLoading, roleCode, showResponsible = false }: RequestListTableProps) {
   if (isLoading) {
     return <p className="rounded-md border p-6 text-sm text-muted-foreground">Cargando solicitudes...</p>;
   }
@@ -29,6 +30,7 @@ export function RequestListTable({ requests, isLoading, roleCode }: RequestListT
         <TableRow>
           <TableHead>Código</TableHead>
           <TableHead>Tipo</TableHead>
+          {showResponsible && <TableHead className="max-w-48">Responsable</TableHead>}
           <TableHead>Estado</TableHead>
           <TableHead>Línea POA</TableHead>
           <TableHead>Mes</TableHead>
@@ -42,6 +44,7 @@ export function RequestListTable({ requests, isLoading, roleCode }: RequestListT
           const actions = getRequestListActions(roleCode, request.status, request.id);
           const timelineDate = getRequestTimelineDate(request);
           const timelineLabel = getRequestTimelineLabel(request);
+          const responsible = getPaymentRequestParty(request) || "—";
           const documentsChecklist = request.request_type === REQUEST_TYPE.ADVANCE_SETTLEMENT
             ? getRequiredDocumentChecklist(request.request_type, request.documents ?? [])
             : null;
@@ -50,6 +53,7 @@ export function RequestListTable({ requests, isLoading, roleCode }: RequestListT
             <TableRow key={request.id} data-testid="request-list-row">
               <TableCell className="font-medium whitespace-nowrap">{request.request_code ?? request.sequential_number ?? "—"}</TableCell>
               <TableCell className="whitespace-nowrap">{REQUEST_TYPE_LABELS[request.request_type]}</TableCell>
+              {showResponsible && <TableCell className="max-w-48 truncate">{responsible}</TableCell>}
               <TableCell>
                 <div className="flex flex-col gap-1">
                   <StatusBadge status={request.status} context={request} />

@@ -66,6 +66,8 @@ export function RequestDetailPage() {
   const { rejectRequest, isLoading: rejecting } = useRejectRequest();
   const { startAdvanceSettlement, isLoading: startingSettlement } = useStartAdvanceSettlement();
 
+  const RETURN_PROOF_OBSERVATION_FIELD = "Constancia de devolución";
+
   if (isLoading) {
     return <p className="rounded-md border p-6 text-sm text-muted-foreground">Cargando solicitud...</p>;
   }
@@ -103,6 +105,10 @@ export function RequestDetailPage() {
     || request.rexan_balance_amount != null
     || request.rexan_return_proof_document_id != null
   );
+  const isRexanReturnProofMissing = rexanPreviewOutcome === REXAN_OUTCOME.DEVOLUCION && returnProofDocuments.length === 0;
+  const returnProofObservationComment = rexanApprovalPreview
+    ? `Por favor adjunta la constancia de devolución por ${formatRequestCurrency(rexanApprovalPreview.balanceAmount, request.currency)} para continuar con la aprobación de la rendición.`
+    : "Por favor adjunta la constancia de devolución para continuar con la aprobación de la rendición.";
   const reviewCopy = {
     observeAction: isAdvanceSettlement ? "Observar rendición" : "Observar",
     approveAction: isAdvanceSettlement ? "Aprobar rendición" : "Aprobar",
@@ -152,6 +158,13 @@ export function RequestDetailPage() {
     } catch (reviewError) {
       toast.error(getApiErrorMessage(reviewError));
     }
+  }
+
+  function handleRequestReturnProof(): void {
+    setFieldReference(RETURN_PROOF_OBSERVATION_FIELD);
+    setObserveComment(returnProofObservationComment);
+    setApproveOpen(false);
+    setObserveOpen(true);
   }
 
   async function handleApprove(): Promise<void> {
@@ -481,7 +494,7 @@ export function RequestDetailPage() {
                   <div className="space-y-2">
                     <label className="text-sm font-medium" htmlFor="return-proof-document">Constancia de devolución *</label>
                     <p className="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
-                      Obligatorio para devolución: selecciona una constancia RETURN_PROOF por {rexanApprovalPreview ? formatRequestCurrency(rexanApprovalPreview.balanceAmount, request.currency) : "la diferencia"} antes de aprobar.
+                      Obligatorio para devolución: selecciona una constancia de devolución por {rexanApprovalPreview ? formatRequestCurrency(rexanApprovalPreview.balanceAmount, request.currency) : "la diferencia"} antes de aprobar.
                     </p>
                     {returnProofDocuments.length > 0 ? (
                       <Select value={returnProofDocumentId} onValueChange={setReturnProofDocumentId}>
@@ -493,7 +506,12 @@ export function RequestDetailPage() {
                         </SelectContent>
                       </Select>
                     ) : (
-                      <p className="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">Para aprobar una devolución, primero solicita o adjunta la constancia de devolución en PDF, JPG o PNG.</p>
+                      <div className="space-y-3 rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
+                        <p>Para aprobar una devolución, primero solicita al solicitante que adjunte la constancia de devolución en PDF, JPG o PNG.</p>
+                        <Button type="button" variant="outline" onClick={handleRequestReturnProof}>
+                          Solicitar constancia
+                        </Button>
+                      </div>
                     )}
                   </div>
                 )}
@@ -503,7 +521,7 @@ export function RequestDetailPage() {
           </div>
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => setApproveOpen(false)} disabled={approving}>Cancelar</Button>
-            <Button type="button" onClick={() => void handleApprove()} disabled={approving}>{approving ? "Aprobando..." : reviewCopy.approveSubmit}</Button>
+            <Button type="button" onClick={() => void handleApprove()} disabled={approving || isRexanReturnProofMissing}>{approving ? "Aprobando..." : reviewCopy.approveSubmit}</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
