@@ -14,6 +14,7 @@ import { PaymentQueueTable } from "./payment-queue-table";
 import { RegisterPaymentModal } from "./register-payment-modal";
 import { BulkMarkPaidModal } from "./bulk-mark-paid-modal";
 import { CompletePaymentDetailsModal } from "./complete-payment-details-modal";
+import { AttachPaymentProofModal } from "./attach-payment-proof-modal";
 
 const PAYMENT_QUEUE_TAB = {
   PENDING: REQUEST_STATUS.APPROVED,
@@ -28,10 +29,12 @@ export function PaymentQueuePage() {
   const [search, setSearch] = useState("");
   const [selectedRequest, setSelectedRequest] = useState<PaymentRequest | null>(null);
   const [completionRequest, setCompletionRequest] = useState<PaymentRequest | null>(null);
+  const [proofAssociationRequest, setProofAssociationRequest] = useState<PaymentRequest | null>(null);
   const [selectedRequestIds, setSelectedRequestIds] = useState<string[]>([]);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isBulkModalOpen, setIsBulkModalOpen] = useState(false);
   const [isCompletionModalOpen, setIsCompletionModalOpen] = useState(false);
+  const [isAttachProofModalOpen, setIsAttachProofModalOpen] = useState(false);
   const activeQueue = usePaymentQueue({
     status: status === PAYMENT_QUEUE_TAB.PENDING_DATA ? PAYMENT_QUEUE_STATUS.PAID : status,
     search: search.trim() || undefined,
@@ -71,6 +74,11 @@ export function PaymentQueuePage() {
     toast.success("Datos de pago actualizados.");
   }
 
+  async function refreshAfterProofAssociation() {
+    await Promise.all([activeQueue.refetch(), pendingQueue.refetch(), paidQueue.refetch(), pendingDataProofQueue.refetch(), pendingDataDetailsQueue.refetch()]);
+    toast.success("Comprobante asociado a líneas POA.");
+  }
+
   function setTab(nextStatus: PaymentQueueTab) {
     setStatus(nextStatus);
     setSelectedRequestIds([]);
@@ -90,6 +98,11 @@ export function PaymentQueuePage() {
   function openCompletePaymentDetails(request: PaymentRequest) {
     setCompletionRequest(request);
     setIsCompletionModalOpen(true);
+  }
+
+  function openAttachPaymentProof(request: PaymentRequest) {
+    setProofAssociationRequest(request);
+    setIsAttachProofModalOpen(true);
   }
 
   return (
@@ -156,6 +169,7 @@ export function PaymentQueuePage() {
               onToggleRequest={status === REQUEST_STATUS.APPROVED ? toggleRequest : undefined}
               onToggleAll={status === REQUEST_STATUS.APPROVED ? toggleAllVisible : undefined}
               onCompletePaymentDetails={openCompletePaymentDetails}
+              onAttachPaymentProof={openAttachPaymentProof}
             />
           )}
         </CardContent>
@@ -164,6 +178,7 @@ export function PaymentQueuePage() {
       <RegisterPaymentModal request={selectedRequest} open={isModalOpen} onOpenChange={setIsModalOpen} onSuccess={refreshAfterPayment} />
       <BulkMarkPaidModal requests={selectedRequests} open={isBulkModalOpen} onOpenChange={setIsBulkModalOpen} onSuccess={refreshAfterBulkPayment} />
       <CompletePaymentDetailsModal request={completionRequest} open={isCompletionModalOpen} onOpenChange={setIsCompletionModalOpen} onSuccess={refreshAfterCompletion} />
+      <AttachPaymentProofModal request={proofAssociationRequest} open={isAttachProofModalOpen} onOpenChange={setIsAttachProofModalOpen} onSuccess={refreshAfterProofAssociation} />
     </div>
   );
 }

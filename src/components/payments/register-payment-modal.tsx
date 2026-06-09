@@ -10,6 +10,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { PaymentAllocationProofCoverage } from "@/components/payments/payment-allocation-proof-coverage";
 import { useRegisterPayment } from "@/hooks/use-requests";
 import { getBusinessDateTimeLocalValue, parseBusinessDateTimeLocalToIso } from "@/lib/business-timezone";
 import { PAYMENT_PROOF_ACCEPT, PAYMENT_PROOF_ACCEPTED_FORMATS_LABEL, formatRequestCurrency, getApiErrorMessage, getRequestPayableAmount, isRexanExcessRequest, toMoneyCents, validatePaymentProofFile } from "@/lib/requests";
@@ -158,6 +159,7 @@ export function RegisterPaymentModal({ request, open, onOpenChange, onSuccess }:
                 <FormMessage />
               </FormItem>
             )} />
+            {request?.allocations?.length ? <PaymentAllocationProofCoverage request={request} compact mode="register-general-proof" /> : null}
             <div className="space-y-2">
               <label className="text-sm font-medium" htmlFor="payment-proof-input">Constancia de pago ({PAYMENT_PROOF_ACCEPTED_FORMATS_LABEL})</label>
               <Input

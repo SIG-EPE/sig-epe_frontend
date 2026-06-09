@@ -10,6 +10,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { PaymentAllocationProofCoverage } from "@/components/payments/payment-allocation-proof-coverage";
 import { useCompletePaymentDetails } from "@/hooks/use-requests";
 import { PAYMENT_PROOF_ACCEPT, PAYMENT_PROOF_ACCEPTED_FORMATS_LABEL, formatRequestCurrency, getApiErrorMessage, getPaymentId, getRequestDisplayCode, getRequestPayableAmount, validatePaymentProofFile } from "@/lib/requests";
 import type { PaymentRequest } from "@/types/requests";
@@ -128,6 +129,7 @@ export function CompletePaymentDetailsModal({ request, open, onOpenChange, onSuc
                 <FormMessage />
               </FormItem>
             )} />
+            {request?.allocations?.length ? <PaymentAllocationProofCoverage request={request} /> : null}
             <div className="space-y-2">
               <label className="text-sm font-medium" htmlFor="complete-payment-proof-input">Constancia de pago ({PAYMENT_PROOF_ACCEPTED_FORMATS_LABEL})</label>
               <Input
