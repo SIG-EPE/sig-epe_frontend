@@ -90,6 +90,13 @@ export const REQUEST_DOCUMENT_UPLOAD_STATUS = {
 
 export type RequestDocumentUploadStatus = (typeof REQUEST_DOCUMENT_UPLOAD_STATUS)[keyof typeof REQUEST_DOCUMENT_UPLOAD_STATUS];
 
+export const REQUEST_DOCUMENT_SCOPE_TYPE = {
+  REQUEST: "REQUEST",
+  ALLOCATION: "ALLOCATION",
+} as const;
+
+export type RequestDocumentScopeType = (typeof REQUEST_DOCUMENT_SCOPE_TYPE)[keyof typeof REQUEST_DOCUMENT_SCOPE_TYPE];
+
 export const REQUEST_RECEIPT_OCR_STATUS = {
   MANUAL: "MANUAL",
   PENDING: "PENDING",
@@ -147,6 +154,7 @@ export const BANK_CODE = {
   COMERCIO: "COMERCIO",
   MIBANCO: "MIBANCO",
   GNB: "GNB",
+  OTROS_BANCOS: "OTROS_BANCOS",
 } as const;
 
 export type BankCode = (typeof BANK_CODE)[keyof typeof BANK_CODE];
@@ -162,6 +170,7 @@ export const BANK_NAME_BY_CODE: Record<BankCode, string> = {
   [BANK_CODE.COMERCIO]: "Banco de Comercio",
   [BANK_CODE.MIBANCO]: "MiBanco",
   [BANK_CODE.GNB]: "Banco GNB Perú",
+  [BANK_CODE.OTROS_BANCOS]: "Otros Bancos",
 };
 
 export const ACCOUNT_TYPE = {
@@ -235,6 +244,17 @@ export interface RequestPlanningLineLookupItem {
   action: RequestActionSummary | null;
   territory?: RequestTerritorySummary | null;
   monthly_summary: RequestPlanningLineMonthlySummary[];
+  funding_sources?: RequestAllocationFundingSource[];
+  financiers?: RequestAllocationFundingSource[];
+}
+
+export interface RequestAllocationFundingSource {
+  id: string;
+  funding_source_id: string;
+  code: string | null;
+  name: string | null;
+  allocated_amount: number | null;
+  percentage: number | null;
 }
 
 export interface RequestPlanningLineLookupResponse {
@@ -260,6 +280,33 @@ export interface RequestBudgetPreview {
   lineWarning: boolean;
   lineWarningMessage: string | null;
   warnings: string[];
+}
+
+export interface RequestAllocationBudgetPreview extends Partial<RequestBudgetPreview> {
+  budget_planning_line_id: string;
+  amount: number;
+  valid: boolean;
+  hard_blocked: boolean;
+  errors: string[];
+  warnings: string[];
+}
+
+export interface RequestOrgUnitBudgetGroupPreview {
+  org_unit_id: string | null;
+  fiscal_year: number;
+  requested_amount: number;
+}
+
+export interface RequestAllocationsBudgetPreview {
+  valid: boolean;
+  hard_blocked: boolean;
+  total_requested_amount: number;
+  fiscal_year: number | null;
+  allocation_count: number;
+  duplicate_planning_line_ids?: string[];
+  errors: string[];
+  allocations: RequestAllocationBudgetPreview[];
+  org_unit_groups: RequestOrgUnitBudgetGroupPreview[];
 }
 
 export interface PaymentRequestPlanningLine {
@@ -345,6 +392,90 @@ export interface RequestPayment {
   registeredBy?: RequestPaymentUserSummary | null;
   created_at: string;
   updated_at: string;
+  allocationExecutions?: RequestAllocationPaymentExecution[];
+  proof_entries?: RequestPaymentProof[];
+  proofs?: RequestPaymentProof[];
+}
+
+export interface RequestPaymentProofAllocation {
+  id: string;
+  request_payment_proof_id: string;
+  request_allocation_id: string;
+  amount_covered: number | null;
+}
+
+export interface RequestPaymentProof {
+  id: string;
+  request_payment_id: string;
+  proof_document_id: string;
+  proof_document?: RequestDocument | null;
+  operation_reference: string | null;
+  paid_at: string | null;
+  amount_paid: number | null;
+  notes: string | null;
+  metadata?: Record<string, unknown> | null;
+  allocations: RequestPaymentProofAllocation[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface RequestAllocationPaymentExecution {
+  id: string;
+  request_payment_id: string;
+  payment_request_id: string;
+  request_allocation_id: string | null;
+  budget_planning_line_id: string;
+  org_unit_id: string | null;
+  fiscal_year: number;
+  budget_month: number;
+  amount_executed: number;
+  currency: RequestCurrency | string;
+}
+
+export interface RequestAllocationPlanningLine extends RequestPlanningLineLookupItem {}
+
+export interface RequestAllocation {
+  id: string | null;
+  payment_request_id: string;
+  budget_planning_line_id: string;
+  amount: number;
+  currency: RequestCurrency | string;
+  budget_month: number | null;
+  fiscal_year: number;
+  org_unit_id: string | null;
+  sort_order: number;
+  budgetPlanningLine: RequestAllocationPlanningLine | null;
+  planning_line: RequestAllocationPlanningLine | null;
+  org_unit: RequestOrgUnitSummary | null;
+  documents?: RequestDocument[];
+  document_checklist?: RequestAllocationDocumentChecklist | null;
+  funding_sources?: RequestAllocationFundingSource[];
+  financiers?: RequestAllocationFundingSource[];
+  payment_execution: RequestAllocationPaymentExecution | null;
+}
+
+export interface RequestAllocationRequiredDocumentItem {
+  key?: string;
+  category?: RequestDocumentCategory | string;
+  document_type?: RequestDocumentCategory | string;
+  label?: string;
+  description?: string;
+  required?: boolean;
+  satisfied?: boolean;
+  acceptedFormatsLabel?: string;
+  accepted_formats_label?: string;
+  missingMessage?: string;
+  missing_message?: string;
+}
+
+export interface RequestAllocationDocumentChecklist {
+  required_documents?: RequestAllocationRequiredDocumentItem[];
+  items?: RequestAllocationRequiredDocumentItem[];
+  complete?: boolean;
+  missing_messages?: string[];
+  missingMessages?: string[];
+  is_complete?: boolean;
+  isComplete?: boolean;
 }
 
 export interface SettlementContextPayment {
@@ -477,6 +608,8 @@ export interface PaymentRequest {
   created_at: string;
   updated_at: string;
   documents?: RequestDocument[];
+  allocations?: RequestAllocation[];
+  allocation_count?: number;
   statusHistory?: RequestStatusHistoryItem[];
   observations?: RequestObservation[];
   payment?: RequestPayment | null;
@@ -515,6 +648,9 @@ export interface AdvanceSettlementCta {
 export interface RequestDocument {
   id: string;
   payment_request_id: string;
+  scope_type?: RequestDocumentScopeType | string;
+  request_allocation_id?: string | null;
+  document_section?: string | null;
   document_category: RequestDocumentCategory | string;
   safe_filename: string;
   original_filename: string;
@@ -616,6 +752,9 @@ export interface RequiredDocumentChecklist {
 export interface UploadRequestDocumentInput {
   file: File;
   document_category: RequestDocumentCategory;
+  scope_type?: RequestDocumentScopeType;
+  request_allocation_id?: string;
+  document_section?: string;
   metadata_json?: Record<string, unknown>;
 }
 
@@ -721,6 +860,22 @@ export interface CompletePaymentDetailsInput {
   proof_document_id?: string;
 }
 
+export interface AttachPaymentProofAllocationInput {
+  request_allocation_id: string;
+  amount_covered?: number;
+}
+
+export interface AttachPaymentProofInput {
+  proof?: File;
+  proof_document_id?: string;
+  request_allocation_ids?: string[];
+  allocations?: AttachPaymentProofAllocationInput[];
+  operation_reference?: string;
+  paid_at?: string;
+  amount_paid?: number;
+  notes?: string;
+}
+
 export interface RenditionInboxRow {
   advance_id: string;
   request_code: string | null;
@@ -775,8 +930,9 @@ export interface RegisterPaymentInput {
 
 export interface CreateRequestDto {
   request_type: RequestType;
-  budget_planning_line_id: string;
-  requested_amount: number;
+  budget_planning_line_id?: string;
+  requested_amount?: number;
+  allocations?: RequestAllocationInputDto[];
   currency?: RequestCurrency;
   concept: string;
   scheduled_rendition_at?: string;
@@ -798,6 +954,12 @@ export interface CreateRequestDto {
 
 export type UpdateRequestDto = Partial<CreateRequestDto>;
 
+export interface RequestAllocationInputDto {
+  client_key?: string;
+  budget_planning_line_id: string;
+  amount: number;
+}
+
 export interface ObserveRequestDto {
   comment: string;
   field_reference?: string;
@@ -817,4 +979,6 @@ export interface BudgetPreviewInput {
   planningLineId?: string;
   month?: number;
   amount?: number;
+  requestId?: string;
+  allocations?: RequestAllocationInputDto[];
 }

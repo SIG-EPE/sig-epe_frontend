@@ -5,7 +5,8 @@ import { toast } from "sonner";
 import { Pencil, PowerOff } from "lucide-react";
 
 import { useCatalogBudgetPrograms, useDeactivateBudgetProgram } from "@/hooks/use-catalogs";
-import type { BudgetProgram, PlanningType } from "@/types/catalogs";
+import type { BudgetProgram } from "@/types/catalogs";
+import { PLANNING_TYPE, PLANNING_TYPE_LABELS, type PlanningType } from "@/lib/planning-types";
 import { CatalogStatusBadge } from "../shared/catalog-status-badge";
 import { CatalogDeactivateModal } from "../shared/catalog-deactivate-modal";
 import { BudgetProgramForm } from "./budget-program-form";
@@ -32,16 +33,16 @@ import { Skeleton } from "@/components/ui/skeleton";
 // -------------------------------------------------------
 
 const PLANNING_TYPE_COLORS: Record<PlanningType, string> = {
-  PROGRAMA: "border-blue-200 bg-blue-50 text-blue-700",
-  PROYECTO: "border-purple-200 bg-purple-50 text-purple-700",
-  GESTIÓN: "border-orange-200 bg-orange-50 text-orange-700",
+  [PLANNING_TYPE.PROGRAMA]: "border-blue-200 bg-blue-50 text-blue-700",
+  [PLANNING_TYPE.PROYECTO]: "border-purple-200 bg-purple-50 text-purple-700",
+  [PLANNING_TYPE.GESTION]: "border-orange-200 bg-orange-50 text-orange-700",
 };
 
 function PlanningTypeBadge({ type }: { type?: PlanningType | null }) {
   if (!type) return <span className="text-muted-foreground">—</span>;
   return (
     <Badge variant="outline" className={`text-xs ${PLANNING_TYPE_COLORS[type]}`}>
-      {type}
+      {PLANNING_TYPE_LABELS[type]}
     </Badge>
   );
 }

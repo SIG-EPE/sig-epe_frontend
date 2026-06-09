@@ -6,7 +6,8 @@ import { SearchSelectModal } from "@/components/ui/search-select-modal";
 import { FormControl, FormDescription, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useRequestPlanningLines } from "@/hooks/use-requests";
-import { formatRequestCurrency, getPlanningLineDisplay } from "@/lib/requests";
+import { PLANNING_TYPES } from "@/lib/planning-types";
+import { getPlanningLineDisplay } from "@/lib/requests";
 import { cn } from "@/lib/utils";
 import type { RequestPlanningLineLookupItem } from "@/types/requests";
 import type { RequestFormValues } from "./request-form";
@@ -34,18 +35,39 @@ interface HierarchySelection {
   territoryId: string | null;
 }
 
+interface SummaryItem {
+  label: string;
+  value: string | null | undefined;
+}
+
 interface PlanningLineSelectorProps {
   control: Control<RequestFormValues>;
+  name?: "budget_planning_line_id" | `allocations.${number}.budget_planning_line_id`;
   selectedLine?: RequestPlanningLineLookupItem | null;
   onSelectedLineChange: (line: RequestPlanningLineLookupItem | null) => void;
 }
 
+function formatCodeName(code: string | null | undefined, name: string | null | undefined): string | null {
+  const cleanCode = code?.trim();
+  const cleanName = name?.trim();
+  if (cleanCode && cleanName) return `${cleanCode} · ${cleanName}`;
+  return cleanName ?? cleanCode ?? null;
+}
+
+function getLineSummaryItems(line: RequestPlanningLineLookupItem): SummaryItem[] {
+  return [
+    { label: "Unidad", value: formatCodeName(line.org_unit?.code, line.org_unit?.name) },
+    { label: "Componente", value: line.action?.component?.name },
+    { label: "Acción", value: line.action?.name },
+    { label: "Categoría/Recurso", value: formatCodeName(line.category?.code, line.category?.name) },
+  ];
+}
+
 function getLineSubLabel(line: RequestPlanningLineLookupItem): string {
-  const unitDetail = line.unit_price && line.quantity
-    ? `${line.quantity} × ${formatRequestCurrency(line.unit_price)}`
-    : null;
-  const parts = [line.org_unit?.name, line.program?.name, line.action?.component?.name, line.action?.name, line.category?.name, line.territory?.name, unitDetail, formatRequestCurrency(line.total_cost)].filter(Boolean);
-  return parts.join(" · ");
+  return getLineSummaryItems(line)
+    .filter((item) => Boolean(item.value))
+    .map((item) => `${item.label}: ${item.value}`)
+    .join(" · ");
 }
 
 function normalizeText(value: string): string {
@@ -92,7 +114,7 @@ function getFilteredLines(lines: RequestPlanningLineLookupItem[], selection: Par
   }));
 }
 
-export function PlanningLineSelector({ control, selectedLine, onSelectedLineChange }: PlanningLineSelectorProps) {
+export function PlanningLineSelector({ control, name = "budget_planning_line_id", selectedLine, onSelectedLineChange }: PlanningLineSelectorProps) {
   const { lines, isLoading, error } = useRequestPlanningLines();
   const [mode, setMode] = useState<PoaSelectorMode>(POA_SELECTOR_MODE.DIRECT);
   const [hierarchy, setHierarchy] = useState<HierarchySelection>({
@@ -155,7 +177,7 @@ export function PlanningLineSelector({ control, selectedLine, onSelectedLineChan
   return (
     <FormField
       control={control}
-      name="budget_planning_line_id"
+      name={name}
       render={({ field }) => (
         <FormItem className="rounded-lg border bg-card p-4 shadow-xs">
           <FormControl>
@@ -261,9 +283,18 @@ export function PlanningLineSelector({ control, selectedLine, onSelectedLineChan
             </div>
           </FormControl>
           {selectedLine && (
-            <FormDescription className="rounded-md border bg-muted/40 p-3">
+            <FormDescription className="space-y-3 rounded-md border bg-muted/40 p-3">
               <span className="block font-medium text-foreground">{getPlanningLineDisplay(selectedLine)}</span>
-              <span>{getLineSubLabel(selectedLine) || "Línea POA seleccionada"}</span>
+              <span className="grid gap-2 text-xs text-muted-foreground sm:grid-cols-2 lg:grid-cols-3">
+                {getLineSummaryItems(selectedLine)
+                  .filter((item) => Boolean(item.value))
+                  .map((item) => (
+                    <span key={item.label} className="rounded-md bg-background/70 px-2 py-1">
+                      <span className="block font-medium text-foreground">{item.label}</span>
+                      <span>{item.value}</span>
+                    </span>
+                  ))}
+              </span>
             </FormDescription>
           )}
           {error && <p className="text-xs text-destructive">{error.message}</p>}

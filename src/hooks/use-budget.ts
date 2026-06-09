@@ -8,6 +8,7 @@
 import { useState, useCallback, useEffect } from "react";
 import { toast } from "sonner";
 import { api, ApiRequestError } from "@/lib/api-client";
+import type { PlanningType } from "@/lib/planning-types";
 import { useAuthStore } from "@/stores/auth-store";
 import type {
   BalanceData,
@@ -1108,7 +1109,7 @@ export interface CreatePlanningLineDto {
   organizational_unit_id: string;
   budget_category_id: string;
   territory_id?: string;
-  planning_type: "PROGRAMA" | "PROYECTO" | "GESTIÓN";
+  planning_type: PlanningType;
   resource_description: string;
   operative_action_id?: string | null;
   importance?: string;

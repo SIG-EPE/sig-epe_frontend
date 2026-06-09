@@ -26,14 +26,22 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ROUTES } from "@/lib/constants";
+import { normalizeDecimalInput, parseDecimalInput } from "@/lib/numeric-input";
+import { PLANNING_TYPE, PLANNING_TYPE_LABELS, PLANNING_TYPES, type PlanningType } from "@/lib/planning-types";
 
 // -------------------------------------------------------
 // Zod schema
 // -------------------------------------------------------
 
+const requiredNumber = (requiredMessage: string, minMessage: string) =>
+  z.preprocess(
+    (value) => (typeof value === "string" ? parseDecimalInput(value) : value),
+    z.number({ invalid_type_error: requiredMessage, required_error: requiredMessage }).min(0, minMessage)
+  );
+
 const PlanningLineSchema = z.object({
   organizational_unit_id: z.string().min(1, "La unidad orgánica es requerida"),
-  planning_type: z.enum(["PROGRAMA", "PROYECTO", "GESTIÓN"], {
+  planning_type: z.enum(PLANNING_TYPES, {
     errorMap: () => ({ message: "Selecciona un tipo válido" }),
   }),
   program_id: z.string().optional(),
@@ -44,25 +52,19 @@ const PlanningLineSchema = z.object({
   frequency: z.string().optional(),
   budget_category_id: z.string().min(1, "El tipo de recurso es requerido"),
   resource_description: z.string().min(1, "La descripción del recurso es requerida"),
-  unit_price: z
-    .number({ invalid_type_error: "El precio unitario es requerido" })
-    .min(0, "El precio unitario no puede ser negativo"),
-  quantity: z
-    .number({ invalid_type_error: "La cantidad es requerida" })
-    .min(0, "La cantidad no puede ser negativa"),
+  unit_price: requiredNumber("El precio unitario es requerido", "El precio unitario no puede ser negativo"),
+  quantity: requiredNumber("La cantidad es requerida", "La cantidad no puede ser negativa"),
 });
 
 type PlanningLineFormData = z.infer<typeof PlanningLineSchema>;
+type PlanningLineFormState = Omit<PlanningLineFormData, "unit_price" | "quantity"> & {
+  unit_price: string;
+  quantity: string;
+};
 
 // -------------------------------------------------------
 // Tipos UI helpers
 // -------------------------------------------------------
-
-const PLANNING_TYPE_LABELS: Record<string, string> = {
-  PROGRAMA: "Programa",
-  PROYECTO: "Proyecto",
-  GESTIÓN: "Gestión",
-};
 
 const IMPORTANCE_OPTIONS = [
   { value: "Actividad estratégica", label: "Actividad estratégica" },
@@ -103,9 +105,9 @@ export function NewPlanningLineForm() {
   // Auth — no longer needed directly; api client reads from store internally
 
   // Estado del formulario
-  const [form, setForm] = useState<PlanningLineFormData>({
+  const [form, setForm] = useState<PlanningLineFormState>({
     organizational_unit_id: "",
-    planning_type: "PROGRAMA",
+    planning_type: PLANNING_TYPE.PROGRAMA,
     program_id: "",
     component_id: null,
     territory_id: "",
@@ -114,11 +116,11 @@ export function NewPlanningLineForm() {
     frequency: "",
     budget_category_id: "",
     resource_description: "",
-    unit_price: 0,
-    quantity: 0,
+    unit_price: "0",
+    quantity: "0",
   });
 
-  const [errors, setErrors] = useState<Partial<Record<keyof PlanningLineFormData, string>>>({});
+  const [errors, setErrors] = useState<Partial<Record<keyof PlanningLineFormState, string>>>({});
 
   // Programas filtrados por planning_type
   const {
@@ -134,7 +136,7 @@ export function NewPlanningLineForm() {
   const handlePlanningTypeChange = (newType: string) => {
     setForm((f) => ({
       ...f,
-      planning_type: newType as PlanningLineFormData["planning_type"],
+      planning_type: newType as PlanningType,
       program_id: "",
       component_id: null,
       operative_action_id: null,
@@ -142,7 +144,7 @@ export function NewPlanningLineForm() {
   };
 
   // Costo total calculado
-  const totalCost = (form.unit_price || 0) * (form.quantity || 0);
+  const totalCost = (parseDecimalInput(form.unit_price) ?? 0) * (parseDecimalInput(form.quantity) ?? 0);
 
   // Crear componente estratégico inline
   const createStrategicComponent = async (name: string) => {
@@ -193,9 +195,9 @@ export function NewPlanningLineForm() {
 
     const parsed = PlanningLineSchema.safeParse(toValidate);
     if (!parsed.success) {
-      const fieldErrors: Partial<Record<keyof PlanningLineFormData, string>> = {};
+      const fieldErrors: Partial<Record<keyof PlanningLineFormState, string>> = {};
       for (const issue of parsed.error.issues) {
-        const field = issue.path[0] as keyof PlanningLineFormData;
+        const field = issue.path[0] as keyof PlanningLineFormState;
         if (!fieldErrors[field]) fieldErrors[field] = issue.message;
       }
       setErrors(fieldErrors);
@@ -289,7 +291,7 @@ export function NewPlanningLineForm() {
           )}
         </div>
 
-        {/* PROGRAMA / PROYECTO / GESTIÓN */}
+        {/* PROGRAMA / PROYECTO / GESTION */}
         <div className="space-y-1" data-error={!!errors.planning_type || undefined}>
           <Label htmlFor="planning_type">Tipo *</Label>
           <select
@@ -302,9 +304,9 @@ export function NewPlanningLineForm() {
             className={`${SELECT_CLASS} ${errors.planning_type ? "border-destructive" : ""}`}
             disabled={creating}
           >
-            {Object.entries(PLANNING_TYPE_LABELS).map(([value, label]) => (
+            {PLANNING_TYPES.map((value) => (
               <option key={value} value={value}>
-                {label}
+                {PLANNING_TYPE_LABELS[value]}
               </option>
             ))}
           </select>
@@ -517,7 +519,7 @@ export function NewPlanningLineForm() {
               onChange={(e) => {
                 setForm((f) => ({
                   ...f,
-                  unit_price: parseFloat(e.target.value) || 0,
+                  unit_price: normalizeDecimalInput(e.target.value),
                 }));
                 setErrors((prev) => ({ ...prev, unit_price: undefined }));
               }}
@@ -541,7 +543,7 @@ export function NewPlanningLineForm() {
               onChange={(e) => {
                 setForm((f) => ({
                   ...f,
-                  quantity: parseFloat(e.target.value) || 0,
+                  quantity: normalizeDecimalInput(e.target.value),
                 }));
                 setErrors((prev) => ({ ...prev, quantity: undefined }));
               }}

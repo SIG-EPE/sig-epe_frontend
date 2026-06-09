@@ -1,5 +1,6 @@
 "use client";
 
+import type { ReactNode } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -11,13 +12,67 @@ import { FundingSourceDistribution } from "./funding-source-distribution";
 import { StatusTimeline } from "./status-timeline";
 import { LineActions } from "./line-actions";
 import { usePlanningLine } from "@/hooks/use-budget";
+import { formatBusinessDateTime } from "@/lib/business-timezone";
+import { PLANNING_TYPE_LABELS, PLANNING_TYPES, type PlanningType } from "@/lib/planning-types";
 import { useAuthStore } from "@/stores/auth-store";
+import type { FundingSourceAllocation, PlanningLine } from "@/types/budget";
 
 function formatCurrency(amount: number): string {
   return new Intl.NumberFormat("es-PE", {
     style: "currency",
     currency: "PEN",
   }).format(amount);
+}
+
+function isPlanningType(value: string | null | undefined): value is PlanningType {
+  return PLANNING_TYPES.includes(value as PlanningType);
+}
+
+function getPlanningTypeLabel(value: string | null | undefined): string {
+  if (!value) return "-";
+  return isPlanningType(value) ? PLANNING_TYPE_LABELS[value] : value;
+}
+
+function formatCodeName(item: { code?: string | null; name?: string | null } | null | undefined): string {
+  const code = item?.code?.trim();
+  const name = item?.name?.trim();
+  if (code && name) return `${code} · ${name}`;
+  return name ?? code ?? "-";
+}
+
+function formatOptionalDate(value: string | null | undefined): string {
+  return value ? formatBusinessDateTime(value) : "-";
+}
+
+function getFundingSourceLabel(source: FundingSourceAllocation): string {
+  const name = formatCodeName(source.fundingSource);
+  const amount = source.allocated_amount == null ? null : formatCurrency(Number(source.allocated_amount));
+  const percentage = source.percentage == null ? null : `${Number(source.percentage).toFixed(2)}%`;
+  return [name, amount, percentage].filter(Boolean).join(" · ");
+}
+
+function DetailItem({ label, value }: { label: string; value: string | number | null | undefined }) {
+  const displayValue = value === null || value === undefined || value === "" ? "-" : value;
+
+  return (
+    <div className="rounded-lg border bg-card p-4">
+      <p className="text-xs font-medium text-muted-foreground">{label}</p>
+      <p className="mt-1 text-sm font-medium text-foreground">{displayValue}</p>
+    </div>
+  );
+}
+
+function DetailSection({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <section className="flex flex-col gap-3">
+      <h2 className="text-lg font-medium">{title}</h2>
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">{children}</div>
+    </section>
+  );
+}
+
+function getLineFundingSources(line: PlanningLine): FundingSourceAllocation[] {
+  return line.fundingSources ?? line.partners ?? [];
 }
 
 export function LineDetailPage() {
@@ -62,6 +117,10 @@ export function LineDetailPage() {
       <div className="flex flex-col gap-4">
         <div className="flex items-start justify-between">
           <div className="flex flex-col gap-2">
+            <p className="text-sm font-medium text-muted-foreground">
+              {line.line_code ?? "Código POA pendiente"}
+              {line.fiscalYear?.year ? ` · POA ${line.fiscalYear.year}` : ""}
+            </p>
             <h1 className="text-2xl font-semibold">
               {line.resource_description}
             </h1>
@@ -77,37 +136,27 @@ export function LineDetailPage() {
         </div>
       </div>
 
-      {/* 2. Info grid */}
-      <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
-        <div className="flex flex-col gap-1 rounded-lg border p-4">
-          <p className="text-xs text-muted-foreground">Unidad organica</p>
-          <p className="text-sm font-medium">
-            {line.organizationalUnit?.name ?? line.organizational_unit?.name ?? "-"}
-          </p>
-        </div>
-        <div className="flex flex-col gap-1 rounded-lg border p-4">
-          <p className="text-xs text-muted-foreground">Programa</p>
-          <p className="text-sm font-medium">
-            {line.program?.name ?? line.budget_program?.name ?? "-"}
-          </p>
-        </div>
-        <div className="flex flex-col gap-1 rounded-lg border p-4">
-          <p className="text-xs text-muted-foreground">Categoria</p>
-          <p className="text-sm font-medium">
-            {line.budgetCategory?.name ?? line.budget_category?.name ?? "-"}
-          </p>
-        </div>
-        <div className="flex flex-col gap-1 rounded-lg border p-4">
-          <p className="text-xs text-muted-foreground">Tipo</p>
-          <p className="text-sm font-medium">
-            {line.planning_type ?? "-"}
-          </p>
-        </div>
+      <DetailSection title="Pertenencia POA">
+        <DetailItem label="Código de línea" value={line.line_code} />
+        <DetailItem label="Año fiscal" value={line.fiscalYear?.year} />
+        <DetailItem label="Unidad orgánica" value={formatCodeName(line.organizationalUnit ?? line.organizational_unit)} />
+        <DetailItem label="Tipo de planificación" value={getPlanningTypeLabel(line.planning_type)} />
+        <DetailItem label="Programa / proyecto / gestión" value={formatCodeName(line.program ?? line.budget_program)} />
+        <DetailItem label="Componente estratégico" value={line.operativeAction?.component?.name} />
+        <DetailItem label="Acción operativa" value={line.operativeAction?.name} />
+      </DetailSection>
 
-      </div>
+      <DetailSection title="Clasificación y alcance">
+        <DetailItem label="Recurso" value={line.resource_description} />
+        <DetailItem label="Categoría / tipo de recurso" value={formatCodeName(line.budgetCategory ?? line.budget_category)} />
+        <DetailItem label="Territorio" value={formatCodeName(line.territory)} />
+        <DetailItem label="Importancia" value={line.importance} />
+        <DetailItem label="Frecuencia" value={line.frequency} />
+        <DetailItem label="Estado actual" value={line.status} />
+      </DetailSection>
 
       {/* 3. Cost */}
-      <div className="flex flex-col gap-2">
+      <div className="flex flex-col gap-2 rounded-lg border bg-card p-4">
         <h2 className="text-lg font-medium">Costo</h2>
         <div className="flex items-baseline gap-2">
           <span className="text-muted-foreground">
@@ -118,6 +167,16 @@ export function LineDetailPage() {
           </span>
         </div>
       </div>
+
+      <DetailSection title="Financiamiento y registro">
+        <DetailItem
+          label="Fuentes de financiamiento"
+          value={getLineFundingSources(line).length > 0 ? getLineFundingSources(line).map(getFundingSourceLabel).join(" | ") : "Sin fuentes asignadas"}
+        />
+        <DetailItem label="Creada" value={formatOptionalDate(line.created_at)} />
+        <DetailItem label="Enviada" value={formatOptionalDate(line.submitted_at)} />
+        <DetailItem label="Aprobada" value={formatOptionalDate(line.approved_at)} />
+      </DetailSection>
 
       {/* 4. Monthly table */}
       <div className="flex flex-col gap-2">

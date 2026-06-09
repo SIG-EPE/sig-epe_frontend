@@ -52,7 +52,7 @@ export function FundingSourceTypeTable() {
               <TableCell className="font-medium">{item.name}</TableCell>
               <TableCell className="text-muted-foreground">{item.description ?? "-"}</TableCell>
               <TableCell>
-                <CatalogStatusBadge isActive={item.isActive} />
+                <CatalogStatusBadge isActive={item.is_active} />
               </TableCell>
             </TableRow>
           ))}

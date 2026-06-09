@@ -3,7 +3,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { useForm } from "react-hook-form";
+import { useFieldArray, useForm } from "react-hook-form";
 import { toast } from "sonner";
 import { z } from "zod";
 
@@ -36,9 +36,10 @@ import {
   isBankCciRequired,
   isBcpBank,
   isKnownBankCode,
+  isOtherBank,
   validateRequestDataForSubmit,
   validateRequestDataForSubmitIssues,
-  type RequestSubmitData,
+  type RequestSubmitDataWithAllocations,
   type RequestEditStep,
   type RequestSubmitValidationIssue,
 } from "@/lib/requests";
@@ -76,9 +77,14 @@ export const requestFormSchema = z.object({
     REQUEST_TYPE.SUPPLIER_PAYMENT,
     REQUEST_TYPE.ADVANCE_SETTLEMENT,
   ], { errorMap: () => ({ message: "Selecciona un tipo de solicitud válido" }) }),
-  budget_planning_line_id: z.string().min(1, "Selecciona una línea POA"),
-  requested_amount: z.coerce.number().positive("Ingresa un monto mayor a cero"),
-  concept: z.string().min(5, "Describe el concepto o justificación"),
+  budget_planning_line_id: z.string().optional(),
+  requested_amount: z.coerce.number().optional(),
+  allocations: z.array(z.object({
+    client_key: z.string(),
+    budget_planning_line_id: z.string().min(1, "Selecciona una línea POA"),
+    amount: z.coerce.number().positive("El monto de la línea POA debe ser mayor a cero"),
+  })).min(1, "Debe agregar al menos una línea POA."),
+  concept: z.string().min(5, "Describe el concepto o justificación").max(120, "El concepto o justificación debe tener máximo 120 caracteres."),
   scheduled_rendition_at: z.string().optional(),
   beneficiary_name: z.string().optional(),
   beneficiary_document_type: z.union([z.enum([
@@ -98,8 +104,9 @@ export const requestFormSchema = z.object({
     BANK_CODE.COMERCIO,
     BANK_CODE.MIBANCO,
     BANK_CODE.GNB,
+    BANK_CODE.OTROS_BANCOS,
   ]), z.literal("")]).optional(),
-  bank_name: z.string().optional(),
+  bank_name: z.string().max(100, "El nombre del banco debe tener máximo 100 caracteres.").optional(),
   bank_account: z.string().optional(),
   bank_cci: z.string().optional(),
   account_type: z.union([z.enum([ACCOUNT_TYPE.SAVINGS, ACCOUNT_TYPE.CHECKING]), z.literal("")]).optional(),
@@ -110,6 +117,13 @@ export const requestFormSchema = z.object({
   if (value.request_type === REQUEST_TYPE.ADVANCE && scheduledRenditionAt && scheduledRenditionAt < getScheduledRenditionMinDate()) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["scheduled_rendition_at"], message: "La fecha límite de rendición no puede ser anterior a hoy" });
   }
+  const seenPlanningLineIds = new Set<string>();
+  value.allocations.forEach((allocation, index) => {
+    if (allocation.budget_planning_line_id && seenPlanningLineIds.has(allocation.budget_planning_line_id)) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["allocations", index, "budget_planning_line_id"], message: "Esta línea POA ya fue agregada; edite el monto del bloque existente." });
+    }
+    seenPlanningLineIds.add(allocation.budget_planning_line_id);
+  });
 }).superRefine((value, ctx) => {
   if (value.request_type !== REQUEST_TYPE.SUPPLIER_PAYMENT) return;
   if (!value.supplier_ruc?.trim()) {
@@ -137,9 +151,13 @@ export const requestFormSchema = z.object({
     ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["beneficiary_document_number"], message: "El CE debe tener de 6 a 12 letras o números" });
   }
   const bankCode = value.bank_code && isKnownBankCode(value.bank_code) ? value.bank_code : null;
+  const bankName = value.bank_name?.trim() ?? "";
   const bankCci = value.bank_cci?.trim() ?? "";
   if (value.bank_account?.trim() && !/^\d{6,30}$/.test(value.bank_account.trim())) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["bank_account"], message: "La cuenta debe tener entre 6 y 30 dígitos" });
+  }
+  if (isOtherBank(bankCode) && !bankName) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["bank_name"], message: "Ingresa el nombre del banco." });
   }
   if (isBankCciRequired(bankCode) && !bankCci) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["bank_cci"], message: "Ingresa el CCI de 20 dígitos." });
@@ -150,8 +168,18 @@ export const requestFormSchema = z.object({
 
 export type RequestFormValues = z.infer<typeof requestFormSchema>;
 
+const DEFAULT_ALLOCATION_CLIENT_KEY = "allocation-1";
+
 export function getScheduledRenditionMinDate(): string {
   return getBusinessDateString();
+}
+
+export function normalizeRequestAmountInput(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) return "";
+
+  const numericValue = Number(trimmed);
+  return Number.isFinite(numericValue) ? String(numericValue) : trimmed;
 }
 
 function emptyToUndefined(value?: string): string | undefined {
@@ -177,6 +205,10 @@ function conditionalBankCci(bankCode: BankCode | undefined, value?: string): str
   return bankCode && !isBcpBank(bankCode) ? emptyToUndefined(value) : undefined;
 }
 
+function conditionalBankName(bankCode: BankCode | undefined, value?: string): string | undefined {
+  return bankCode && isOtherBank(bankCode) ? emptyToUndefined(value) : undefined;
+}
+
 function formatOptionalText(value?: string | number | null): string {
   if (value === null || value === undefined) return "—";
   const text = String(value).trim();
@@ -193,10 +225,17 @@ function formatOptionalCodeName(code?: string | null, name?: string | null): str
 export function toCreateRequestDto(values: RequestFormValues): CreateRequestDto {
   const bankCode = optionalBankCode(values.bank_code);
   const bankCci = conditionalBankCci(bankCode, values.bank_cci);
+  const bankName = conditionalBankName(bankCode, values.bank_name);
+  const allocations = values.allocations.map((allocation) => ({
+    client_key: allocation.client_key,
+    budget_planning_line_id: allocation.budget_planning_line_id,
+    amount: Number(allocation.amount),
+  }));
   const dto: CreateRequestDto = {
     request_type: values.request_type,
-    budget_planning_line_id: values.budget_planning_line_id,
-    requested_amount: values.requested_amount,
+    budget_planning_line_id: allocations[0]?.budget_planning_line_id,
+    requested_amount: allocations.reduce((total, allocation) => total + allocation.amount, 0),
+    allocations,
     currency: REQUEST_CURRENCY.PEN,
     concept: values.concept.trim(),
     supplier_ruc: emptyToUndefined(values.supplier_ruc),
@@ -205,11 +244,11 @@ export function toCreateRequestDto(values: RequestFormValues): CreateRequestDto 
     beneficiary_document_type: optionalDocumentType(values.beneficiary_document_type),
     beneficiary_document_number: emptyToUndefined(values.beneficiary_document_number)?.toUpperCase(),
     bank_code: bankCode,
-    bank_name: emptyToUndefined(values.bank_name),
     bank_account: emptyToUndefined(values.bank_account),
     account_type: optionalAccountType(values.account_type),
   };
 
+  if (bankName) dto.bank_name = bankName;
   if (bankCci) dto.bank_cci = bankCci;
 
   if (values.request_type === REQUEST_TYPE.ADVANCE) {
@@ -225,9 +264,16 @@ export function toUpdateRequestDto(values: RequestFormValues, currentRequestType
 
   const bankCode = optionalBankCode(values.bank_code);
   const bankCci = conditionalBankCci(bankCode, values.bank_cci);
+  const bankName = conditionalBankName(bankCode, values.bank_name);
+  const allocations = values.allocations.map((allocation) => ({
+    client_key: allocation.client_key,
+    budget_planning_line_id: allocation.budget_planning_line_id,
+    amount: Number(allocation.amount),
+  }));
   const dto: UpdateRequestDto = {
-    budget_planning_line_id: values.budget_planning_line_id,
-    requested_amount: values.requested_amount,
+    budget_planning_line_id: allocations[0]?.budget_planning_line_id,
+    requested_amount: allocations.reduce((total, allocation) => total + allocation.amount, 0),
+    allocations,
     currency: REQUEST_CURRENCY.PEN,
     concept: values.concept.trim(),
     supplier_ruc: emptyToUndefined(values.supplier_ruc),
@@ -236,11 +282,11 @@ export function toUpdateRequestDto(values: RequestFormValues, currentRequestType
     beneficiary_document_type: optionalDocumentType(values.beneficiary_document_type),
     beneficiary_document_number: emptyToUndefined(values.beneficiary_document_number)?.toUpperCase(),
     bank_code: bankCode,
-    bank_name: emptyToUndefined(values.bank_name),
     bank_account: emptyToUndefined(values.bank_account),
     account_type: optionalAccountType(values.account_type),
   };
 
+  if (bankName) dto.bank_name = bankName;
   if (bankCci) dto.bank_cci = bankCci;
 
   if (effectiveRequestType === REQUEST_TYPE.ADVANCE) {
@@ -250,16 +296,22 @@ export function toUpdateRequestDto(values: RequestFormValues, currentRequestType
   return dto;
 }
 
-function toRequestSubmitData(values: RequestFormValues): RequestSubmitData {
+function toRequestSubmitData(values: RequestFormValues): RequestSubmitDataWithAllocations {
+  const totalRequestedAmount = values.allocations.reduce((total, allocation) => total + Number(allocation.amount || 0), 0);
   return {
     request_type: values.request_type,
-    budget_planning_line_id: values.budget_planning_line_id,
-    requested_amount: values.requested_amount,
+    budget_planning_line_id: values.allocations[0]?.budget_planning_line_id ?? "",
+    requested_amount: totalRequestedAmount,
+    allocations: values.allocations.map((allocation) => ({
+      budget_planning_line_id: allocation.budget_planning_line_id,
+      amount: Number(allocation.amount || 0),
+    })),
     concept: values.concept,
     beneficiary_name: values.beneficiary_name ?? null,
     beneficiary_document_type: optionalDocumentType(values.beneficiary_document_type) ?? null,
     beneficiary_document_number: values.beneficiary_document_number ?? null,
     bank_code: values.bank_code && isKnownBankCode(values.bank_code) ? values.bank_code : null,
+    bank_name: values.bank_name ?? null,
     account_type: optionalAccountType(values.account_type) ?? null,
     bank_account: values.bank_account ?? null,
     bank_cci: values.bank_cci ?? null,
@@ -292,6 +344,92 @@ export function getRequestSubmitFailureToast(message: string, status?: RequestSt
   return `El borrador fue guardado, pero el envío falló: ${message}`;
 }
 
+function makeAllocationClientKey(): string {
+  return `allocation-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function getLineFiscalYear(line?: RequestPlanningLineLookupItem | null): number | null {
+  return line?.fiscal_year?.year ?? null;
+}
+
+function getLineFinanciers(line?: RequestPlanningLineLookupItem | null) {
+  return line?.financiers ?? line?.funding_sources ?? [];
+}
+
+function mapRequestPlanningLineToLookup(line: PaymentRequest["budgetPlanningLine"] | undefined | null): RequestPlanningLineLookupItem | null {
+  if (!line) return null;
+  return {
+    id: line.id,
+    line_code: line.line_code,
+    resource_description: line.resource_description ?? "Línea POA seleccionada",
+    planning_type: line.planning_type ?? null,
+    type_resource: line.type_resource ?? null,
+    unit_price: line.unit_price ?? null,
+    quantity: line.quantity ?? null,
+    total_cost: Number(line.total_cost ?? 0),
+    status: "APPROVED",
+    fiscal_year: line.fiscalYear ?? null,
+    org_unit: line.organizationalUnit ?? null,
+    category: line.budgetCategory ?? null,
+    territory: line.territory ?? null,
+    program: line.program ?? null,
+    action: line.operativeAction ?? null,
+    monthly_summary: [],
+  };
+}
+
+function getInitialAllocationValues(initialRequest?: PaymentRequest): RequestFormValues["allocations"] {
+  const allocations = initialRequest?.allocations ?? [];
+  if (allocations.length > 0) {
+    return allocations.map((allocation, index) => ({
+      client_key: allocation.id ?? `allocation-${index + 1}`,
+      budget_planning_line_id: allocation.budget_planning_line_id,
+      amount: Number(allocation.amount ?? 0),
+    }));
+  }
+  return [{
+    client_key: DEFAULT_ALLOCATION_CLIENT_KEY,
+    budget_planning_line_id: initialRequest?.budget_planning_line_id ?? "",
+    amount: Number(initialRequest?.requested_amount ?? 0),
+  }];
+}
+
+function getInitialSelectedLines(initialRequest?: PaymentRequest): RequestPlanningLineLookupItem[] {
+  const allocations = initialRequest?.allocations ?? [];
+  if (allocations.length > 0) {
+    return allocations.reduce<RequestPlanningLineLookupItem[]>((lines, allocation) => {
+      const line = allocation.planning_line ?? allocation.budgetPlanningLine ?? null;
+      if (!line) return lines;
+      lines.push({
+        id: line.id,
+        line_code: line.line_code,
+        resource_description: line.resource_description,
+        planning_type: line.planning_type ?? null,
+        type_resource: line.type_resource ?? null,
+        unit_price: line.unit_price ?? null,
+        quantity: line.quantity ?? null,
+        total_cost: Number(line.total_cost ?? 0),
+        status: line.status,
+        fiscal_year: line.fiscal_year,
+        org_unit: line.org_unit,
+        category: line.category,
+        territory: line.territory,
+        program: line.program,
+        action: line.action,
+        monthly_summary: line.monthly_summary ?? [],
+        funding_sources: line.funding_sources,
+        financiers: allocation.financiers ?? allocation.funding_sources ?? line.financiers ?? line.funding_sources,
+      });
+      return lines;
+    }, []);
+  }
+  const legacyLine = mapRequestPlanningLineToLookup(initialRequest?.budgetPlanningLine);
+  return legacyLine ? [legacyLine] : [];
+}
+
+export const REQUEST_BUDGET_CEILING_BLOCK_MESSAGE =
+  "El monto supera el techo presupuestal disponible de la unidad orgánica. Ajusta el monto o selecciona otra línea POA antes de continuar.";
+
 interface RequestFormProps {
   initialRequest?: PaymentRequest;
   mode?: "create" | "edit";
@@ -319,28 +457,7 @@ export function RequestForm({
   const [documentStepErrors, setDocumentStepErrors] = useState<string[]>([]);
   const [isNavigatingStep, setIsNavigatingStep] = useState(false);
   const [pendingAction, setPendingAction] = useState<"save" | "submit" | null>(null);
-  const [selectedLine, setSelectedLine] = useState<RequestPlanningLineLookupItem | null>(
-    initialRequest?.budgetPlanningLine
-      ? {
-          id: initialRequest.budgetPlanningLine.id,
-          line_code: initialRequest.budgetPlanningLine.line_code,
-          resource_description: initialRequest.budgetPlanningLine.resource_description ?? "Línea POA seleccionada",
-          planning_type: initialRequest.budgetPlanningLine.planning_type ?? null,
-          type_resource: initialRequest.budgetPlanningLine.type_resource ?? null,
-          unit_price: initialRequest.budgetPlanningLine.unit_price ?? null,
-          quantity: initialRequest.budgetPlanningLine.quantity ?? null,
-          total_cost: Number(initialRequest.budgetPlanningLine.total_cost ?? 0),
-          status: "APPROVED",
-          fiscal_year: initialRequest.budgetPlanningLine.fiscalYear ?? null,
-          org_unit: initialRequest.budgetPlanningLine.organizationalUnit ?? null,
-          category: initialRequest.budgetPlanningLine.budgetCategory ?? null,
-          territory: initialRequest.budgetPlanningLine.territory ?? null,
-          program: initialRequest.budgetPlanningLine.program ?? null,
-          action: initialRequest.budgetPlanningLine.operativeAction ?? null,
-          monthly_summary: [],
-        }
-      : null,
-  );
+  const [selectedLines, setSelectedLines] = useState<Array<RequestPlanningLineLookupItem | null>>(() => getInitialSelectedLines(initialRequest));
 
   const form = useForm<RequestFormValues>({
     resolver: zodResolver(requestFormSchema),
@@ -348,6 +465,7 @@ export function RequestForm({
       request_type: initialRequest?.request_type ?? REQUEST_TYPE.ADVANCE,
       budget_planning_line_id: initialRequest?.budget_planning_line_id ?? "",
       requested_amount: Number(initialRequest?.requested_amount ?? 0),
+      allocations: getInitialAllocationValues(initialRequest),
       concept: initialRequest?.concept ?? "",
       scheduled_rendition_at: initialRequest?.request_type === REQUEST_TYPE.ADVANCE ? initialRequest.scheduled_rendition_at ?? "" : "",
       beneficiary_name: initialRequest?.beneficiary_name ?? "",
@@ -364,15 +482,26 @@ export function RequestForm({
   });
 
   const requestType = form.watch("request_type");
+  const conceptLength = form.watch("concept")?.length ?? 0;
   const effectiveRequestType = currentRequest?.request_type ?? initialRequest?.request_type ?? requestType;
   const isAdvanceSettlement = effectiveRequestType === REQUEST_TYPE.ADVANCE_SETTLEMENT;
-  const planningLineId = form.watch("budget_planning_line_id");
-  const requestedAmount = form.watch("requested_amount");
+  const allocations = form.watch("allocations");
+  const totalRequestedAmount = allocations.reduce((total, allocation) => total + Number(allocation.amount || 0), 0);
   const scheduledRenditionMinDate = getScheduledRenditionMinDate();
+  const allocationFields = useFieldArray({ control: form.control, name: "allocations" });
+  const selectedFiscalYears = selectedLines.map(getLineFiscalYear).filter((year): year is number => typeof year === "number");
+  const hasMixedFiscalYears = new Set(selectedFiscalYears).size > 1;
+  const selectedAllocationLineIds = allocations.map((allocation) => allocation.budget_planning_line_id).filter((lineId) => lineId.trim().length > 0);
+  const duplicateAllocationLineIds = selectedAllocationLineIds.filter((lineId, index) => selectedAllocationLineIds.indexOf(lineId) !== index);
+  const hasDuplicateAllocations = duplicateAllocationLineIds.length > 0;
 
   const preview = useBudgetPreview({
-    planningLineId: isAdvanceSettlement ? "" : planningLineId,
-    amount: isAdvanceSettlement ? 0 : Number(requestedAmount),
+    requestId: draftId ?? initialRequest?.id,
+    allocations: isAdvanceSettlement ? [] : allocations.map((allocation) => ({
+      client_key: allocation.client_key,
+      budget_planning_line_id: allocation.budget_planning_line_id,
+      amount: Number(allocation.amount || 0),
+    })),
   });
   const { createRequest, isLoading: creating } = useCreateRequest();
   const { updateRequest, isLoading: updating } = useUpdateRequest();
@@ -388,13 +517,15 @@ export function RequestForm({
   const currentRequestDataErrors = currentRequestDataIssues.length > 0 ? getDataValidationMessages(currentRequestDataIssues) : [];
   const hasCompleteRequestData = currentRequestDataErrors.length === 0;
   const dataStepBlockingMessages = submitErrors.length > 0 ? submitErrors : currentRequestDataErrors;
+  const hasBudgetCeilingSubmitError = dataStepBlockingMessages.includes(REQUEST_BUDGET_CEILING_BLOCK_MESSAGE);
   const stepperItems = getRequestEditStepperItems(mode === "create" ? REQUEST_EDIT_STEP.DATA : activeStep, {
     isDataComplete: hasCompleteRequestData,
     isDocumentsComplete: checklist.isComplete,
     requestType: effectiveRequestType,
   });
   const reviewNavigationIssues = currentRequest ? getRequestReviewNavigationIssues(currentRequest, checklist) : null;
-  const canSubmitReview = hasCompleteRequestData && areDocumentsReady && checklist.isComplete && (isAdvanceSettlement || !isBudgetPreviewBlocking(preview.data));
+  const isBudgetCeilingBlocked = !isAdvanceSettlement && isBudgetPreviewBlocking(preview.data);
+  const canSubmitReview = hasCompleteRequestData && areDocumentsReady && checklist.isComplete && !isBudgetCeilingBlocked;
 
   useEffect(() => {
     setIsNavigatingStep(false);
@@ -537,6 +668,29 @@ export function RequestForm({
       return;
     }
 
+    if (hasDuplicateAllocations) {
+      const message = "Esta línea POA ya fue agregada; edite el monto del bloque existente.";
+      setSubmitErrors([message]);
+      toast.error(message);
+      setPendingAction(null);
+      return;
+    }
+
+    if (hasMixedFiscalYears) {
+      const message = "Todas las líneas POA deben pertenecer al mismo año fiscal.";
+      setSubmitErrors([message]);
+      toast.error(message);
+      setPendingAction(null);
+      return;
+    }
+
+    if (isBudgetCeilingBlocked) {
+      setSubmitErrors([REQUEST_BUDGET_CEILING_BLOCK_MESSAGE]);
+      toast.error(REQUEST_BUDGET_CEILING_BLOCK_MESSAGE);
+      setPendingAction(null);
+      return;
+    }
+
     try {
       const saved = await saveDraft(values);
       toast.success(getRequestSaveSuccessToast(saved));
@@ -567,8 +721,26 @@ export function RequestForm({
       return;
     }
 
-    if (!isAdvanceSettlement && isBudgetPreviewBlocking(preview.data)) {
-      toast.error("El techo de la unidad orgánica bloquea el envío. Puedes guardar el borrador para corregirlo luego.");
+    if (hasDuplicateAllocations) {
+      const message = "Esta línea POA ya fue agregada; edite el monto del bloque existente.";
+      setSubmitErrors([message]);
+      toast.error(message);
+      navigateToStep(REQUEST_EDIT_STEP.DATA);
+      setPendingAction(null);
+      return;
+    }
+
+    if (hasMixedFiscalYears) {
+      const message = "Todas las líneas POA deben pertenecer al mismo año fiscal.";
+      setSubmitErrors([message]);
+      toast.error(message);
+      navigateToStep(REQUEST_EDIT_STEP.DATA);
+      setPendingAction(null);
+      return;
+    }
+
+    if (isBudgetCeilingBlocked) {
+      toast.error(REQUEST_BUDGET_CEILING_BLOCK_MESSAGE);
       setPendingAction(null);
       return;
     }
@@ -650,6 +822,116 @@ export function RequestForm({
     return <SettlementContextCard context={settlementContext} showDocuments={activeStep !== REQUEST_EDIT_STEP.REVIEW} />;
   }
 
+  function setAllocationLine(index: number, line: RequestPlanningLineLookupItem | null): void {
+    setSelectedLines((current) => {
+      const next = [...current];
+      next[index] = line;
+      return next;
+    });
+  }
+
+  function addAllocationBlock(): void {
+    allocationFields.append({ client_key: makeAllocationClientKey(), budget_planning_line_id: "", amount: 0 });
+    setSelectedLines((current) => [...current, null]);
+  }
+
+  function removeAllocationBlock(index: number): void {
+    if (allocationFields.fields.length <= 1) return;
+    allocationFields.remove(index);
+    setSelectedLines((current) => current.filter((_, currentIndex) => currentIndex !== index));
+  }
+
+  function renderFinanciers(line: RequestPlanningLineLookupItem | null): ReactNode {
+    const financiers = getLineFinanciers(line);
+    if (!line) return <p className="text-xs text-muted-foreground">Selecciona una línea POA para ver financiador(es).</p>;
+    if (financiers.length === 0) return <p className="text-xs text-muted-foreground">Sin financiadores informados para esta línea.</p>;
+
+    return (
+      <div className="space-y-1 text-xs text-muted-foreground">
+        {financiers.map((financier) => (
+          <div key={financier.id} className="flex flex-col rounded-md bg-background/70 px-2 py-1 sm:flex-row sm:items-center sm:justify-between">
+            <span>{formatOptionalCodeName(financier.code, financier.name)}</span>
+            <span>{financier.allocated_amount === null || financier.allocated_amount === undefined ? "" : formatRequestCurrency(Number(financier.allocated_amount))}</span>
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  function renderAllocationBlocks(): ReactNode {
+    return (
+      <section className="space-y-4">
+        <div className="flex flex-col gap-3 border-b pb-2 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <h2 className="text-base font-semibold">2. Líneas POA y montos</h2>
+            <p className="text-sm text-muted-foreground">Agrega una o más líneas POA. El total se calcula automáticamente.</p>
+          </div>
+          <Button type="button" variant="outline" onClick={addAllocationBlock} disabled={isBusy} data-testid="request-add-allocation-button">Agregar línea POA</Button>
+        </div>
+
+        {hasMixedFiscalYears && (
+          <Alert variant="destructive">
+            <AlertDescription>Todas las líneas POA deben pertenecer al mismo año fiscal.</AlertDescription>
+          </Alert>
+        )}
+        {hasDuplicateAllocations && (
+          <Alert variant="destructive">
+            <AlertDescription>Esta línea POA ya fue agregada; edite el monto del bloque existente.</AlertDescription>
+          </Alert>
+        )}
+
+        <div className="space-y-4">
+          {allocationFields.fields.map((field, index) => (
+            <Card key={field.id} className="border-dashed" data-testid="request-allocation-block">
+              <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <CardTitle className="text-base">Bloque {index + 1}</CardTitle>
+                {allocationFields.fields.length > 1 && <Button type="button" variant="ghost" size="sm" onClick={() => removeAllocationBlock(index)} disabled={isBusy}>Quitar bloque</Button>}
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <PlanningLineSelector
+                  control={form.control}
+                  name={`allocations.${index}.budget_planning_line_id`}
+                  selectedLine={selectedLines[index] ?? null}
+                  onSelectedLineChange={(line) => setAllocationLine(index, line)}
+                />
+                <FormField control={form.control} name={`allocations.${index}.amount`} render={({ field: amountField }) => (
+                  <FormItem>
+                    <FormLabel>Monto de la línea *</FormLabel>
+                    <FormControl>
+                      <Input
+                        type="number"
+                        min={0}
+                        step="0.01"
+                        data-testid={index === 0 ? "request-amount-input" : "request-allocation-amount-input"}
+                        {...amountField}
+                        value={amountField.value ?? ""}
+                        onChange={(event) => amountField.onChange(event.target.value)}
+                        onBlur={(event) => {
+                          amountField.onBlur();
+                          amountField.onChange(normalizeRequestAmountInput(event.target.value));
+                        }}
+                      />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )} />
+                <div className="rounded-md border bg-muted/40 p-3">
+                  <p className="text-xs font-medium text-muted-foreground">Financiador(es)</p>
+                  {renderFinanciers(selectedLines[index] ?? null)}
+                </div>
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+
+        <div className="rounded-md border bg-muted/40 p-4 text-sm">
+          <p className="text-muted-foreground">Total solicitado</p>
+          <p className="text-lg font-semibold" data-testid="request-total-amount">{formatRequestCurrency(totalRequestedAmount)}</p>
+        </div>
+      </section>
+    );
+  }
+
   function renderDataStep(): ReactNode {
     if (isAdvanceSettlement) {
       return (
@@ -687,7 +969,7 @@ export function RequestForm({
             {dataStepBlockingMessages.length > 0 && activeStep === REQUEST_EDIT_STEP.DATA && (
               <Alert variant="destructive">
                 <AlertDescription>
-                  <p className="font-medium">Completa los datos obligatorios para continuar</p>
+                  <p className="font-medium">{hasBudgetCeilingSubmitError ? "No se puede continuar a documentos" : "Completa los datos obligatorios para continuar"}</p>
                   <ul className="mt-2 list-disc space-y-1 pl-5">
                     {dataStepBlockingMessages.map((message) => <li key={message}>{message}</li>)}
                   </ul>
@@ -699,20 +981,12 @@ export function RequestForm({
               <div className="max-w-xl">
                 <RequestTypeSelector control={form.control} />
               </div>
-              <PlanningLineSelector control={form.control} selectedLine={selectedLine} onSelectedLineChange={setSelectedLine} />
             </section>
 
+            {renderAllocationBlocks()}
+
             <section className="space-y-4">
-              <h2 className="border-b pb-2 text-base font-semibold">2. Monto y justificación</h2>
-              <div className="grid gap-4 md:grid-cols-2">
-                <FormField control={form.control} name="requested_amount" render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Monto *</FormLabel>
-                    <FormControl><Input type="number" min={0} step="0.01" data-testid="request-amount-input" {...field} onChange={(event) => field.onChange(Number(event.target.value))} /></FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )} />
-              </div>
+              <h2 className="border-b pb-2 text-base font-semibold">3. Justificación</h2>
               {requestType === REQUEST_TYPE.ADVANCE && (
                 <FormField control={form.control} name="scheduled_rendition_at" render={({ field }) => (
                   <FormItem>
@@ -725,8 +999,11 @@ export function RequestForm({
               )}
               <FormField control={form.control} name="concept" render={({ field }) => (
                 <FormItem>
-                  <FormLabel>Concepto / justificación *</FormLabel>
-                  <FormControl><Textarea {...field} rows={4} placeholder="Describe el motivo de la solicitud" data-testid="request-concept-input" /></FormControl>
+                  <div className="flex items-center justify-between gap-3">
+                    <FormLabel>Concepto / justificación *</FormLabel>
+                    <span className="text-xs text-muted-foreground" data-testid="request-concept-counter">{conceptLength}/120</span>
+                  </div>
+                  <FormControl><Textarea {...field} rows={4} maxLength={120} placeholder="Describe el motivo de la solicitud" data-testid="request-concept-input" /></FormControl>
                   <FormMessage />
                 </FormItem>
               )} />
@@ -808,6 +1085,37 @@ export function RequestForm({
     );
   }
 
+  function renderAllocationSummary(request: PaymentRequest): ReactNode {
+    const allocationsToRender = request.allocations ?? [];
+    if (allocationsToRender.length === 0) return null;
+
+    return (
+      <section className="space-y-3">
+        <h3 className="border-b pb-2 text-sm font-semibold">Distribución POA</h3>
+        <div className="space-y-2">
+          {allocationsToRender.map((allocation, index) => {
+            const line = allocation.planning_line ?? allocation.budgetPlanningLine;
+            const financiers = allocation.financiers ?? allocation.funding_sources ?? line?.financiers ?? line?.funding_sources ?? [];
+            return (
+              <div key={allocation.id ?? `${allocation.budget_planning_line_id}-${index}`} className="rounded-md border p-3 text-sm">
+                <div className="flex flex-col gap-1 sm:flex-row sm:items-start sm:justify-between">
+                  <div>
+                    <p className="font-medium">Bloque {index + 1}: {getPlanningLineDisplay(line)}</p>
+                    <p className="text-xs text-muted-foreground">Unidad: {formatOptionalCodeName(allocation.org_unit?.code ?? line?.org_unit?.code, allocation.org_unit?.name ?? line?.org_unit?.name)} · Año fiscal: {allocation.fiscal_year}</p>
+                  </div>
+                  <p className="font-semibold">{formatRequestCurrency(Number(allocation.amount), request.currency)}</p>
+                </div>
+                <p className="mt-2 text-xs text-muted-foreground">
+                  Financiador(es): {financiers.length > 0 ? financiers.map((financier) => formatOptionalCodeName(financier.code, financier.name)).join(", ") : "Sin financiadores informados"}
+                </p>
+              </div>
+            );
+          })}
+        </div>
+      </section>
+    );
+  }
+
   function renderReviewSummary(): ReactNode {
     if (!currentRequest) return null;
 
@@ -868,6 +1176,8 @@ export function RequestForm({
               {renderSummaryItem("Territorio", planningLine?.territory?.name ?? "—")}
             </div>
           </section>
+
+          {renderAllocationSummary(currentRequest)}
 
           <section className="space-y-3">
             <h3 className="border-b pb-2 text-sm font-semibold">Beneficiario y pago</h3>

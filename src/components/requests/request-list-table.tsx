@@ -49,6 +49,12 @@ export function RequestListTable({ requests, isLoading, roleCode, showResponsibl
             ? getRequiredDocumentChecklist(request.request_type, request.documents ?? [])
             : null;
 
+          const allocationCount = request.allocation_count ?? request.allocations?.length ?? 0;
+          const firstAllocationLine = request.allocations?.[0]?.planning_line ?? request.allocations?.[0]?.budgetPlanningLine;
+          const poaSummary = allocationCount > 1
+            ? `${allocationCount} líneas POA · ${getPlanningLineDisplay(firstAllocationLine)}`
+            : getPlanningLineDisplay(firstAllocationLine ?? request.budgetPlanningLine);
+
           return (
             <TableRow key={request.id} data-testid="request-list-row">
               <TableCell className="font-medium whitespace-nowrap">{request.request_code ?? request.sequential_number ?? "—"}</TableCell>
@@ -64,7 +70,7 @@ export function RequestListTable({ requests, isLoading, roleCode, showResponsibl
                   )}
                 </div>
               </TableCell>
-              <TableCell className="max-w-xs truncate">{getPlanningLineDisplay(request.budgetPlanningLine)}</TableCell>
+              <TableCell className="max-w-xs truncate">{poaSummary}</TableCell>
               <TableCell className="whitespace-nowrap">{getRequestMonthLabel(request.budget_month)}</TableCell>
               <TableCell className="text-right font-medium">{formatRequestCurrency(Number(request.requested_amount), request.currency)}</TableCell>
               <TableCell className="whitespace-nowrap">

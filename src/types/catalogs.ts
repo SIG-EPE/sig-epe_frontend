@@ -1,3 +1,5 @@
+import type { PlanningType } from "@/lib/planning-types";
+
 // -------------------------------------------------------
 // Catalog types — SIG-EPE
 // Tipos TypeScript para todos los catálogos del sistema
@@ -6,8 +8,6 @@
 // -------------------------------------------------------
 // BudgetProgram — Programas/Proyectos/Gestiones
 // -------------------------------------------------------
-
-export type PlanningType = "PROGRAMA" | "PROYECTO" | "GESTIÓN";
 
 export interface BudgetProgram {
   id: string;
@@ -46,7 +46,7 @@ export interface FundingSourceType {
   id: string;
   name: string;
   description?: string | null;
-  isActive: boolean;
+  is_active: boolean;
 }
 
 // -------------------------------------------------------

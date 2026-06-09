@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, type ChangeEvent } from "react";
+import { useEffect, useRef, useState, type ChangeEvent, type ReactNode } from "react";
 import { flushSync } from "react-dom";
 import { CheckCircle2, ExternalLink, FileText, Info, Trash2, Upload, XCircle } from "lucide-react";
 import { toast } from "sonner";
@@ -27,6 +27,7 @@ import {
   getRequestDocumentStorageProviderLabel,
   getRequestDocumentUploadStatusLabel,
   getRequiredDocumentChecklist,
+  formatRequestCurrency,
   REQUEST_DOCUMENT_CATEGORY_OPTIONS,
   REQUEST_DOCUMENT_UPLOAD_SUCCESS_MESSAGE,
   validateRequestDocumentFile,
@@ -35,10 +36,13 @@ import { useAuthStore } from "@/stores/auth-store";
 import {
   REQUEST_CURRENCY,
   REQUEST_DOCUMENT_CATEGORY,
+  REQUEST_DOCUMENT_SCOPE_TYPE,
   REQUEST_RECEIPT_DUPLICATE_STATUS,
   REQUEST_RECEIPT_OCR_STATUS,
   REQUEST_TYPE,
   type PaymentRequest,
+  type RequestAllocation,
+  type RequestAllocationRequiredDocumentItem,
   type RequestDocument,
   type RequestDocumentCategory,
   type RequiredDocumentChecklistItem,
@@ -77,7 +81,19 @@ const DOCUMENT_UPLOAD_ACTION = {
   GENERIC: "generic",
 } as const;
 
-type DocumentUploadAction = RequestDocumentCategory | (typeof DOCUMENT_UPLOAD_ACTION)[keyof typeof DOCUMENT_UPLOAD_ACTION];
+type DocumentUploadAction = string;
+
+interface UploadScopeOptions {
+  scope_type?: typeof REQUEST_DOCUMENT_SCOPE_TYPE.ALLOCATION;
+  request_allocation_id?: string;
+}
+
+const EMPTY_CHECKLIST = {
+  items: [],
+  conditionalNotes: [],
+  missingMessages: [],
+  isComplete: true,
+};
 
 function ChecklistAttachButton({ item, disabled, isUploading, onAttach }: ChecklistAttachButtonProps) {
   const inputRef = useRef<HTMLInputElement>(null);
@@ -125,6 +141,92 @@ function getOptionalDocumentCategoryOptions(checklist: RequiredDocumentChecklist
 
 function getDefaultOptionalDocumentCategory(options: typeof REQUEST_DOCUMENT_CATEGORY_OPTIONS): RequestDocumentCategory | "" {
   return options.find((option) => option.value === REQUEST_DOCUMENT_CATEGORY.REQUEST_SUPPORT)?.value ?? options[0]?.value ?? "";
+}
+
+function isAllocationScopedDocument(document: RequestDocument): boolean {
+  return document.scope_type === REQUEST_DOCUMENT_SCOPE_TYPE.ALLOCATION || Boolean(document.request_allocation_id);
+}
+
+function getRequestLevelDocuments(documents: RequestDocument[]): RequestDocument[] {
+  return documents.filter((document) => !isAllocationScopedDocument(document));
+}
+
+function getAllocationDocuments(allocation: RequestAllocation, documents: RequestDocument[]): RequestDocument[] {
+  const directDocuments = allocation.documents ?? [];
+  if (!allocation.id) return directDocuments;
+
+  const scopedDocuments = documents.filter((document) => document.request_allocation_id === allocation.id);
+  const byId = new Map<string, RequestDocument>();
+  [...directDocuments, ...scopedDocuments].forEach((document) => byId.set(document.id, document));
+
+  return Array.from(byId.values());
+}
+
+function getPlanningLineDisplay(allocation: RequestAllocation): string {
+  const line = allocation.planning_line ?? allocation.budgetPlanningLine;
+  const code = line?.line_code?.trim();
+  const description = line?.resource_description?.trim();
+
+  return [code, description].filter(Boolean).join(" · ") || "Línea POA sin detalle";
+}
+
+function getAllocationSummary(allocation: RequestAllocation): string {
+  const line = allocation.planning_line ?? allocation.budgetPlanningLine;
+  const orgUnit = allocation.org_unit ?? line?.org_unit ?? null;
+  const fiscalYear = allocation.fiscal_year ?? line?.fiscal_year?.year ?? null;
+  const parts = [
+    orgUnit?.name ? `Unidad: ${orgUnit.name}` : null,
+    fiscalYear ? `Año fiscal: ${fiscalYear}` : null,
+    `Monto: ${formatRequestCurrency(Number(allocation.amount ?? 0), allocation.currency || REQUEST_CURRENCY.PEN)}`,
+  ].filter((part): part is string => Boolean(part));
+
+  return parts.join(" · ");
+}
+
+function normalizeBackendChecklistItem(item: RequestAllocationRequiredDocumentItem, index: number): RequiredDocumentChecklistItem | null {
+  const category = (item.category ?? item.document_type) as RequestDocumentCategory | undefined;
+  if (!category || !Object.values(REQUEST_DOCUMENT_CATEGORY).includes(category)) return null;
+
+  return {
+    key: item.key ?? `${category}-${index}`,
+    category,
+    label: item.label ?? getRequestDocumentCategoryLabel(category),
+    description: item.description ?? (category === REQUEST_DOCUMENT_CATEGORY.PXQ ? "Adjunta la plantilla PxQ correspondiente a esta línea POA." : "Adjunta el documento requerido para esta línea POA."),
+    required: item.required ?? true,
+    satisfied: item.satisfied ?? false,
+    acceptedFormatsLabel: item.acceptedFormatsLabel ?? item.accepted_formats_label ?? getRequestDocumentAcceptedFormatsLabel(category),
+    missingMessage: item.missingMessage ?? item.missing_message ?? `Falta adjuntar ${getRequestDocumentCategoryLabel(category)} para esta línea POA.`,
+  };
+}
+
+function mergeBackendChecklistWithLocalDocuments(items: RequiredDocumentChecklistItem[], allocationDocuments: RequestDocument[]): RequiredDocumentChecklistItem[] {
+  const localChecklist = getRequiredDocumentChecklist(REQUEST_TYPE.ADVANCE, allocationDocuments);
+
+  return items.map((item) => {
+    const localItem = localChecklist.items.find((candidate) => candidate.category === item.category);
+
+    return {
+      ...item,
+      satisfied: item.satisfied || Boolean(localItem?.satisfied),
+    };
+  });
+}
+
+function getAllocationChecklist(allocation: RequestAllocation, allocationDocuments: RequestDocument[]) {
+  const backendItems = allocation.document_checklist?.required_documents ?? allocation.document_checklist?.items ?? [];
+  if (backendItems.length > 0) {
+    const normalizedItems = backendItems
+      .map(normalizeBackendChecklistItem)
+      .filter((item): item is RequiredDocumentChecklistItem => item !== null);
+    const items = mergeBackendChecklistWithLocalDocuments(normalizedItems, allocationDocuments);
+    const missingMessages = items.filter((item) => item.required && !item.satisfied).map((item) => item.missingMessage);
+    const backendIsComplete = allocation.document_checklist?.complete ?? allocation.document_checklist?.is_complete ?? allocation.document_checklist?.isComplete;
+    const isComplete = missingMessages.length === 0 || Boolean(backendIsComplete);
+
+    return { items, conditionalNotes: [], missingMessages, isComplete };
+  }
+
+  return getRequiredDocumentChecklist(REQUEST_TYPE.ADVANCE, allocationDocuments);
 }
 
 function getReceiptStatusLabel(receiptReview?: RequestReceiptReview): string {
@@ -227,8 +329,13 @@ export function RequestDocumentsCard({
   const [receiptForm, setReceiptForm] = useState<ReceiptReviewFormState | null>(null);
   const [activeUploadAction, setActiveUploadAction] = useState<DocumentUploadAction | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const checklist = getRequiredDocumentChecklist(request.request_type, documents);
-  const optionalCategoryOptions = getOptionalDocumentCategoryOptions(checklist.items);
+  const allocationGroups = request.allocations ?? [];
+  const hasAllocationGroups = allocationGroups.length > 0;
+  const requestLevelDocuments = getRequestLevelDocuments(documents);
+  const checklist = hasAllocationGroups && request.request_type === REQUEST_TYPE.ADVANCE
+    ? EMPTY_CHECKLIST
+    : getRequiredDocumentChecklist(request.request_type, requestLevelDocuments);
+  const optionalCategoryOptions = getOptionalDocumentCategoryOptions(checklist.items).filter((option) => !hasAllocationGroups || option.value !== REQUEST_DOCUMENT_CATEGORY.PXQ);
   const hasOptionalCategoryOptions = optionalCategoryOptions.length > 0;
   const acceptedFormatsLabel = category ? getRequestDocumentAcceptedFormatsLabel(category) : "selecciona una categoría";
   const uploadActionsDisabled = uploading || activeUploadAction !== null;
@@ -252,7 +359,7 @@ export function RequestDocumentsCard({
     setValidationError(validateRequestDocumentFile(file, nextCategory));
   }
 
-  async function uploadSelectedFile(selectedFile: File, selectedCategory: RequestDocumentCategory, action: DocumentUploadAction): Promise<void> {
+  async function uploadSelectedFile(selectedFile: File, selectedCategory: RequestDocumentCategory, action: DocumentUploadAction, scope?: UploadScopeOptions): Promise<void> {
     const fileError = validateRequestDocumentFile(selectedFile, selectedCategory);
     if (fileError) {
       setValidationError(fileError);
@@ -262,7 +369,7 @@ export function RequestDocumentsCard({
     try {
       setActiveUploadAction(action);
       setOperationError(null);
-      await uploadDocument(request.id, { file: selectedFile, document_category: selectedCategory });
+      await uploadDocument(request.id, { file: selectedFile, document_category: selectedCategory, ...scope });
       toast.success(REQUEST_DOCUMENT_UPLOAD_SUCCESS_MESSAGE);
       setSuccessMessage(REQUEST_DOCUMENT_UPLOAD_SUCCESS_MESSAGE);
       setFile(null);
@@ -299,6 +406,13 @@ export function RequestDocumentsCard({
       setSuccessMessage(null);
     });
     void uploadSelectedFile(nextFile, nextCategory, nextCategory);
+  }
+
+  function handleAllocationChecklistAttach(allocationId: string, nextCategory: RequestDocumentCategory, nextFile: File): void {
+    void uploadSelectedFile(nextFile, nextCategory, `${nextCategory}:${allocationId}` as DocumentUploadAction, {
+      scope_type: REQUEST_DOCUMENT_SCOPE_TYPE.ALLOCATION,
+      request_allocation_id: allocationId,
+    });
   }
 
   async function handleDelete(documentId: string): Promise<void> {
@@ -359,6 +473,149 @@ export function RequestDocumentsCard({
     }
   }
 
+  function renderDocumentRows(rows: RequestDocument[]): ReactNode {
+    if (rows.length === 0) return <p className="text-sm text-muted-foreground">Sin documentos adjuntos.</p>;
+
+    return (
+      <div className="space-y-3">
+        {rows.map((document) => {
+          const documentWebUrl = getRequestDocumentWebUrl(document);
+          const receiptReview = receipts.find((item) => item.receipt?.document_id === document.id);
+          const shouldShowReceiptReview = document.document_category === REQUEST_DOCUMENT_CATEGORY.RECEIPT && (receiptsLoading || receiptReview);
+
+          return (
+            <div key={document.id} className="flex flex-col gap-3 rounded-md border p-3 sm:flex-row sm:items-center sm:justify-between">
+              <div className="flex min-w-0 gap-3">
+                <FileText className="mt-0.5 size-5 shrink-0 text-muted-foreground" />
+                <div className="min-w-0 space-y-1">
+                  <p className="truncate text-sm font-medium">{getRequestDocumentDisplayName(document)}</p>
+                  <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
+                    <Badge variant="secondary">{getRequestDocumentCategoryLabel(document.document_category)}</Badge>
+                    <span>{getRequestDocumentMimeLabel(document.mime_type)}</span>
+                    <span>{formatRequestDocumentSize(document.size_bytes)}</span>
+                    <span>Subido: {formatRequestDateTime(document.created_at)}</span>
+                    <span>Proveedor: {getRequestDocumentStorageProviderLabel(document.storage_provider)}</span>
+                    <span>Estado: {getRequestDocumentUploadStatusLabel(document.upload_status)}</span>
+                  </div>
+                  {shouldShowReceiptReview && (
+                    <div className="mt-2 rounded-md bg-muted p-3 text-xs">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Badge variant={getReceiptStatusVariant(receiptReview)}>{getReceiptStatusLabel(receiptReview)}</Badge>
+                        <span className="text-muted-foreground">Lectura automática del comprobante</span>
+                      </div>
+                      {receiptReview ? (
+                        <div className="mt-2 space-y-1 text-muted-foreground">
+                          <p>{getReceiptValueSummary(receiptReview)}</p>
+                          {receiptReview.receipt.issuer_document_number && <p>RUC: {receiptReview.receipt.issuer_document_number}</p>}
+                          {receiptReview.receipt.issue_date && <p>Fecha: {receiptReview.receipt.issue_date}</p>}
+                          {receiptReview.latest_extraction?.error_message && <p>Necesita revisión manual para completar la información.</p>}
+                          {receiptReview.duplicate_candidates.length > 0 && <p>Ya existe un comprobante con la misma serie y número en otra solicitud activa.</p>}
+                        </div>
+                      ) : (
+                        <p className="mt-2 text-muted-foreground">Estamos leyendo el comprobante para ayudarte a validar sus datos.</p>
+                      )}
+                    </div>
+                  )}
+                </div>
+              </div>
+              <div className="flex shrink-0 flex-col gap-2 sm:items-end">
+                {documentWebUrl ? (
+                  <Button asChild variant="outline" size="sm">
+                    <a href={documentWebUrl} target="_blank" rel="noopener noreferrer">
+                      <ExternalLink className="size-4" />
+                      Ver documento
+                    </a>
+                  </Button>
+                ) : (
+                  <p className="text-xs text-muted-foreground">Enlace no disponible</p>
+                )}
+                {receiptReview && canManageActions && (
+                  <Button type="button" variant="outline" size="sm" onClick={() => openReceiptReview(receiptReview)}>
+                    Revisar datos
+                  </Button>
+                )}
+                {receiptReview && canManageActions && canConfirmReceiptReview(receiptReview) && (
+                  <Button type="button" size="sm" onClick={() => void handleConfirmReceiptReview(receiptReview)} disabled={confirmingReceipt}>
+                    {confirmingReceipt ? "Confirmando..." : "Confirmar datos"}
+                  </Button>
+                )}
+                {canManageActions && (
+                  <Button type="button" variant="outline" size="sm" onClick={() => setDocumentToDelete(document.id)} disabled={deleting}>
+                    <Trash2 className="size-4" />
+                    {deleting && documentToDelete === document.id ? "Eliminando..." : "Eliminar"}
+                  </Button>
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    );
+  }
+
+  function renderAllocationGroups(): ReactNode {
+    if (!hasAllocationGroups) return null;
+
+    return (
+      <section className="space-y-3" data-testid="allocation-documents-groups">
+        <div className="space-y-1">
+          <h3 className="text-sm font-semibold">Documentos por línea POA</h3>
+          <p className="text-xs text-muted-foreground">Cada línea POA debe completar su propio Excel PxQ. Un archivo de una línea no completa otra línea.</p>
+        </div>
+        {allocationGroups.map((allocation, index) => {
+          const allocationDocuments = getAllocationDocuments(allocation, documents);
+          const allocationChecklist = getAllocationChecklist(allocation, allocationDocuments);
+          const allocationId = allocation.id;
+
+          return (
+            <div key={allocationId ?? `${allocation.budget_planning_line_id}-${index}`} className="space-y-3 rounded-md border p-4" data-testid="allocation-documents-group">
+              <div className="flex flex-col gap-1 sm:flex-row sm:items-start sm:justify-between">
+                <div>
+                  <h4 className="text-sm font-semibold">Bloque {index + 1}: {getPlanningLineDisplay(allocation)}</h4>
+                  <p className="text-xs text-muted-foreground">{getAllocationSummary(allocation)}</p>
+                </div>
+                <Badge variant={allocationChecklist.isComplete ? "secondary" : "destructive"}>{allocationChecklist.isComplete ? "Completo" : "Pendiente"}</Badge>
+              </div>
+              {!allocationId && canManageActions && (
+                <Alert>
+                  <Info className="h-4 w-4" />
+                  <AlertDescription>Guarda el borrador y continúa para adjuntar el Excel PxQ de esta línea POA.</AlertDescription>
+                </Alert>
+              )}
+              <div className="space-y-3">
+                {allocationChecklist.items.map((item) => (
+                  <div key={item.key} className="flex flex-col gap-3 rounded-md border p-3 sm:flex-row sm:items-center sm:justify-between">
+                    <div className="flex gap-3">
+                      {item.satisfied ? <CheckCircle2 className="mt-0.5 size-5 text-emerald-600" /> : <XCircle className="mt-0.5 size-5 text-destructive" />}
+                      <div className="space-y-1">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <p className="text-sm font-medium">{item.label}</p>
+                          <Badge variant={item.satisfied ? "secondary" : "destructive"}>{item.satisfied ? "Adjunto" : "Pendiente"}</Badge>
+                        </div>
+                        <p className="text-xs text-muted-foreground">{item.description}</p>
+                        <p className="text-xs text-muted-foreground">Formatos esperados: {item.acceptedFormatsLabel}.</p>
+                        {!item.satisfied && <p className="text-xs text-muted-foreground">{item.missingMessage}</p>}
+                      </div>
+                    </div>
+                    {!item.satisfied && canManageActions && allocationId && (
+                      <ChecklistAttachButton
+                        item={item}
+                        disabled={uploadActionsDisabled}
+                        isUploading={activeUploadAction === `${item.category}:${allocationId}`}
+                        onAttach={(nextCategory, nextFile) => handleAllocationChecklistAttach(allocationId, nextCategory, nextFile)}
+                      />
+                    )}
+                  </div>
+                ))}
+              </div>
+              {renderDocumentRows(allocationDocuments)}
+            </div>
+          );
+        })}
+      </section>
+    );
+  }
+
   return (
     <Card>
       <CardHeader>
@@ -370,18 +627,29 @@ export function RequestDocumentsCard({
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
+        {hasAllocationGroups && (
+          <Alert>
+            <Info className="h-4 w-4" />
+            <AlertDescription>
+              Esta solicitud tiene líneas POA. Adjunta el Excel PxQ dentro del bloque correspondiente y usa documentos generales solo para sustentos de la solicitud.
+            </AlertDescription>
+          </Alert>
+        )}
+        {renderAllocationGroups()}
         <div className="rounded-md border p-4">
           <div className="space-y-1">
-            <h3 className="text-sm font-semibold">Checklist de documentos requeridos</h3>
+            <h3 className="text-sm font-semibold">Checklist de documentos generales</h3>
             <p className="text-xs text-muted-foreground">
               {readOnly
                 ? "Estado de los documentos requeridos para esta solicitud. Esta vista no permite adjuntar ni eliminar archivos."
-                : "Completa los documentos requeridos para continuar con el envío. La validación final se realizará al enviar la solicitud."}
+                : hasAllocationGroups
+                  ? "Completa aquí solo los documentos requeridos a nivel general. Los Excel PxQ se adjuntan en cada línea POA."
+                  : "Completa los documentos requeridos para continuar con el envío. La validación final se realizará al enviar la solicitud."}
             </p>
           </div>
           <div className="mt-3 space-y-3">
             {checklist.items.length === 0 ? (
-              <p className="text-sm text-muted-foreground">No hay documentos obligatorios configurados para este tipo de solicitud.</p>
+              <p className="text-sm text-muted-foreground">No hay documentos obligatorios generales configurados para este tipo de solicitud.</p>
             ) : checklist.items.map((item) => (
               <div key={item.key} className="flex flex-col gap-3 rounded-md border p-3 sm:flex-row sm:items-center sm:justify-between">
                 <div className="flex gap-3">
@@ -516,82 +784,11 @@ export function RequestDocumentsCard({
 
         {isLoading ? (
           <p className="text-sm text-muted-foreground">Cargando documentos...</p>
-        ) : documents.length === 0 ? (
-          <p className="text-sm text-muted-foreground">Sin documentos adjuntos.</p>
         ) : (
-          <div className="space-y-3">
-            {documents.map((document) => {
-              const documentWebUrl = getRequestDocumentWebUrl(document);
-              const receiptReview = receipts.find((item) => item.receipt?.document_id === document.id);
-              const shouldShowReceiptReview = document.document_category === REQUEST_DOCUMENT_CATEGORY.RECEIPT && (receiptsLoading || receiptReview);
-
-              return (
-                <div key={document.id} className="flex flex-col gap-3 rounded-md border p-3 sm:flex-row sm:items-center sm:justify-between">
-                  <div className="flex min-w-0 gap-3">
-                    <FileText className="mt-0.5 size-5 shrink-0 text-muted-foreground" />
-                    <div className="min-w-0 space-y-1">
-                      <p className="truncate text-sm font-medium">{getRequestDocumentDisplayName(document)}</p>
-                      <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
-                        <Badge variant="secondary">{getRequestDocumentCategoryLabel(document.document_category)}</Badge>
-                        <span>{getRequestDocumentMimeLabel(document.mime_type)}</span>
-                        <span>{formatRequestDocumentSize(document.size_bytes)}</span>
-                        <span>Subido: {formatRequestDateTime(document.created_at)}</span>
-                        <span>Proveedor: {getRequestDocumentStorageProviderLabel(document.storage_provider)}</span>
-                        <span>Estado: {getRequestDocumentUploadStatusLabel(document.upload_status)}</span>
-                      </div>
-                      {shouldShowReceiptReview && (
-                        <div className="mt-2 rounded-md bg-muted p-3 text-xs">
-                          <div className="flex flex-wrap items-center gap-2">
-                            <Badge variant={getReceiptStatusVariant(receiptReview)}>{getReceiptStatusLabel(receiptReview)}</Badge>
-                            <span className="text-muted-foreground">Lectura automática del comprobante</span>
-                          </div>
-                          {receiptReview ? (
-                            <div className="mt-2 space-y-1 text-muted-foreground">
-                              <p>{getReceiptValueSummary(receiptReview)}</p>
-                              {receiptReview.receipt.issuer_document_number && <p>RUC: {receiptReview.receipt.issuer_document_number}</p>}
-                              {receiptReview.receipt.issue_date && <p>Fecha: {receiptReview.receipt.issue_date}</p>}
-                              {receiptReview.latest_extraction?.error_message && <p>Necesita revisión manual para completar la información.</p>}
-                              {receiptReview.duplicate_candidates.length > 0 && <p>Ya existe un comprobante con la misma serie y número en otra solicitud activa.</p>}
-                            </div>
-                          ) : (
-                            <p className="mt-2 text-muted-foreground">Estamos leyendo el comprobante para ayudarte a validar sus datos.</p>
-                          )}
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                  <div className="flex shrink-0 flex-col gap-2 sm:items-end">
-                    {documentWebUrl ? (
-                      <Button asChild variant="outline" size="sm">
-                        <a href={documentWebUrl} target="_blank" rel="noopener noreferrer">
-                          <ExternalLink className="size-4" />
-                          Ver documento
-                        </a>
-                      </Button>
-                    ) : (
-                      <p className="text-xs text-muted-foreground">Enlace no disponible</p>
-                    )}
-                    {receiptReview && canManageActions && (
-                      <Button type="button" variant="outline" size="sm" onClick={() => openReceiptReview(receiptReview)}>
-                        Revisar datos
-                      </Button>
-                    )}
-                    {receiptReview && canManageActions && canConfirmReceiptReview(receiptReview) && (
-                      <Button type="button" size="sm" onClick={() => void handleConfirmReceiptReview(receiptReview)} disabled={confirmingReceipt}>
-                        {confirmingReceipt ? "Confirmando..." : "Confirmar datos"}
-                      </Button>
-                    )}
-                    {canManageActions && (
-                      <Button type="button" variant="outline" size="sm" onClick={() => setDocumentToDelete(document.id)} disabled={deleting}>
-                        <Trash2 className="size-4" />
-                        {deleting && documentToDelete === document.id ? "Eliminando..." : "Eliminar"}
-                      </Button>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
+          <section className="space-y-3">
+            <h3 className="text-sm font-semibold">Documentos generales</h3>
+            {renderDocumentRows(requestLevelDocuments)}
+          </section>
         )}
         <Dialog open={Boolean(receiptToReview)} onOpenChange={(open) => !open && closeReceiptReview()}>
           <DialogContent>

@@ -372,6 +372,33 @@ export function RequestDetailPage() {
         </CardContent>
       </Card>
 
+      {(request.allocations?.length ?? 0) > 0 && (
+        <Card>
+          <CardHeader><CardTitle>Distribución POA</CardTitle></CardHeader>
+          <CardContent className="space-y-3">
+            {request.allocations?.map((allocation, index) => {
+              const line = allocation.planning_line ?? allocation.budgetPlanningLine;
+              const financiers = allocation.financiers ?? allocation.funding_sources ?? line?.financiers ?? line?.funding_sources ?? [];
+              return (
+                <div key={allocation.id ?? `${allocation.budget_planning_line_id}-${index}`} className="rounded-md border p-3 text-sm">
+                  <div className="flex flex-col gap-1 sm:flex-row sm:items-start sm:justify-between">
+                    <div>
+                      <p className="font-medium">Bloque {index + 1}: {getPlanningLineDisplay(line)}</p>
+                      <p className="text-xs text-muted-foreground">Unidad: {allocation.org_unit?.name ?? line?.org_unit?.name ?? "—"} · Año fiscal: {allocation.fiscal_year}</p>
+                    </div>
+                    <p className="font-semibold">{formatRequestCurrency(Number(allocation.amount), request.currency)}</p>
+                  </div>
+                  <p className="mt-2 text-xs text-muted-foreground">
+                    Financiador(es): {financiers.length > 0 ? financiers.map((financier) => financier.name ?? financier.code ?? "—").join(", ") : "Sin financiadores informados"}
+                  </p>
+                  {allocation.payment_execution && <p className="mt-1 text-xs text-muted-foreground">Ejecutado: {formatRequestCurrency(Number(allocation.payment_execution.amount_executed), request.currency)}</p>}
+                </div>
+              );
+            })}
+          </CardContent>
+        </Card>
+      )}
+
       <Card>
         <CardHeader><CardTitle>Beneficiario y proveedor</CardTitle></CardHeader>
         <CardContent className="grid gap-4 md:grid-cols-2">

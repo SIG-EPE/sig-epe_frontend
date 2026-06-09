@@ -26,11 +26,16 @@ import {
   type RenditionStatus,
   type RequestDocument,
   type RequestDocumentCategory,
+  type RequestAllocation,
+  type RequestAllocationFundingSource,
+  type RequestPayment,
+  type RequestPaymentProof,
   type RequestStatusHistoryItem,
   type AccountType,
   type BankCode,
   type BeneficiaryDocumentType,
   type RequestBudgetPreview,
+  type RequestAllocationsBudgetPreview,
   type RequiredDocumentChecklist,
   type RequiredDocumentChecklistItem,
   type ConditionalDocumentChecklistNote,
@@ -98,10 +103,20 @@ export type RequestSubmitData = Pick<PaymentRequest,
   | "beneficiary_document_type"
   | "beneficiary_document_number"
   | "bank_code"
+  | "bank_name"
   | "account_type"
   | "bank_account"
   | "bank_cci"
 >;
+
+export interface RequestAllocationSubmitData {
+  budget_planning_line_id: string;
+  amount: number;
+}
+
+export type RequestSubmitDataWithAllocations = RequestSubmitData & {
+  allocations?: RequestAllocationSubmitData[];
+};
 
 export interface RequestStatusStepperItem {
   status: RequestStatus;
@@ -1028,6 +1043,41 @@ export function getPaymentId(request: Pick<PaymentRequest, "payment_id" | "payme
   return request.payment_id ?? request.payment?.id ?? null;
 }
 
+export function getRequestPaymentProofEntries(payment?: Pick<RequestPayment, "proof_entries" | "proofs"> | null): RequestPaymentProof[] {
+  return payment?.proof_entries ?? payment?.proofs ?? [];
+}
+
+export function getPaymentProofEntriesForAllocation(
+  payment: Pick<RequestPayment, "proof_entries" | "proofs"> | null | undefined,
+  allocationId: string | null | undefined,
+): RequestPaymentProof[] {
+  if (!allocationId) return [];
+  return getRequestPaymentProofEntries(payment).filter((proof) => (
+    proof.allocations.some((allocation) => allocation.request_allocation_id === allocationId)
+  ));
+}
+
+export function hasAllocationPaymentProofCoverage(
+  payment: Pick<RequestPayment, "proof_entries" | "proofs"> | null | undefined,
+  allocationId: string | null | undefined,
+): boolean {
+  return getPaymentProofEntriesForAllocation(payment, allocationId).length > 0;
+}
+
+export function getAllocationProofCoverageLabel(
+  allocation: Pick<RequestAllocation, "id">,
+  payment: Pick<RequestPayment, "proof_entries" | "proofs"> | null | undefined,
+): string {
+  return hasAllocationPaymentProofCoverage(payment, allocation.id) ? "Con comprobante asociado" : "Sin comprobante específico";
+}
+
+export function getAllocationFinanciersLabel(financiers?: RequestAllocationFundingSource[] | null): string {
+  const names = financiers
+    ?.map((financier) => financier.name ?? financier.code)
+    .filter((value): value is string => Boolean(value?.trim())) ?? [];
+  return names.length > 0 ? names.join(", ") : "Financiadores no informados";
+}
+
 export function getPaymentPendingBadges(request: Pick<PaymentRequest, "payment_proof_pending" | "proof_pending" | "payment_details_pending" | "details_pending" | "payment">): string[] {
   const badges: string[] = [];
   if (hasPaymentProofPending(request)) badges.push("Falta constancia");
@@ -1084,6 +1134,7 @@ export const REQUEST_SUBMIT_FIELD = {
   BENEFICIARY_DOCUMENT_TYPE: "beneficiary_document_type",
   BENEFICIARY_DOCUMENT_NUMBER: "beneficiary_document_number",
   BANK_CODE: "bank_code",
+  BANK_NAME: "bank_name",
   ACCOUNT_TYPE: "account_type",
   BANK_ACCOUNT: "bank_account",
   BANK_CCI: "bank_cci",
@@ -1103,22 +1154,36 @@ export interface RequestReviewNavigationIssues {
   canEnterReview: boolean;
 }
 
-export function validateRequestDataForSubmitIssues(request: RequestSubmitData): RequestSubmitValidationIssue[] {
+export function validateRequestDataForSubmitIssues(request: RequestSubmitDataWithAllocations): RequestSubmitValidationIssue[] {
   const issues: RequestSubmitValidationIssue[] = [];
   if (request.request_type === REQUEST_TYPE.ADVANCE_SETTLEMENT) return issues;
 
   const beneficiaryDocumentNumber = request.beneficiary_document_number?.trim().toUpperCase() ?? "";
   const bankAccount = request.bank_account?.trim() ?? "";
   const bankCci = request.bank_cci?.trim() ?? "";
+  const bankName = request.bank_name?.trim() ?? "";
   const requiresCci = isBankCciRequired(request.bank_code);
 
   function addIssue(field: RequestSubmitField, message: string): void {
     issues.push({ field, step: REQUEST_SUBMIT_VALIDATION_STEP.DATA, message });
   }
 
-  if (!hasText(request.budget_planning_line_id)) addIssue(REQUEST_SUBMIT_FIELD.BUDGET_PLANNING_LINE_ID, "Selecciona una línea POA.");
-  if (Number(request.requested_amount) <= 0) addIssue(REQUEST_SUBMIT_FIELD.REQUESTED_AMOUNT, "Ingresa un monto mayor a cero.");
+  const allocations = request.allocations ?? [];
+  const hasAllocations = allocations.length > 0;
+  if (hasAllocations) {
+    const seenLineIds = new Set<string>();
+    allocations.forEach((allocation) => {
+      if (!hasText(allocation.budget_planning_line_id)) addIssue(REQUEST_SUBMIT_FIELD.BUDGET_PLANNING_LINE_ID, "Selecciona una línea POA.");
+      if (Number(allocation.amount) <= 0) addIssue(REQUEST_SUBMIT_FIELD.REQUESTED_AMOUNT, "El monto de la línea POA debe ser mayor a cero.");
+      if (allocation.budget_planning_line_id && seenLineIds.has(allocation.budget_planning_line_id)) {
+        addIssue(REQUEST_SUBMIT_FIELD.BUDGET_PLANNING_LINE_ID, "Esta línea POA ya fue agregada; edite el monto del bloque existente.");
+      }
+      seenLineIds.add(allocation.budget_planning_line_id);
+    });
+  } else if (!hasText(request.budget_planning_line_id)) addIssue(REQUEST_SUBMIT_FIELD.BUDGET_PLANNING_LINE_ID, "Selecciona una línea POA.");
+  if (hasAllocations ? allocations.reduce((total, allocation) => total + Number(allocation.amount || 0), 0) <= 0 : Number(request.requested_amount) <= 0) addIssue(REQUEST_SUBMIT_FIELD.REQUESTED_AMOUNT, "Ingresa un monto mayor a cero.");
   if (!hasText(request.concept)) addIssue(REQUEST_SUBMIT_FIELD.CONCEPT, "Describe el concepto o justificación.");
+  else if (request.concept.trim().length > 120) addIssue(REQUEST_SUBMIT_FIELD.CONCEPT, "El concepto o justificación debe tener máximo 120 caracteres.");
   if (!hasText(request.beneficiary_name)) addIssue(REQUEST_SUBMIT_FIELD.BENEFICIARY_NAME, "Ingresa el nombre del beneficiario.");
   if (!request.beneficiary_document_type) addIssue(REQUEST_SUBMIT_FIELD.BENEFICIARY_DOCUMENT_TYPE, "Selecciona el tipo de documento del beneficiario.");
   if (!beneficiaryDocumentNumber) addIssue(REQUEST_SUBMIT_FIELD.BENEFICIARY_DOCUMENT_NUMBER, "Ingresa el número de documento del beneficiario.");
@@ -1132,6 +1197,8 @@ export function validateRequestDataForSubmitIssues(request: RequestSubmitData): 
     addIssue(REQUEST_SUBMIT_FIELD.BENEFICIARY_DOCUMENT_NUMBER, "El carné de extranjería del beneficiario debe tener de 6 a 12 letras o números.");
   }
   if (!request.bank_code || !Object.values(BANK_CODE).includes(request.bank_code)) addIssue(REQUEST_SUBMIT_FIELD.BANK_CODE, "Selecciona el banco del beneficiario.");
+  if (isOtherBank(request.bank_code) && !bankName) addIssue(REQUEST_SUBMIT_FIELD.BANK_NAME, "Ingresa el nombre del banco.");
+  else if (isOtherBank(request.bank_code) && bankName.length > 100) addIssue(REQUEST_SUBMIT_FIELD.BANK_NAME, "El nombre del banco debe tener máximo 100 caracteres.");
   if (!request.account_type || !Object.values(ACCOUNT_TYPE).includes(request.account_type)) addIssue(REQUEST_SUBMIT_FIELD.ACCOUNT_TYPE, "Selecciona el tipo de cuenta bancaria.");
   if (!/^\d{6,30}$/.test(bankAccount)) addIssue(REQUEST_SUBMIT_FIELD.BANK_ACCOUNT, "Ingresa una cuenta bancaria de 6 a 30 dígitos.");
   if (requiresCci && !bankCci) addIssue(REQUEST_SUBMIT_FIELD.BANK_CCI, "Ingresa el CCI de 20 dígitos.");
@@ -1140,12 +1207,12 @@ export function validateRequestDataForSubmitIssues(request: RequestSubmitData): 
   return issues.filter((issue, index, currentIssues) => currentIssues.findIndex((currentIssue) => currentIssue.field === issue.field && currentIssue.message === issue.message) === index);
 }
 
-export function validateRequestDataForSubmit(request: RequestSubmitData): string[] {
+export function validateRequestDataForSubmit(request: RequestSubmitDataWithAllocations): string[] {
   return Array.from(new Set(validateRequestDataForSubmitIssues(request).map((issue) => issue.message)));
 }
 
 export function getRequestReviewNavigationIssues(
-  request: RequestSubmitData,
+  request: RequestSubmitDataWithAllocations,
   checklist: Pick<RequiredDocumentChecklist, "isComplete" | "missingMessages">,
 ): RequestReviewNavigationIssues {
   const dataIssues = validateRequestDataForSubmitIssues(request);
@@ -1451,7 +1518,8 @@ export function getApiErrorMessage(error: unknown): string {
   return getApiErrorMessages(error).join("\n");
 }
 
-export function isBudgetPreviewBlocking(preview: RequestBudgetPreview | null | undefined): boolean {
+export function isBudgetPreviewBlocking(preview: RequestBudgetPreview | RequestAllocationsBudgetPreview | null | undefined): boolean {
+  if (preview && "hard_blocked" in preview) return preview.hard_blocked;
   return Boolean(preview?.willExceedOrgUnitCeiling || (preview?.orgUnitBlockingErrors?.length ?? 0) > 0);
 }
 
@@ -1499,6 +1567,10 @@ export function isKnownBankCode(value: string): value is BankCode {
 
 export function isBcpBank(bankCode?: BankCode | null): boolean {
   return bankCode === BANK_CODE.BCP;
+}
+
+export function isOtherBank(bankCode?: BankCode | null): boolean {
+  return bankCode === BANK_CODE.OTROS_BANCOS;
 }
 
 export function isBankCciRequired(bankCode?: BankCode | null): boolean {

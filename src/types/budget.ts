@@ -2,6 +2,32 @@
 // Budget types — SIG-EPE
 // -------------------------------------------------------
 
+import type { PlanningType } from "@/lib/planning-types";
+
+export interface PlanningLineFiscalYearRelation {
+  id: string;
+  year: number;
+  status?: string;
+}
+
+export interface PlanningLineNamedRelation {
+  id: string;
+  code?: string;
+  name: string;
+  short_name?: string;
+}
+
+export interface PlanningLineComponentRelation {
+  id: string;
+  name: string;
+}
+
+export interface PlanningLineOperativeActionRelation {
+  id: string;
+  name: string;
+  component?: PlanningLineComponentRelation | null;
+}
+
 /** Datos de saldo presupuestal devueltos por GET /budget/balance/:fiscalYearId */
 export interface BalanceData {
   fiscal_year_id: string;
@@ -39,7 +65,7 @@ export interface PlanningLine {
   organizational_unit_id: string;
   program_id: string | null;
   budget_category_id: string;
-  planning_type: "PROGRAMA" | "PROYECTO" | "GESTIÓN";
+  planning_type: PlanningType;
   resource_description: string;
   operative_action_id?: string | null;
   territory_id?: string | null;
@@ -59,13 +85,16 @@ export interface PlanningLine {
   deleted_at?: string | null;
   line_code?: string;
   // Relaciones — nombres que devuelve el backend (camelCase en TypeORM)
-  organizationalUnit?: { id: string; code: string; name: string; short_name?: string };
-  program?: { id: string; code: string; name: string } | null;
-  budgetCategory?: { id: string; code: string; name: string };
+  fiscalYear?: PlanningLineFiscalYearRelation;
+  organizationalUnit?: PlanningLineNamedRelation;
+  program?: PlanningLineNamedRelation | null;
+  budgetCategory?: PlanningLineNamedRelation;
+  territory?: PlanningLineNamedRelation | null;
+  operativeAction?: PlanningLineOperativeActionRelation | null;
   // Alias snake_case para compatibilidad con componentes existentes
-  organizational_unit?: { id: string; code: string; name: string; short_name?: string };
-  budget_program?: { id: string; code: string; name: string } | null;
-  budget_category?: { id: string; code: string; name: string };
+  organizational_unit?: PlanningLineNamedRelation;
+  budget_program?: PlanningLineNamedRelation | null;
+  budget_category?: PlanningLineNamedRelation;
   monthlyDistribution?: MonthlyEntry[];
   monthly_distribution?: MonthlyEntry[]; // alias snake_case — usar monthlyDistribution
   fundingSources?: FundingSourceAllocation[];

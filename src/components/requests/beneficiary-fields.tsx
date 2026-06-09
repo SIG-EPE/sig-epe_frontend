@@ -15,6 +15,7 @@ import {
   isBcpBank,
   isBankCciRequired,
   isKnownBankCode,
+  isOtherBank,
   sanitizeBeneficiaryDocumentNumber,
   sanitizeDigits,
 } from "@/lib/requests";
@@ -35,6 +36,7 @@ export function BeneficiaryFields({ control, user, setValue, watch }: Beneficiar
   const selectedBankCode = watch("bank_code") as BankCode | "" | undefined;
   const normalizedBankCode: BankCode | null = selectedBankCode && isKnownBankCode(selectedBankCode) ? selectedBankCode : null;
   const cciRequired = isBankCciRequired(normalizedBankCode);
+  const otherBankSelected = isOtherBank(normalizedBankCode);
 
   function useRequesterAsBeneficiary(): void {
     const fullName = [user?.firstName, user?.lastName].filter((value): value is string => Boolean(value?.trim())).join(" ");
@@ -53,6 +55,9 @@ export function BeneficiaryFields({ control, user, setValue, watch }: Beneficiar
     setValue("bank_code", nextBankCode, { shouldDirty: true, shouldValidate: true });
     if (isBcpBank(nextBankCode)) {
       setValue("bank_cci", "", { shouldDirty: true, shouldValidate: true });
+    }
+    if (!isOtherBank(nextBankCode)) {
+      setValue("bank_name", "", { shouldDirty: true, shouldValidate: true });
     }
   }
 
@@ -116,6 +121,23 @@ export function BeneficiaryFields({ control, user, setValue, watch }: Beneficiar
             <FormMessage />
           </FormItem>
         )} />
+        {otherBankSelected && (
+          <FormField control={control} name="bank_name" render={({ field }) => (
+            <FormItem>
+              <FormLabel>Nombre del banco *</FormLabel>
+              <FormControl>
+                <Input
+                  {...field}
+                  maxLength={100}
+                  placeholder="Indica el banco del beneficiario"
+                  data-testid="request-bank-name-input"
+                />
+              </FormControl>
+              <FormDescription>Requerido cuando seleccionas Otros Bancos. Máximo 100 caracteres.</FormDescription>
+              <FormMessage />
+            </FormItem>
+          )} />
+        )}
         <FormField control={control} name="account_type" render={({ field }) => (
           <FormItem>
             <FormLabel>Tipo de cuenta *</FormLabel>

@@ -5,7 +5,8 @@ import { toast } from "sonner";
 import { z } from "zod";
 
 import { useCreateBudgetProgram, useUpdateBudgetProgram } from "@/hooks/use-catalogs";
-import type { BudgetProgram, CreateBudgetProgramDto, UpdateBudgetProgramDto, PlanningType } from "@/types/catalogs";
+import type { BudgetProgram, CreateBudgetProgramDto, UpdateBudgetProgramDto } from "@/types/catalogs";
+import { PLANNING_TYPE_LABELS, PLANNING_TYPES, type PlanningType } from "@/lib/planning-types";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -14,8 +15,6 @@ import { TerritorySelector } from "@/components/shared/territory-selector";
 // -------------------------------------------------------
 // Zod schema
 // -------------------------------------------------------
-
-const PLANNING_TYPES = ["PROGRAMA", "PROYECTO", "GESTIÓN"] as const;
 
 const BudgetProgramSchema = z.object({
   code: z.string().min(1, "El código es requerido").max(50, "Máximo 50 caracteres"),
@@ -145,7 +144,7 @@ export function BudgetProgramForm({ item, onClose, onSuccess }: BudgetProgramFor
           <option value="">Sin tipo</option>
           {PLANNING_TYPES.map((t) => (
             <option key={t} value={t}>
-              {t}
+              {PLANNING_TYPE_LABELS[t]}
             </option>
           ))}
         </select>

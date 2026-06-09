@@ -6,7 +6,7 @@ import { RequestDocumentsCard } from "@/components/requests/request-documents-ca
 import { api, ApiRequestError } from "@/lib/api-client";
 import { ROLE_CODE } from "@/lib/constants";
 import { useAuthStore } from "@/stores/auth-store";
-import { REQUEST_CURRENCY, REQUEST_DOCUMENT_CATEGORY, REQUEST_RECEIPT_DUPLICATE_STATUS, REQUEST_RECEIPT_OCR_STATUS, REQUEST_STATUS, REQUEST_TYPE, type PaymentRequest, type RequestDocument, type RequestReceiptReview } from "@/types/requests";
+import { REQUEST_CURRENCY, REQUEST_DOCUMENT_CATEGORY, REQUEST_DOCUMENT_SCOPE_TYPE, REQUEST_RECEIPT_DUPLICATE_STATUS, REQUEST_RECEIPT_OCR_STATUS, REQUEST_STATUS, REQUEST_TYPE, type PaymentRequest, type RequestAllocation, type RequestDocument, type RequestReceiptReview } from "@/types/requests";
 
 vi.mock("@/lib/api-client", () => ({
   api: {
@@ -95,6 +95,38 @@ function makeDocument(overrides: Partial<RequestDocument> = {}): RequestDocument
   };
 }
 
+function makeAllocation(overrides: Partial<RequestAllocation> = {}): RequestAllocation {
+  return {
+    id: "alloc-1",
+    payment_request_id: "req-1",
+    budget_planning_line_id: "line-1",
+    amount: 100,
+    currency: REQUEST_CURRENCY.PEN,
+    budget_month: 1,
+    fiscal_year: 2026,
+    org_unit_id: "org-1",
+    sort_order: 1,
+    budgetPlanningLine: null,
+    planning_line: {
+      id: "line-1",
+      line_code: "POA-1",
+      resource_description: "Compra de equipos",
+      total_cost: 100,
+      status: "APPROVED",
+      fiscal_year: { id: "fy-1", year: 2026 },
+      org_unit: { id: "org-1", code: "UO1", name: "Unidad 1" },
+      category: null,
+      program: null,
+      action: null,
+      monthly_summary: [],
+    },
+    org_unit: { id: "org-1", code: "UO1", name: "Unidad 1" },
+    documents: [],
+    payment_execution: null,
+    ...overrides,
+  };
+}
+
 function makeReceiptReview(overrides: Partial<RequestReceiptReview> = {}): RequestReceiptReview {
   return {
     receipt: {
@@ -145,6 +177,8 @@ function createDeferred<T>() {
 describe("RequestDocumentsCard", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    Object.defineProperty(HTMLElement.prototype, "hasPointerCapture", { value: vi.fn(), configurable: true });
+    Object.defineProperty(HTMLElement.prototype, "scrollIntoView", { value: vi.fn(), configurable: true });
     useAuthStore.setState({
       user: {
         id: "user-1",
@@ -273,6 +307,137 @@ describe("RequestDocumentsCard", () => {
     expect(formData.get("file")).toBe(file);
     expect(formData.get("document_category")).toBe(REQUEST_DOCUMENT_CATEGORY.REQUEST_SUPPORT);
     expect(await screen.findByText(/puede enviar una notificación por correo/i)).toBeInTheDocument();
+  });
+
+  it("sube el PxQ de una línea POA con alcance de asignación", async () => {
+    vi.mocked(api.get).mockResolvedValue([]);
+    vi.mocked(api.postForm).mockResolvedValue(makeDocument({ id: "doc-alloc-1", original_filename: "pxq.xlsx" }));
+
+    render(<RequestDocumentsCard request={makeRequest({ allocations: [makeAllocation({ id: "alloc-1" })] })} />);
+
+    expect(await screen.findByText(/documentos por línea poa/i)).toBeInTheDocument();
+
+    const file = new File(["contenido"], "pxq.xlsx", { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+    fireEvent.change(screen.getByLabelText(/seleccionar excel pxq/i), { target: { files: [file] } });
+
+    await waitFor(() => {
+      expect(api.postForm).toHaveBeenCalledWith("/requests/req-1/documents", expect.any(FormData));
+    });
+    const formData = vi.mocked(api.postForm).mock.calls[0][1] as FormData;
+    expect(formData.get("file")).toBe(file);
+    expect(formData.get("document_category")).toBe(REQUEST_DOCUMENT_CATEGORY.PXQ);
+    expect(formData.get("scope_type")).toBe(REQUEST_DOCUMENT_SCOPE_TYPE.ALLOCATION);
+    expect(formData.get("request_allocation_id")).toBe("alloc-1");
+  });
+
+  it("no marca otra línea POA como satisfecha cuando solo una tiene PxQ", async () => {
+    vi.mocked(api.get).mockResolvedValue([
+      makeDocument({
+        id: "doc-alloc-1",
+        document_category: REQUEST_DOCUMENT_CATEGORY.PXQ,
+        original_filename: "pxq-linea-1.xlsx",
+        mime_type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        scope_type: REQUEST_DOCUMENT_SCOPE_TYPE.ALLOCATION,
+        request_allocation_id: "alloc-1",
+      }),
+    ]);
+
+    render(<RequestDocumentsCard request={makeRequest({ allocations: [
+      makeAllocation({ id: "alloc-1", budget_planning_line_id: "line-1" }),
+      makeAllocation({ id: "alloc-2", budget_planning_line_id: "line-2", amount: 200, sort_order: 2, planning_line: {
+        ...makeAllocation().planning_line!,
+        id: "line-2",
+        line_code: "POA-2",
+        resource_description: "Servicios logísticos",
+      } }),
+    ] })} />);
+
+    expect(await screen.findByText("pxq-linea-1.xlsx")).toBeInTheDocument();
+    const groups = screen.getAllByTestId("allocation-documents-group");
+    expect(groups).toHaveLength(2);
+    expect(groups[0]).toHaveTextContent("Completo");
+    expect(groups[0]).toHaveTextContent("Adjunto");
+    expect(groups[1]).toHaveTextContent("Pendiente");
+    expect(groups[1]).toHaveTextContent("Falta adjuntar Excel PxQ.");
+  });
+
+  it("marca completo el bloque con PxQ aunque el checklist del request aún venga pendiente", async () => {
+    vi.mocked(api.get).mockResolvedValue([
+      makeDocument({
+        id: "doc-alloc-1",
+        document_category: REQUEST_DOCUMENT_CATEGORY.PXQ,
+        original_filename: "POA_ALL_CONTROL INTERNO.xlsx",
+        mime_type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        scope_type: REQUEST_DOCUMENT_SCOPE_TYPE.ALLOCATION,
+        request_allocation_id: "alloc-1",
+      }),
+    ]);
+
+    render(<RequestDocumentsCard request={makeRequest({ allocations: [
+      makeAllocation({
+        id: "alloc-1",
+        document_checklist: {
+          complete: false,
+          required_documents: [{
+            category: REQUEST_DOCUMENT_CATEGORY.PXQ,
+            label: "Excel PxQ",
+            required: true,
+            satisfied: false,
+          }],
+        },
+      }),
+      makeAllocation({
+        id: "alloc-2",
+        budget_planning_line_id: "line-2",
+        amount: 200,
+        sort_order: 2,
+        planning_line: {
+          ...makeAllocation().planning_line!,
+          id: "line-2",
+          line_code: "POA-2",
+          resource_description: "Servicios logísticos",
+        },
+        document_checklist: {
+          complete: false,
+          required_documents: [{
+            category: REQUEST_DOCUMENT_CATEGORY.PXQ,
+            label: "Excel PxQ",
+            required: true,
+            satisfied: false,
+          }],
+        },
+      }),
+    ] })} />);
+
+    expect(await screen.findByText("POA_ALL_CONTROL INTERNO.xlsx")).toBeInTheDocument();
+    const groups = screen.getAllByTestId("allocation-documents-group");
+    expect(groups).toHaveLength(2);
+    expect(groups[0]).toHaveTextContent("Completo");
+    expect(groups[0]).toHaveTextContent("Adjunto");
+    expect(groups[1]).toHaveTextContent("Pendiente");
+  });
+
+  it("mantiene la constancia de pago como documento general aunque se envíe alcance", async () => {
+    vi.mocked(api.get).mockResolvedValue([]);
+    vi.mocked(api.postForm).mockResolvedValue(makeDocument({ id: "doc-payment", document_category: REQUEST_DOCUMENT_CATEGORY.PAYMENT_PROOF }));
+
+    const user = userEvent.setup();
+    render(<RequestDocumentsCard request={makeRequest({ request_type: REQUEST_TYPE.SUPPLIER_PAYMENT, allocations: [makeAllocation({ id: "alloc-1" })] })} />);
+
+    const categoryTrigger = await screen.findByRole("combobox", { name: /categoría/i });
+    await user.click(categoryTrigger);
+    await user.click(await screen.findByRole("option", { name: /constancia de pago/i }));
+    const file = new File(["contenido"], "pago.pdf", { type: "application/pdf" });
+    fireEvent.change(screen.getByLabelText(/archivo/i), { target: { files: [file] } });
+    await user.click(screen.getByRole("button", { name: /^adjuntar$/i }));
+
+    await waitFor(() => {
+      expect(api.postForm).toHaveBeenCalledWith("/requests/req-1/documents", expect.any(FormData));
+    });
+    const formData = vi.mocked(api.postForm).mock.calls[0][1] as FormData;
+    expect(formData.get("document_category")).toBe(REQUEST_DOCUMENT_CATEGORY.PAYMENT_PROOF);
+    expect(formData.get("scope_type")).toBeNull();
+    expect(formData.get("request_allocation_id")).toBeNull();
   });
 
   it("muestra el mensaje específico cuando el comprobante ya fue registrado", async () => {

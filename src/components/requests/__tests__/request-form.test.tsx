@@ -6,9 +6,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { BeneficiaryFields } from "@/components/requests/beneficiary-fields";
 import { Form } from "@/components/ui/form";
-import { getRequestSaveSuccessToast, getRequestSubmitFailureToast, getRequestSubmitSavingToast, getRequestSubmitSuccessToast, getScheduledRenditionMinDate, RequestForm, requestFormSchema, toCreateRequestDto, toUpdateRequestDto, type RequestFormValues } from "@/components/requests/request-form";
-import { REQUEST_EDIT_STEP } from "@/lib/requests";
-import { ACCOUNT_TYPE, BANK_CODE, BENEFICIARY_DOCUMENT_TYPE, REQUEST_CURRENCY, REQUEST_DOCUMENT_CATEGORY, REQUEST_STATUS, REQUEST_TYPE, type PaymentRequest, type RequestDocument, type SettlementContextResponse } from "@/types/requests";
+import { getRequestSaveSuccessToast, getRequestSubmitFailureToast, getRequestSubmitSavingToast, getRequestSubmitSuccessToast, getScheduledRenditionMinDate, normalizeRequestAmountInput, REQUEST_BUDGET_CEILING_BLOCK_MESSAGE, RequestForm, requestFormSchema, toCreateRequestDto, toUpdateRequestDto, type RequestFormValues } from "@/components/requests/request-form";
+import { BANK_OPTIONS, REQUEST_EDIT_STEP } from "@/lib/requests";
+import { ACCOUNT_TYPE, BANK_CODE, BENEFICIARY_DOCUMENT_TYPE, REQUEST_CURRENCY, REQUEST_DOCUMENT_CATEGORY, REQUEST_STATUS, REQUEST_TYPE, type PaymentRequest, type RequestBudgetPreview, type RequestDocument, type SettlementContextResponse } from "@/types/requests";
 
 const mocks = vi.hoisted(() => ({
   createRequest: vi.fn(),
@@ -19,6 +19,7 @@ const mocks = vi.hoisted(() => ({
   toastError: vi.fn(),
   toastSuccess: vi.fn(),
   updateRequest: vi.fn(),
+  budgetPreview: null as RequestBudgetPreview | null,
 }));
 
 vi.mock("next/navigation", () => ({
@@ -37,7 +38,7 @@ vi.mock("@/stores/auth-store", () => ({
 }));
 
 vi.mock("@/hooks/use-requests", () => ({
-  useBudgetPreview: () => ({ canPreview: false, data: null, error: null, isLoading: false, refetch: vi.fn() }),
+  useBudgetPreview: () => ({ canPreview: Boolean(mocks.budgetPreview), data: mocks.budgetPreview, error: null, isLoading: false, refetch: vi.fn() }),
   useCreateRequest: () => ({ createRequest: mocks.createRequest, isLoading: false }),
   useRequestDocuments: () => ({ documents: mocks.requestDocuments, error: null, isLoading: false, refetch: mocks.refetchDocuments }),
   useSubmitRequest: () => ({ submitRequest: mocks.submitRequest, isLoading: false }),
@@ -63,6 +64,7 @@ function makeValues(overrides: Partial<RequestFormValues> = {}): RequestFormValu
     request_type: REQUEST_TYPE.ADVANCE_SETTLEMENT,
     budget_planning_line_id: "line-1",
     requested_amount: 250.5,
+    allocations: [{ client_key: "allocation-1", budget_planning_line_id: "line-1", amount: 250.5 }],
     concept: "Rendición del anticipo pagado",
     scheduled_rendition_at: getScheduledRenditionMinDate(),
     beneficiary_name: "Ana Solicitante",
@@ -138,6 +140,46 @@ function makeDocument(overrides: Partial<RequestDocument> = {}): RequestDocument
     upload_status: "PERMANENT",
     uploaded_by_id: "user-1",
     created_at: "2026-05-27T00:00:00.000Z",
+    ...overrides,
+  };
+}
+
+function makeBudgetPreview(overrides: Partial<RequestBudgetPreview> = {}): RequestBudgetPreview {
+  return {
+    planning_line: {
+      id: "line-1",
+      line_code: "POA-001",
+      resource_description: "Materiales operativos",
+      planning_type: "POA",
+      type_resource: "Bienes",
+      unit_price: 100,
+      quantity: 3,
+      total_cost: 300,
+      status: "APPROVED",
+      fiscal_year: { id: "fy-2026", year: 2026, status: "OPEN" },
+      org_unit: { id: "ou-1", code: "UO-01", name: "Unidad de Operaciones" },
+      category: { id: "cat-1", code: "CAT", name: "Categoría operativa" },
+      program: { id: "prog-1", code: "PROG", name: "Programa institucional" },
+      action: { id: "act-1", name: "Acción de control" },
+      territory: null,
+      monthly_summary: [],
+    },
+    month: null,
+    amount: 100,
+    org_unit: { id: "ou-1", code: "UO-01", name: "Unidad de Operaciones" },
+    org_unit_ceiling: 80,
+    current_consumed_amount: 0,
+    submitted_pending_amount: 0,
+    remaining_ceiling: 80,
+    willExceedOrgUnitCeiling: false,
+    orgUnitBlockingErrors: [],
+    planned_line_month_amount: null,
+    planned_line_month_executed_amount: null,
+    line_consumed_amount: 0,
+    line_planned_remaining: null,
+    lineWarning: false,
+    lineWarningMessage: null,
+    warnings: [],
     ...overrides,
   };
 }
@@ -225,6 +267,7 @@ beforeEach(() => {
   mocks.toastError.mockReset();
   mocks.toastSuccess.mockReset();
   mocks.updateRequest.mockReset();
+  mocks.budgetPreview = null;
 });
 
 function BeneficiaryFieldsErrorHarness() {
@@ -243,6 +286,23 @@ function BeneficiaryFieldsErrorHarness() {
     form.setError("bank_account", { type: "manual", message: "Ingresa una cuenta bancaria de 6 a 30 dígitos." });
     form.setError("bank_cci", { type: "manual", message: "Ingresa el CCI de 20 dígitos." });
   }, [form]);
+
+  return (
+    <Form {...form}>
+      <BeneficiaryFields control={form.control} user={null} setValue={form.setValue} watch={form.watch} />
+    </Form>
+  );
+}
+
+function BeneficiaryFieldsOtherBankHarness() {
+  const form = useForm<RequestFormValues>({
+    defaultValues: makeValues({
+      bank_code: BANK_CODE.OTROS_BANCOS,
+      bank_name: "",
+      bank_account: "1234567890",
+      bank_cci: "",
+    }),
+  });
 
   return (
     <Form {...form}>
@@ -290,6 +350,72 @@ describe("RequestForm payload helpers", () => {
     })).success).toBe(true);
   });
 
+  it("normaliza ceros iniciales en el monto sin romper decimales o vacío", () => {
+    expect(normalizeRequestAmountInput("0123")).toBe("123");
+    expect(normalizeRequestAmountInput("01.50")).toBe("1.5");
+    expect(normalizeRequestAmountInput("")).toBe("");
+  });
+
+  it("normaliza visualmente el monto al salir del campo", async () => {
+    const user = userEvent.setup();
+
+    render(<RequestForm activeStep={REQUEST_EDIT_STEP.DATA} initialRequest={makePaymentRequest({ request_type: REQUEST_TYPE.ADVANCE })} mode="edit" />);
+    const amountInput = screen.getByTestId("request-amount-input");
+
+    await user.clear(amountInput);
+    expect(amountInput).toHaveValue(null);
+
+    await user.type(amountInput, "01.50");
+    await user.tab();
+
+    expect(amountInput).toHaveValue(1.5);
+  });
+
+  it("permite agregar y quitar bloques de línea POA", async () => {
+    const user = userEvent.setup();
+
+    render(<RequestForm activeStep={REQUEST_EDIT_STEP.DATA} initialRequest={makePaymentRequest({ request_type: REQUEST_TYPE.ADVANCE })} mode="edit" />);
+
+    expect(screen.getAllByTestId("request-allocation-block")).toHaveLength(1);
+
+    await user.click(screen.getByTestId("request-add-allocation-button"));
+
+    expect(screen.getAllByTestId("request-allocation-block")).toHaveLength(2);
+
+    await user.click(screen.getAllByRole("button", { name: "Quitar bloque" })[0]);
+
+    expect(screen.getAllByTestId("request-allocation-block")).toHaveLength(1);
+  });
+
+  it("limita el concepto a 120 caracteres y muestra contador visible", async () => {
+    const user = userEvent.setup();
+
+    render(<RequestForm />);
+    const conceptInput = screen.getByTestId("request-concept-input");
+
+    expect(conceptInput).toHaveAttribute("maxLength", "120");
+    expect(screen.getByTestId("request-concept-counter")).toHaveTextContent("0/120");
+
+    await user.type(conceptInput, "Justificación operativa");
+
+    expect(screen.getByTestId("request-concept-counter")).toHaveTextContent("23/120");
+  });
+
+  it("valida que el concepto no supere 120 caracteres", () => {
+    const validConcept = "a".repeat(120);
+    const invalidConcept = "a".repeat(121);
+
+    expect(requestFormSchema.safeParse(makeValues({ concept: validConcept })).success).toBe(true);
+
+    const result = requestFormSchema.safeParse(makeValues({ concept: invalidConcept }));
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues).toEqual(expect.arrayContaining([
+        expect.objectContaining({ path: ["concept"], message: "El concepto o justificación debe tener máximo 120 caracteres." }),
+      ]));
+    }
+  });
+
   it("muestra ayuda de fecha límite para rendición de anticipos", () => {
     render(<RequestForm activeStep={REQUEST_EDIT_STEP.DATA} initialRequest={makePaymentRequest({ request_type: REQUEST_TYPE.ADVANCE })} mode="edit" />);
 
@@ -303,6 +429,7 @@ describe("RequestForm payload helpers", () => {
       request_type: REQUEST_TYPE.ADVANCE_SETTLEMENT,
       budget_planning_line_id: "line-1",
       requested_amount: 250.5,
+      allocations: [{ client_key: "allocation-1", budget_planning_line_id: "line-1", amount: 250.5 }],
       currency: REQUEST_CURRENCY.PEN,
     });
     expect(dto).not.toHaveProperty("budget_month");
@@ -329,6 +456,7 @@ describe("RequestForm payload helpers", () => {
 
   it("omite el CCI para BCP y lo conserva para otros bancos", () => {
     expect(toCreateRequestDto(makeValues({ bank_code: BANK_CODE.BCP }))).not.toHaveProperty("bank_cci");
+    expect(toCreateRequestDto(makeValues({ bank_code: BANK_CODE.BCP, bank_name: "Banco personalizado" }))).not.toHaveProperty("bank_name");
     expect(toUpdateRequestDto(makeValues({ bank_code: BANK_CODE.BCP }))).not.toHaveProperty("bank_cci");
     expect(toCreateRequestDto(makeValues({ bank_code: "", bank_cci: "stale-invalid-cci" }))).not.toHaveProperty("bank_cci");
     expect(toUpdateRequestDto(makeValues({ bank_code: "", bank_cci: "stale-invalid-cci" }))).not.toHaveProperty("bank_cci");
@@ -344,6 +472,72 @@ describe("RequestForm payload helpers", () => {
       bank_name: "Banco Pichincha",
       bank_cci: "12345678901234567890",
     })).bank_cci).toBe("12345678901234567890");
+  });
+
+  it("mapea varias líneas POA al arreglo allocations y deriva el monto total", () => {
+    const values = makeValues({
+      request_type: REQUEST_TYPE.ADVANCE,
+      allocations: [
+        { client_key: "allocation-1", budget_planning_line_id: "line-1", amount: 100.25 },
+        { client_key: "allocation-2", budget_planning_line_id: "line-2", amount: 200.75 },
+      ],
+    });
+
+    expect(toCreateRequestDto(values)).toMatchObject({
+      budget_planning_line_id: "line-1",
+      requested_amount: 301,
+      allocations: [
+        { client_key: "allocation-1", budget_planning_line_id: "line-1", amount: 100.25 },
+        { client_key: "allocation-2", budget_planning_line_id: "line-2", amount: 200.75 },
+      ],
+    });
+    expect(toUpdateRequestDto(values)).toMatchObject({
+      budget_planning_line_id: "line-1",
+      requested_amount: 301,
+      allocations: [
+        { client_key: "allocation-1", budget_planning_line_id: "line-1", amount: 100.25 },
+        { client_key: "allocation-2", budget_planning_line_id: "line-2", amount: 200.75 },
+      ],
+    });
+  });
+
+  it("rechaza líneas POA duplicadas en el formulario", () => {
+    const result = requestFormSchema.safeParse(makeValues({
+      allocations: [
+        { client_key: "allocation-1", budget_planning_line_id: "line-1", amount: 100 },
+        { client_key: "allocation-2", budget_planning_line_id: "line-1", amount: 50 },
+      ],
+    }));
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues).toEqual(expect.arrayContaining([
+        expect.objectContaining({ message: "Esta línea POA ya fue agregada; edite el monto del bloque existente." }),
+      ]));
+    }
+  });
+
+  it("envía nombre personalizado y CCI para Otros Bancos", () => {
+    const values = makeValues({
+      request_type: REQUEST_TYPE.REIMBURSEMENT,
+      bank_code: BANK_CODE.OTROS_BANCOS,
+      bank_name: "Caja Rural Regional",
+      bank_cci: "12345678901234567890",
+    });
+
+    expect(BANK_OPTIONS).toEqual(expect.arrayContaining([
+      expect.objectContaining({ value: BANK_CODE.OTROS_BANCOS, label: "Otros Bancos" }),
+    ]));
+    expect(toCreateRequestDto(values)).toMatchObject({
+      bank_code: BANK_CODE.OTROS_BANCOS,
+      bank_name: "Caja Rural Regional",
+      bank_cci: "12345678901234567890",
+    });
+    expect(toUpdateRequestDto(values)).toMatchObject({
+      bank_code: BANK_CODE.OTROS_BANCOS,
+      bank_name: "Caja Rural Regional",
+      bank_cci: "12345678901234567890",
+    });
   });
 
   it("ignora CCI oculto inválido para BCP o sin banco en la validación del formulario", () => {
@@ -423,6 +617,66 @@ describe("RequestForm payload helpers", () => {
     expect(screen.getByTestId("request-bank-select")).toHaveAttribute("aria-invalid", "true");
     expect(screen.getByTestId("request-account-type-select")).toHaveAttribute("aria-invalid", "true");
     expect(screen.getByTestId("request-bank-account-input")).toHaveAttribute("aria-invalid", "true");
+  });
+
+  it("requiere nombre de banco y CCI válido para Otros Bancos", () => {
+    const missingResult = requestFormSchema.safeParse(makeValues({
+      bank_code: BANK_CODE.OTROS_BANCOS,
+      bank_name: "",
+      bank_cci: "",
+    }));
+    const longNameResult = requestFormSchema.safeParse(makeValues({
+      bank_code: BANK_CODE.OTROS_BANCOS,
+      bank_name: "a".repeat(101),
+      bank_cci: "12345678901234567890",
+    }));
+    const validResult = requestFormSchema.safeParse(makeValues({
+      bank_code: BANK_CODE.OTROS_BANCOS,
+      bank_name: "Caja Rural Regional",
+      bank_cci: "12345678901234567890",
+    }));
+
+    expect(missingResult.success).toBe(false);
+    expect(longNameResult.success).toBe(false);
+    expect(validResult.success).toBe(true);
+    if (!missingResult.success) {
+      expect(missingResult.error.issues).toEqual(expect.arrayContaining([
+        expect.objectContaining({ path: ["bank_name"], message: "Ingresa el nombre del banco." }),
+        expect.objectContaining({ path: ["bank_cci"], message: "Ingresa el CCI de 20 dígitos." }),
+      ]));
+    }
+    if (!longNameResult.success) {
+      expect(longNameResult.error.issues).toEqual(expect.arrayContaining([
+        expect.objectContaining({ path: ["bank_name"], message: "El nombre del banco debe tener máximo 100 caracteres." }),
+      ]));
+    }
+  });
+
+  it("muestra campo de nombre de banco y CCI para Otros Bancos", () => {
+    render(<BeneficiaryFieldsOtherBankHarness />);
+
+    expect(screen.getByText("Nombre del banco *")).toBeInTheDocument();
+    expect(screen.getByTestId("request-bank-name-input")).toHaveAttribute("maxLength", "100");
+    expect(screen.getByTestId("request-bank-cci-input")).toBeInTheDocument();
+    expect(screen.getByText("Requerido cuando seleccionas Otros Bancos. Máximo 100 caracteres.")).toBeInTheDocument();
+  });
+
+  it("bloquea Datos -> Documentos cuando el monto supera el techo presupuestal", async () => {
+    const user = userEvent.setup();
+    mocks.budgetPreview = makeBudgetPreview({
+      willExceedOrgUnitCeiling: true,
+      orgUnitBlockingErrors: ["Techo presupuestal excedido"],
+    });
+    const request = makePaymentRequest({ request_type: REQUEST_TYPE.ADVANCE });
+
+    render(<RequestForm activeStep={REQUEST_EDIT_STEP.DATA} initialRequest={request} mode="edit" />);
+    await user.click(screen.getByTestId("request-save-draft-button"));
+
+    expect(mocks.updateRequest).not.toHaveBeenCalled();
+    expect(mocks.push).not.toHaveBeenCalled();
+    expect(mocks.toastError).toHaveBeenCalledWith(REQUEST_BUDGET_CEILING_BLOCK_MESSAGE);
+    expect(screen.getByText("No se puede continuar a documentos")).toBeInTheDocument();
+    expect(screen.getByText(REQUEST_BUDGET_CEILING_BLOCK_MESSAGE)).toBeInTheDocument();
   });
 
   it("vuelve desde Documentos a Datos con Corregir datos y muestra errores en los campos", async () => {

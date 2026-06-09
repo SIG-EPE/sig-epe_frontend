@@ -4,7 +4,9 @@ import { useCallback, useEffect, useState } from "react";
 
 import { api } from "@/lib/api-client";
 import { useAuthStore } from "@/stores/auth-store";
+import { REQUEST_DOCUMENT_CATEGORY } from "@/types/requests";
 import type {
+  AttachPaymentProofInput,
   BudgetPreviewInput,
   BulkMarkPaidInput,
   BulkMarkPaidResponse,
@@ -19,6 +21,7 @@ import type {
   RenditionsInboxResponse,
   RenditionInboxCounts,
   RequestBudgetPreview,
+  RequestAllocationsBudgetPreview,
   RequestPlanningLineLookupResponse,
   RequestDocument,
   RequestReceiptReview,
@@ -365,6 +368,40 @@ export function useCompletePaymentDetails() {
   return { completePaymentDetails, isLoading, error };
 }
 
+export async function attachPaymentProof(paymentId: string, input: AttachPaymentProofInput): Promise<PaymentRequest> {
+  const formData = new FormData();
+  if (input.proof) formData.append("proof", input.proof);
+  if (input.proof_document_id?.trim()) formData.append("proof_document_id", input.proof_document_id.trim());
+  if (input.operation_reference?.trim()) formData.append("operation_reference", input.operation_reference.trim());
+  if (input.paid_at?.trim()) formData.append("paid_at", input.paid_at.trim());
+  if (input.amount_paid !== undefined) formData.append("amount_paid", String(input.amount_paid));
+  if (input.notes?.trim()) formData.append("notes", input.notes.trim());
+  if (input.request_allocation_ids?.length) formData.append("request_allocation_ids", JSON.stringify(input.request_allocation_ids));
+  if (input.allocations?.length) formData.append("allocations", JSON.stringify(input.allocations));
+  return await api.postForm<PaymentRequest>(`/request-payments/${paymentId}/proofs`, formData);
+}
+
+export function useAttachPaymentProof() {
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<Error | null>(null);
+
+  const submitPaymentProof = async (paymentId: string, input: AttachPaymentProofInput): Promise<PaymentRequest> => {
+    setIsLoading(true);
+    setError(null);
+    try {
+      return await attachPaymentProof(paymentId, input);
+    } catch (e) {
+      const nextError = e instanceof Error ? e : new Error("Error al asociar comprobante de pago");
+      setError(nextError);
+      throw e;
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  return { attachPaymentProof: submitPaymentProof, isLoading, error };
+}
+
 export function useStartAdvanceSettlement() {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<Error | null>(null);
@@ -565,6 +602,15 @@ export function useUploadRequestDocument() {
       const formData = new FormData();
       formData.append("file", input.file);
       formData.append("document_category", input.document_category);
+      if (input.scope_type && input.document_category !== REQUEST_DOCUMENT_CATEGORY.PAYMENT_PROOF) {
+        formData.append("scope_type", input.scope_type);
+      }
+      if (input.request_allocation_id && input.document_category !== REQUEST_DOCUMENT_CATEGORY.PAYMENT_PROOF) {
+        formData.append("request_allocation_id", input.request_allocation_id);
+      }
+      if (input.document_section) {
+        formData.append("document_section", input.document_section);
+      }
       if (input.metadata_json) {
         formData.append("metadata_json", JSON.stringify(input.metadata_json));
       }
@@ -670,36 +716,47 @@ export function useRequestPlanningLines(filters?: RequestPlanningLineLookupFilte
 }
 
 export function useBudgetPreview(input: BudgetPreviewInput) {
-  const [data, setData] = useState<RequestBudgetPreview | null>(null);
+  const [data, setData] = useState<RequestBudgetPreview | RequestAllocationsBudgetPreview | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<Error | null>(null);
 
   const authIsLoading = useAuthStore((state) => state.isLoading);
   const accessToken = useAuthStore((state) => state.accessToken);
 
-  const hasValidInput = Boolean(
-    input.planningLineId && input.amount && input.amount > 0,
-  );
+  const allocationKey = input.allocations?.map((allocation) => `${allocation.budget_planning_line_id}:${allocation.amount}`).join("|") ?? "";
+  const validAllocations = input.allocations?.filter((allocation) => allocation.budget_planning_line_id && allocation.amount > 0) ?? [];
+  const hasBatchInput = validAllocations.length > 0;
+  const hasLegacyInput = Boolean(input.planningLineId && input.amount && input.amount > 0);
+  const hasValidInput = hasBatchInput || hasLegacyInput;
 
   const refetch = useCallback(async () => {
-    if (!hasValidInput || !input.planningLineId || !input.amount || authIsLoading || !accessToken) {
+    if (!hasValidInput || authIsLoading || !accessToken) {
       return;
     }
     setIsLoading(true);
     setError(null);
     try {
+      if (hasBatchInput) {
+        const result = await api.post<RequestAllocationsBudgetPreview>("/requests/lookups/planning-lines/budget-preview", {
+          allocations: validAllocations,
+          month: input.month,
+          request_id: input.requestId,
+        });
+        setData(result);
+        return;
+      }
+
       const params = new URLSearchParams({ amount: String(input.amount) });
       if (input.month) params.set("month", String(input.month));
-      const result = await api.get<RequestBudgetPreview>(
-        `/requests/lookups/planning-lines/${input.planningLineId}/budget-preview?${params.toString()}`,
-      );
+      if (input.requestId) params.set("request_id", input.requestId);
+      const result = await api.get<RequestBudgetPreview>(`/requests/lookups/planning-lines/${input.planningLineId}/budget-preview?${params.toString()}`);
       setData(result);
     } catch (e) {
       setError(e instanceof Error ? e : new Error("Error al obtener vista previa presupuestal"));
     } finally {
       setIsLoading(false);
     }
-  }, [accessToken, authIsLoading, hasValidInput, input.amount, input.month, input.planningLineId]);
+  }, [accessToken, authIsLoading, allocationKey, hasBatchInput, hasValidInput, input.amount, input.month, input.planningLineId, input.requestId]);
 
   useEffect(() => {
     if (!hasValidInput) {
