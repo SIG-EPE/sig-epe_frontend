@@ -7,6 +7,11 @@ import { toast } from 'sonner'
 import { useAuthStore } from '@/stores/auth-store'
 import { useProfile } from '@/hooks/use-profile'
 import { ROLE_LABELS, type RoleCode } from '@/lib/constants'
+import {
+  ONBOARDING_EMAIL_RECOMMENDATION_MESSAGE,
+  isValidEmailFormat,
+  shouldShowOnboardingEmailRecommendation,
+} from '@/lib/onboarding-domain'
 
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Badge } from '@/components/ui/badge'
@@ -52,6 +57,7 @@ export function ProfileView() {
   const [firstName, setFirstName] = useState(user?.firstName ?? '')
   const [lastName, setLastName] = useState(user?.lastName ?? '')
   const [email, setEmail] = useState(user?.email ?? '')
+  const [emailError, setEmailError] = useState<string | null>(null)
 
   if (isAuthLoading || !user) return <ProfileSkeleton />
 
@@ -68,6 +74,14 @@ export function ProfileView() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
+
+    if (email.trim().length > 0 && !isValidEmailFormat(email)) {
+      setEmailError('Ingresa un correo válido')
+      return
+    }
+
+    setEmailError(null)
+
     try {
       await updateProfile({
         email: email || undefined,
@@ -103,7 +117,7 @@ export function ProfileView() {
           <CardTitle>Información personal</CardTitle>
         </CardHeader>
         <CardContent>
-          <form onSubmit={(e) => void handleSubmit(e)} className="space-y-4">
+          <form onSubmit={(e) => void handleSubmit(e)} className="space-y-4" noValidate>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               {/* Nombre */}
               <div className="space-y-1.5">
@@ -173,9 +187,20 @@ export function ProfileView() {
                   id="email"
                   type="email"
                   value={email}
-                  onChange={(e) => setEmail(e.target.value)}
+                  onChange={(e) => {
+                    setEmail(e.target.value)
+                    setEmailError(null)
+                  }}
                   placeholder="No configurado"
+                  aria-invalid={emailError ? 'true' : 'false'}
                 />
+                {emailError ? (
+                  <p className="text-sm text-destructive">{emailError}</p>
+                ) : shouldShowOnboardingEmailRecommendation(email) ? (
+                  <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-100">
+                    {ONBOARDING_EMAIL_RECOMMENDATION_MESSAGE}
+                  </p>
+                ) : null}
               </div>
             </div>
 

@@ -15,7 +15,8 @@ Required environment variables:
 
 Recommended environment variables:
 
-- `NEXT_PUBLIC_ONBOARDING_ALLOWED_EMAIL_DOMAINS` — comma-separated allowed onboarding email domains, if onboarding restrictions are enabled.
+- `NEXT_PUBLIC_ONBOARDING_RECOMMENDED_EMAIL_DOMAINS` — comma-separated corporate domains shown as a non-blocking recommendation during onboarding/profile updates. Use `ensenaperu.org` unless the organization changes domains.
+- `NEXT_PUBLIC_ONBOARDING_ALLOWED_EMAIL_DOMAINS` — legacy fallback name for older deployments only; prefer the recommended-domain variable for new configuration.
 
 ## GitHub Actions
 

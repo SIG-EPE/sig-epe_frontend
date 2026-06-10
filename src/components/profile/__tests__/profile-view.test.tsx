@@ -1,6 +1,6 @@
 // src/components/profile/__tests__/profile-view.test.tsx
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 
 // -------------------------------------------------------
 // Mocks
@@ -8,6 +8,17 @@ import { render, screen } from '@testing-library/react'
 
 vi.mock('@/stores/auth-store', () => ({
   useAuthStore: vi.fn(),
+}))
+
+vi.mock('@/hooks/use-profile', () => ({
+  useProfile: vi.fn(),
+}))
+
+vi.mock('sonner', () => ({
+  toast: {
+    error: vi.fn(),
+    success: vi.fn(),
+  },
 }))
 
 vi.mock('next/navigation', () => ({
@@ -21,6 +32,7 @@ vi.mock('next/navigation', () => ({
 
 import { ProfileView } from '@/components/profile/profile-view'
 import { useAuthStore } from '@/stores/auth-store'
+import { useProfile } from '@/hooks/use-profile'
 import type { AuthUser } from '@/types/auth'
 
 // -------------------------------------------------------
@@ -47,6 +59,8 @@ const baseUser: AuthUser = {
   authSource: 'LOCAL',
 }
 
+const updateProfileMock = vi.fn()
+
 // -------------------------------------------------------
 // Tests
 // -------------------------------------------------------
@@ -54,6 +68,10 @@ const baseUser: AuthUser = {
 describe('ProfileView', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    vi.mocked(useProfile).mockReturnValue({
+      updateProfile: updateProfileMock,
+      isLoading: false,
+    })
   })
 
   it('✅ muestra skeleton cuando user es null', () => {
@@ -119,5 +137,55 @@ describe('ProfileView', () => {
     mockStore({ user: { ...baseUser, authSource: 'EPE' }, isLoading: false })
     render(<ProfileView />)
     expect(screen.getByText('Cuenta Enseña Perú')).toBeInTheDocument()
+  })
+
+  it('permite guardar perfil con correo válido no corporativo y muestra recomendación', async () => {
+    updateProfileMock.mockResolvedValue(undefined)
+    mockStore({ user: baseUser, isLoading: false })
+    render(<ProfileView />)
+
+    fireEvent.change(screen.getByLabelText(/correo electrónico/i), {
+      target: { value: 'persona@gmail.com' },
+    })
+
+    expect(
+      screen.getByText(/recomendamos usar tu correo corporativo/i)
+    ).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: /guardar cambios/i }))
+
+    await waitFor(() => {
+      expect(updateProfileMock).toHaveBeenCalledWith({
+        email: 'persona@gmail.com',
+        firstName: 'Administrador',
+        lastName: 'Sistema',
+      })
+    })
+  })
+
+  it('no muestra recomendación para correo corporativo recomendado', () => {
+    mockStore({ user: baseUser, isLoading: false })
+    render(<ProfileView />)
+
+    fireEvent.change(screen.getByLabelText(/correo electrónico/i), {
+      target: { value: 'persona@ensenaperu.org' },
+    })
+
+    expect(
+      screen.queryByText(/recomendamos usar tu correo corporativo/i)
+    ).not.toBeInTheDocument()
+  })
+
+  it('bloquea guardar perfil cuando el formato de correo es inválido', async () => {
+    mockStore({ user: baseUser, isLoading: false })
+    render(<ProfileView />)
+
+    fireEvent.change(screen.getByLabelText(/correo electrónico/i), {
+      target: { value: 'not-an-email' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /guardar cambios/i }))
+
+    expect(await screen.findByText(/ingresa un correo válido/i)).toBeInTheDocument()
+    expect(updateProfileMock).not.toHaveBeenCalled()
   })
 })

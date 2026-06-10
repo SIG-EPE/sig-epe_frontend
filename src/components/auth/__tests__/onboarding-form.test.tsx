@@ -52,8 +52,7 @@ vi.mock("@/lib/constants", () => ({
 // Helpers
 // -------------------------------------------------------
 
-import { ApiRequestError, api } from "@/lib/api-client";
-import { toast } from "sonner";
+import { api } from "@/lib/api-client";
 import { OnboardingForm } from "@/components/auth/onboarding-form";
 
 function renderOnboardingForm(epeUserName = "Juan Pérez") {
@@ -126,16 +125,39 @@ describe("OnboardingForm", () => {
     });
   });
 
-  it("bloquea correos externos antes de enviar la activación de cuenta", async () => {
+  it("permite enviar onboarding con correo válido no corporativo y muestra recomendación", async () => {
+    vi.mocked(api.post).mockResolvedValue({
+      accessToken: "token",
+      refreshToken: "refresh",
+      onboardingRequired: false,
+      user: {
+        id: "user-1",
+        firstName: "Juan",
+        lastName: "Pérez",
+        email: "persona@gmail.com",
+        documentNumber: "12345678",
+        onboardingCompleted: true,
+        authSource: "LOCAL",
+        role: { code: "SOLICITANTE_EPE", name: "Solicitante EPE" },
+      },
+    });
     renderOnboardingForm();
 
     fillLocalOnboardingForm({ email: "persona@gmail.com" });
+
+    expect(
+      screen.getByText(/recomendamos usar tu correo corporativo/i)
+    ).toBeInTheDocument();
+
     submitOnboardingForm();
 
     await waitFor(() => {
-      expect(screen.getByText(/solo se permiten correos @ensenaperu\.org/i)).toBeInTheDocument();
+      expect(api.post).toHaveBeenCalledWith("/auth/onboarding", {
+        email: "persona@gmail.com",
+        newPassword: "Password123",
+        confirmPassword: "Password123",
+      });
     });
-    expect(api.post).not.toHaveBeenCalled();
   });
 
   it("acepta el dominio permitido sin importar mayúsculas ni espacios", async () => {
@@ -157,6 +179,11 @@ describe("OnboardingForm", () => {
     renderOnboardingForm();
 
     fillLocalOnboardingForm({ email: "  Persona@EnsenaPeru.Org  " });
+
+    expect(
+      screen.queryByText(/recomendamos usar tu correo corporativo/i)
+    ).not.toBeInTheDocument();
+
     submitOnboardingForm();
 
     await waitFor(() => {
@@ -168,26 +195,18 @@ describe("OnboardingForm", () => {
     });
   });
 
-  it("muestra el rechazo de dominio devuelto por backend", async () => {
-    const backendMessage = "Solo se permiten correos @ensenaperu.org para completar el onboarding.";
-    const sanitizedMessage = "Solo se permiten correos @ensenaperu.org para completar la activación de cuenta.";
-    vi.mocked(api.post).mockRejectedValue(
-      new ApiRequestError(400, {
-        statusCode: 400,
-        message: backendMessage,
-        error: "Bad Request",
-        timestamp: "2026-05-14T00:00:00.000Z",
-        path: "/auth/onboarding",
-      }),
-    );
+  it("no muestra recomendación para formatos inválidos y mantiene bloqueo por formato", async () => {
     renderOnboardingForm();
 
-    fillLocalOnboardingForm({ email: "persona@ensenaperu.org" });
+    fillLocalOnboardingForm({ email: "not-an-email" });
+    expect(
+      screen.queryByText(/recomendamos usar tu correo corporativo/i)
+    ).not.toBeInTheDocument();
     submitOnboardingForm();
 
     await waitFor(() => {
-      expect(screen.getByText(sanitizedMessage)).toBeInTheDocument();
+      expect(screen.getByText(/Ingresa un correo válido/i)).toBeInTheDocument();
     });
-    expect(toast.error).toHaveBeenCalledWith(sanitizedMessage);
+    expect(api.post).not.toHaveBeenCalled();
   });
 });
