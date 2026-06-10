@@ -8,13 +8,14 @@ import { BeneficiaryFields } from "@/components/requests/beneficiary-fields";
 import { Form } from "@/components/ui/form";
 import { getRequestSaveSuccessToast, getRequestSubmitFailureToast, getRequestSubmitSavingToast, getRequestSubmitSuccessToast, getScheduledRenditionMinDate, normalizeRequestAmountInput, REQUEST_BUDGET_CEILING_BLOCK_MESSAGE, RequestForm, requestFormSchema, toCreateRequestDto, toUpdateRequestDto, type RequestFormValues } from "@/components/requests/request-form";
 import { BANK_OPTIONS, REQUEST_EDIT_STEP } from "@/lib/requests";
-import { ACCOUNT_TYPE, BANK_CODE, BENEFICIARY_DOCUMENT_TYPE, REQUEST_CURRENCY, REQUEST_DOCUMENT_CATEGORY, REQUEST_STATUS, REQUEST_TYPE, type PaymentRequest, type RequestBudgetPreview, type RequestDocument, type SettlementContextResponse } from "@/types/requests";
+import { ACCOUNT_TYPE, BANK_CODE, BENEFICIARY_DOCUMENT_TYPE, REQUEST_CURRENCY, REQUEST_DOCUMENT_CATEGORY, REQUEST_DOCUMENT_SCOPE_TYPE, REQUEST_STATUS, REQUEST_TYPE, type PaymentRequest, type RequestAllocation, type RequestBudgetPreview, type RequestDocument, type SettlementContextResponse } from "@/types/requests";
 
 const mocks = vi.hoisted(() => ({
   createRequest: vi.fn(),
   push: vi.fn(),
   refetchDocuments: vi.fn(),
   requestDocuments: [] as RequestDocument[],
+  structuredReportReady: true,
   submitRequest: vi.fn(),
   toastError: vi.fn(),
   toastSuccess: vi.fn(),
@@ -54,9 +55,19 @@ vi.mock("@/components/requests/budget-preview-card", () => ({
 }));
 
 vi.mock("@/components/requests/request-documents-card", () => ({
-  RequestDocumentsCard: (props: { documents?: RequestDocument[] }) => (
-    <div data-testid="request-documents-card" data-documents-count={props.documents?.length ?? 0} />
+  RequestDocumentsCard: (props: { documents?: RequestDocument[]; structuredReportLocked?: boolean }) => (
+    <div data-testid="request-documents-card" data-documents-count={props.documents?.length ?? 0} data-structured-report-locked={props.structuredReportLocked ? "true" : "false"} />
   ),
+}));
+
+vi.mock("@/components/requests/structured-rendition-report-card", () => ({
+  StructuredRenditionReportCard: (props: { onReadinessChange?: (ready: boolean, messages: string[]) => void; onLockChange?: (locked: boolean) => void }) => {
+    useEffect(() => {
+      props.onReadinessChange?.(mocks.structuredReportReady, mocks.structuredReportReady ? [] : ["Genera el informe antes de continuar a revisión."]);
+      props.onLockChange?.(mocks.structuredReportReady);
+    }, []);
+    return <div data-testid="structured-rendition-report-card">Informe de rendición estructurado</div>;
+  },
 }));
 
 function makeValues(overrides: Partial<RequestFormValues> = {}): RequestFormValues {
@@ -184,6 +195,43 @@ function makeBudgetPreview(overrides: Partial<RequestBudgetPreview> = {}): Reque
   };
 }
 
+function makeSettlementAllocation(overrides: Partial<RequestAllocation> = {}): RequestAllocation {
+  return {
+    id: "alloc-1",
+    payment_request_id: "advance-1",
+    budget_planning_line_id: "line-1",
+    amount: 500,
+    currency: REQUEST_CURRENCY.PEN,
+    budget_month: 1,
+    fiscal_year: 2026,
+    org_unit_id: "ou-1",
+    sort_order: 1,
+    budgetPlanningLine: null,
+    planning_line: {
+      id: "line-1",
+      line_code: "POA-001",
+      resource_description: "Taller regional",
+      planning_type: "POA",
+      type_resource: "Bienes",
+      unit_price: 100,
+      quantity: 5,
+      total_cost: 500,
+      status: "APPROVED",
+      fiscal_year: { id: "fy-2026", year: 2026, status: "OPEN" },
+      org_unit: { id: "ou-1", code: "UO-01", name: "Unidad de Operaciones" },
+      category: null,
+      program: null,
+      action: null,
+      territory: null,
+      monthly_summary: [],
+    },
+    org_unit: { id: "ou-1", code: "UO-01", name: "Unidad de Operaciones" },
+    documents: [],
+    payment_execution: null,
+    ...overrides,
+  };
+}
+
 function makeSettlementContext(overrides: Partial<SettlementContextResponse> = {}): SettlementContextResponse {
   return {
     settlement: {
@@ -262,8 +310,9 @@ beforeEach(() => {
   mocks.createRequest.mockReset();
   mocks.push.mockReset();
   mocks.refetchDocuments.mockReset();
-  mocks.requestDocuments = [];
-  mocks.submitRequest.mockReset();
+    mocks.requestDocuments = [];
+    mocks.structuredReportReady = true;
+    mocks.submitRequest.mockReset();
   mocks.toastError.mockReset();
   mocks.toastSuccess.mockReset();
   mocks.updateRequest.mockReset();
@@ -840,6 +889,70 @@ describe("RequestForm payload helpers", () => {
     expect(screen.queryByTestId("request-bank-account-input")).not.toBeInTheDocument();
   });
 
+  it("agrupa documentos del anticipo original por línea POA cuando tienen alcance", () => {
+    const allocationOne = makeSettlementAllocation({ id: "alloc-1" });
+    const allocationTwo = makeSettlementAllocation({
+      id: "alloc-2",
+      budget_planning_line_id: "line-2",
+      amount: 300,
+      sort_order: 2,
+      planning_line: {
+        ...makeSettlementAllocation().planning_line!,
+        id: "line-2",
+        line_code: "POA-002",
+        resource_description: "Pasajes regionales",
+      },
+    });
+    const context = makeSettlementContext({
+      original_advance: {
+        ...makeSettlementContext().original_advance,
+        allocations: [allocationOne, allocationTwo],
+      },
+      original_advance_documents: [
+        {
+          ...makeDocument({
+            id: "pxq-1",
+            payment_request_id: "advance-1",
+            document_category: REQUEST_DOCUMENT_CATEGORY.PXQ,
+            original_filename: "POA equipos.xlsx",
+            safe_filename: "poa-equipos.xlsx",
+            mime_type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            scope_type: REQUEST_DOCUMENT_SCOPE_TYPE.ALLOCATION,
+            request_allocation_id: "alloc-1",
+          }),
+          read_only: true,
+        },
+        {
+          ...makeDocument({
+            id: "pxq-2",
+            payment_request_id: "advance-1",
+            document_category: REQUEST_DOCUMENT_CATEGORY.PXQ,
+            original_filename: "POA pasajes.xlsx",
+            safe_filename: "poa-pasajes.xlsx",
+            mime_type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            scope_type: REQUEST_DOCUMENT_SCOPE_TYPE.ALLOCATION,
+            request_allocation_id: "alloc-2",
+          }),
+          read_only: true,
+        },
+        {
+          ...makeDocument({ id: "general-doc", payment_request_id: "advance-1", original_filename: "Sustento general.pdf" }),
+          read_only: true,
+        },
+      ],
+    });
+
+    render(<RequestForm activeStep={REQUEST_EDIT_STEP.DATA} initialRequest={makePaymentRequest()} mode="edit" settlementContext={context} />);
+
+    const groups = screen.getAllByTestId("original-advance-allocation-documents");
+    expect(groups).toHaveLength(2);
+    expect(groups[0]).toHaveTextContent("POA-001");
+    expect(groups[0]).toHaveTextContent("POA equipos.xlsx");
+    expect(groups[1]).toHaveTextContent("POA-002");
+    expect(groups[1]).toHaveTextContent("POA pasajes.xlsx");
+    expect(screen.getByTestId("original-advance-general-documents")).toHaveTextContent("Sustento general.pdf");
+  });
+
   it("mantiene campos editables normales en borradores no REXAN", () => {
     render(<RequestForm activeStep={REQUEST_EDIT_STEP.DATA} initialRequest={makePaymentRequest({ request_type: REQUEST_TYPE.ADVANCE })} mode="edit" />);
 
@@ -870,7 +983,32 @@ describe("RequestForm payload helpers", () => {
 
     expect(screen.getByText("Resumen del anticipo original")).toBeInTheDocument();
     expect(screen.getByTestId("request-documents-card")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Adjuntar documentos para continuar" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Continuar a revisión" })).toBeEnabled();
+  });
+
+  it("bloquea continuar a revisión REXAN hasta que el informe esté generado", async () => {
+    mocks.structuredReportReady = false;
+    const user = userEvent.setup();
+
+    render(<RequestForm activeStep={REQUEST_EDIT_STEP.DOCUMENTS} initialRequest={makePaymentRequest()} mode="edit" settlementContext={makeSettlementContext()} />);
+
+    expect(await screen.findByRole("button", { name: "Generar informe para continuar" })).toBeEnabled();
+    await user.click(screen.getByRole("button", { name: "Generar informe para continuar" }));
+
+    expect(mocks.push).not.toHaveBeenCalledWith("/requests/request-1/edit?step=review");
+    expect(mocks.toastError).toHaveBeenCalledWith("Genera el informe antes de continuar a revisión.");
+    expect(screen.getByText("Genera el informe antes de continuar a revisión.")).toBeInTheDocument();
+  });
+
+  it("permite continuar a revisión REXAN cuando el informe ya fue generado", async () => {
+    mocks.structuredReportReady = true;
+    const user = userEvent.setup();
+
+    render(<RequestForm activeStep={REQUEST_EDIT_STEP.DOCUMENTS} initialRequest={makePaymentRequest()} mode="edit" settlementContext={makeSettlementContext()} />);
+
+    await user.click(screen.getByRole("button", { name: "Continuar a revisión" }));
+
+    expect(mocks.push).toHaveBeenCalledWith("/requests/request-1/edit?step=review");
   });
 
   it("incluye contexto original en revisión REXAN sin mezclar documentos propios", () => {

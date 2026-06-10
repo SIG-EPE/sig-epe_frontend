@@ -6,7 +6,7 @@ import { RequestDocumentsCard } from "@/components/requests/request-documents-ca
 import { api, ApiRequestError } from "@/lib/api-client";
 import { ROLE_CODE } from "@/lib/constants";
 import { useAuthStore } from "@/stores/auth-store";
-import { REQUEST_CURRENCY, REQUEST_DOCUMENT_CATEGORY, REQUEST_DOCUMENT_SCOPE_TYPE, REQUEST_RECEIPT_DUPLICATE_STATUS, REQUEST_RECEIPT_OCR_STATUS, REQUEST_STATUS, REQUEST_TYPE, type PaymentRequest, type RequestAllocation, type RequestDocument, type RequestReceiptReview } from "@/types/requests";
+import { REQUEST_CURRENCY, REQUEST_DOCUMENT_CATEGORY, REQUEST_DOCUMENT_SCOPE_TYPE, REQUEST_RECEIPT_DUPLICATE_STATUS, REQUEST_RECEIPT_OCR_STATUS, REQUEST_STATUS, REQUEST_TYPE, REXAN_OUTCOME, type PaymentRequest, type RequestAllocation, type RequestDocument, type RequestReceiptReview } from "@/types/requests";
 
 vi.mock("@/lib/api-client", () => ({
   api: {
@@ -132,6 +132,7 @@ function makeReceiptReview(overrides: Partial<RequestReceiptReview> = {}): Reque
     receipt: {
       id: "receipt-1",
       request_id: "req-1",
+      request_allocation_id: null,
       document_id: "doc-1",
       receipt_type: "INVOICE",
       issuer_document_type: "RUC",
@@ -215,6 +216,68 @@ describe("RequestDocumentsCard", () => {
       expect(api.delete).toHaveBeenCalledWith("/requests/req-1/documents/doc-1");
     });
   }, 10_000);
+
+  it("oculta acciones de documentos y revisión OCR cuando el informe generado está bloqueado", async () => {
+    vi.mocked(api.get)
+      .mockResolvedValueOnce([makeDocument({ document_category: REQUEST_DOCUMENT_CATEGORY.RECEIPT })])
+      .mockResolvedValueOnce([makeReceiptReview()]);
+
+    render(<RequestDocumentsCard request={makeRequest({ request_type: REQUEST_TYPE.ADVANCE_SETTLEMENT, allocations: [makeAllocation()] })} structuredReportLocked />);
+
+    expect(await screen.findByText("Sustento.pdf")).toBeInTheDocument();
+    expect(screen.getByText(/El informe generado bloquea la carga, eliminación y revisión de comprobantes/i)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Adjuntar/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Eliminar/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Revisar datos/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Confirmar datos/i })).not.toBeInTheDocument();
+  });
+
+  it("reabre acciones de documentos y revisión cuando la rendición está observada", async () => {
+    vi.mocked(api.get)
+      .mockResolvedValueOnce([makeDocument({ document_category: REQUEST_DOCUMENT_CATEGORY.RECEIPT })])
+      .mockResolvedValueOnce([makeReceiptReview()]);
+    vi.mocked(api.postForm).mockResolvedValue(makeDocument({
+      id: "return-proof-1",
+      document_category: REQUEST_DOCUMENT_CATEGORY.RETURN_PROOF,
+      original_filename: "constancia-devolucion.pdf",
+    }));
+
+    render(<RequestDocumentsCard request={makeRequest({
+      request_type: REQUEST_TYPE.ADVANCE_SETTLEMENT,
+      status: REQUEST_STATUS.OBSERVED,
+      rexan_outcome: REXAN_OUTCOME.DEVOLUCION,
+      rexan_return_proof_document_id: null,
+      allocations: [makeAllocation()],
+      observations: [{
+        id: "obs-1",
+        payment_request_id: "req-1",
+        observer_id: "giof-1",
+        field_reference: "Constancia de devolución",
+        comment: "Por favor adjunta la constancia de devolución por S/ 20.00 para continuar.",
+        is_resolved: false,
+        resolved_at: null,
+        created_at: "2026-05-01T10:00:00.000Z",
+        updated_at: "2026-05-01T10:00:00.000Z",
+      }],
+    })} structuredReportLocked />);
+
+    expect(await screen.findByText("Constancia de devolución")).toBeInTheDocument();
+    expect(screen.getByText(/La rendición fue observada; puedes actualizar sustentos y regenerar el informe antes de reenviar/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Revisar datos/i })).toBeEnabled();
+    expect(screen.getByRole("button", { name: /Confirmar datos/i })).toBeEnabled();
+    expect(screen.getByRole("button", { name: /^Adjuntar$/i })).toBeInTheDocument();
+    expect(screen.queryByText(/El informe generado bloquea la carga, eliminación y revisión de comprobantes/i)).not.toBeInTheDocument();
+
+    const file = new File(["constancia"], "constancia-devolucion.pdf", { type: "application/pdf" });
+    fireEvent.change(screen.getByLabelText(/seleccionar constancia de devolución/i), { target: { files: [file] } });
+
+    await waitFor(() => {
+      expect(api.postForm).toHaveBeenCalledWith("/requests/req-1/documents", expect.any(FormData));
+    });
+    const formData = vi.mocked(api.postForm).mock.calls[0][1] as FormData;
+    expect(formData.get("file")).toBe(file);
+    expect(formData.get("document_category")).toBe(REQUEST_DOCUMENT_CATEGORY.RETURN_PROOF);
+  });
 
   it("muestra un enlace visible de Drive para revisores GIOF sin habilitar acciones de edición", async () => {
     const driveWebUrl = "https://drive.google.com/file/d/doc-1/view";
@@ -361,6 +424,157 @@ describe("RequestDocumentsCard", () => {
     expect(groups[1]).toHaveTextContent("Falta adjuntar Excel PxQ.");
   });
 
+  it("muestra la regla de comprobantes por línea POA para una rendición de anticipo", async () => {
+    vi.mocked(api.get).mockResolvedValue([
+      makeDocument({
+        id: "receipt-1",
+        document_category: REQUEST_DOCUMENT_CATEGORY.RECEIPT,
+        original_filename: "Comprobante.pdf",
+        scope_type: REQUEST_DOCUMENT_SCOPE_TYPE.ALLOCATION,
+        request_allocation_id: "alloc-1",
+      }),
+    ]);
+
+    render(<RequestDocumentsCard request={makeRequest({
+      request_type: REQUEST_TYPE.ADVANCE_SETTLEMENT,
+      allocations: [makeAllocation({ id: "alloc-1" }), makeAllocation({
+        id: "alloc-2",
+        budget_planning_line_id: "line-2",
+        amount: 200,
+        sort_order: 2,
+        planning_line: {
+          ...makeAllocation().planning_line!,
+          id: "line-2",
+          line_code: "POA-2",
+          resource_description: "Servicios logísticos",
+        },
+      })],
+    })} />);
+
+    expect(await screen.findByText(/cada línea POA debe tener al menos un comprobante/i)).toBeInTheDocument();
+    expect(screen.getByText(/Comprobantes por línea POA/i)).toBeInTheDocument();
+    expect(screen.queryByTestId("allocation-documents-groups")).not.toBeInTheDocument();
+    expect(screen.queryByText("Excel PxQ")).not.toBeInTheDocument();
+    expect(screen.queryByText("Falta adjuntar Excel PxQ.")).not.toBeInTheDocument();
+    expect(screen.queryByText("Comprobante de la rendición")).not.toBeInTheDocument();
+    expect(screen.getAllByTestId("settlement-receipt-group")).toHaveLength(2);
+    expect(screen.getByText(/POA-1/)).toBeInTheDocument();
+    expect(screen.getByText(/POA-2/)).toBeInTheDocument();
+    expect(screen.getByText("Comprobante.pdf")).toBeInTheDocument();
+  });
+
+  it("muestra líneas del anticipo como referencia si la rendición aún no trae líneas", async () => {
+    vi.mocked(api.get).mockResolvedValue([]);
+
+    render(<RequestDocumentsCard
+      request={makeRequest({ request_type: REQUEST_TYPE.ADVANCE_SETTLEMENT, allocations: [] })}
+      guidanceAllocations={[
+        makeAllocation({ id: "original-alloc-1" }),
+        makeAllocation({
+          id: "original-alloc-2",
+          budget_planning_line_id: "line-2",
+          amount: 200,
+          sort_order: 2,
+          planning_line: {
+            ...makeAllocation().planning_line!,
+            id: "line-2",
+            line_code: "POA-2",
+            resource_description: "Servicios logísticos",
+          },
+        }),
+      ]}
+    />);
+
+    expect(await screen.findByText(/líneas POA del anticipo original como referencia/i)).toBeInTheDocument();
+    expect(screen.getAllByTestId("settlement-receipt-group")).toHaveLength(2);
+    expect(screen.getByText(/POA-1/)).toBeInTheDocument();
+    expect(screen.getByText(/POA-2/)).toBeInTheDocument();
+    expect(screen.queryByRole("combobox", { name: /línea poa/i })).not.toBeInTheDocument();
+  });
+
+  it("sube un comprobante de rendición asociado a una línea POA", async () => {
+    vi.mocked(api.get).mockResolvedValue([]);
+    vi.mocked(api.postForm).mockResolvedValue(makeDocument({ id: "receipt-alloc-1", document_category: REQUEST_DOCUMENT_CATEGORY.RECEIPT }));
+
+    const user = userEvent.setup();
+    render(<RequestDocumentsCard request={makeRequest({
+      request_type: REQUEST_TYPE.ADVANCE_SETTLEMENT,
+      allocations: [makeAllocation({ id: "alloc-1" }), makeAllocation({ id: "alloc-2", sort_order: 2 })],
+    })} />);
+
+    const categoryTrigger = await screen.findByRole("combobox", { name: /categoría/i });
+    await user.click(categoryTrigger);
+    await user.click(await screen.findByRole("option", { name: /^comprobante$/i }));
+    const allocationTrigger = screen.getByRole("combobox", { name: /línea poa/i });
+    await user.click(allocationTrigger);
+    await user.click(await screen.findByRole("option", { name: /línea 1/i }));
+    const file = new File(["contenido"], "factura.pdf", { type: "application/pdf" });
+    fireEvent.change(screen.getByLabelText(/archivo/i), { target: { files: [file] } });
+    await user.click(screen.getByRole("button", { name: /^adjuntar$/i }));
+
+    await waitFor(() => {
+      expect(api.postForm).toHaveBeenCalledWith("/requests/req-1/documents", expect.any(FormData));
+    });
+    const formData = vi.mocked(api.postForm).mock.calls[0][1] as FormData;
+    expect(formData.get("document_category")).toBe(REQUEST_DOCUMENT_CATEGORY.RECEIPT);
+    expect(formData.get("scope_type")).toBe(REQUEST_DOCUMENT_SCOPE_TYPE.ALLOCATION);
+    expect(formData.get("request_allocation_id")).toBe("alloc-1");
+  });
+
+  it("mantiene Adjuntar deshabilitado para comprobantes hasta seleccionar línea POA", async () => {
+    vi.mocked(api.get).mockResolvedValue([]);
+    vi.mocked(api.postForm).mockResolvedValue(makeDocument({ id: "receipt-alloc-1", document_category: REQUEST_DOCUMENT_CATEGORY.RECEIPT }));
+
+    const user = userEvent.setup();
+    render(<RequestDocumentsCard request={makeRequest({
+      request_type: REQUEST_TYPE.ADVANCE_SETTLEMENT,
+      allocations: [makeAllocation({ id: "alloc-1" }), makeAllocation({ id: "alloc-2", sort_order: 2 })],
+    })} />);
+
+    const categoryTrigger = await screen.findByRole("combobox", { name: /categoría/i });
+    await user.click(categoryTrigger);
+    await user.click(await screen.findByRole("option", { name: /^comprobante$/i }));
+    const file = new File(["contenido"], "factura.pdf", { type: "application/pdf" });
+    fireEvent.change(screen.getByLabelText(/archivo/i), { target: { files: [file] } });
+
+    expect(screen.getAllByText("Selecciona la línea POA antes de adjuntar el comprobante.").length).toBeGreaterThan(0);
+    expect(screen.getByRole("button", { name: /^adjuntar$/i })).toBeDisabled();
+
+    await user.click(screen.getByRole("combobox", { name: /línea poa/i }));
+    await user.click(await screen.findByRole("option", { name: /línea 1/i }));
+
+    expect(screen.getByRole("button", { name: /^adjuntar$/i })).toBeEnabled();
+    await user.click(screen.getByRole("button", { name: /^adjuntar$/i }));
+
+    await waitFor(() => {
+      expect(api.postForm).toHaveBeenCalledWith("/requests/req-1/documents", expect.any(FormData));
+    });
+    const formData = vi.mocked(api.postForm).mock.calls[0][1] as FormData;
+    expect(formData.get("request_allocation_id")).toBe("alloc-1");
+  });
+
+  it("usa etiquetas compactas para seleccionar líneas POA largas al adjuntar comprobantes", async () => {
+    vi.mocked(api.get).mockResolvedValue([]);
+    const user = userEvent.setup();
+    render(<RequestDocumentsCard request={makeRequest({
+      request_type: REQUEST_TYPE.ADVANCE_SETTLEMENT,
+      allocations: [makeAllocation({
+        id: "alloc-1",
+        planning_line: {
+          ...makeAllocation().planning_line!,
+          line_code: "POA-LARGA-2026",
+          resource_description: "Descripción extensa de la línea POA para compras logísticas, materiales y servicios en territorio",
+        },
+      })],
+    })} />);
+
+    await user.click(await screen.findByRole("combobox", { name: /categoría/i }));
+    await user.click(await screen.findByRole("option", { name: /^comprobante$/i }));
+    await user.click(screen.getByRole("combobox", { name: /línea poa/i }));
+
+    expect(await screen.findByRole("option", { name: "Línea 1 · POA-LARGA-2026" })).toBeInTheDocument();
+  });
+
   it("marca completo el bloque con PxQ aunque el checklist del request aún venga pendiente", async () => {
     vi.mocked(api.get).mockResolvedValue([
       makeDocument({
@@ -463,7 +677,7 @@ describe("RequestDocumentsCard", () => {
 
   it("muestra datos detectados del comprobante y permite corregirlos", async () => {
     vi.mocked(api.get).mockImplementation(async (path) => {
-      if (path === "/requests/req-1/receipts") return [makeReceiptReview()];
+      if (path === "/requests/req-1/receipts") return [makeReceiptReview({ receipt: { ...makeReceiptReview().receipt, issue_date: "2026-05-01T04:30:00.000Z" } })];
       return [makeDocument({ document_category: REQUEST_DOCUMENT_CATEGORY.RECEIPT, original_filename: "Factura.pdf" })];
     });
     vi.mocked(api.patch).mockResolvedValue(makeReceiptReview({
@@ -477,12 +691,15 @@ describe("RequestDocumentsCard", () => {
     render(<RequestDocumentsCard request={makeRequest({ request_type: REQUEST_TYPE.SUPPLIER_PAYMENT })} />);
 
     expect(await screen.findByText("Factura.pdf")).toBeInTheDocument();
-    expect(screen.getByText("Datos detectados")).toBeInTheDocument();
+    expect(screen.getByText("Pendiente de confirmación")).toBeInTheDocument();
     expect(screen.getByText(/Proveedor SAC · F001-123 · PEN 150.5/i)).toBeInTheDocument();
     expect(screen.getByText("RUC: 20123456789")).toBeInTheDocument();
+    expect(screen.getByText(/confirma los datos para usar este comprobante en el informe de rendición/i)).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: /revisar datos/i }));
     const providerInput = await screen.findByLabelText(/proveedor/i);
+    expect(screen.getByLabelText(/fecha del comprobante/i)).toHaveValue("2026-05-01");
+    expect(screen.getByText(/selecciona solo día, mes y año/i)).toBeInTheDocument();
     fireEvent.change(providerInput, { target: { value: "Proveedor Corregido SAC" } });
     await user.click(screen.getByRole("button", { name: /guardar corrección/i }));
 
@@ -515,11 +732,19 @@ describe("RequestDocumentsCard", () => {
 
     await user.click(screen.getByRole("button", { name: /confirmar datos/i }));
 
+    expect(await screen.findByRole("dialog", { name: /confirmar datos del comprobante/i })).toBeInTheDocument();
+    expect(screen.getByText(/esta confirmación es necesaria para que el comprobante pueda agregarse al informe de rendición/i)).toBeInTheDocument();
+    expect(screen.getByText(/después de confirmar, podrás seleccionar la línea poa/i)).toBeInTheDocument();
+    expect(api.post).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("button", { name: /confirmar para informe/i }));
+
     await waitFor(() => {
       expect(api.post).toHaveBeenCalledWith("/requests/req-1/receipts/receipt-1/confirm");
     });
     await waitFor(() => {
       expect(api.get).toHaveBeenCalledWith("/requests/req-1/receipts");
+      expect(api.get).toHaveBeenCalledWith("/requests/req-1/documents");
     });
   });
 

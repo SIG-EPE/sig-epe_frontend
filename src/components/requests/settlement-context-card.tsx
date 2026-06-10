@@ -17,7 +17,7 @@ import {
   getRequestDocumentMimeLabel,
   getRequestDocumentUploadStatusLabel,
 } from "@/lib/requests";
-import type { SettlementContextResponse, SettlementContextDocument } from "@/types/requests";
+import { REQUEST_CURRENCY, type RequestAllocation, type SettlementContextResponse, type SettlementContextDocument } from "@/types/requests";
 
 interface SettlementContextCardProps {
   context: SettlementContextResponse;
@@ -61,7 +61,72 @@ function renderSummaryItem(label: string, value: ReactNode, className = ""): Rea
   );
 }
 
-function OriginalAdvanceDocuments({ documents }: { documents: SettlementContextDocument[] }) {
+function getAllocationDocuments(allocation: RequestAllocation, documents: SettlementContextDocument[]): SettlementContextDocument[] {
+  if (!allocation.id) return [];
+  return documents.filter((document) => document.request_allocation_id === allocation.id);
+}
+
+function getGeneralDocuments(documents: SettlementContextDocument[]): SettlementContextDocument[] {
+  return documents.filter((document) => !document.request_allocation_id);
+}
+
+function getAllocationSummary(allocation: RequestAllocation): string {
+  const line = allocation.planning_line ?? allocation.budgetPlanningLine;
+  const orgUnit = allocation.org_unit ?? line?.org_unit ?? null;
+  const fiscalYear = allocation.fiscal_year ?? line?.fiscal_year?.year ?? null;
+  const parts = [
+    orgUnit?.name ? `Unidad: ${orgUnit.name}` : null,
+    fiscalYear ? `Año fiscal: ${fiscalYear}` : null,
+    `Monto: ${formatRequestCurrency(Number(allocation.amount ?? 0), allocation.currency || REQUEST_CURRENCY.PEN)}`,
+  ].filter((part): part is string => Boolean(part));
+
+  return parts.join(" · ");
+}
+
+function DocumentRows({ documents, emptyMessage = "Sin documentos visibles." }: { documents: SettlementContextDocument[]; emptyMessage?: string }) {
+  if (documents.length === 0) return <p className="rounded-md border p-3 text-sm text-muted-foreground">{emptyMessage}</p>;
+
+  return (
+    <div className="space-y-3">
+      {documents.map((document) => {
+        const documentWebUrl = getDocumentWebUrl(document);
+
+        return (
+          <div key={document.id} className="flex flex-col gap-3 rounded-md border p-3 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex min-w-0 gap-3">
+              <FileText className="mt-0.5 size-5 shrink-0 text-muted-foreground" />
+              <div className="min-w-0 space-y-1">
+                <p className="truncate text-sm font-medium">{getRequestDocumentDisplayName(document)}</p>
+                <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
+                  <Badge variant="secondary">{getRequestDocumentCategoryLabel(document.document_category)}</Badge>
+                  <Badge variant="outline">Solo lectura</Badge>
+                  <span>{getRequestDocumentMimeLabel(document.mime_type)}</span>
+                  <span>{formatRequestDocumentSize(document.size_bytes)}</span>
+                  <span>Subido: {formatRequestDateTime(document.created_at)}</span>
+                  <span>Estado: {getRequestDocumentUploadStatusLabel(document.upload_status)}</span>
+                </div>
+              </div>
+            </div>
+            {documentWebUrl ? (
+              <Button asChild variant="outline" size="sm">
+                <a href={documentWebUrl} target="_blank" rel="noopener noreferrer">
+                  <ExternalLink className="size-4" />
+                  Ver documento
+                </a>
+              </Button>
+            ) : (
+              <p className="text-xs text-muted-foreground">Enlace no disponible</p>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function OriginalAdvanceDocuments({ documents, allocations }: { documents: SettlementContextDocument[]; allocations: RequestAllocation[] }) {
+  const generalDocuments = allocations.length > 0 ? getGeneralDocuments(documents) : documents;
+
   return (
     <section className="space-y-3" data-testid="original-advance-documents">
       <div>
@@ -72,38 +137,26 @@ function OriginalAdvanceDocuments({ documents }: { documents: SettlementContextD
         <p className="rounded-md border p-3 text-sm text-muted-foreground">El anticipo original no tiene documentos visibles.</p>
       ) : (
         <div className="space-y-3">
-          {documents.map((document) => {
-            const documentWebUrl = getDocumentWebUrl(document);
+          {allocations.map((allocation, index) => {
+            const allocationDocuments = getAllocationDocuments(allocation, documents);
+            if (allocationDocuments.length === 0) return null;
 
             return (
-              <div key={document.id} className="flex flex-col gap-3 rounded-md border p-3 sm:flex-row sm:items-center sm:justify-between">
-                <div className="flex min-w-0 gap-3">
-                  <FileText className="mt-0.5 size-5 shrink-0 text-muted-foreground" />
-                  <div className="min-w-0 space-y-1">
-                    <p className="truncate text-sm font-medium">{getRequestDocumentDisplayName(document)}</p>
-                    <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
-                      <Badge variant="secondary">{getRequestDocumentCategoryLabel(document.document_category)}</Badge>
-                      <Badge variant="outline">Solo lectura</Badge>
-                      <span>{getRequestDocumentMimeLabel(document.mime_type)}</span>
-                      <span>{formatRequestDocumentSize(document.size_bytes)}</span>
-                      <span>Subido: {formatRequestDateTime(document.created_at)}</span>
-                      <span>Estado: {getRequestDocumentUploadStatusLabel(document.upload_status)}</span>
-                    </div>
-                  </div>
+              <div key={allocation.id ?? `${allocation.budget_planning_line_id}-${index}`} className="space-y-3 rounded-md border p-4" data-testid="original-advance-allocation-documents">
+                <div>
+                  <h4 className="text-sm font-semibold">Línea {index + 1}: {getPlanningLineDisplay(allocation.planning_line ?? allocation.budgetPlanningLine)}</h4>
+                  <p className="text-xs text-muted-foreground">{getAllocationSummary(allocation)}</p>
                 </div>
-                {documentWebUrl ? (
-                  <Button asChild variant="outline" size="sm">
-                    <a href={documentWebUrl} target="_blank" rel="noopener noreferrer">
-                      <ExternalLink className="size-4" />
-                      Ver documento
-                    </a>
-                  </Button>
-                ) : (
-                  <p className="text-xs text-muted-foreground">Enlace no disponible</p>
-                )}
+                <DocumentRows documents={allocationDocuments} />
               </div>
             );
           })}
+          {generalDocuments.length > 0 && (
+            <div className="space-y-3 rounded-md border p-4" data-testid="original-advance-general-documents">
+              <h4 className="text-sm font-semibold">Documentos generales del anticipo</h4>
+              <DocumentRows documents={generalDocuments} />
+            </div>
+          )}
         </div>
       )}
     </section>
@@ -143,7 +196,7 @@ export function SettlementContextCard({ context, showDocuments = true }: Settlem
             "md:col-span-2",
           )}
         </section>
-        {showDocuments && <OriginalAdvanceDocuments documents={context.original_advance_documents} />}
+        {showDocuments && <OriginalAdvanceDocuments documents={context.original_advance_documents} allocations={context.original_advance.allocations ?? []} />}
       </CardContent>
     </Card>
   );

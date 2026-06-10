@@ -11,6 +11,7 @@ import type {
   BulkMarkPaidInput,
   BulkMarkPaidResponse,
   CompletePaymentDetailsInput,
+  CreateManualRenditionRowInput,
   ApproveRequestDto,
   CreateRequestDto,
   ObserveRequestDto,
@@ -25,7 +26,12 @@ import type {
   RequestPlanningLineLookupResponse,
   RequestDocument,
   RequestReceiptReview,
+  RequestRenditionReport,
+  RequestRenditionGenerateResponse,
+  RequestRenditionRow,
+  RequestRenditionValidationResponse,
   StartAdvanceSettlementResponse,
+  UpdateRenditionRowInput,
   UpdateRequestReceiptReviewInput,
   UploadRequestDocumentInput,
   RejectRequestDto,
@@ -100,6 +106,10 @@ export function getStartAdvanceSettlementPath(requestId: string): string {
 
 export function getSettlementContextPath(requestId: string): string {
   return `/requests/${requestId}/settlement-context`;
+}
+
+export function getRenditionReportPath(requestId: string): string {
+  return `/requests/${requestId}/rendition-report`;
 }
 
 export function useRequests(filters?: RequestsListFilters) {
@@ -543,6 +553,89 @@ export function useRequestReceiptReviews(requestId?: string) {
   }, [accessToken, authIsLoading, refetch]);
 
   return { receipts, isLoading, error, refetch };
+}
+
+export function useRequestRenditionReport(requestId?: string, enabled = true) {
+  const [report, setReport] = useState<RequestRenditionReport | null>(null);
+  const [isLoading, setIsLoading] = useState(Boolean(requestId && enabled));
+  const [error, setError] = useState<Error | null>(null);
+
+  const authIsLoading = useAuthStore((state) => state.isLoading);
+  const accessToken = useAuthStore((state) => state.accessToken);
+
+  const refetch = useCallback(async () => {
+    if (!requestId || !enabled || authIsLoading || !accessToken) return;
+    setIsLoading(true);
+    setError(null);
+    try {
+      setReport(await api.get<RequestRenditionReport>(getRenditionReportPath(requestId)));
+    } catch (e) {
+      setError(e instanceof Error ? e : new Error("Error al cargar informe de rendición"));
+    } finally {
+      setIsLoading(false);
+    }
+  }, [accessToken, authIsLoading, enabled, requestId]);
+
+  useEffect(() => {
+    if (!requestId || !enabled) {
+      setReport(null);
+      setError(null);
+      setIsLoading(false);
+      return;
+    }
+    if (authIsLoading || !accessToken) return;
+    void refetch();
+  }, [accessToken, authIsLoading, enabled, refetch, requestId]);
+
+  return { report, isLoading, error, refetch };
+}
+
+export function useRequestRenditionReportActions() {
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<Error | null>(null);
+
+  async function run<T>(fallbackMessage: string, action: () => Promise<T>): Promise<T> {
+    setIsLoading(true);
+    setError(null);
+    try {
+      return await action();
+    } catch (e) {
+      const nextError = e instanceof Error ? e : new Error(fallbackMessage);
+      setError(nextError);
+      throw e;
+    } finally {
+      setIsLoading(false);
+    }
+  }
+
+  return {
+    isLoading,
+    error,
+    addReceiptRow: (requestId: string, receiptId: string, requestAllocationId?: string) => run(
+      "Error al agregar comprobante al informe",
+      () => api.post<RequestRenditionRow>(`${getRenditionReportPath(requestId)}/rows/from-receipt/${receiptId}`, requestAllocationId ? { request_allocation_id: requestAllocationId } : {}),
+    ),
+    createManualRow: (requestId: string, input: CreateManualRenditionRowInput) => run(
+      "Error al agregar fila manual al informe",
+      () => api.post<RequestRenditionRow>(`${getRenditionReportPath(requestId)}/rows/manual`, input),
+    ),
+    updateRow: (requestId: string, rowId: string, input: UpdateRenditionRowInput) => run(
+      "Error al actualizar fila del informe",
+      () => api.patch<RequestRenditionRow>(`${getRenditionReportPath(requestId)}/rows/${rowId}`, input),
+    ),
+    deleteRow: (requestId: string, rowId: string) => run(
+      "Error al quitar fila del informe",
+      () => api.delete<RequestRenditionRow>(`${getRenditionReportPath(requestId)}/rows/${rowId}`),
+    ),
+    validateReport: (requestId: string) => run(
+      "Error al validar informe de rendición",
+      () => api.post<RequestRenditionValidationResponse>(`${getRenditionReportPath(requestId)}/validate`),
+    ),
+    generateReport: (requestId: string) => run(
+      "Error al generar informe de rendición",
+      () => api.post<RequestRenditionGenerateResponse>(`${getRenditionReportPath(requestId)}/generate`),
+    ),
+  };
 }
 
 export function useUpdateRequestReceiptReview() {

@@ -100,6 +100,9 @@ export function EditRequestPage() {
         settlementContextError={settlementContext.error}
         settlementContextLoading={settlementContext.isLoading}
         onRetrySettlementContext={settlementContext.refetch}
+        onRequestChanged={async () => {
+          await Promise.all([refetch(), settlementContext.refetch()]);
+        }}
       />
     </div>
   );

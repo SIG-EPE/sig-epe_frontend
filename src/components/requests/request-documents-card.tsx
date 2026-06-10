@@ -39,6 +39,8 @@ import {
   REQUEST_DOCUMENT_SCOPE_TYPE,
   REQUEST_RECEIPT_DUPLICATE_STATUS,
   REQUEST_RECEIPT_OCR_STATUS,
+  REQUEST_STATUS,
+  REXAN_OUTCOME,
   REQUEST_TYPE,
   type PaymentRequest,
   type RequestAllocation,
@@ -52,8 +54,10 @@ import {
 
 interface RequestDocumentsCardProps {
   request: PaymentRequest;
+  guidanceAllocations?: RequestAllocation[];
   backendMissingMessages?: string[];
   readOnly?: boolean;
+  structuredReportLocked?: boolean;
   documents?: RequestDocument[];
   documentsLoading?: boolean;
   documentsError?: Error | null;
@@ -151,6 +155,51 @@ function getRequestLevelDocuments(documents: RequestDocument[]): RequestDocument
   return documents.filter((document) => !isAllocationScopedDocument(document));
 }
 
+function hasOpenReturnProofObservation(request: PaymentRequest): boolean {
+  return Boolean(request.observations?.some((observation) => {
+    if (observation.is_resolved) return false;
+    const fieldReference = observation.field_reference?.toLowerCase() ?? "";
+    const comment = observation.comment.toLowerCase();
+
+    return fieldReference.includes("constancia de devolución") || comment.includes("constancia de devolución");
+  }));
+}
+
+function isReturnProofFollowUpRequired(request: PaymentRequest, documents: RequestDocument[]): boolean {
+  if (request.request_type !== REQUEST_TYPE.ADVANCE_SETTLEMENT || request.status !== REQUEST_STATUS.OBSERVED) {
+    return false;
+  }
+
+  const existingReturnProof = documents.some((document) => document.document_category === REQUEST_DOCUMENT_CATEGORY.RETURN_PROOF);
+  if (existingReturnProof || request.rexan_return_proof_document_id) return false;
+
+  return request.rexan_outcome === REXAN_OUTCOME.DEVOLUCION || hasOpenReturnProofObservation(request);
+}
+
+function getGeneralChecklist(request: PaymentRequest, requestLevelDocuments: RequestDocument[]): ReturnType<typeof getRequiredDocumentChecklist> {
+  const checklist = getRequiredDocumentChecklist(request.request_type, requestLevelDocuments);
+  if (!isReturnProofFollowUpRequired(request, requestLevelDocuments)) return checklist;
+
+  return {
+    ...checklist,
+    items: [
+      ...checklist.items,
+      {
+        key: "return-proof-follow-up",
+        category: REQUEST_DOCUMENT_CATEGORY.RETURN_PROOF,
+        label: "Constancia de devolución",
+        description: "Adjunta la constancia solicitada para completar la aprobación de la devolución. Este documento no modifica el informe generado.",
+        required: true,
+        satisfied: false,
+        acceptedFormatsLabel: getRequestDocumentAcceptedFormatsLabel(REQUEST_DOCUMENT_CATEGORY.RETURN_PROOF),
+        missingMessage: "Falta adjuntar la constancia de devolución solicitada.",
+      },
+    ],
+    missingMessages: [...checklist.missingMessages, "Falta adjuntar la constancia de devolución solicitada."],
+    isComplete: false,
+  };
+}
+
 function getAllocationDocuments(allocation: RequestAllocation, documents: RequestDocument[]): RequestDocument[] {
   const directDocuments = allocation.documents ?? [];
   if (!allocation.id) return directDocuments;
@@ -168,6 +217,15 @@ function getPlanningLineDisplay(allocation: RequestAllocation): string {
   const description = line?.resource_description?.trim();
 
   return [code, description].filter(Boolean).join(" · ") || "Línea POA sin detalle";
+}
+
+function getPlanningLineCode(allocation: RequestAllocation): string {
+  const line = allocation.planning_line ?? allocation.budgetPlanningLine;
+  return line?.line_code?.trim() || "Sin código";
+}
+
+function getCompactPlanningLineLabel(allocation: RequestAllocation, index: number): string {
+  return `Línea ${index + 1} · ${getPlanningLineCode(allocation)}`;
 }
 
 function getAllocationSummary(allocation: RequestAllocation): string {
@@ -238,7 +296,7 @@ function getReceiptStatusLabel(receiptReview?: RequestReceiptReview): string {
   const status = receiptReview.receipt.ocr_status;
   if (status === REQUEST_RECEIPT_OCR_STATUS.PENDING || status === REQUEST_RECEIPT_OCR_STATUS.PROCESSING) return "Procesando comprobante";
   if (status === REQUEST_RECEIPT_OCR_STATUS.REQUIRES_REVIEW || status === REQUEST_RECEIPT_OCR_STATUS.FAILED) return "Requiere revisión";
-  if (status === REQUEST_RECEIPT_OCR_STATUS.SUCCESS) return "Datos detectados";
+  if (status === REQUEST_RECEIPT_OCR_STATUS.SUCCESS) return "Pendiente de confirmación";
   return "Lectura automática disponible";
 }
 
@@ -262,13 +320,17 @@ function canConfirmReceiptReview(receiptReview: RequestReceiptReview): boolean {
   );
 }
 
+function toDateInputValue(value?: string | null): string {
+  return value?.match(/^\d{4}-\d{2}-\d{2}/)?.[0] ?? "";
+}
+
 function getReceiptReviewFormState(receiptReview: RequestReceiptReview): ReceiptReviewFormState {
   return {
     issuer_document_number: receiptReview.receipt.issuer_document_number ?? "",
     issuer_name: receiptReview.receipt.issuer_name ?? "",
     series: receiptReview.receipt.series ?? "",
     number: receiptReview.receipt.number ?? "",
-    issue_date: receiptReview.receipt.issue_date ?? "",
+    issue_date: toDateInputValue(receiptReview.receipt.issue_date),
     amount: receiptReview.receipt.amount === null ? "" : String(receiptReview.receipt.amount),
     currency: receiptReview.receipt.currency || REQUEST_CURRENCY.PEN,
   };
@@ -297,8 +359,10 @@ function getReceiptValueSummary(receiptReview: RequestReceiptReview): string {
 
 export function RequestDocumentsCard({
   request,
+  guidanceAllocations = [],
   backendMissingMessages = [],
   readOnly = false,
+  structuredReportLocked = false,
   documents: controlledDocuments,
   documentsLoading,
   documentsError,
@@ -306,8 +370,10 @@ export function RequestDocumentsCard({
 }: RequestDocumentsCardProps) {
   const user = useAuthStore((state) => state.user);
   const roleCode = user?.role?.code;
+  const effectiveStructuredReportLocked = structuredReportLocked && request.status !== REQUEST_STATUS.OBSERVED;
   const canManage = canManageRequestDocuments(roleCode, request.status, request, user?.id);
-  const canManageActions = canManage && !readOnly;
+  const canManageActions = canManage && !readOnly && !effectiveStructuredReportLocked;
+  const canManageReturnProofWhileLocked = canManage && !readOnly && effectiveStructuredReportLocked && request.status === REQUEST_STATUS.OBSERVED;
   const permissionMessage = getRequestDocumentPermissionMessage(roleCode, request.status, request, user?.id);
   const internalDocuments = useRequestDocuments(request.id);
   const documents = controlledDocuments ?? internalDocuments.documents;
@@ -326,19 +392,30 @@ export function RequestDocumentsCard({
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [documentToDelete, setDocumentToDelete] = useState<string | null>(null);
   const [receiptToReview, setReceiptToReview] = useState<RequestReceiptReview | null>(null);
+  const [receiptToConfirm, setReceiptToConfirm] = useState<RequestReceiptReview | null>(null);
   const [receiptForm, setReceiptForm] = useState<ReceiptReviewFormState | null>(null);
   const [activeUploadAction, setActiveUploadAction] = useState<DocumentUploadAction | null>(null);
+  const [uploadAllocationId, setUploadAllocationId] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
   const allocationGroups = request.allocations ?? [];
+  const displayAllocationGroups = allocationGroups.length > 0 ? allocationGroups : guidanceAllocations;
+  const isAdvanceSettlement = request.request_type === REQUEST_TYPE.ADVANCE_SETTLEMENT;
   const hasAllocationGroups = allocationGroups.length > 0;
+  const hasDisplayAllocationGroups = displayAllocationGroups.length > 0;
+  const isUsingGuidanceAllocations = isAdvanceSettlement && !hasAllocationGroups && guidanceAllocations.length > 0;
+  const hasAllocationDocumentGroups = hasAllocationGroups && !isAdvanceSettlement;
+  const requiresReceiptAllocation = isAdvanceSettlement && hasAllocationGroups && category === REQUEST_DOCUMENT_CATEGORY.RECEIPT;
   const requestLevelDocuments = getRequestLevelDocuments(documents);
   const checklist = hasAllocationGroups && request.request_type === REQUEST_TYPE.ADVANCE
     ? EMPTY_CHECKLIST
-    : getRequiredDocumentChecklist(request.request_type, requestLevelDocuments);
+    : getGeneralChecklist(request, requestLevelDocuments);
   const optionalCategoryOptions = getOptionalDocumentCategoryOptions(checklist.items).filter((option) => !hasAllocationGroups || option.value !== REQUEST_DOCUMENT_CATEGORY.PXQ);
   const hasOptionalCategoryOptions = optionalCategoryOptions.length > 0;
   const acceptedFormatsLabel = category ? getRequestDocumentAcceptedFormatsLabel(category) : "selecciona una categoría";
   const uploadActionsDisabled = uploading || activeUploadAction !== null;
+  const uploadRequiresAllocationSelection = requiresReceiptAllocation && !uploadAllocationId;
+  const uploadButtonDisabled = uploadActionsDisabled || Boolean(validationError) || !file || uploadRequiresAllocationSelection;
+  const selectedUploadAllocation = allocationGroups.find((allocation) => allocation.id === uploadAllocationId) ?? null;
 
   useEffect(() => {
     if (optionalCategoryOptions.some((option) => option.value === category)) return;
@@ -356,10 +433,12 @@ export function RequestDocumentsCard({
   function handleCategoryChange(value: string): void {
     const nextCategory = value as RequestDocumentCategory;
     setCategory(nextCategory);
+    if (nextCategory !== REQUEST_DOCUMENT_CATEGORY.RECEIPT) setUploadAllocationId("");
     setValidationError(validateRequestDocumentFile(file, nextCategory));
   }
 
   async function uploadSelectedFile(selectedFile: File, selectedCategory: RequestDocumentCategory, action: DocumentUploadAction, scope?: UploadScopeOptions): Promise<void> {
+    if (effectiveStructuredReportLocked && selectedCategory !== REQUEST_DOCUMENT_CATEGORY.RETURN_PROOF) return;
     const fileError = validateRequestDocumentFile(selectedFile, selectedCategory);
     if (fileError) {
       setValidationError(fileError);
@@ -396,7 +475,15 @@ export function RequestDocumentsCard({
       return;
     }
 
-    await uploadSelectedFile(file, category, DOCUMENT_UPLOAD_ACTION.GENERIC);
+    if (requiresReceiptAllocation && !uploadAllocationId) {
+      setValidationError("Selecciona la línea POA a la que corresponde el comprobante.");
+      return;
+    }
+
+    await uploadSelectedFile(file, category, DOCUMENT_UPLOAD_ACTION.GENERIC, requiresReceiptAllocation ? {
+      scope_type: REQUEST_DOCUMENT_SCOPE_TYPE.ALLOCATION,
+      request_allocation_id: uploadAllocationId,
+    } : undefined);
   }
 
   function handleChecklistAttach(nextCategory: RequestDocumentCategory, nextFile: File): void {
@@ -416,6 +503,8 @@ export function RequestDocumentsCard({
   }
 
   async function handleDelete(documentId: string): Promise<void> {
+    const existingDocument = documents.find((document) => document.id === documentId);
+    if (effectiveStructuredReportLocked && existingDocument?.document_category !== REQUEST_DOCUMENT_CATEGORY.RETURN_PROOF) return;
     try {
       setOperationError(null);
       await deleteDocument(request.id, documentId);
@@ -431,6 +520,7 @@ export function RequestDocumentsCard({
   }
 
   function openReceiptReview(receiptReview: RequestReceiptReview): void {
+    if (effectiveStructuredReportLocked) return;
     setReceiptToReview(receiptReview);
     setReceiptForm(getReceiptReviewFormState(receiptReview));
     setOperationError(null);
@@ -441,18 +531,35 @@ export function RequestDocumentsCard({
     setReceiptForm(null);
   }
 
+  function openReceiptConfirm(receiptReview: RequestReceiptReview): void {
+    if (effectiveStructuredReportLocked) return;
+    setReceiptToConfirm(receiptReview);
+    setOperationError(null);
+  }
+
+  function closeReceiptConfirm(): void {
+    setReceiptToConfirm(null);
+  }
+
+  function moveReceiptConfirmToReview(): void {
+    if (!receiptToConfirm) return;
+    const nextReceiptReview = receiptToConfirm;
+    closeReceiptConfirm();
+    openReceiptReview(nextReceiptReview);
+  }
+
   function updateReceiptFormField(field: keyof ReceiptReviewFormState, value: string): void {
     setReceiptForm((current) => current ? { ...current, [field]: value } : current);
   }
 
   async function handleSaveReceiptReview(): Promise<void> {
-    if (!receiptToReview || !receiptForm) return;
+    if (!receiptToReview || !receiptForm || effectiveStructuredReportLocked) return;
     try {
       setOperationError(null);
       await updateReceiptReview(request.id, receiptToReview.receipt.id, getReceiptReviewPayload(receiptForm));
       toast.success("Datos del comprobante actualizados");
       closeReceiptReview();
-      await refetchReceipts();
+      await Promise.all([refetchReceipts(), refetch()]);
     } catch (reviewError) {
       const message = getApiErrorMessage(reviewError);
       setOperationError(message);
@@ -460,12 +567,14 @@ export function RequestDocumentsCard({
     }
   }
 
-  async function handleConfirmReceiptReview(receiptReview: RequestReceiptReview): Promise<void> {
+  async function handleConfirmReceiptReview(): Promise<void> {
+    if (!receiptToConfirm || effectiveStructuredReportLocked) return;
     try {
       setOperationError(null);
-      await confirmReceiptReview(request.id, receiptReview.receipt.id);
+      await confirmReceiptReview(request.id, receiptToConfirm.receipt.id);
       toast.success("Datos del comprobante confirmados");
-      await refetchReceipts();
+      closeReceiptConfirm();
+      await Promise.all([refetchReceipts(), refetch()]);
     } catch (confirmError) {
       const message = getApiErrorMessage(confirmError);
       setOperationError(message);
@@ -508,6 +617,9 @@ export function RequestDocumentsCard({
                           <p>{getReceiptValueSummary(receiptReview)}</p>
                           {receiptReview.receipt.issuer_document_number && <p>RUC: {receiptReview.receipt.issuer_document_number}</p>}
                           {receiptReview.receipt.issue_date && <p>Fecha: {receiptReview.receipt.issue_date}</p>}
+                          {!receiptReview.receipt.confirmed_at && (
+                            <p className="font-medium text-foreground">Confirma los datos para usar este comprobante en el Informe de rendición. Si algún valor no coincide, selecciona Revisar datos antes de confirmar.</p>
+                          )}
                           {receiptReview.latest_extraction?.error_message && <p>Necesita revisión manual para completar la información.</p>}
                           {receiptReview.duplicate_candidates.length > 0 && <p>Ya existe un comprobante con la misma serie y número en otra solicitud activa.</p>}
                         </div>
@@ -535,11 +647,11 @@ export function RequestDocumentsCard({
                   </Button>
                 )}
                 {receiptReview && canManageActions && canConfirmReceiptReview(receiptReview) && (
-                  <Button type="button" size="sm" onClick={() => void handleConfirmReceiptReview(receiptReview)} disabled={confirmingReceipt}>
+                  <Button type="button" size="sm" onClick={() => openReceiptConfirm(receiptReview)} disabled={confirmingReceipt}>
                     {confirmingReceipt ? "Confirmando..." : "Confirmar datos"}
                   </Button>
                 )}
-                {canManageActions && (
+                {(canManageActions || (canManageReturnProofWhileLocked && document.document_category === REQUEST_DOCUMENT_CATEGORY.RETURN_PROOF)) && (
                   <Button type="button" variant="outline" size="sm" onClick={() => setDocumentToDelete(document.id)} disabled={deleting}>
                     <Trash2 className="size-4" />
                     {deleting && documentToDelete === document.id ? "Eliminando..." : "Eliminar"}
@@ -554,7 +666,7 @@ export function RequestDocumentsCard({
   }
 
   function renderAllocationGroups(): ReactNode {
-    if (!hasAllocationGroups) return null;
+    if (!hasAllocationDocumentGroups) return null;
 
     return (
       <section className="space-y-3" data-testid="allocation-documents-groups">
@@ -616,6 +728,40 @@ export function RequestDocumentsCard({
     );
   }
 
+  function renderSettlementReceiptGroups(): ReactNode {
+    if (!isAdvanceSettlement || !hasDisplayAllocationGroups) return null;
+
+    return (
+      <section className="space-y-3" data-testid="settlement-receipt-groups">
+        <div className="space-y-1">
+          <h3 className="text-sm font-semibold">Comprobantes por línea POA</h3>
+          <p className="text-xs text-muted-foreground">
+            {isUsingGuidanceAllocations
+              ? "Estas son las líneas POA del anticipo original como referencia mientras se actualizan las líneas de la rendición."
+              : "Cada comprobante de la rendición debe pertenecer a una sola línea POA. Una línea puede tener uno o más comprobantes."}
+          </p>
+        </div>
+        {displayAllocationGroups.map((allocation, index) => {
+          const allocationDocuments = !isUsingGuidanceAllocations && allocation.id ? getAllocationDocuments(allocation, documents) : [];
+          const hasReceipts = allocationDocuments.some((document) => document.document_category === REQUEST_DOCUMENT_CATEGORY.RECEIPT);
+
+          return (
+            <div key={allocation.id ?? `${allocation.budget_planning_line_id}-${index}`} className="space-y-3 rounded-md border p-4" data-testid="settlement-receipt-group">
+              <div className="flex flex-col gap-1 sm:flex-row sm:items-start sm:justify-between">
+                <div>
+                  <h4 className="text-sm font-semibold">Línea {index + 1}: {getPlanningLineDisplay(allocation)}</h4>
+                  <p className="text-xs text-muted-foreground">{getAllocationSummary(allocation)}</p>
+                </div>
+                <Badge variant={hasReceipts ? "secondary" : "destructive"}>{isUsingGuidanceAllocations ? "Referencia" : hasReceipts ? "Con comprobante" : "Pendiente"}</Badge>
+              </div>
+              {isUsingGuidanceAllocations ? <p className="text-sm text-muted-foreground">Cuando termine la actualización, adjunta el comprobante seleccionando esta línea POA en el cargador.</p> : renderDocumentRows(allocationDocuments)}
+            </div>
+          );
+        })}
+      </section>
+    );
+  }
+
   return (
     <Card>
       <CardHeader>
@@ -627,7 +773,33 @@ export function RequestDocumentsCard({
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
-        {hasAllocationGroups && (
+        {isAdvanceSettlement && hasDisplayAllocationGroups && (
+          <Alert>
+            <Info className="h-4 w-4" />
+            <AlertDescription>
+              {isUsingGuidanceAllocations
+                ? "En esta rendición no debes volver a adjuntar los Excel PxQ del anticipo. Estamos actualizando las líneas de la rendición antes de asociar comprobantes."
+                : "En esta rendición no debes volver a adjuntar los Excel PxQ del anticipo. Cada línea POA debe tener al menos un comprobante agregado al Informe de rendición; adjunta cada comprobante seleccionando su línea POA."}
+            </AlertDescription>
+          </Alert>
+        )}
+        {request.status === REQUEST_STATUS.OBSERVED && structuredReportLocked ? (
+          <Alert>
+            <Info className="h-4 w-4" />
+            <AlertDescription>La rendición fue observada; puedes actualizar sustentos y regenerar el informe antes de reenviar.</AlertDescription>
+          </Alert>
+        ) : null}
+        {effectiveStructuredReportLocked ? (
+          <Alert>
+            <Info className="h-4 w-4" />
+            <AlertDescription>
+              {canManageReturnProofWhileLocked && isReturnProofFollowUpRequired(request, requestLevelDocuments)
+                ? "El informe generado mantiene bloqueados comprobantes, eliminación y revisión de datos. Puedes adjuntar la constancia de devolución solicitada; este documento no modifica el informe generado."
+                : "El informe generado bloquea la carga, eliminación y revisión de comprobantes. Si el informe es observado/reabierto o la generación falla, estas acciones volverán a estar disponibles."}
+            </AlertDescription>
+          </Alert>
+        ) : null}
+        {hasAllocationDocumentGroups && (
           <Alert>
             <Info className="h-4 w-4" />
             <AlertDescription>
@@ -636,13 +808,16 @@ export function RequestDocumentsCard({
           </Alert>
         )}
         {renderAllocationGroups()}
+        {renderSettlementReceiptGroups()}
         <div className="rounded-md border p-4">
           <div className="space-y-1">
             <h3 className="text-sm font-semibold">Checklist de documentos generales</h3>
             <p className="text-xs text-muted-foreground">
               {readOnly
                 ? "Estado de los documentos requeridos para esta solicitud. Esta vista no permite adjuntar ni eliminar archivos."
-                : hasAllocationGroups
+                : isAdvanceSettlement && hasAllocationGroups
+                  ? "No hay un comprobante general obligatorio. Los comprobantes se gestionan por línea POA y luego se agregan al Informe de rendición."
+                : hasAllocationDocumentGroups
                   ? "Completa aquí solo los documentos requeridos a nivel general. Los Excel PxQ se adjuntan en cada línea POA."
                   : "Completa los documentos requeridos para continuar con el envío. La validación final se realizará al enviar la solicitud."}
             </p>
@@ -663,7 +838,7 @@ export function RequestDocumentsCard({
                     <p className="text-xs text-muted-foreground">Formatos esperados: {item.acceptedFormatsLabel}.</p>
                   </div>
                 </div>
-                {!item.satisfied && canManageActions && (
+                {!item.satisfied && (canManageActions || (canManageReturnProofWhileLocked && item.category === REQUEST_DOCUMENT_CATEGORY.RETURN_PROOF)) && (
                   <ChecklistAttachButton
                     item={item}
                     disabled={uploadActionsDisabled}
@@ -703,8 +878,8 @@ export function RequestDocumentsCard({
               <p className="text-xs text-muted-foreground">Usa este cargador solo para documentos adicionales que no se solicitan en el checklist. Para documentos requeridos pendientes, usa el botón de su fila. Este cargador adjunta un archivo por vez.</p>
             </div>
             {hasOptionalCategoryOptions ? (
-            <div className="grid gap-3 md:grid-cols-[220px_1fr_auto] md:items-end">
-              <div className="space-y-2">
+            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-[220px_minmax(0,1fr)_minmax(220px,320px)_auto] xl:items-end">
+              <div className="min-w-0 space-y-2">
                 <label className="text-sm font-medium" htmlFor="document-category">Categoría</label>
                 <Select value={category} onValueChange={handleCategoryChange}>
                   <SelectTrigger id="document-category" disabled={uploadActionsDisabled}><SelectValue placeholder="Selecciona categoría" /></SelectTrigger>
@@ -728,7 +903,23 @@ export function RequestDocumentsCard({
                 />
                 <p className="text-xs text-muted-foreground">Máximo 10 MB. Formatos permitidos para esta categoría: {acceptedFormatsLabel}. Selecciona un solo archivo por carga.</p>
               </div>
-              <Button type="button" onClick={() => void handleUpload()} disabled={uploadActionsDisabled || Boolean(validationError) || !file}>
+              {requiresReceiptAllocation && (
+                <div className="min-w-0 space-y-2">
+                  <label className="text-sm font-medium" htmlFor="receipt-allocation">Línea POA</label>
+                  <Select value={uploadAllocationId} onValueChange={(value) => { setUploadAllocationId(value); setValidationError(null); }}>
+                    <SelectTrigger id="receipt-allocation" className="max-w-full" disabled={uploadActionsDisabled}><SelectValue placeholder="Selecciona línea POA" /></SelectTrigger>
+                    <SelectContent className="max-w-[min(92vw,28rem)]">
+                      {allocationGroups.map((allocation, index) => allocation.id ? (
+                        <SelectItem key={allocation.id} value={allocation.id} title={`Línea ${index + 1}: ${getPlanningLineDisplay(allocation)}`}>{getCompactPlanningLineLabel(allocation, index)}</SelectItem>
+                      ) : null)}
+                    </SelectContent>
+                  </Select>
+                  <p className="truncate text-xs text-muted-foreground" title={selectedUploadAllocation ? getPlanningLineDisplay(selectedUploadAllocation) : undefined}>
+                    {selectedUploadAllocation ? getPlanningLineDisplay(selectedUploadAllocation) : "Selecciona la línea POA antes de adjuntar el comprobante."}
+                  </p>
+                </div>
+              )}
+              <Button type="button" className="md:self-end" onClick={() => void handleUpload()} disabled={uploadButtonDisabled}>
                 <Upload className="size-4" />
                 {activeUploadAction === DOCUMENT_UPLOAD_ACTION.GENERIC ? "Subiendo..." : "Adjuntar"}
               </Button>
@@ -745,6 +936,7 @@ export function RequestDocumentsCard({
               </div>
             )}
             {validationError && <p className="mt-2 text-sm text-destructive">{validationError}</p>}
+            {uploadRequiresAllocationSelection && !validationError && <p className="mt-2 text-sm text-muted-foreground">Selecciona la línea POA antes de adjuntar el comprobante.</p>}
           </div>
         ) : (
           <p className="text-sm text-muted-foreground">
@@ -777,7 +969,7 @@ export function RequestDocumentsCard({
           <Alert variant="destructive">
             <AlertDescription className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
               <span>No se pudo cargar la lectura automática de comprobantes. Puedes reintentar sin afectar los documentos adjuntos.</span>
-              <Button type="button" variant="outline" size="sm" onClick={() => void refetchReceipts()}>Reintentar lectura</Button>
+              {!effectiveStructuredReportLocked ? <Button type="button" variant="outline" size="sm" onClick={() => void refetchReceipts()}>Reintentar lectura</Button> : null}
             </AlertDescription>
           </Alert>
         )}
@@ -817,8 +1009,9 @@ export function RequestDocumentsCard({
                   <Input id="receipt-number" value={receiptForm.number} onChange={(event) => updateReceiptFormField("number", event.target.value)} />
                 </div>
                 <div className="space-y-2">
-                  <label className="text-sm font-medium" htmlFor="receipt-date">Fecha</label>
-                  <Input id="receipt-date" type="date" value={receiptForm.issue_date} onChange={(event) => updateReceiptFormField("issue_date", event.target.value)} />
+                  <label className="text-sm font-medium" htmlFor="receipt-date">Fecha del comprobante</label>
+                  <Input id="receipt-date" type="date" value={receiptForm.issue_date} aria-describedby="receipt-date-help" onChange={(event) => updateReceiptFormField("issue_date", event.target.value)} />
+                  <p id="receipt-date-help" className="text-xs text-muted-foreground">Selecciona solo día, mes y año. No requiere hora.</p>
                 </div>
                 <div className="space-y-2">
                   <label className="text-sm font-medium" htmlFor="receipt-amount">Total</label>
@@ -840,6 +1033,39 @@ export function RequestDocumentsCard({
               <Button type="button" variant="outline" onClick={closeReceiptReview} disabled={updatingReceipt}>Cancelar</Button>
               <Button type="button" onClick={() => void handleSaveReceiptReview()} disabled={updatingReceipt || !receiptForm}>
                 {updatingReceipt ? "Guardando..." : "Guardar corrección"}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+        <Dialog open={Boolean(receiptToConfirm)} onOpenChange={(open) => !open && closeReceiptConfirm()}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Confirmar datos del comprobante</DialogTitle>
+              <DialogDescription>
+                Esta confirmación es necesaria para que el comprobante pueda agregarse al Informe de rendición. Revisa el resumen y, si algo no coincide con el documento, usa Revisar datos antes de continuar.
+              </DialogDescription>
+            </DialogHeader>
+            {receiptToConfirm && (
+              <div className="space-y-3 rounded-md border p-3 text-sm">
+                <div className="flex flex-wrap items-center gap-2">
+                  <Badge variant="secondary">Pendiente de confirmación</Badge>
+                  <span className="text-muted-foreground">Datos detectados por lectura automática</span>
+                </div>
+                <dl className="grid gap-2 sm:grid-cols-2">
+                  <div><dt className="text-xs text-muted-foreground">Proveedor</dt><dd className="font-medium">{receiptToConfirm.receipt.issuer_name || "Proveedor no detectado"}</dd></div>
+                  <div><dt className="text-xs text-muted-foreground">RUC</dt><dd className="font-medium">{receiptToConfirm.receipt.issuer_document_number || "RUC no detectado"}</dd></div>
+                  <div><dt className="text-xs text-muted-foreground">Comprobante</dt><dd className="font-medium">{[receiptToConfirm.receipt.series, receiptToConfirm.receipt.number].filter(Boolean).join("-") || "Serie y número no detectados"}</dd></div>
+                  <div><dt className="text-xs text-muted-foreground">Fecha</dt><dd className="font-medium">{receiptToConfirm.receipt.issue_date || "Fecha no detectada"}</dd></div>
+                  <div><dt className="text-xs text-muted-foreground">Monto</dt><dd className="font-medium">{receiptToConfirm.receipt.amount === null ? "Monto no detectado" : formatRequestCurrency(receiptToConfirm.receipt.amount, receiptToConfirm.receipt.currency || REQUEST_CURRENCY.PEN)}</dd></div>
+                </dl>
+                <p className="text-xs text-muted-foreground">Después de confirmar, podrás seleccionar la línea POA y agregar este comprobante al Informe de rendición.</p>
+              </div>
+            )}
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={closeReceiptConfirm} disabled={confirmingReceipt}>Cancelar</Button>
+              <Button type="button" variant="outline" onClick={moveReceiptConfirmToReview} disabled={confirmingReceipt}>Revisar datos</Button>
+              <Button type="button" onClick={() => void handleConfirmReceiptReview()} disabled={confirmingReceipt || !receiptToConfirm}>
+                {confirmingReceipt ? "Confirmando..." : "Confirmar para informe"}
               </Button>
             </DialogFooter>
           </DialogContent>

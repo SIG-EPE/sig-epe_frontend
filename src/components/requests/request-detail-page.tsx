@@ -12,7 +12,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-import { useApproveRequest, useObserveRequest, useRejectRequest, useRequest, useRequestDocuments, useStartAdvanceSettlement } from "@/hooks/use-requests";
+import { useApproveRequest, useObserveRequest, useRejectRequest, useRequest, useRequestDocuments, useRequestRenditionReport, useStartAdvanceSettlement } from "@/hooks/use-requests";
 import { ROUTES } from "@/lib/constants";
 import {
   canCorrectObservedRequest,
@@ -40,16 +40,43 @@ import {
   validateRexanReturnProofSelection,
 } from "@/lib/requests";
 import { useAuthStore } from "@/stores/auth-store";
-import { ADVANCE_SETTLEMENT_CTA_STATE, REQUEST_TYPE, REXAN_OUTCOME, type ApproveRequestDto } from "@/types/requests";
+import { ADVANCE_SETTLEMENT_CTA_STATE, REQUEST_RENDITION_REPORT_STATUS, REQUEST_TYPE, REXAN_OUTCOME, type ApproveRequestDto, type RequestRenditionReport, type RexanOutcome } from "@/types/requests";
 import { RequestStatusStepper } from "./request-status-stepper";
 import { RequestDocumentsCard } from "./request-documents-card";
+import { StructuredRenditionReportCard } from "./structured-rendition-report-card";
 import { StatusBadge } from "./status-badge";
+
+function getStructuredReportTotal(report: RequestRenditionReport | null): number | null {
+  return normalizeMoneyAmount(report?.totals.total_amount ?? report?.total_amount);
+}
+
+function isStructuredGeneratedReportReady(report: RequestRenditionReport | null): boolean {
+  return Boolean(
+    report?.status === REQUEST_RENDITION_REPORT_STATUS.EXPORTED
+    && report.settlement_report_document_id
+    && getStructuredReportTotal(report) !== null,
+  );
+}
+
+function getComputedOutcomeLabel(outcome: RexanOutcome | null): string {
+  if (outcome === REXAN_OUTCOME.EXACT) return "Exacta";
+  if (outcome === REXAN_OUTCOME.DEVOLUCION) return "Devolución pendiente";
+  if (outcome === REXAN_OUTCOME.EXCESS) return "Saldo adicional por pagar";
+  return "Pendiente";
+}
+
+function getComputedOutcomeDifferenceLabel(outcome: RexanOutcome | null): string {
+  if (outcome === REXAN_OUTCOME.DEVOLUCION) return "Diferencia a devolver";
+  if (outcome === REXAN_OUTCOME.EXCESS) return "Diferencia por pagar";
+  return "Diferencia";
+}
 
 export function RequestDetailPage() {
   const params = useParams<{ id: string }>();
   const router = useRouter();
   const { request, isLoading, error, refetch } = useRequest(params.id);
   const requestDocuments = useRequestDocuments(params.id);
+  const structuredReportState = useRequestRenditionReport(params.id, request?.request_type === REQUEST_TYPE.ADVANCE_SETTLEMENT);
   const user = useAuthStore((state) => state.user);
   const roleCode = user?.role?.code;
   const [observeOpen, setObserveOpen] = useState(false);
@@ -90,13 +117,17 @@ export function RequestDetailPage() {
   const renditionStatus = getPaymentRequestRenditionStatus(request);
   const editHref = `${ROUTES.REQUESTS}/${request.id}/edit`;
   const isAdvanceSettlement = request.request_type === REQUEST_TYPE.ADVANCE_SETTLEMENT;
+  const structuredReport = structuredReportState.report;
+  const structuredReportTotal = getStructuredReportTotal(structuredReport);
+  const hasStructuredGeneratedReport = isAdvanceSettlement && isStructuredGeneratedReportReady(structuredReport);
   const returnProofDocuments = getReturnProofDocuments(requestDocuments.documents);
   const parsedValidatedSpentAmount = validatedSpentAmount.trim() === "" ? null : Number(validatedSpentAmount);
-  const rexanPreviewOutcome = isAdvanceSettlement && parsedValidatedSpentAmount !== null && Number.isFinite(parsedValidatedSpentAmount)
-    ? deriveRexanPreviewOutcome(request.requested_amount, parsedValidatedSpentAmount)
+  const effectiveSpentAmount = hasStructuredGeneratedReport ? structuredReportTotal : parsedValidatedSpentAmount;
+  const rexanPreviewOutcome = isAdvanceSettlement && effectiveSpentAmount !== null && Number.isFinite(effectiveSpentAmount)
+    ? deriveRexanPreviewOutcome(request.requested_amount, effectiveSpentAmount)
     : null;
-  const rexanApprovalPreview = isAdvanceSettlement && parsedValidatedSpentAmount !== null && Number.isFinite(parsedValidatedSpentAmount)
-    ? deriveRexanApprovalPreview(request.requested_amount, parsedValidatedSpentAmount, request.currency)
+  const rexanApprovalPreview = isAdvanceSettlement && effectiveSpentAmount !== null && Number.isFinite(effectiveSpentAmount)
+    ? deriveRexanApprovalPreview(request.requested_amount, effectiveSpentAmount, request.currency)
     : null;
   const storedRexanOutcome = request.rexan_outcome ?? null;
   const shouldShowRexanSummary = isAdvanceSettlement && (
@@ -171,7 +202,11 @@ export function RequestDetailPage() {
     if (!request) return;
     const payload: ApproveRequestDto = { comment: approveComment.trim() || undefined };
     if (isAdvanceSettlement) {
-      if (parsedValidatedSpentAmount === null || !Number.isFinite(parsedValidatedSpentAmount) || parsedValidatedSpentAmount < 0) {
+      if (hasStructuredGeneratedReport && (effectiveSpentAmount === null || !Number.isFinite(effectiveSpentAmount))) {
+        toast.error("El informe generado todavía no tiene un total disponible.");
+        return;
+      }
+      if (!hasStructuredGeneratedReport && (parsedValidatedSpentAmount === null || !Number.isFinite(parsedValidatedSpentAmount) || parsedValidatedSpentAmount < 0)) {
         toast.error("Ingresa el gasto validado de la rendición.");
         return;
       }
@@ -180,7 +215,9 @@ export function RequestDetailPage() {
         toast.error(returnProofError);
         return;
       }
-      payload.validated_spent_amount = parsedValidatedSpentAmount;
+      if (!hasStructuredGeneratedReport) {
+        payload.validated_spent_amount = parsedValidatedSpentAmount ?? undefined;
+      }
       if (rexanPreviewOutcome === REXAN_OUTCOME.DEVOLUCION) {
         payload.return_proof_document_id = returnProofDocumentId;
       }
@@ -358,6 +395,8 @@ export function RequestDetailPage() {
         </Card>
       )}
 
+      {isAdvanceSettlement && <StructuredRenditionReportCard request={request} readOnly onChanged={requestDocuments.refetch} />}
+
       <RequestDocumentsCard request={request} readOnly documents={requestDocuments.documents} documentsLoading={requestDocuments.isLoading} documentsError={requestDocuments.error} onDocumentsChanged={requestDocuments.refetch} />
 
       <Card>
@@ -488,26 +527,63 @@ export function RequestDetailPage() {
           <div className="space-y-4">
             {isAdvanceSettlement && (
               <div className="space-y-4 rounded-md border p-4">
-                <div className="rounded-md bg-muted p-3 text-sm">
-                  <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Monto del anticipo</p>
-                  <p className="text-base font-semibold">{formatRequestCurrency(normalizeMoneyAmount(request.requested_amount) ?? 0, request.currency)}</p>
-                  <p className="mt-2 text-muted-foreground">
-                    Regla: se compara el gasto validado contra el monto del anticipo. Si es igual, la rendición se aprueba sin saldo; si es menor, se registra devolución; si es mayor, el saldo adicional pasa a Cola de Pagos.
-                  </p>
-                </div>
-                <div className="space-y-2">
-                  <label className="text-sm font-medium" htmlFor="validated-spent-amount">Gasto validado *</label>
-                  <Input id="validated-spent-amount" type="number" min="0" step="0.01" value={validatedSpentAmount} onChange={(event) => setValidatedSpentAmount(event.target.value)} placeholder="0.00" />
-                </div>
-                <div className="rounded-md border p-3 text-sm">
-                  <p className="font-medium">Ejemplos rápidos</p>
-                  <ul className="mt-2 list-disc space-y-1 pl-5 text-muted-foreground">
-                    <li>Gasto validado igual al anticipo: rendición exacta, sin saldo pendiente.</li>
-                    <li>Gasto validado menor al anticipo: devolución por la diferencia y constancia obligatoria.</li>
-                    <li>Gasto validado mayor al anticipo: saldo adicional por pagar en Cola de Pagos.</li>
-                  </ul>
-                </div>
-                {rexanApprovalPreview && (
+                {hasStructuredGeneratedReport ? (
+                  <div className="space-y-3 rounded-md bg-muted p-3 text-sm" aria-live="polite">
+                    <div>
+                      <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Resultado calculado</p>
+                      <p className="mt-1 text-muted-foreground">Revisa el resultado del informe generado y confirma la aprobación de la rendición.</p>
+                    </div>
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <div>
+                        <p className="text-xs text-muted-foreground">Total rendido</p>
+                        <p className="font-semibold">{formatRequestCurrency(structuredReportTotal ?? 0, request.currency)}</p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-muted-foreground">Anticipo</p>
+                        <p className="font-semibold">{formatRequestCurrency(normalizeMoneyAmount(request.requested_amount) ?? 0, request.currency)}</p>
+                        {request.relatedRequest && <p className="text-xs text-muted-foreground">{getRequestDisplayCode(request.relatedRequest)}</p>}
+                      </div>
+                    </div>
+                    {rexanApprovalPreview && (
+                      <div className="rounded-md border bg-background p-3">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="font-medium">Resultado</span>
+                          <Badge variant={getRexanOutcomeBadgeTone(rexanApprovalPreview.outcome)}>{getComputedOutcomeLabel(rexanApprovalPreview.outcome)}</Badge>
+                        </div>
+                        {rexanApprovalPreview.outcome === REXAN_OUTCOME.EXACT ? (
+                          <p className="mt-2 text-muted-foreground">El total rendido coincide con el anticipo. No queda diferencia pendiente.</p>
+                        ) : (
+                          <p className="mt-2 text-muted-foreground">
+                            {getComputedOutcomeDifferenceLabel(rexanApprovalPreview.outcome)}: {formatRequestCurrency(rexanApprovalPreview.balanceAmount, request.currency)}.
+                          </p>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <>
+                    <div className="rounded-md bg-muted p-3 text-sm">
+                      <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Monto del anticipo</p>
+                      <p className="text-base font-semibold">{formatRequestCurrency(normalizeMoneyAmount(request.requested_amount) ?? 0, request.currency)}</p>
+                      <p className="mt-2 text-muted-foreground">
+                        Compara el gasto validado con el monto del anticipo. Si es igual, la rendición se aprueba sin saldo; si es menor, se registra devolución; si es mayor, el saldo adicional pasa a Cola de Pagos.
+                      </p>
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-sm font-medium" htmlFor="validated-spent-amount">Gasto validado *</label>
+                      <Input id="validated-spent-amount" type="number" min="0" step="0.01" value={validatedSpentAmount} onChange={(event) => setValidatedSpentAmount(event.target.value)} placeholder="0.00" />
+                    </div>
+                    <div className="rounded-md border p-3 text-sm">
+                      <p className="font-medium">Ejemplos rápidos</p>
+                      <ul className="mt-2 list-disc space-y-1 pl-5 text-muted-foreground">
+                        <li>Gasto validado igual al anticipo: rendición exacta, sin saldo pendiente.</li>
+                        <li>Gasto validado menor al anticipo: devolución por la diferencia y constancia obligatoria.</li>
+                        <li>Gasto validado mayor al anticipo: saldo adicional por pagar en Cola de Pagos.</li>
+                      </ul>
+                    </div>
+                  </>
+                )}
+                {rexanApprovalPreview && !hasStructuredGeneratedReport && (
                   <div className="rounded-md border bg-muted p-3 text-sm" aria-live="polite">
                     <div className="flex flex-wrap items-center gap-2">
                       <span className="font-medium">Resultado previsto</span>

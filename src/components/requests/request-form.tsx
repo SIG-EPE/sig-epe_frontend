@@ -68,6 +68,7 @@ import { PlanningLineSelector } from "./planning-line-selector";
 import { RequestTypeSelector } from "./request-type-selector";
 import { RequestDocumentsCard } from "./request-documents-card";
 import { SettlementContextCard } from "./settlement-context-card";
+import { StructuredRenditionReportCard } from "./structured-rendition-report-card";
 import { SupplierFields } from "./supplier-fields";
 
 export const requestFormSchema = z.object({
@@ -438,6 +439,7 @@ interface RequestFormProps {
   settlementContextError?: Error | null;
   settlementContextLoading?: boolean;
   onRetrySettlementContext?: () => Promise<void> | void;
+  onRequestChanged?: () => Promise<void> | void;
 }
 
 export function RequestForm({
@@ -448,6 +450,7 @@ export function RequestForm({
   settlementContextError = null,
   settlementContextLoading = false,
   onRetrySettlementContext,
+  onRequestChanged,
 }: RequestFormProps) {
   const router = useRouter();
   const user = useAuthStore((state) => state.user);
@@ -458,6 +461,10 @@ export function RequestForm({
   const [isNavigatingStep, setIsNavigatingStep] = useState(false);
   const [pendingAction, setPendingAction] = useState<"save" | "submit" | null>(null);
   const [selectedLines, setSelectedLines] = useState<Array<RequestPlanningLineLookupItem | null>>(() => getInitialSelectedLines(initialRequest));
+  const [structuredReportReady, setStructuredReportReady] = useState(false);
+  const [structuredReportLocked, setStructuredReportLocked] = useState(false);
+  const [structuredReportMessages, setStructuredReportMessages] = useState<string[]>([]);
+  const [structuredReportRefreshSignal, setStructuredReportRefreshSignal] = useState(0);
 
   const form = useForm<RequestFormValues>({
     resolver: zodResolver(requestFormSchema),
@@ -517,6 +524,11 @@ export function RequestForm({
   const currentRequestDataErrors = currentRequestDataIssues.length > 0 ? getDataValidationMessages(currentRequestDataIssues) : [];
   const hasCompleteRequestData = currentRequestDataErrors.length === 0;
   const dataStepBlockingMessages = submitErrors.length > 0 ? submitErrors : currentRequestDataErrors;
+
+  async function refreshDocumentsAndStructuredReport(): Promise<void> {
+    await Promise.all([reviewDocuments.refetch(), onRequestChanged?.()]);
+    setStructuredReportRefreshSignal((current) => current + 1);
+  }
   const hasBudgetCeilingSubmitError = dataStepBlockingMessages.includes(REQUEST_BUDGET_CEILING_BLOCK_MESSAGE);
   const stepperItems = getRequestEditStepperItems(mode === "create" ? REQUEST_EDIT_STEP.DATA : activeStep, {
     isDataComplete: hasCompleteRequestData,
@@ -525,7 +537,16 @@ export function RequestForm({
   });
   const reviewNavigationIssues = currentRequest ? getRequestReviewNavigationIssues(currentRequest, checklist) : null;
   const isBudgetCeilingBlocked = !isAdvanceSettlement && isBudgetPreviewBlocking(preview.data);
-  const canSubmitReview = hasCompleteRequestData && areDocumentsReady && checklist.isComplete && !isBudgetCeilingBlocked;
+  const canSubmitReview = hasCompleteRequestData && areDocumentsReady && checklist.isComplete && !isBudgetCeilingBlocked && (!isAdvanceSettlement || structuredReportReady);
+  const settlementGuidanceAllocations = isAdvanceSettlement && (currentRequest?.allocations?.length ?? 0) === 0
+    ? settlementContext?.original_advance.allocations ?? []
+    : [];
+
+  useEffect(() => {
+    if (!initialRequest) return;
+    setDraftId(initialRequest.id);
+    setCurrentRequest(initialRequest);
+  }, [initialRequest]);
 
   useEffect(() => {
     setIsNavigatingStep(false);
@@ -606,6 +627,13 @@ export function RequestForm({
         navigateToStep(REQUEST_EDIT_STEP.DOCUMENTS);
         return false;
       }
+
+      if (isAdvanceSettlement && !structuredReportReady) {
+        setDocumentStepErrors(structuredReportMessages.length > 0 ? structuredReportMessages : ["Genera el informe antes de continuar a revisión."]);
+        toast.error("Genera el informe antes de continuar a revisión.");
+        navigateToStep(REQUEST_EDIT_STEP.DOCUMENTS);
+        return false;
+      }
     }
 
     return true;
@@ -637,6 +665,12 @@ export function RequestForm({
     if (navigationIssues.documentMessages.length > 0) {
       setDocumentStepErrors(navigationIssues.documentMessages);
       toast.error("Adjunta los documentos requeridos antes de pasar a revisión.");
+      return;
+    }
+
+    if (isAdvanceSettlement && !structuredReportReady) {
+      setDocumentStepErrors(structuredReportMessages.length > 0 ? structuredReportMessages : ["Genera el informe antes de continuar a revisión."]);
+      toast.error("Genera el informe antes de continuar a revisión.");
       return;
     }
 
@@ -749,6 +783,15 @@ export function RequestForm({
       setSubmitErrors(checklist.missingMessages);
       setDocumentStepErrors(checklist.missingMessages);
       toast.error("Adjunta los documentos requeridos antes de enviar. La validación final se realizará al enviar la solicitud.");
+      setPendingAction(null);
+      return;
+    }
+
+    if (isAdvanceSettlement && !structuredReportReady) {
+      const messages = structuredReportMessages.length > 0 ? structuredReportMessages : ["Genera el informe antes de continuar a revisión."];
+      setSubmitErrors(messages);
+      setDocumentStepErrors(messages);
+      toast.error("Genera el informe antes de continuar a revisión.");
       setPendingAction(null);
       return;
     }
@@ -1040,11 +1083,28 @@ export function RequestForm({
         {renderSettlementContextState()}
         <RequestDocumentsCard
           request={currentRequest}
+          guidanceAllocations={settlementGuidanceAllocations}
+          structuredReportLocked={structuredReportLocked}
           documents={reviewDocuments.documents}
           documentsLoading={reviewDocuments.isLoading}
           documentsError={reviewDocuments.error}
-          onDocumentsChanged={reviewDocuments.refetch}
+          onDocumentsChanged={refreshDocumentsAndStructuredReport}
         />
+        {currentRequest.request_type === REQUEST_TYPE.ADVANCE_SETTLEMENT && (
+          <StructuredRenditionReportCard
+            request={currentRequest}
+            guidanceAllocations={settlementGuidanceAllocations}
+            refreshSignal={structuredReportRefreshSignal}
+            onChanged={async () => {
+              await Promise.all([reviewDocuments.refetch(), onRequestChanged?.()]);
+            }}
+            onReadinessChange={(ready, messages) => {
+              setStructuredReportReady(ready);
+              setStructuredReportMessages(messages);
+            }}
+            onLockChange={setStructuredReportLocked}
+          />
+        )}
         {documentStepErrors.length > 0 && (
           <Alert variant="destructive">
             <AlertDescription>
@@ -1069,7 +1129,7 @@ export function RequestForm({
         <div className="flex flex-col-reverse gap-3 border-t pt-4 sm:flex-row sm:justify-between">
           <Button type="button" variant="outline" onClick={() => navigateToStep(REQUEST_EDIT_STEP.DATA)} disabled={isBusy}>Volver a datos</Button>
           <Button type="button" onClick={handleContinueToReview} disabled={isBusy || !areDocumentsReady}>
-            {isNavigatingStep || !areDocumentsReady ? "Validando..." : currentRequestDataErrors.length > 0 ? "Corregir datos" : !checklist.isComplete ? "Adjuntar documentos para continuar" : "Continuar a revisión"}
+            {isNavigatingStep || !areDocumentsReady ? "Validando..." : currentRequestDataErrors.length > 0 ? "Corregir datos" : !checklist.isComplete ? "Adjuntar documentos para continuar" : isAdvanceSettlement && !structuredReportReady ? "Generar informe para continuar" : "Continuar a revisión"}
           </Button>
         </div>
       </>
@@ -1235,12 +1295,30 @@ export function RequestForm({
         {renderReviewSummary()}
         <RequestDocumentsCard
           request={currentRequest}
+          guidanceAllocations={settlementGuidanceAllocations}
           backendMissingMessages={submitErrors}
+          structuredReportLocked={structuredReportLocked}
           documents={reviewDocuments.documents}
           documentsLoading={reviewDocuments.isLoading}
           documentsError={reviewDocuments.error}
-          onDocumentsChanged={reviewDocuments.refetch}
+          onDocumentsChanged={refreshDocumentsAndStructuredReport}
         />
+        {currentRequest.request_type === REQUEST_TYPE.ADVANCE_SETTLEMENT && (
+          <StructuredRenditionReportCard
+            request={currentRequest}
+            readOnly
+            guidanceAllocations={settlementGuidanceAllocations}
+            refreshSignal={structuredReportRefreshSignal}
+            onChanged={async () => {
+              await Promise.all([reviewDocuments.refetch(), onRequestChanged?.()]);
+            }}
+            onReadinessChange={(ready, messages) => {
+              setStructuredReportReady(ready);
+              setStructuredReportMessages(messages);
+            }}
+            onLockChange={setStructuredReportLocked}
+          />
+        )}
         <div className="flex flex-col-reverse gap-3 border-t pt-4 sm:flex-row sm:justify-between">
           <Button type="button" variant="outline" onClick={() => navigateToStep(REQUEST_EDIT_STEP.DOCUMENTS)} disabled={isBusy}>Volver a documentos</Button>
           <Button type="button" onClick={form.handleSubmit(handleSubmitDraft)} disabled={isBusy || !canSubmitReview}>

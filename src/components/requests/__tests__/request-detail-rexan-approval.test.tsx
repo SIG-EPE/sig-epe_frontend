@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { RequestDetailPage } from "@/components/requests/request-detail-page";
-import { REQUEST_CURRENCY, REQUEST_DOCUMENT_CATEGORY, REQUEST_DOCUMENT_STORAGE_PROVIDER, REQUEST_DOCUMENT_UPLOAD_STATUS, REQUEST_STATUS, REQUEST_TYPE, REXAN_OUTCOME, type PaymentRequest, type RequestDocument } from "@/types/requests";
+import { REQUEST_CURRENCY, REQUEST_DOCUMENT_CATEGORY, REQUEST_DOCUMENT_STORAGE_PROVIDER, REQUEST_DOCUMENT_UPLOAD_STATUS, REQUEST_RENDITION_REPORT_STATUS, REQUEST_STATUS, REQUEST_TYPE, REXAN_OUTCOME, type PaymentRequest, type RequestDocument, type RequestRenditionReport } from "@/types/requests";
 
 const mocks = vi.hoisted(() => ({
   approveRequest: vi.fn(),
@@ -12,8 +12,10 @@ const mocks = vi.hoisted(() => ({
   startAdvanceSettlement: vi.fn(),
   useRequest: vi.fn(),
   useRequestDocuments: vi.fn(),
+  useRequestRenditionReport: vi.fn(),
   requestRefetch: vi.fn(),
   documentsRefetch: vi.fn(),
+  reportRefetch: vi.fn(),
   toastError: vi.fn(),
   toastSuccess: vi.fn(),
 }));
@@ -36,6 +38,7 @@ vi.mock("@/stores/auth-store", () => ({
 vi.mock("@/hooks/use-requests", () => ({
   useRequest: (id?: string) => mocks.useRequest(id),
   useRequestDocuments: (id?: string) => mocks.useRequestDocuments(id),
+  useRequestRenditionReport: (id?: string, enabled?: boolean) => mocks.useRequestRenditionReport(id, enabled),
   useApproveRequest: () => ({ approveRequest: mocks.approveRequest, isLoading: false }),
   useObserveRequest: () => ({ observeRequest: mocks.observeRequest, isLoading: false }),
   useRejectRequest: () => ({ rejectRequest: mocks.rejectRequest, isLoading: false }),
@@ -48,6 +51,10 @@ vi.mock("@/components/requests/request-status-stepper", () => ({
 
 vi.mock("@/components/requests/request-documents-card", () => ({
   RequestDocumentsCard: () => <div data-testid="request-documents-card" />,
+}));
+
+vi.mock("@/components/requests/structured-rendition-report-card", () => ({
+  StructuredRenditionReportCard: () => <div data-testid="structured-rendition-report-card" />,
 }));
 
 vi.mock("@/components/requests/status-badge", () => ({
@@ -113,6 +120,26 @@ function makeDocument(overrides: Partial<RequestDocument> = {}): RequestDocument
   };
 }
 
+function makeReport(overrides: Partial<RequestRenditionReport> = {}): RequestRenditionReport {
+  const totalAmount = overrides.total_amount ?? overrides.totals?.total_amount ?? 100;
+  return {
+    id: "report-1",
+    request_id: "rexan-1",
+    status: REQUEST_RENDITION_REPORT_STATUS.EXPORTED,
+    total_amount: totalAmount,
+    currency: REQUEST_CURRENCY.PEN,
+    settlement_report_document_id: "generated-report-1",
+    drive_sync_status: "SYNCED",
+    drive_sync_error: null,
+    submitted_at: null,
+    exported_at: "2026-05-02T10:00:00.000Z",
+    rows: [],
+    totals: { total_amount: totalAmount, by_allocation: [], missing_allocations: [] },
+    allocation_coverage: [],
+    ...overrides,
+  };
+}
+
 async function openApproveDialogAndSetAmount(amount: string) {
   const user = userEvent.setup();
   render(<RequestDetailPage />);
@@ -129,13 +156,14 @@ describe("RequestDetailPage REXAN approval", () => {
     mocks.approveRequest.mockResolvedValue(makeRequest({ status: REQUEST_STATUS.APPROVED }));
     mocks.useRequest.mockReturnValue({ request: makeRequest(), isLoading: false, error: null, refetch: mocks.requestRefetch });
     mocks.useRequestDocuments.mockReturnValue({ documents: [], isLoading: false, error: null, refetch: mocks.documentsRefetch });
+    mocks.useRequestRenditionReport.mockReturnValue({ report: null, isLoading: false, error: null, refetch: mocks.reportRefetch });
   });
 
   it("aprueba REXAN EXACT con validated_spent_amount y sin campos de devolución ni nota legacy", async () => {
     const user = await openApproveDialogAndSetAmount("100");
 
     expect(screen.getByText("Monto del anticipo")).toBeInTheDocument();
-    expect(screen.getByText("Regla: se compara el gasto validado contra el monto del anticipo. Si es igual, la rendición se aprueba sin saldo; si es menor, se registra devolución; si es mayor, el saldo adicional pasa a Cola de Pagos.")).toBeInTheDocument();
+    expect(screen.getByText("Compara el gasto validado con el monto del anticipo. Si es igual, la rendición se aprueba sin saldo; si es menor, se registra devolución; si es mayor, el saldo adicional pasa a Cola de Pagos.")).toBeInTheDocument();
     expect(screen.getByText("Rendición exacta: no queda saldo pendiente.")).toBeInTheDocument();
     await user.click(screen.getAllByRole("button", { name: "Aprobar rendición" }).at(-1)!);
 
@@ -196,6 +224,75 @@ describe("RequestDetailPage REXAN approval", () => {
       });
     });
     expect(mocks.approveRequest.mock.calls[0][1]).not.toHaveProperty("return_proof_document_id");
+  });
+
+  it("muestra resultado calculado para informe generado estructurado y no pide gasto manual", async () => {
+    const user = userEvent.setup();
+    mocks.useRequestRenditionReport.mockReturnValue({ report: makeReport({ total_amount: 100 }), isLoading: false, error: null, refetch: mocks.reportRefetch });
+
+    render(<RequestDetailPage />);
+    await user.click(screen.getByRole("button", { name: "Aprobar rendición" }));
+
+    expect(screen.getByText("Resultado calculado")).toBeInTheDocument();
+    expect(screen.getByText("Total rendido")).toBeInTheDocument();
+    expect(screen.getByText("Anticipo")).toBeInTheDocument();
+    expect(screen.getByText("Exacta")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Gasto validado *")).not.toBeInTheDocument();
+
+    await user.click(screen.getAllByRole("button", { name: "Aprobar rendición" }).at(-1)!);
+
+    await waitFor(() => {
+      expect(mocks.approveRequest).toHaveBeenCalledWith("rexan-1", { comment: undefined });
+    });
+    expect(mocks.approveRequest.mock.calls[0][1]).not.toHaveProperty("validated_spent_amount");
+  });
+
+  it.each([
+    { total: 100, label: "Exacta", difference: /No queda diferencia pendiente/i },
+    { total: 80, label: "Devolución pendiente", difference: /Diferencia a devolver: S\/\s*20\.00\./ },
+    { total: 125.55, label: "Saldo adicional por pagar", difference: /Diferencia por pagar: S\/\s*25\.55\./ },
+  ])("renderiza resultado calculado $label para informe generado", async ({ total, label, difference }) => {
+    const user = userEvent.setup();
+    mocks.useRequestRenditionReport.mockReturnValue({ report: makeReport({ total_amount: total }), isLoading: false, error: null, refetch: mocks.reportRefetch });
+    if (total === 80) {
+      mocks.useRequestDocuments.mockReturnValue({ documents: [makeDocument()], isLoading: false, error: null, refetch: mocks.documentsRefetch });
+    }
+
+    render(<RequestDetailPage />);
+    await user.click(screen.getByRole("button", { name: "Aprobar rendición" }));
+
+    expect(screen.getByText(label)).toBeInTheDocument();
+    expect(screen.getByText(difference)).toBeInTheDocument();
+  });
+
+  it("envía solo constancia para devolución de informe generado y omite gasto validado", async () => {
+    const user = userEvent.setup();
+    mocks.useRequestRenditionReport.mockReturnValue({ report: makeReport({ total_amount: 80 }), isLoading: false, error: null, refetch: mocks.reportRefetch });
+    mocks.useRequestDocuments.mockReturnValue({ documents: [makeDocument()], isLoading: false, error: null, refetch: mocks.documentsRefetch });
+
+    render(<RequestDetailPage />);
+    await user.click(screen.getByRole("button", { name: "Aprobar rendición" }));
+    await user.click(screen.getAllByRole("button", { name: "Aprobar rendición" }).at(-1)!);
+
+    await waitFor(() => {
+      expect(mocks.approveRequest).toHaveBeenCalledWith("rexan-1", {
+        comment: undefined,
+        return_proof_document_id: "return-proof-1",
+      });
+    });
+    expect(mocks.approveRequest.mock.calls[0][1]).not.toHaveProperty("validated_spent_amount");
+  });
+
+  it("mantiene el gasto manual obligatorio cuando no hay informe generado", async () => {
+    const user = userEvent.setup();
+    render(<RequestDetailPage />);
+
+    await user.click(screen.getByRole("button", { name: "Aprobar rendición" }));
+    expect(screen.getByLabelText("Gasto validado *")).toBeInTheDocument();
+    await user.click(screen.getAllByRole("button", { name: "Aprobar rendición" }).at(-1)!);
+
+    expect(mocks.toastError).toHaveBeenCalledWith("Ingresa el gasto validado de la rendición.");
+    expect(mocks.approveRequest).not.toHaveBeenCalled();
   });
 
   it("mantiene aprobación normal sin campos REXAN para solicitudes no rendición", async () => {

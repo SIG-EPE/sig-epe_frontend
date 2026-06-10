@@ -1264,26 +1264,7 @@ const REQUIRED_DOCUMENT_RULES: Record<RequestType, Omit<RequiredDocumentChecklis
     acceptedFormatsLabel: "PDF, JPG o PNG",
     missingMessage: "Falta adjuntar comprobante factura/RH.",
   }],
-  [REQUEST_TYPE.ADVANCE_SETTLEMENT]: [
-    {
-      key: "advance-settlement-report",
-      category: REQUEST_DOCUMENT_CATEGORY.SETTLEMENT_REPORT,
-      label: "Informe de rendición REXAN Excel",
-      description: "Adjunta el informe de rendición del anticipo en XLS o XLSX.",
-      required: true,
-      acceptedFormatsLabel: "XLS o XLSX",
-      missingMessage: "Falta adjuntar informe de rendición REXAN Excel.",
-    },
-    {
-      key: "advance-settlement-receipt",
-      category: REQUEST_DOCUMENT_CATEGORY.RECEIPT,
-      label: "Comprobante de la rendición",
-      description: "Adjunta al menos un comprobante de gasto asociado a la rendición del anticipo.",
-      required: true,
-      acceptedFormatsLabel: "PDF, JPG o PNG",
-      missingMessage: "Falta adjuntar comprobante de la rendición.",
-    },
-  ],
+  [REQUEST_TYPE.ADVANCE_SETTLEMENT]: [],
 };
 
 const SUPPLIER_PAYMENT_CONDITIONAL_NOTES: ConditionalDocumentChecklistNote[] = [

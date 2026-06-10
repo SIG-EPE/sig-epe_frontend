@@ -34,4 +34,9 @@ describe("business timezone utilities", () => {
     expect(formatBusinessDate("2026-06-01T04:59:59.000Z", { day: "2-digit", month: "2-digit", year: "numeric" })).toBe("31/05/2026");
     expect(formatBusinessDateTime("2026-06-01T05:00:00.000Z")).toContain("1 jun");
   });
+
+  it("formats date-only values without shifting them to the previous Lima day", () => {
+    expect(formatBusinessDate("2026-06-01", { day: "2-digit", month: "2-digit", year: "numeric" })).toBe("01/06/2026");
+    expect(formatBusinessDate("2026-06-01")).toContain("1 jun");
+  });
 });

@@ -127,6 +127,33 @@ export const REQUEST_RECEIPT_TYPE = {
 
 export type RequestReceiptType = (typeof REQUEST_RECEIPT_TYPE)[keyof typeof REQUEST_RECEIPT_TYPE];
 
+export const REQUEST_RENDITION_REPORT_STATUS = {
+  DRAFT: "DRAFT",
+  READY: "READY",
+  SUBMITTED: "SUBMITTED",
+  EXPORT_PENDING: "EXPORT_PENDING",
+  EXPORTED: "EXPORTED",
+  EXPORT_FAILED: "EXPORT_FAILED",
+  OBSERVED: "OBSERVED",
+} as const;
+
+export type RequestRenditionReportStatus = (typeof REQUEST_RENDITION_REPORT_STATUS)[keyof typeof REQUEST_RENDITION_REPORT_STATUS];
+
+export const REQUEST_RENDITION_ROW_TYPE = {
+  OCR_RECEIPT: "OCR_RECEIPT",
+  MANUAL_EXTRA: "MANUAL_EXTRA",
+} as const;
+
+export type RequestRenditionRowType = (typeof REQUEST_RENDITION_ROW_TYPE)[keyof typeof REQUEST_RENDITION_ROW_TYPE];
+
+export const REQUEST_RENDITION_ROW_REVIEW_STATUS = {
+  DRAFT: "DRAFT",
+  REVIEWED: "REVIEWED",
+  SUBMIT_READY: "SUBMIT_READY",
+} as const;
+
+export type RequestRenditionRowReviewStatus = (typeof REQUEST_RENDITION_ROW_REVIEW_STATUS)[keyof typeof REQUEST_RENDITION_ROW_REVIEW_STATUS];
+
 export const REXAN_OUTCOME = {
   EXACT: "EXACT",
   DEVOLUCION: "DEVOLUCION",
@@ -519,6 +546,7 @@ export interface SettlementContextOriginalAdvance {
   amount_disbursed: number | string | null;
   budgetPlanningLine?: PaymentRequestPlanningLine | null;
   organizationalUnit?: RequestOrgUnitSummary | null;
+  allocations?: RequestAllocation[];
 }
 
 export interface SettlementContextSettlement {
@@ -670,6 +698,7 @@ export interface RequestDocument {
 export interface RequestReceipt {
   id: string;
   request_id: string;
+  request_allocation_id: string | null;
   document_id: string | null;
   receipt_type: RequestReceiptType | string;
   issuer_document_type: string | null;
@@ -713,6 +742,141 @@ export interface RequestReceiptReview {
   receipt: RequestReceipt;
   latest_extraction: RequestReceiptExtractionSummary | null;
   duplicate_candidates: RequestReceiptDuplicateCandidate[];
+}
+
+export interface RequestRenditionAllocationCoverage {
+  request_allocation_id: string;
+  request_allocation_label?: string;
+  planned_amount: number;
+  row_total_amount: number;
+  row_count: number;
+  has_rows: boolean;
+  classification_label?: string | null;
+  budget_category_label?: string | null;
+  area_label?: string | null;
+  org_unit_label?: string | null;
+  cost_center_label?: string | null;
+  line_code?: string | null;
+  line_name?: string | null;
+  resource_description?: string | null;
+  program_label?: string | null;
+  operative_action_label?: string | null;
+  importance_label?: string | null;
+  frequency_label?: string | null;
+  budget_month?: number | null;
+  fiscal_year?: number | null;
+}
+
+export interface RequestRenditionTotals {
+  total_amount: number;
+  by_allocation: RequestRenditionAllocationCoverage[];
+  missing_allocations: string[];
+}
+
+export interface RequestRenditionRow {
+  id: string;
+  report_id: string;
+  request_id: string;
+  request_allocation_id: string;
+  request_document_id: string;
+  request_receipt_id: string | null;
+  request_ocr_extraction_id: string | null;
+  row_type: RequestRenditionRowType | string;
+  purchase_date: string;
+  provider_name: string;
+  receipt_number: string | null;
+  detail: string;
+  amount: number;
+  currency: RequestCurrency | string;
+  review_status: RequestRenditionRowReviewStatus | string;
+  source_snapshot: Record<string, unknown> | null;
+  classification_label?: string | null;
+  budget_category_label?: string | null;
+  area_label?: string | null;
+  org_unit_label?: string | null;
+  cost_center_label?: string | null;
+  line_code?: string | null;
+  line_name?: string | null;
+  resource_description?: string | null;
+  program_label?: string | null;
+  operative_action_label?: string | null;
+  importance_label?: string | null;
+  frequency_label?: string | null;
+  budget_month?: number | null;
+  fiscal_year?: number | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface RequestRenditionReport {
+  id: string;
+  request_id: string;
+  status: RequestRenditionReportStatus | string;
+  total_amount: number;
+  currency: RequestCurrency | string;
+  settlement_report_document_id: string | null;
+  drive_sync_status: string;
+  drive_sync_error: string | null;
+  submitted_at: string | null;
+  exported_at: string | null;
+  classification_label?: string | null;
+  budget_category_label?: string | null;
+  area_label?: string | null;
+  org_unit_label?: string | null;
+  cost_center_label?: string | null;
+  line_code?: string | null;
+  line_name?: string | null;
+  resource_description?: string | null;
+  program_label?: string | null;
+  operative_action_label?: string | null;
+  importance_label?: string | null;
+  frequency_label?: string | null;
+  budget_month?: number | null;
+  fiscal_year?: number | null;
+  rows: RequestRenditionRow[];
+  totals: RequestRenditionTotals;
+  allocation_coverage: RequestRenditionAllocationCoverage[];
+}
+
+export interface RequestRenditionValidationBlocker {
+  code: string;
+  message: string;
+  request_allocation_id?: string;
+  request_allocation_label?: string;
+  row_id?: string;
+}
+
+export interface RequestRenditionValidationResponse {
+  ready: boolean;
+  report: RequestRenditionReport;
+  totals: RequestRenditionTotals;
+  allocation_coverage: RequestRenditionAllocationCoverage[];
+  blockers: RequestRenditionValidationBlocker[];
+}
+
+export interface RequestRenditionGenerateResponse {
+  report: RequestRenditionReport;
+  document: RequestDocument;
+}
+
+export interface CreateManualRenditionRowInput {
+  request_document_id: string;
+  request_allocation_id: string;
+  purchase_date: string;
+  provider_name: string;
+  receipt_number?: string | null;
+  detail: string;
+  amount: number;
+}
+
+export interface UpdateRenditionRowInput {
+  request_document_id?: string;
+  request_allocation_id?: string;
+  purchase_date?: string;
+  provider_name?: string;
+  receipt_number?: string | null;
+  detail?: string;
+  amount?: number;
 }
 
 export interface UpdateRequestReceiptReviewInput {

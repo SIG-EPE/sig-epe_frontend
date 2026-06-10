@@ -856,21 +856,16 @@ describe("requests helpers", () => {
     expect(supplier.conditionalNotes.length).toBeGreaterThan(0);
 
     const rexanMissing = getRequiredDocumentChecklist(REQUEST_TYPE.ADVANCE_SETTLEMENT, []);
-    expect(rexanMissing.items.map((item) => item.category)).toEqual([
-      REQUEST_DOCUMENT_CATEGORY.SETTLEMENT_REPORT,
-      REQUEST_DOCUMENT_CATEGORY.RECEIPT,
-    ]);
-    expect(rexanMissing.missingMessages).toEqual([
-      "Falta adjuntar informe de rendición REXAN Excel.",
-      "Falta adjuntar comprobante de la rendición.",
-    ]);
+    expect(rexanMissing.items).toEqual([]);
+    expect(rexanMissing.missingMessages).toEqual([]);
+    expect(rexanMissing.isComplete).toBe(true);
 
     const rexanWrongReport = getRequiredDocumentChecklist(REQUEST_TYPE.ADVANCE_SETTLEMENT, [
       makeDocument({ document_category: REQUEST_DOCUMENT_CATEGORY.SETTLEMENT_REPORT, original_filename: "reporte.pdf", safe_filename: "reporte.pdf", mime_type: "application/pdf" }),
       makeDocument({ document_category: REQUEST_DOCUMENT_CATEGORY.RECEIPT }),
     ]);
-    expect(rexanWrongReport.isComplete).toBe(false);
-    expect(rexanWrongReport.missingMessages).toEqual(["Falta adjuntar informe de rendición REXAN Excel."]);
+    expect(rexanWrongReport.isComplete).toBe(true);
+    expect(rexanWrongReport.missingMessages).toEqual([]);
 
     const rexanComplete = getRequiredDocumentChecklist(REQUEST_TYPE.ADVANCE_SETTLEMENT, [
       makeDocument({ document_category: REQUEST_DOCUMENT_CATEGORY.SETTLEMENT_REPORT, original_filename: "rexan.xlsx", safe_filename: "rexan.xlsx", mime_type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }),

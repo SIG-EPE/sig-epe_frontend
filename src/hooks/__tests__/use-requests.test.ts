@@ -1,7 +1,7 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
-import { getPaymentQueuePath, getRenditionCountsPath, getRenditionsPath, getRequestsPath, getSettlementContextPath, getStartAdvanceSettlementPath, useBulkMarkPaid, useCompletePaymentDetails, useSettlementContext, useStartAdvanceSettlement } from "@/hooks/use-requests";
+import { getPaymentQueuePath, getRenditionCountsPath, getRenditionsPath, getRequestsPath, getSettlementContextPath, getStartAdvanceSettlementPath, useBulkMarkPaid, useCompletePaymentDetails, useRequestRenditionReportActions, useSettlementContext, useStartAdvanceSettlement } from "@/hooks/use-requests";
 import { api } from "@/lib/api-client";
 import { RENDITION_SORT_DIRECTION, RENDITION_SORT_FIELD, RENDITION_STATUS, REQUEST_CURRENCY, REQUEST_STATUS, REQUEST_TYPE, type PaymentRequest } from "@/types/requests";
 
@@ -10,6 +10,7 @@ vi.mock("@/lib/api-client", () => ({
     get: vi.fn(),
     post: vi.fn(),
     patchForm: vi.fn(),
+    delete: vi.fn(),
   },
 }));
 
@@ -175,5 +176,19 @@ describe("request hook URL helpers", () => {
     expect(formData.get("bank_commission")).toBe("1.5");
     expect(formData.has("amount_paid")).toBe(false);
     expect(formData.has("paid_at")).toBe(false);
+  });
+
+  it("genera informe de rendición con respuesta de informe y documento", async () => {
+    vi.mocked(api.post).mockResolvedValueOnce({ report: { id: "report-1" }, document: { id: "document-1" } });
+    const { result } = renderHook(() => useRequestRenditionReportActions());
+
+    await act(async () => {
+      await expect(result.current.generateReport("settlement-1")).resolves.toMatchObject({
+        report: { id: "report-1" },
+        document: { id: "document-1" },
+      });
+    });
+
+    expect(api.post).toHaveBeenCalledWith("/requests/settlement-1/rendition-report/generate");
   });
 });
