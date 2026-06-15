@@ -136,12 +136,12 @@ Credenciales disponibles en el entorno de desarrollo (requiere que el backend te
 
 ### Cuentas de prueba
 
-| Identifier                        | Contraseña               | Rol               | Notas                                             |
-| --------------------------------- | ------------------------ | ----------------- | ------------------------------------------------- |
-| `admin@sigepe.local`              | `SigEpe2026!`            | `ADMIN_SISTEMA`   | Admin principal, onboarding completo              |
-| `carlos.huaman@ensenaperudev.org` | `DevPass2026!`           | `GIOF_GESTOR`     | Onboarding completo                               |
-| `ana.torres@ensenaperudev.org`    | `DevPass2026!`           | `SOLICITANTE_EPE` | `onboarding_completed: false`                     |
-| DNI: `12345678`                   | _(sin contraseña local)_ | `SOLICITANTE_EPE` | Sin email, sin password — simula primer login EPE |
+| Identifier                        | Contraseña                  | Rol               | Notas                                             |
+| --------------------------------- | --------------------------- | ----------------- | ------------------------------------------------- |
+| `admin@sigepe.local`              | Solicitar por canal privado | `ADMIN_SISTEMA`   | Admin principal, onboarding completo              |
+| `carlos.huaman@ensenaperudev.org` | Solicitar por canal privado | `GIOF_GESTOR`     | Onboarding completo                               |
+| `ana.torres@ensenaperudev.org`    | Solicitar por canal privado | `SOLICITANTE_EPE` | `onboarding_completed: false`                     |
+| DNI: `12345678`                   | _(sin contraseña local)_    | `SOLICITANTE_EPE` | Sin email, sin password — simula primer login EPE |
 
 > **DNI `12345678` (María García Quispe):** simula el primer login de un empleado EPE. No tiene contraseña local; usa las credenciales del sistema EPE real.
 

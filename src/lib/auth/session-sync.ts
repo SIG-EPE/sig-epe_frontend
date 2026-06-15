@@ -28,8 +28,13 @@ function getCookieDomainCandidates(): string[] {
 
 function expireCookie(name: string, path: string, domain?: string): void {
   const domainAttribute = domain ? `; domain=${domain}` : "";
-  document.cookie = `${name}=; path=${path}${domainAttribute}; max-age=0; SameSite=Strict`;
-  document.cookie = `${name}=; path=${path}${domainAttribute}; expires=Thu, 01 Jan 1970 00:00:00 GMT; SameSite=Lax`;
+  const secureAttribute = getSecureCookieAttribute();
+  document.cookie = `${name}=; path=${path}${domainAttribute}; max-age=0; SameSite=Strict${secureAttribute}`;
+  document.cookie = `${name}=; path=${path}${domainAttribute}; expires=Thu, 01 Jan 1970 00:00:00 GMT; SameSite=Lax${secureAttribute}`;
+}
+
+function getSecureCookieAttribute(): string {
+  return typeof window !== "undefined" && window.location.protocol === "https:" ? "; Secure" : "";
 }
 
 export function getAccessTokenFromCookie(): string | null {
@@ -60,7 +65,7 @@ export function writeSessionHintCookie(sessionExpiresAt?: string): void {
   if (typeof document === "undefined") return;
 
   const maxAge = getSessionHintMaxAge(sessionExpiresAt);
-  document.cookie = `${SESSION_HINT_COOKIE_NAME}=${SESSION_HINT_COOKIE_VALUE}; path=/; SameSite=Strict; Max-Age=${maxAge}`;
+  document.cookie = `${SESSION_HINT_COOKIE_NAME}=${SESSION_HINT_COOKIE_VALUE}; path=/; SameSite=Strict; Max-Age=${maxAge}${getSecureCookieAttribute()}`;
 }
 
 export function clearSessionHintCookie(): void {
@@ -128,7 +133,7 @@ export function writeAccessTokenCookie(
   clearAccessTokenCookie();
 
   const maxAge = getAccessTokenMaxAge(accessTokenExpiresAt);
-  document.cookie = `${TOKEN_KEY}=${encodeURIComponent(accessToken)}; path=/; SameSite=Strict; Max-Age=${maxAge}`;
+  document.cookie = `${TOKEN_KEY}=${encodeURIComponent(accessToken)}; path=/; SameSite=Strict; Max-Age=${maxAge}${getSecureCookieAttribute()}`;
 }
 
 export function syncAuthSession({
