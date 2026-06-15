@@ -12,10 +12,11 @@ interface RequestListTableProps {
   requests: PaymentRequest[];
   isLoading: boolean;
   roleCode?: string | null;
+  currentUserId?: string | null;
   showResponsible?: boolean;
 }
 
-export function RequestListTable({ requests, isLoading, roleCode, showResponsible = false }: RequestListTableProps) {
+export function RequestListTable({ requests, isLoading, roleCode, currentUserId, showResponsible = false }: RequestListTableProps) {
   if (isLoading) {
     return <p className="rounded-md border p-6 text-sm text-muted-foreground">Cargando solicitudes...</p>;
   }
@@ -41,7 +42,7 @@ export function RequestListTable({ requests, isLoading, roleCode, showResponsibl
       </TableHeader>
       <TableBody>
         {requests.map((request) => {
-          const actions = getRequestListActions(roleCode, request.status, request.id);
+          const actions = getRequestListActions(roleCode, request.status, request.id, request.requester_id, currentUserId);
           const timelineDate = getRequestTimelineDate(request);
           const timelineLabel = getRequestTimelineLabel(request);
           const responsible = getPaymentRequestParty(request) || "—";

@@ -154,6 +154,28 @@ export const REQUEST_RENDITION_ROW_REVIEW_STATUS = {
 
 export type RequestRenditionRowReviewStatus = (typeof REQUEST_RENDITION_ROW_REVIEW_STATUS)[keyof typeof REQUEST_RENDITION_ROW_REVIEW_STATUS];
 
+export const REQUEST_RENDITION_LINE_RETURN_STATUS = {
+  DRAFT: "DRAFT",
+  VALID: "VALID",
+  MISMATCH: "MISMATCH",
+  OBSERVED: "OBSERVED",
+} as const;
+
+export type RequestRenditionLineReturnStatus = (typeof REQUEST_RENDITION_LINE_RETURN_STATUS)[keyof typeof REQUEST_RENDITION_LINE_RETURN_STATUS];
+
+export const LINE_RETURN_VALIDATION_STATUS = {
+  NOT_REQUIRED: "NOT_REQUIRED",
+  MISSING: "MISSING",
+  MISSING_PROOF: "MISSING_PROOF",
+  MISSING_JUSTIFICATION: "MISSING_JUSTIFICATION",
+  MISMATCH: "MISMATCH",
+  VALID: "VALID",
+  EXCESS: "EXCESS",
+  MISSING_EXECUTION: "MISSING_EXECUTION",
+} as const;
+
+export type LineReturnValidationStatus = (typeof LINE_RETURN_VALIDATION_STATUS)[keyof typeof LINE_RETURN_VALIDATION_STATUS];
+
 export const REXAN_OUTCOME = {
   EXACT: "EXACT",
   DEVOLUCION: "DEVOLUCION",
@@ -749,6 +771,13 @@ export interface RequestRenditionAllocationCoverage {
   request_allocation_label?: string;
   planned_amount: number;
   row_total_amount: number;
+  paid_base_amount?: number;
+  rendered_amount?: number;
+  expected_return_amount?: number;
+  returned_amount?: number;
+  excess_amount?: number;
+  line_return?: RequestRenditionLineReturn | null;
+  return_validation_status?: LineReturnValidationStatus | string;
   row_count: number;
   has_rows: boolean;
   classification_label?: string | null;
@@ -765,6 +794,16 @@ export interface RequestRenditionAllocationCoverage {
   frequency_label?: string | null;
   budget_month?: number | null;
   fiscal_year?: number | null;
+}
+
+export interface RequestRenditionLineReturn {
+  id: string;
+  returned_amount: number;
+  justification: string;
+  return_proof_document_id: string;
+  return_proof_filename: string | null;
+  status: RequestRenditionLineReturnStatus | string;
+  validated_at: string | null;
 }
 
 export interface RequestRenditionTotals {
@@ -844,6 +883,7 @@ export interface RequestRenditionValidationBlocker {
   request_allocation_id?: string;
   request_allocation_label?: string;
   row_id?: string;
+  pending_count?: number;
 }
 
 export interface RequestRenditionValidationResponse {
@@ -877,6 +917,12 @@ export interface UpdateRenditionRowInput {
   receipt_number?: string | null;
   detail?: string;
   amount?: number;
+}
+
+export interface UpsertRenditionLineReturnInput {
+  returned_amount: number;
+  justification: string;
+  return_proof_document_id: string;
 }
 
 export interface UpdateRequestReceiptReviewInput {
@@ -922,6 +968,36 @@ export interface UploadRequestDocumentInput {
   metadata_json?: Record<string, unknown>;
 }
 
+export const REQUEST_DOCUMENT_UPLOAD_QUEUE_STATUS = {
+  PENDING: "pending",
+  UPLOADING: "uploading",
+  COMPLETED: "completed",
+  FAILED: "failed",
+  REMOVED: "removed",
+} as const;
+
+export type RequestDocumentUploadQueueStatus = (typeof REQUEST_DOCUMENT_UPLOAD_QUEUE_STATUS)[keyof typeof REQUEST_DOCUMENT_UPLOAD_QUEUE_STATUS];
+
+export const REQUEST_DOCUMENT_UPLOAD_QUEUE_ERROR_KIND = {
+  VALIDATION: "validation",
+  TRANSIENT: "transient",
+  BACKEND: "backend",
+} as const;
+
+export type RequestDocumentUploadQueueErrorKind = (typeof REQUEST_DOCUMENT_UPLOAD_QUEUE_ERROR_KIND)[keyof typeof REQUEST_DOCUMENT_UPLOAD_QUEUE_ERROR_KIND];
+
+export interface RequestDocumentUploadQueueItem {
+  id: string;
+  file: File;
+  document_category: RequestDocumentCategory;
+  scope_type?: RequestDocumentScopeType;
+  request_allocation_id?: string;
+  status: RequestDocumentUploadQueueStatus;
+  error_kind?: RequestDocumentUploadQueueErrorKind;
+  error_message?: string;
+  retryable: boolean;
+}
+
 export interface RequestsListResponse {
   requests: PaymentRequest[];
   total: number;
@@ -938,6 +1014,7 @@ export interface RequestsListFilters {
   budget_planning_line_id?: string;
   org_unit_id?: string;
   search?: string;
+  scope?: "mine" | "review";
 }
 
 export interface PaymentQueueFilters {

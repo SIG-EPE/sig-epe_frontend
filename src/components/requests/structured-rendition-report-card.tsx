@@ -13,11 +13,13 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
-import { useRequestDocuments, useRequestReceiptReviews, useRequestRenditionReport, useRequestRenditionReportActions } from "@/hooks/use-requests";
+import { useRequestDocuments, useRequestReceiptReviews, useRequestRenditionReport, useRequestRenditionReportActions, useUploadRequestDocument } from "@/hooks/use-requests";
 import { formatRequestCurrency, formatRequestDate, getApiErrorMessage, getPlanningLineDisplay, getRequestDocumentDisplayName } from "@/lib/requests";
 import {
   REQUEST_CURRENCY,
   REQUEST_DOCUMENT_CATEGORY,
+  REQUEST_DOCUMENT_SCOPE_TYPE,
+  LINE_RETURN_VALIDATION_STATUS,
   REQUEST_RENDITION_REPORT_STATUS,
   REQUEST_RENDITION_ROW_TYPE,
   REQUEST_STATUS,
@@ -37,9 +39,18 @@ interface StructuredRenditionReportCardProps {
   guidanceAllocations?: RequestAllocation[];
   refreshSignal?: number;
   readOnly?: boolean;
+  reportResource?: ReturnType<typeof useRequestRenditionReport>;
+  documentsResource?: ReturnType<typeof useRequestDocuments>;
+  receiptsResource?: ReturnType<typeof useRequestReceiptReviews>;
   onChanged?: () => Promise<void> | void;
   onReadinessChange?: (ready: boolean, blockers: string[]) => void;
   onLockChange?: (locked: boolean) => void;
+}
+
+interface LineReturnFormState {
+  returned_amount: string;
+  justification: string;
+  return_proof_document_id: string;
 }
 
 interface RowFormState {
@@ -56,6 +67,20 @@ interface AllocationOption {
   id: string;
   label: string;
   allocation: RequestAllocation | null;
+}
+
+const BULK_RECEIPT_ADD_STATUS = {
+  IDLE: "idle",
+  PROCESSING: "processing",
+  SUCCESS: "success",
+  ERROR: "error",
+} as const;
+
+type BulkReceiptAddStatus = (typeof BULK_RECEIPT_ADD_STATUS)[keyof typeof BULK_RECEIPT_ADD_STATUS];
+
+interface BulkReceiptAddResult {
+  status: BulkReceiptAddStatus;
+  message?: string;
 }
 
 const EMPTY_ROW_FORM: RowFormState = {
@@ -186,7 +211,7 @@ function getReceiptSummary(receiptReview: RequestReceiptReview): string {
 function renderBlockers(blockers: RequestRenditionValidationBlocker[]): ReactNode {
   if (blockers.length === 0) return null;
   return (
-    <Alert variant={blockers.some((blocker) => blocker.code !== "UNCONFIRMED_RECEIPTS_PENDING") ? "destructive" : undefined}>
+    <Alert variant={blockers.some((blocker) => blocker.code !== "UNCONFIRMED_RECEIPTS_PENDING" && blocker.code !== "UNCONFIRMED_RECEIPT_EVIDENCE") ? "destructive" : undefined}>
       <AlertDescription>
         <p className="font-medium">Pendientes del informe</p>
         <ul className="mt-2 list-disc space-y-1 pl-5">
@@ -225,6 +250,11 @@ function isReportGeneratedForReview(report: RequestRenditionReport | null): bool
 function hasSafeReportCoverage(report: RequestRenditionReport | null): boolean {
   if (!report || report.rows.length === 0 || report.totals.missing_allocations.length > 0) return false;
   if (report.allocation_coverage.some((coverage) => !coverage.has_rows)) return false;
+  if (report.allocation_coverage.some((coverage) => {
+    const expectedReturn = Number(coverage.expected_return_amount ?? 0);
+    if (expectedReturn <= 0) return false;
+    return coverage.return_validation_status !== LINE_RETURN_VALIDATION_STATUS.VALID;
+  })) return false;
   return report.rows.every((row) => (
     Boolean(row.request_document_id)
     && Boolean(row.request_allocation_id)
@@ -233,6 +263,51 @@ function hasSafeReportCoverage(report: RequestRenditionReport | null): boolean {
     && Boolean(row.detail.trim())
     && Number(row.amount) > 0
   ));
+}
+
+function toMoneyInput(value: number | string | null | undefined): string {
+  const amount = Number(value ?? 0);
+  return Number.isFinite(amount) ? amount.toFixed(2) : "0.00";
+}
+
+function getReturnValidationLabel(status?: string | null): string {
+  switch (status) {
+    case LINE_RETURN_VALIDATION_STATUS.VALID:
+      return "Devolución conforme";
+    case LINE_RETURN_VALIDATION_STATUS.NOT_REQUIRED:
+      return "No requiere devolución";
+    case LINE_RETURN_VALIDATION_STATUS.MISSING:
+      return "Falta registrar devolución";
+    case LINE_RETURN_VALIDATION_STATUS.MISSING_PROOF:
+      return "Falta constancia";
+    case LINE_RETURN_VALIDATION_STATUS.MISSING_JUSTIFICATION:
+      return "Falta justificación";
+    case LINE_RETURN_VALIDATION_STATUS.MISMATCH:
+      return "Monto no coincide";
+    case LINE_RETURN_VALIDATION_STATUS.EXCESS:
+      return "Exceso rendido";
+    case LINE_RETURN_VALIDATION_STATUS.MISSING_EXECUTION:
+      return "Falta monto pagado";
+    default:
+      return "Pendiente";
+  }
+}
+
+function getLineReturnBlockerMessage(status?: string | null): string | null {
+  switch (status) {
+    case LINE_RETURN_VALIDATION_STATUS.MISSING:
+      return "Registra la devolución exacta de esta línea POA.";
+    case LINE_RETURN_VALIDATION_STATUS.MISSING_PROOF:
+      return "Selecciona o adjunta una constancia de devolución para esta línea.";
+    case LINE_RETURN_VALIDATION_STATUS.MISSING_JUSTIFICATION:
+      return "Ingresa una justificación breve para esta devolución.";
+    case LINE_RETURN_VALIDATION_STATUS.MISMATCH:
+      return "El monto devuelto debe coincidir exactamente con el saldo esperado.";
+    case LINE_RETURN_VALIDATION_STATUS.MISSING_EXECUTION:
+      return "Falta registrar el monto efectivamente pagado para esta línea.";
+    default:
+      return null;
+  }
 }
 
 function cleanText(value?: string | null): string | null {
@@ -266,11 +341,15 @@ function getCoverageClassificationItems(coverage: RequestRenditionReport["alloca
   return items.filter((item): item is { label: string; value: string } => Boolean(item.value));
 }
 
-export function StructuredRenditionReportCard({ request, guidanceAllocations = [], refreshSignal = 0, readOnly = false, onChanged, onReadinessChange, onLockChange }: StructuredRenditionReportCardProps) {
-  const reportState = useRequestRenditionReport(request.id);
-  const documentsState = useRequestDocuments(request.id);
-  const receiptState = useRequestReceiptReviews(request.id);
+export function StructuredRenditionReportCard({ request, guidanceAllocations = [], refreshSignal = 0, readOnly = false, reportResource, documentsResource, receiptsResource, onChanged, onReadinessChange, onLockChange }: StructuredRenditionReportCardProps) {
+  const internalReportState = useRequestRenditionReport(request.id);
+  const internalDocumentsState = useRequestDocuments(request.id);
+  const internalReceiptState = useRequestReceiptReviews(request.id);
+  const reportState = reportResource ?? internalReportState;
+  const documentsState = documentsResource ?? internalDocumentsState;
+  const receiptState = receiptsResource ?? internalReceiptState;
   const actions = useRequestRenditionReportActions();
+  const uploadDocument = useUploadRequestDocument();
   const [manualForm, setManualForm] = useState<RowFormState>(EMPTY_ROW_FORM);
   const [editingRowId, setEditingRowId] = useState<string | null>(null);
   const [editForm, setEditForm] = useState<RowFormState>(EMPTY_ROW_FORM);
@@ -279,21 +358,31 @@ export function StructuredRenditionReportCard({ request, guidanceAllocations = [
   const [ready, setReady] = useState(false);
   const [rowToDelete, setRowToDelete] = useState<RequestRenditionRow | null>(null);
   const [isGenerateConfirmOpen, setIsGenerateConfirmOpen] = useState(false);
+  const [selectedReceiptIds, setSelectedReceiptIds] = useState<Set<string>>(() => new Set());
+  const [bulkReceiptResults, setBulkReceiptResults] = useState<Record<string, BulkReceiptAddResult>>({});
+  const [bulkReceiptProgress, setBulkReceiptProgress] = useState<{ completed: number; total: number; failed: number } | null>(null);
+  const [isBulkAddingReceipts, setIsBulkAddingReceipts] = useState(false);
+  const [lineReturnForms, setLineReturnForms] = useState<Record<string, LineReturnFormState>>({});
   const lastReadinessNotificationRef = useRef<string | null>(null);
   const lastLockNotificationRef = useRef<boolean | null>(null);
+  const blockerSummaryRef = useRef<HTMLDivElement>(null);
+  const firstReceiptBlockerRef = useRef<HTMLDivElement>(null);
+  const shouldFocusBlockerRef = useRef(false);
 
   const report = reportState.report;
   const allocationOptions = getAllocationOptions(request, report);
   const hasGuidanceAllocations = guidanceAllocations.length > 0;
   const documents = documentsState.documents;
   const rows = report?.rows ?? [];
-  const evidenceDocuments = documents.filter((document) => document.document_category !== REQUEST_DOCUMENT_CATEGORY.SETTLEMENT_REPORT);
+  const evidenceDocuments = documents.filter((document) => document.document_category !== REQUEST_DOCUMENT_CATEGORY.SETTLEMENT_REPORT && document.document_category !== REQUEST_DOCUMENT_CATEGORY.RETURN_PROOF);
+  const returnProofDocuments = documents.filter((document) => document.document_category === REQUEST_DOCUMENT_CATEGORY.RETURN_PROOF);
   const generatedDocument = report?.settlement_report_document_id ? getDocumentById(documents, report.settlement_report_document_id) : null;
   const missingAllocations = report?.totals.missing_allocations ?? [];
   const allocationLabelsById = new Map(allocationOptions.map((option) => [option.id, option.label]));
   const receiptsWithoutRows = receiptState.receipts.filter((receiptReview) => !rows.some((row) => row.request_receipt_id === receiptReview.receipt.id));
   const confirmedReceipts = receiptsWithoutRows.filter((receiptReview) => receiptReview.receipt.confirmed_at);
   const unconfirmedReceipts = receiptsWithoutRows.filter((receiptReview) => !receiptReview.receipt.confirmed_at);
+  const unconfirmedActiveReceipts = receiptState.receipts.filter((receiptReview) => !receiptReview.receipt.confirmed_at && hasActiveReceiptDocument(receiptReview, documents));
   const isObservedRequest = request.status === REQUEST_STATUS.OBSERVED;
   const isObservedGeneratedReport = isObservedRequest && (
     report?.status === REQUEST_RENDITION_REPORT_STATUS.EXPORTED
@@ -327,15 +416,17 @@ export function StructuredRenditionReportCard({ request, guidanceAllocations = [
     }
     return { ...blocker, request_allocation_label: allocationLabel };
   });
-  const unconfirmedReceiptsMessage = "Hay comprobantes pendientes de revisión. Confirma sus datos o elimínalos si no corresponden.";
+  const unconfirmedReceiptsMessage = unconfirmedActiveReceipts.length === 1
+    ? "Hay 1 comprobante pendiente de revisión. Confirma sus datos o elimínalo si no corresponde antes de generar el informe."
+    : `Hay ${unconfirmedActiveReceipts.length} comprobantes pendientes de revisión. Confirma sus datos o elimínalos si no corresponden antes de generar el informe.`;
   const hasUnconfirmedReceiptBlocker = effectiveBlockers.some((blocker) => blocker.code === "UNCONFIRMED_RECEIPT_EVIDENCE");
   const validationSummaryBlockers = [
     ...effectiveBlockers,
-    ...(unconfirmedReceipts.length > 0 && !hasUnconfirmedReceiptBlocker ? [{ code: "UNCONFIRMED_RECEIPTS_PENDING", message: unconfirmedReceiptsMessage }] : []),
+    ...(unconfirmedActiveReceipts.length > 0 && !hasUnconfirmedReceiptBlocker ? [{ code: "UNCONFIRMED_RECEIPTS_PENDING", message: unconfirmedReceiptsMessage, pending_count: unconfirmedActiveReceipts.length }] : []),
   ];
   const hasHardBlockers = effectiveBlockers.length > 0;
   const hasPendingValidationItems = validationSummaryBlockers.length > 0;
-  const canUseGenerationAction = canRegenerateReport || (isReportEditable && canGenerateFromLoadedReport && !hasHardBlockers);
+  const canUseGenerationAction = !hasPendingValidationItems && (canRegenerateReport || (isReportEditable && canGenerateFromLoadedReport && !hasHardBlockers));
   const generationButtonLabel = canRegenerateReport ? "Regenerar informe" : "Generar informe";
   const readinessMessages = reportGeneratedForReview ? [] : ["Genera el informe antes de continuar a revisión."];
   const readinessMessagesKey = readinessMessages.join("\n");
@@ -345,6 +436,10 @@ export function StructuredRenditionReportCard({ request, guidanceAllocations = [
       ? "Estamos actualizando las líneas POA de esta rendición. Vuelve a intentar en unos segundos."
       : "No hay líneas POA disponibles para asociar comprobantes."
     : null;
+  const addableConfirmedReceipts = confirmedReceipts.filter((receiptReview) => canAddConfirmedReceipt(receiptReview));
+  const addableReceiptIds = addableConfirmedReceipts.map((receiptReview) => receiptReview.receipt.id);
+  const selectedAddableReceiptIds = addableReceiptIds.filter((receiptId) => selectedReceiptIds.has(receiptId));
+  const areAllAddableReceiptsSelected = addableReceiptIds.length > 0 && selectedAddableReceiptIds.length === addableReceiptIds.length;
 
   useEffect(() => {
     const readinessNotificationKey = `${derivedReady ? "ready" : "pending"}:${readinessMessagesKey}`;
@@ -364,14 +459,137 @@ export function StructuredRenditionReportCard({ request, guidanceAllocations = [
     void refreshAll();
   }, [refreshSignal]);
 
+  useEffect(() => {
+    if (!shouldFocusBlockerRef.current || validationSummaryBlockers.length === 0) return;
+    shouldFocusBlockerRef.current = false;
+    focusFirstBlocker();
+  }, [validationSummaryBlockers.length]);
+
+  useEffect(() => {
+    const addableIds = new Set(addableReceiptIds);
+    setSelectedReceiptIds((current) => {
+      const next = new Set(Array.from(current).filter((receiptId) => addableIds.has(receiptId)));
+      return next.size === current.size ? current : next;
+    });
+    setBulkReceiptResults((current) => {
+      const nextEntries = Object.entries(current).filter(([receiptId]) => addableIds.has(receiptId));
+      return nextEntries.length === Object.keys(current).length ? current : Object.fromEntries(nextEntries);
+    });
+  }, [addableReceiptIds.join("|")]);
+
+  function focusFirstBlocker(): void {
+    const target = firstReceiptBlockerRef.current ?? blockerSummaryRef.current;
+    target?.scrollIntoView({ behavior: "smooth", block: "center" });
+    target?.focus({ preventScroll: true });
+  }
+
+  function getLineReturnForm(coverage: RequestRenditionReport["allocation_coverage"][number]): LineReturnFormState {
+    const existingForm = lineReturnForms[coverage.request_allocation_id];
+    if (existingForm) return existingForm;
+    return {
+      returned_amount: toMoneyInput(coverage.line_return?.returned_amount ?? coverage.expected_return_amount ?? 0),
+      justification: coverage.line_return?.justification ?? "",
+      return_proof_document_id: coverage.line_return?.return_proof_document_id ?? "",
+    };
+  }
+
+  function updateLineReturnForm(allocationId: string, patch: Partial<LineReturnFormState>): void {
+    setLineReturnForms((current) => {
+      const coverage = report?.allocation_coverage.find((item) => item.request_allocation_id === allocationId);
+      const base = coverage ? getLineReturnForm(coverage) : { returned_amount: "0.00", justification: "", return_proof_document_id: "" };
+      return { ...current, [allocationId]: { ...base, ...patch } };
+    });
+  }
+
+  async function handleUploadReturnProof(allocationId: string, files: FileList | null): Promise<void> {
+    const file = files?.item(0);
+    if (!file || !isReportEditable) return;
+    try {
+      const document = await uploadDocument.uploadDocument(request.id, {
+        file,
+        document_category: REQUEST_DOCUMENT_CATEGORY.RETURN_PROOF,
+        scope_type: REQUEST_DOCUMENT_SCOPE_TYPE.ALLOCATION,
+        request_allocation_id: allocationId,
+      });
+      documentsState.upsertDocument?.(document);
+      updateLineReturnForm(allocationId, { return_proof_document_id: document.id });
+      toast.success("Constancia de devolución adjuntada a la línea POA");
+      await documentsState.refetch({ background: true });
+    } catch (error) {
+      toast.error(getApiErrorMessage(error));
+    }
+  }
+
+  async function handleSaveLineReturn(coverage: RequestRenditionReport["allocation_coverage"][number]): Promise<void> {
+    if (!isReportEditable) return;
+    const form = getLineReturnForm(coverage);
+    const expectedReturn = Number(coverage.expected_return_amount ?? 0);
+    const returnedAmount = Number(form.returned_amount);
+    if (!Number.isFinite(returnedAmount) || returnedAmount < 0) {
+      toast.error("Ingresa un monto devuelto válido.");
+      return;
+    }
+    if (Math.round(returnedAmount * 100) !== Math.round(expectedReturn * 100)) {
+      toast.error("El monto devuelto debe coincidir exactamente con el saldo esperado de la línea POA.");
+      return;
+    }
+    if (!form.return_proof_document_id) {
+      toast.error("Selecciona o adjunta la constancia de devolución de esta línea POA.");
+      return;
+    }
+    if (!form.justification.trim()) {
+      toast.error("Ingresa una justificación para la devolución de esta línea POA.");
+      return;
+    }
+    try {
+      const nextReport = await actions.upsertLineReturn(request.id, coverage.request_allocation_id, {
+        returned_amount: returnedAmount,
+        justification: form.justification.trim(),
+        return_proof_document_id: form.return_proof_document_id,
+      });
+      reportState.replaceReport?.(nextReport);
+      setLineReturnForms((current) => {
+        const next = { ...current };
+        delete next[coverage.request_allocation_id];
+        return next;
+      });
+      toast.success("Devolución de línea POA guardada");
+      await refreshReportOnly();
+    } catch (error) {
+      toast.error(getApiErrorMessage(error));
+    }
+  }
+
+  async function handleDeleteLineReturn(allocationId: string): Promise<void> {
+    if (!isReportEditable) return;
+    try {
+      await actions.deleteLineReturn(request.id, allocationId);
+      setLineReturnForms((current) => {
+        const next = { ...current };
+        delete next[allocationId];
+        return next;
+      });
+      toast.success("Devolución retirada de la línea POA");
+      await refreshReportOnly();
+    } catch (error) {
+      toast.error(getApiErrorMessage(error));
+    }
+  }
+
   async function refreshAll(): Promise<void> {
-    await Promise.all([reportState.refetch(), documentsState.refetch(), receiptState.refetch(), onChanged?.()]);
+    await Promise.all([reportState.refetch({ background: true }), documentsState.refetch({ background: true }), receiptState.refetch({ background: true }), onChanged?.()]);
+    setBlockers([]);
+    setReady(false);
+  }
+
+  async function refreshReportOnly(): Promise<void> {
+    await reportState.refetch({ background: true });
     setBlockers([]);
     setReady(false);
   }
 
   async function handleAddReceiptRow(receiptReview: RequestReceiptReview): Promise<void> {
-    if (!isReportEditable) return;
+    if (!isReportEditable || isBulkAddingReceipts) return;
     if (!receiptReview.receipt.confirmed_at) {
       toast.error("Confirma los datos del comprobante antes de agregarlo al informe.");
       return;
@@ -382,11 +600,92 @@ export function StructuredRenditionReportCard({ request, guidanceAllocations = [
       return;
     }
     try {
-      await actions.addReceiptRow(request.id, receiptReview.receipt.id, allocationId);
+      const row = await actions.addReceiptRow(request.id, receiptReview.receipt.id, allocationId);
+      reportState.upsertReportRow?.(row);
       toast.success("Comprobante agregado al informe");
-      await refreshAll();
+      await refreshReportOnly();
     } catch (error) {
       toast.error(getApiErrorMessage(error));
+    }
+  }
+
+  function canAddConfirmedReceipt(receiptReview: RequestReceiptReview): boolean {
+    const selectedAllocationId = getValidReceiptAllocationId(receiptReview, documents, allocationOptions);
+    return Boolean(receiptReview.receipt.confirmed_at && selectedAllocationId && hasActiveReceiptDocument(receiptReview, documents));
+  }
+
+  function toggleReceiptSelection(receiptId: string, checked: boolean): void {
+    setSelectedReceiptIds((current) => {
+      const next = new Set(current);
+      if (checked) next.add(receiptId);
+      else next.delete(receiptId);
+      return next;
+    });
+  }
+
+  function toggleSelectAllAddableReceipts(checked: boolean): void {
+    setSelectedReceiptIds((current) => {
+      const next = new Set(current);
+      addableReceiptIds.forEach((receiptId) => {
+        if (checked) next.add(receiptId);
+        else next.delete(receiptId);
+      });
+      return next;
+    });
+  }
+
+  async function handleAddSelectedReceiptRows(): Promise<void> {
+    if (!isReportEditable || isBulkAddingReceipts || selectedAddableReceiptIds.length === 0) return;
+    const selectedReceipts = addableConfirmedReceipts.filter((receiptReview) => selectedReceiptIds.has(receiptReview.receipt.id));
+    setIsBulkAddingReceipts(true);
+    setBulkReceiptProgress({ completed: 0, total: selectedReceipts.length, failed: 0 });
+    setBulkReceiptResults((current) => {
+      const next = { ...current };
+      selectedReceipts.forEach((receiptReview) => {
+        next[receiptReview.receipt.id] = { status: BULK_RECEIPT_ADD_STATUS.IDLE };
+      });
+      return next;
+    });
+
+    let completed = 0;
+    let failed = 0;
+    const failedReceiptIds = new Set<string>();
+
+    try {
+      for (const receiptReview of selectedReceipts) {
+        const receiptId = receiptReview.receipt.id;
+        const allocationId = getValidReceiptAllocationId(receiptReview, documents, allocationOptions);
+        if (!allocationId || !hasActiveReceiptDocument(receiptReview, documents)) {
+          failed += 1;
+          failedReceiptIds.add(receiptId);
+          setBulkReceiptResults((current) => ({ ...current, [receiptId]: { status: BULK_RECEIPT_ADD_STATUS.ERROR, message: "No se puede agregar: falta línea POA válida o sustento activo." } }));
+          setBulkReceiptProgress({ completed, total: selectedReceipts.length, failed });
+          continue;
+        }
+
+        setBulkReceiptResults((current) => ({ ...current, [receiptId]: { status: BULK_RECEIPT_ADD_STATUS.PROCESSING } }));
+        try {
+          const row = await actions.addReceiptRow(request.id, receiptId, allocationId);
+          reportState.upsertReportRow?.(row);
+          completed += 1;
+          setBulkReceiptResults((current) => ({ ...current, [receiptId]: { status: BULK_RECEIPT_ADD_STATUS.SUCCESS, message: "Agregado al informe." } }));
+        } catch (error) {
+          failed += 1;
+          failedReceiptIds.add(receiptId);
+          setBulkReceiptResults((current) => ({ ...current, [receiptId]: { status: BULK_RECEIPT_ADD_STATUS.ERROR, message: getApiErrorMessage(error) } }));
+        }
+        setBulkReceiptProgress({ completed, total: selectedReceipts.length, failed });
+      }
+
+      await refreshReportOnly();
+      setSelectedReceiptIds(failedReceiptIds);
+      if (failed > 0) {
+        toast.error(`${failed} de ${selectedReceipts.length} comprobantes no se pudieron agregar. Revisa los resultados y reintenta.`);
+      } else {
+        toast.success(`${completed} comprobante${completed === 1 ? " agregado" : "s agregados"} al informe`);
+      }
+    } finally {
+      setIsBulkAddingReceipts(false);
     }
   }
 
@@ -398,11 +697,12 @@ export function StructuredRenditionReportCard({ request, guidanceAllocations = [
       return;
     }
     try {
-      await actions.createManualRow(request.id, payload);
+      const row = await actions.createManualRow(request.id, payload);
+      reportState.upsertReportRow?.(row);
       toast.success("Fila agregada al informe");
       setManualForm(EMPTY_ROW_FORM);
       setIsManualDialogOpen(false);
-      await refreshAll();
+      await refreshReportOnly();
     } catch (error) {
       toast.error(getApiErrorMessage(error));
     }
@@ -416,10 +716,11 @@ export function StructuredRenditionReportCard({ request, guidanceAllocations = [
       return;
     }
     try {
-      await actions.updateRow(request.id, editingRowId, payload);
+      const row = await actions.updateRow(request.id, editingRowId, payload);
+      reportState.upsertReportRow?.(row);
       toast.success("Fila actualizada");
       setEditingRowId(null);
-      await refreshAll();
+      await refreshReportOnly();
     } catch (error) {
       toast.error(getApiErrorMessage(error));
     }
@@ -429,9 +730,10 @@ export function StructuredRenditionReportCard({ request, guidanceAllocations = [
     if (!rowToDelete || !isReportEditable) return;
     try {
       await actions.deleteRow(request.id, rowToDelete.id);
+      reportState.removeReportRow?.(rowToDelete.id);
       toast.success("Fila retirada del informe");
       setRowToDelete(null);
-      await refreshAll();
+      await refreshReportOnly();
     } catch (error) {
       toast.error(getApiErrorMessage(error));
     }
@@ -444,13 +746,15 @@ export function StructuredRenditionReportCard({ request, guidanceAllocations = [
       setReady(validation.ready);
       setBlockers(validation.blockers);
       if (!validation.ready) {
+        shouldFocusBlockerRef.current = true;
         toast.warning("Hay pendientes del informe por resolver antes de continuar.");
       } else if (unconfirmedReceipts.length > 0) {
+        shouldFocusBlockerRef.current = true;
         toast.warning(unconfirmedReceiptsMessage);
       } else {
         toast.success("Informe validado correctamente");
       }
-      await reportState.refetch();
+      await reportState.refetch({ background: true });
     } catch (error) {
       toast.error(getApiErrorMessage(error));
     }
@@ -459,14 +763,16 @@ export function StructuredRenditionReportCard({ request, guidanceAllocations = [
   async function handleGenerate(): Promise<void> {
     if (!canUseGenerationAction) return;
     try {
-      await actions.generateReport(request.id);
+      const generated = await actions.generateReport(request.id);
+      if (generated.report) reportState.replaceReport?.(generated.report);
+      if (generated.document) documentsState.upsertDocument?.(generated.document);
       toast.success("Informe generado correctamente");
       setReady(true);
       setBlockers([]);
-      await refreshAll();
+      await Promise.all([reportState.refetch({ background: true }), documentsState.refetch({ background: true }), onChanged?.()]);
     } catch (error) {
       toast.error(getApiErrorMessage(error));
-      await reportState.refetch();
+      await reportState.refetch({ background: true });
     }
   }
 
@@ -549,7 +855,8 @@ export function StructuredRenditionReportCard({ request, guidanceAllocations = [
         <CardDescription>Revisa comprobantes, completa filas y genera el informe final desde la información validada.</CardDescription>
       </CardHeader>
       <CardContent className="space-y-6">
-        {reportState.isLoading ? <p className="rounded-md border p-4 text-sm text-muted-foreground">Cargando informe...</p> : null}
+        {reportState.isLoading && !report ? <p className="rounded-md border p-4 text-sm text-muted-foreground">Cargando informe...</p> : null}
+        {reportState.isRefreshing ? <p className="rounded-md border bg-muted/40 px-3 py-2 text-sm text-muted-foreground" role="status">Actualizando informe en segundo plano…</p> : null}
         {reportState.error ? (
           <Alert variant="destructive"><AlertDescription>No se pudo cargar el informe. Intenta nuevamente.</AlertDescription></Alert>
         ) : null}
@@ -592,6 +899,83 @@ export function StructuredRenditionReportCard({ request, guidanceAllocations = [
           </div>
         </section>
 
+        {report?.allocation_coverage.some((coverage) => Number(coverage.expected_return_amount ?? 0) > 0 || Number(coverage.returned_amount ?? 0) > 0 || Number(coverage.excess_amount ?? 0) > 0) ? (
+          <section className="space-y-3 rounded-md border p-4">
+            <div>
+              <h3 className="text-sm font-semibold">Devoluciones por línea POA</h3>
+              <p className="text-xs text-muted-foreground">Cuando una línea tiene saldo a devolver, registra el monto exacto, una constancia por esa línea y la justificación. Esto reemplaza la constancia global de devolución.</p>
+            </div>
+            <div className="grid gap-3">
+              {report.allocation_coverage.filter((coverage) => Number(coverage.expected_return_amount ?? 0) > 0 || Number(coverage.returned_amount ?? 0) > 0 || Number(coverage.excess_amount ?? 0) > 0).map((coverage, index) => {
+                const allocationLabel = allocationLabelsById.get(coverage.request_allocation_id) ?? coverage.request_allocation_label ?? `Línea POA ${index + 1}`;
+                const currency = report.currency || request.currency;
+                const expectedReturn = Number(coverage.expected_return_amount ?? 0);
+                const returnedAmount = Number(coverage.returned_amount ?? coverage.line_return?.returned_amount ?? 0);
+                const excessAmount = Number(coverage.excess_amount ?? 0);
+                const validationStatus = coverage.return_validation_status ?? (expectedReturn > 0 ? LINE_RETURN_VALIDATION_STATUS.MISSING : LINE_RETURN_VALIDATION_STATUS.NOT_REQUIRED);
+                const blockerMessage = getLineReturnBlockerMessage(validationStatus);
+                const form = getLineReturnForm(coverage);
+                const lineReturnProofs = returnProofDocuments.filter((document) => document.request_allocation_id === coverage.request_allocation_id || document.id === coverage.line_return?.return_proof_document_id);
+                const selectedProof = form.return_proof_document_id ? getDocumentById(documents, form.return_proof_document_id) : null;
+                const amountMatches = Math.round(Number(form.returned_amount || 0) * 100) === Math.round(expectedReturn * 100);
+                return (
+                  <div key={coverage.request_allocation_id} className="space-y-4 rounded-md border bg-muted/20 p-3 text-sm" data-testid={`line-return-${coverage.request_allocation_id}`}>
+                    <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                      <div>
+                        <p className="font-medium">{allocationLabel}</p>
+                        <p className="text-xs text-muted-foreground">Devolución esperada calculada por línea POA.</p>
+                      </div>
+                      <Badge variant={validationStatus === LINE_RETURN_VALIDATION_STATUS.VALID || validationStatus === LINE_RETURN_VALIDATION_STATUS.NOT_REQUIRED ? "secondary" : "destructive"}>{getReturnValidationLabel(validationStatus)}</Badge>
+                    </div>
+                    <dl className="grid gap-2 sm:grid-cols-5">
+                      <div className="rounded-md bg-background p-2"><dt className="text-xs text-muted-foreground">Base pagada</dt><dd className="font-semibold">{formatRequestCurrency(Number(coverage.paid_base_amount ?? coverage.planned_amount ?? 0), currency)}</dd></div>
+                      <div className="rounded-md bg-background p-2"><dt className="text-xs text-muted-foreground">Rendido</dt><dd className="font-semibold">{formatRequestCurrency(Number(coverage.rendered_amount ?? coverage.row_total_amount ?? 0), currency)}</dd></div>
+                      <div className="rounded-md bg-background p-2"><dt className="text-xs text-muted-foreground">Saldo esperado</dt><dd className="font-semibold">{formatRequestCurrency(expectedReturn, currency)}</dd></div>
+                      <div className="rounded-md bg-background p-2"><dt className="text-xs text-muted-foreground">Monto devuelto</dt><dd className="font-semibold">{formatRequestCurrency(returnedAmount, currency)}</dd></div>
+                      <div className="rounded-md bg-background p-2"><dt className="text-xs text-muted-foreground">Exceso</dt><dd className="font-semibold">{formatRequestCurrency(excessAmount, currency)}</dd></div>
+                    </dl>
+                    {blockerMessage ? <Alert variant="destructive"><AlertDescription>{blockerMessage}</AlertDescription></Alert> : null}
+                    {expectedReturn > 0 ? (
+                      <div className="grid gap-3 md:grid-cols-2">
+                        <div className="space-y-2">
+                          <label className="text-sm font-medium" htmlFor={`return-amount-${coverage.request_allocation_id}`}>Monto devuelto *</label>
+                          <Input id={`return-amount-${coverage.request_allocation_id}`} type="number" min="0" step="0.01" value={form.returned_amount} disabled={!isReportEditable || actions.isLoading} onChange={(event) => updateLineReturnForm(coverage.request_allocation_id, { returned_amount: event.target.value })} />
+                          {!amountMatches ? <p className="text-xs text-destructive">Debe coincidir exactamente con {formatRequestCurrency(expectedReturn, currency)}.</p> : <p className="text-xs text-muted-foreground">Se completa con el saldo esperado; solo corrige si el backend recalculó la línea.</p>}
+                        </div>
+                        <div className="space-y-2">
+                          <label className="text-sm font-medium" htmlFor={`return-proof-${coverage.request_allocation_id}`}>Constancia de devolución *</label>
+                          <Select value={form.return_proof_document_id || undefined} onValueChange={(value) => updateLineReturnForm(coverage.request_allocation_id, { return_proof_document_id: value })} disabled={!isReportEditable || actions.isLoading || uploadDocument.isLoading}>
+                            <SelectTrigger id={`return-proof-${coverage.request_allocation_id}`}><SelectValue placeholder="Selecciona constancia de esta línea" /></SelectTrigger>
+                            <SelectContent>
+                              {lineReturnProofs.map((document) => (
+                                <SelectItem key={document.id} value={document.id}>{getRequestDocumentDisplayName(document)}</SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                          {selectedProof ? <p className="text-xs text-muted-foreground">Seleccionada: {getRequestDocumentDisplayName(selectedProof)}</p> : <p className="text-xs text-muted-foreground">Debe ser RETURN_PROOF asociado a esta misma línea POA.</p>}
+                          {isReportEditable ? <Input aria-label={`Adjuntar constancia de devolución para ${allocationLabel}`} type="file" accept=".pdf,.jpg,.jpeg,.png,application/pdf,image/jpeg,image/png" disabled={actions.isLoading || uploadDocument.isLoading} onChange={(event) => void handleUploadReturnProof(coverage.request_allocation_id, event.target.files)} /> : null}
+                        </div>
+                        <div className="space-y-2 md:col-span-2">
+                          <label className="text-sm font-medium" htmlFor={`return-justification-${coverage.request_allocation_id}`}>Justificación *</label>
+                          <Textarea id={`return-justification-${coverage.request_allocation_id}`} rows={2} value={form.justification} disabled={!isReportEditable || actions.isLoading} onChange={(event) => updateLineReturnForm(coverage.request_allocation_id, { justification: event.target.value })} placeholder="Ej.: devolución por saldo no utilizado de la línea POA." />
+                        </div>
+                        {isReportEditable ? (
+                          <div className="flex flex-col gap-2 md:col-span-2 sm:flex-row">
+                            <Button type="button" onClick={() => void handleSaveLineReturn(coverage)} disabled={actions.isLoading || uploadDocument.isLoading}>Guardar devolución de línea</Button>
+                            {coverage.line_return ? <Button type="button" variant="outline" onClick={() => void handleDeleteLineReturn(coverage.request_allocation_id)} disabled={actions.isLoading || uploadDocument.isLoading}>Quitar devolución</Button> : null}
+                          </div>
+                        ) : null}
+                      </div>
+                    ) : excessAmount > 0 ? (
+                      <p className="text-xs text-muted-foreground">Esta línea tiene gasto rendido por encima de la base pagada; no requiere constancia de devolución.</p>
+                    ) : null}
+                  </div>
+                );
+              })}
+            </div>
+          </section>
+        ) : null}
+
         {report?.allocation_coverage.some((coverage) => getCoverageClassificationItems(coverage).length > 0) ? (
           <section className="space-y-3 rounded-md border p-4">
             <div>
@@ -621,7 +1005,11 @@ export function StructuredRenditionReportCard({ request, guidanceAllocations = [
           </section>
         ) : null}
 
-        {renderBlockers(validationSummaryBlockers)}
+        {validationSummaryBlockers.length > 0 ? (
+          <div ref={blockerSummaryRef} tabIndex={-1} className="rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2">
+            {renderBlockers(validationSummaryBlockers)}
+          </div>
+        ) : null}
 
         {isObservedRequest ? (
           <Alert>
@@ -639,8 +1027,13 @@ export function StructuredRenditionReportCard({ request, guidanceAllocations = [
           <section className="space-y-3">
             <h3 className="text-sm font-semibold">Comprobantes por revisar</h3>
             <p className="text-sm text-muted-foreground">Confirma los datos detectados para usar estos comprobantes en el informe. Si no corresponden a la rendición, elimínalos desde Documentos adjuntos.</p>
-            {unconfirmedReceipts.map((receiptReview) => (
-              <div key={receiptReview.receipt.id} className="grid gap-3 rounded-md border p-3 md:grid-cols-[1fr_auto] md:items-center">
+            {unconfirmedReceipts.map((receiptReview, index) => (
+              <div
+                key={receiptReview.receipt.id}
+                ref={index === 0 ? firstReceiptBlockerRef : undefined}
+                tabIndex={index === 0 ? -1 : undefined}
+                className="grid gap-3 rounded-md border p-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 md:grid-cols-[1fr_auto] md:items-center"
+              >
                 <div>
                   <div className="flex flex-wrap items-center gap-2">
                     <p className="text-sm font-medium">{getReceiptSummary(receiptReview)}</p>
@@ -665,14 +1058,51 @@ export function StructuredRenditionReportCard({ request, guidanceAllocations = [
             {allocationOptions.length === 0 ? (
               <Alert variant="destructive"><AlertDescription>No se encontraron líneas POA disponibles para asociar los comprobantes.</AlertDescription></Alert>
             ) : null}
+            <div className="flex flex-col gap-3 rounded-md border bg-muted/30 p-3 sm:flex-row sm:items-center sm:justify-between">
+              <label className="flex items-center gap-2 text-sm font-medium">
+                <input
+                  type="checkbox"
+                  className="size-4 rounded border-input"
+                  checked={areAllAddableReceiptsSelected}
+                  disabled={isBulkAddingReceipts || actions.isLoading || addableReceiptIds.length === 0}
+                  onChange={(event) => toggleSelectAllAddableReceipts(event.target.checked)}
+                />
+                Seleccionar todos
+                <span className="text-xs font-normal text-muted-foreground">({selectedAddableReceiptIds.length} de {addableReceiptIds.length} disponibles)</span>
+              </label>
+              <div className="flex flex-col gap-2 sm:items-end">
+                <Button type="button" onClick={() => void handleAddSelectedReceiptRows()} disabled={isBulkAddingReceipts || actions.isLoading || selectedAddableReceiptIds.length === 0}>
+                  {isBulkAddingReceipts ? "Agregando seleccionados..." : "Agregar seleccionados al informe"}
+                </Button>
+                {bulkReceiptProgress ? (
+                  <p className="text-xs text-muted-foreground" role="status">
+                    {bulkReceiptProgress.completed} de {bulkReceiptProgress.total} comprobantes agregados{bulkReceiptProgress.failed > 0 ? ` · ${bulkReceiptProgress.failed} con error` : ""}
+                  </p>
+                ) : null}
+              </div>
+            </div>
             {confirmedReceipts.map((receiptReview) => {
               const selectedAllocationId = getValidReceiptAllocationId(receiptReview, documents, allocationOptions);
               const hasActiveDocument = hasActiveReceiptDocument(receiptReview, documents);
               const canAddReceipt = Boolean(selectedAllocationId && hasActiveDocument);
+              const receiptResult = bulkReceiptResults[receiptReview.receipt.id];
               return (
-                <div key={receiptReview.receipt.id} className="grid min-w-0 gap-3 rounded-md border p-3 md:grid-cols-[minmax(0,1fr)_minmax(0,18rem)_auto] md:items-center">
+                <div key={receiptReview.receipt.id} className="grid min-w-0 gap-3 rounded-md border p-3 md:grid-cols-[auto_minmax(0,1fr)_minmax(0,18rem)_auto] md:items-center">
+                  <input
+                    type="checkbox"
+                    className="mt-1 size-4 rounded border-input md:mt-0"
+                    aria-label={`Seleccionar ${getReceiptSummary(receiptReview)}`}
+                    checked={selectedReceiptIds.has(receiptReview.receipt.id)}
+                    disabled={isBulkAddingReceipts || actions.isLoading || !canAddReceipt}
+                    onChange={(event) => toggleReceiptSelection(receiptReview.receipt.id, event.target.checked)}
+                  />
                   <div className="min-w-0">
-                    <p className="truncate text-sm font-medium" title={getReceiptSummary(receiptReview)}>{getReceiptSummary(receiptReview)}</p>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <p className="truncate text-sm font-medium" title={getReceiptSummary(receiptReview)}>{getReceiptSummary(receiptReview)}</p>
+                      {receiptResult?.status === BULK_RECEIPT_ADD_STATUS.PROCESSING ? <Badge variant="outline">Agregando</Badge> : null}
+                      {receiptResult?.status === BULK_RECEIPT_ADD_STATUS.SUCCESS ? <Badge variant="secondary">Agregado</Badge> : null}
+                      {receiptResult?.status === BULK_RECEIPT_ADD_STATUS.ERROR ? <Badge variant="destructive">Error</Badge> : null}
+                    </div>
                     {canAddReceipt ? (
                       <p className="text-xs text-muted-foreground">Este comprobante pertenece a esta línea POA.</p>
                     ) : hasActiveDocument ? (
@@ -680,11 +1110,12 @@ export function StructuredRenditionReportCard({ request, guidanceAllocations = [
                     ) : (
                       <p className="text-xs text-muted-foreground">El documento de sustento ya no está activo. Vuelve a adjuntarlo para agregarlo al informe.</p>
                     )}
+                    {receiptResult?.message ? <p className="text-xs text-muted-foreground">{receiptResult.message}</p> : null}
                   </div>
                   <div className="min-w-0">
                     {selectedAllocationId ? renderAllocationSelect(selectedAllocationId, () => undefined, undefined, true) : <p className="rounded-md border border-dashed p-2 text-xs text-muted-foreground">Línea POA no asignada</p>}
                   </div>
-                  <Button type="button" onClick={() => void handleAddReceiptRow(receiptReview)} disabled={actions.isLoading || allocationOptions.length === 0 || !canAddReceipt}>Agregar al informe</Button>
+                  <Button type="button" onClick={() => void handleAddReceiptRow(receiptReview)} disabled={isBulkAddingReceipts || actions.isLoading || allocationOptions.length === 0 || !canAddReceipt}>Agregar al informe</Button>
                 </div>
               );
             })}
@@ -745,11 +1176,12 @@ export function StructuredRenditionReportCard({ request, guidanceAllocations = [
             <div>
               <h3 className="text-sm font-semibold">Validación y generación</h3>
               <p className="text-xs text-muted-foreground">Valida que todas las líneas POA tengan comprobantes y luego genera el informe final.</p>
-              {hasPendingValidationItems ? <p className="mt-1 text-xs text-muted-foreground">Revisa los pendientes agrupados arriba antes de continuar.</p> : null}
+              {hasPendingValidationItems ? <p className="mt-1 text-xs text-muted-foreground">Revisa los pendientes agrupados arriba antes de continuar. La página se mantiene en esta sección para que puedas corregirlos sin recargar.</p> : null}
             </div>
             {isReportEditable || canRegenerateReport ? (
               <div className="flex flex-col gap-2 sm:flex-row">
                 {isReportEditable ? <Button type="button" variant="outline" onClick={() => void handleValidate()} disabled={actions.isLoading}>Validar informe</Button> : null}
+                {hasPendingValidationItems ? <Button type="button" variant="outline" onClick={focusFirstBlocker}>Ir al primer pendiente</Button> : null}
                 <Button type="button" onClick={openGenerateConfirmation} disabled={actions.isLoading || !canUseGenerationAction}>{generationButtonLabel}</Button>
               </div>
             ) : null}

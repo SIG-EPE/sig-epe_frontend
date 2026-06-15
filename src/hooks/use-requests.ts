@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { api } from "@/lib/api-client";
 import { useAuthStore } from "@/stores/auth-store";
@@ -33,6 +33,7 @@ import type {
   StartAdvanceSettlementResponse,
   UpdateRenditionRowInput,
   UpdateRequestReceiptReviewInput,
+  UpsertRenditionLineReturnInput,
   UploadRequestDocumentInput,
   RejectRequestDto,
   RequestsListFilters,
@@ -47,6 +48,25 @@ function appendIfPresent(params: URLSearchParams, key: string, value: string | n
   }
 }
 
+export interface RequestResourceRefetchOptions {
+  background?: boolean;
+}
+
+export interface RequestResourceState<T> {
+  data: T | null;
+  isInitialLoading: boolean;
+  isRefreshing: boolean;
+  isLoading: boolean;
+  error: Error | null;
+  refetch: (options?: RequestResourceRefetchOptions) => Promise<void>;
+}
+
+function upsertById<T extends { id: string }>(items: T[], item: T): T[] {
+  const existingIndex = items.findIndex((candidate) => candidate.id === item.id);
+  if (existingIndex === -1) return [...items, item];
+  return items.map((candidate, index) => index === existingIndex ? item : candidate);
+}
+
 export function getRequestsPath(filters?: RequestsListFilters): string {
   const params = new URLSearchParams();
   appendIfPresent(params, "page", filters?.page);
@@ -59,6 +79,7 @@ export function getRequestsPath(filters?: RequestsListFilters): string {
   appendIfPresent(params, "budget_planning_line_id", filters?.budget_planning_line_id);
   appendIfPresent(params, "org_unit_id", filters?.org_unit_id);
   appendIfPresent(params, "search", filters?.search);
+  appendIfPresent(params, "scope", filters?.scope);
   const query = params.toString();
   return `/requests${query ? `?${query}` : ""}`;
 }
@@ -125,6 +146,7 @@ export function useRequests(filters?: RequestsListFilters) {
   const planningLineFilter = filters?.budget_planning_line_id;
   const orgUnitFilter = filters?.org_unit_id;
   const searchFilter = filters?.search;
+  const scopeFilter = filters?.scope;
 
   const authIsLoading = useAuthStore((state) => state.isLoading);
   const accessToken = useAuthStore((state) => state.accessToken);
@@ -152,6 +174,7 @@ export function useRequests(filters?: RequestsListFilters) {
     planningLineFilter,
     orgUnitFilter,
     searchFilter,
+    scopeFilter,
   ]);
 
   useEffect(() => {
@@ -435,22 +458,28 @@ export function useStartAdvanceSettlement() {
 
 export function useRequest(id?: string) {
   const [request, setRequest] = useState<PaymentRequest | null>(null);
-  const [isLoading, setIsLoading] = useState(Boolean(id));
+  const hasLoadedRequestRef = useRef(false);
+  const [isInitialLoading, setIsInitialLoading] = useState(Boolean(id));
+  const [isRefreshing, setIsRefreshing] = useState(false);
   const [error, setError] = useState<Error | null>(null);
 
   const authIsLoading = useAuthStore((state) => state.isLoading);
   const accessToken = useAuthStore((state) => state.accessToken);
 
-  const refetch = useCallback(async () => {
+  const refetch = useCallback(async (options?: RequestResourceRefetchOptions) => {
     if (!id || authIsLoading || !accessToken) return;
-    setIsLoading(true);
+    const background = options?.background === true || hasLoadedRequestRef.current;
+    setIsInitialLoading(!background);
+    setIsRefreshing(background);
     setError(null);
     try {
       setRequest(await api.get<PaymentRequest>(`/requests/${id}`));
+      hasLoadedRequestRef.current = true;
     } catch (e) {
       setError(e instanceof Error ? e : new Error("Error al cargar la solicitud"));
     } finally {
-      setIsLoading(false);
+      setIsInitialLoading(false);
+      setIsRefreshing(false);
     }
   }, [accessToken, authIsLoading, id]);
 
@@ -459,62 +488,81 @@ export function useRequest(id?: string) {
     void refetch();
   }, [accessToken, authIsLoading, refetch]);
 
-  return { request, isLoading, error, refetch };
+  const patchRequest = (nextRequest: PaymentRequest): void => {
+    hasLoadedRequestRef.current = true;
+    setRequest(nextRequest);
+  };
+
+  return { request, data: request, isInitialLoading, isRefreshing, isLoading: isInitialLoading, error, refetch, patchRequest };
 }
 
 export function useSettlementContext(requestId?: string, enabled = true) {
   const [context, setContext] = useState<SettlementContextResponse | null>(null);
-  const [isLoading, setIsLoading] = useState(Boolean(requestId && enabled));
+  const hasLoadedContextRef = useRef(false);
+  const [isInitialLoading, setIsInitialLoading] = useState(Boolean(requestId && enabled));
+  const [isRefreshing, setIsRefreshing] = useState(false);
   const [error, setError] = useState<Error | null>(null);
 
   const authIsLoading = useAuthStore((state) => state.isLoading);
   const accessToken = useAuthStore((state) => state.accessToken);
 
-  const refetch = useCallback(async () => {
+  const refetch = useCallback(async (options?: RequestResourceRefetchOptions) => {
     if (!requestId || !enabled || authIsLoading || !accessToken) return;
-    setIsLoading(true);
+    const background = options?.background === true || hasLoadedContextRef.current;
+    setIsInitialLoading(!background);
+    setIsRefreshing(background);
     setError(null);
     try {
       setContext(await api.get<SettlementContextResponse>(getSettlementContextPath(requestId)));
+      hasLoadedContextRef.current = true;
     } catch (e) {
       setError(e instanceof Error ? e : new Error("Error al cargar el contexto de rendición"));
     } finally {
-      setIsLoading(false);
+      setIsInitialLoading(false);
+      setIsRefreshing(false);
     }
   }, [accessToken, authIsLoading, enabled, requestId]);
 
   useEffect(() => {
     if (!requestId || !enabled) {
       setContext(null);
+      hasLoadedContextRef.current = false;
       setError(null);
-      setIsLoading(false);
+      setIsInitialLoading(false);
+      setIsRefreshing(false);
       return;
     }
     if (authIsLoading || !accessToken) return;
     void refetch();
   }, [accessToken, authIsLoading, enabled, refetch, requestId]);
 
-  return { context, isLoading, error, refetch };
+  return { context, data: context, isInitialLoading, isRefreshing, isLoading: isInitialLoading, error, refetch };
 }
 
 export function useRequestDocuments(requestId?: string) {
   const [documents, setDocuments] = useState<RequestDocument[]>([]);
-  const [isLoading, setIsLoading] = useState(Boolean(requestId));
+  const hasLoadedDocumentsRef = useRef(false);
+  const [isInitialLoading, setIsInitialLoading] = useState(Boolean(requestId));
+  const [isRefreshing, setIsRefreshing] = useState(false);
   const [error, setError] = useState<Error | null>(null);
 
   const authIsLoading = useAuthStore((state) => state.isLoading);
   const accessToken = useAuthStore((state) => state.accessToken);
 
-  const refetch = useCallback(async () => {
+  const refetch = useCallback(async (options?: RequestResourceRefetchOptions) => {
     if (!requestId || authIsLoading || !accessToken) return;
-    setIsLoading(true);
+    const background = options?.background === true || hasLoadedDocumentsRef.current;
+    setIsInitialLoading(!background);
+    setIsRefreshing(background);
     setError(null);
     try {
       setDocuments(await api.get<RequestDocument[]>(`/requests/${requestId}/documents`));
+      hasLoadedDocumentsRef.current = true;
     } catch (e) {
       setError(e instanceof Error ? e : new Error("Error al cargar documentos"));
     } finally {
-      setIsLoading(false);
+      setIsInitialLoading(false);
+      setIsRefreshing(false);
     }
   }, [accessToken, authIsLoading, requestId]);
 
@@ -523,27 +571,39 @@ export function useRequestDocuments(requestId?: string) {
     void refetch();
   }, [accessToken, authIsLoading, refetch]);
 
-  return { documents, isLoading, error, refetch };
+  const upsertDocument = (document: RequestDocument): void => {
+    hasLoadedDocumentsRef.current = true;
+    setDocuments((current) => upsertById(current, document));
+  };
+  const removeDocument = (documentId: string): void => setDocuments((current) => current.filter((document) => document.id !== documentId));
+
+  return { documents, data: documents, isInitialLoading, isRefreshing, isLoading: isInitialLoading, error, refetch, upsertDocument, removeDocument };
 }
 
 export function useRequestReceiptReviews(requestId?: string) {
   const [receipts, setReceipts] = useState<RequestReceiptReview[]>([]);
-  const [isLoading, setIsLoading] = useState(Boolean(requestId));
+  const hasLoadedReceiptsRef = useRef(false);
+  const [isInitialLoading, setIsInitialLoading] = useState(Boolean(requestId));
+  const [isRefreshing, setIsRefreshing] = useState(false);
   const [error, setError] = useState<Error | null>(null);
 
   const authIsLoading = useAuthStore((state) => state.isLoading);
   const accessToken = useAuthStore((state) => state.accessToken);
 
-  const refetch = useCallback(async () => {
+  const refetch = useCallback(async (options?: RequestResourceRefetchOptions) => {
     if (!requestId || authIsLoading || !accessToken) return;
-    setIsLoading(true);
+    const background = options?.background === true || hasLoadedReceiptsRef.current;
+    setIsInitialLoading(!background);
+    setIsRefreshing(background);
     setError(null);
     try {
       setReceipts(await api.get<RequestReceiptReview[]>(`/requests/${requestId}/receipts`));
+      hasLoadedReceiptsRef.current = true;
     } catch (e) {
       setError(e instanceof Error ? e : new Error("Error al cargar lectura automática de comprobantes"));
     } finally {
-      setIsLoading(false);
+      setIsInitialLoading(false);
+      setIsRefreshing(false);
     }
   }, [accessToken, authIsLoading, requestId]);
 
@@ -552,42 +612,71 @@ export function useRequestReceiptReviews(requestId?: string) {
     void refetch();
   }, [accessToken, authIsLoading, refetch]);
 
-  return { receipts, isLoading, error, refetch };
+  const upsertReceipt = (receipt: RequestReceiptReview): void => {
+    hasLoadedReceiptsRef.current = true;
+    setReceipts((current) => {
+      const existingIndex = current.findIndex((candidate) => candidate.receipt.id === receipt.receipt.id);
+      if (existingIndex === -1) return [...current, receipt];
+      return current.map((candidate, index) => index === existingIndex ? receipt : candidate);
+    });
+  };
+
+  return { receipts, data: receipts, isInitialLoading, isRefreshing, isLoading: isInitialLoading, error, refetch, upsertReceipt };
 }
 
 export function useRequestRenditionReport(requestId?: string, enabled = true) {
   const [report, setReport] = useState<RequestRenditionReport | null>(null);
-  const [isLoading, setIsLoading] = useState(Boolean(requestId && enabled));
+  const hasLoadedReportRef = useRef(false);
+  const [isInitialLoading, setIsInitialLoading] = useState(Boolean(requestId && enabled));
+  const [isRefreshing, setIsRefreshing] = useState(false);
   const [error, setError] = useState<Error | null>(null);
 
   const authIsLoading = useAuthStore((state) => state.isLoading);
   const accessToken = useAuthStore((state) => state.accessToken);
 
-  const refetch = useCallback(async () => {
+  const refetch = useCallback(async (options?: RequestResourceRefetchOptions) => {
     if (!requestId || !enabled || authIsLoading || !accessToken) return;
-    setIsLoading(true);
+    const background = options?.background === true || hasLoadedReportRef.current;
+    setIsInitialLoading(!background);
+    setIsRefreshing(background);
     setError(null);
     try {
       setReport(await api.get<RequestRenditionReport>(getRenditionReportPath(requestId)));
+      hasLoadedReportRef.current = true;
     } catch (e) {
       setError(e instanceof Error ? e : new Error("Error al cargar informe de rendición"));
     } finally {
-      setIsLoading(false);
+      setIsInitialLoading(false);
+      setIsRefreshing(false);
     }
   }, [accessToken, authIsLoading, enabled, requestId]);
 
   useEffect(() => {
     if (!requestId || !enabled) {
       setReport(null);
+      hasLoadedReportRef.current = false;
       setError(null);
-      setIsLoading(false);
+      setIsInitialLoading(false);
+      setIsRefreshing(false);
       return;
     }
     if (authIsLoading || !accessToken) return;
     void refetch();
   }, [accessToken, authIsLoading, enabled, refetch, requestId]);
 
-  return { report, isLoading, error, refetch };
+  const replaceReport = (nextReport: RequestRenditionReport): void => {
+    hasLoadedReportRef.current = true;
+    setReport(nextReport);
+  };
+  const upsertReportRow = (row: RequestRenditionRow): void => {
+    hasLoadedReportRef.current = true;
+    setReport((current) => current ? { ...current, rows: upsertById(current.rows, row) } : current);
+  };
+  const removeReportRow = (rowId: string): void => {
+    setReport((current) => current ? { ...current, rows: current.rows.filter((row) => row.id !== rowId) } : current);
+  };
+
+  return { report, data: report, isInitialLoading, isRefreshing, isLoading: isInitialLoading, error, refetch, replaceReport, upsertReportRow, removeReportRow };
 }
 
 export function useRequestRenditionReportActions() {
@@ -634,6 +723,14 @@ export function useRequestRenditionReportActions() {
     generateReport: (requestId: string) => run(
       "Error al generar informe de rendición",
       () => api.post<RequestRenditionGenerateResponse>(`${getRenditionReportPath(requestId)}/generate`),
+    ),
+    upsertLineReturn: (requestId: string, allocationId: string, input: UpsertRenditionLineReturnInput) => run(
+      "Error al guardar devolución de línea POA",
+      () => api.patch<RequestRenditionReport>(`${getRenditionReportPath(requestId)}/line-returns/${allocationId}`, input),
+    ),
+    deleteLineReturn: (requestId: string, allocationId: string) => run(
+      "Error al quitar devolución de línea POA",
+      () => api.delete<{ deleted: true }>(`${getRenditionReportPath(requestId)}/line-returns/${allocationId}`),
     ),
   };
 }

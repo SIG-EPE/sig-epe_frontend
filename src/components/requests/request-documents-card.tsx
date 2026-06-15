@@ -13,6 +13,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useConfirmRequestReceiptReview, useDeleteRequestDocument, useRequestDocuments, useRequestReceiptReviews, useUpdateRequestReceiptReview, useUploadRequestDocument } from "@/hooks/use-requests";
+import { getSafeDocumentUrl } from "@/lib/safe-url";
 import {
   canManageRequestDocuments,
   formatRequestDateTime,
@@ -30,13 +31,18 @@ import {
   formatRequestCurrency,
   REQUEST_DOCUMENT_CATEGORY_OPTIONS,
   REQUEST_DOCUMENT_UPLOAD_SUCCESS_MESSAGE,
+  REQUEST_DOCUMENT_UPLOAD_QUEUE_DELAY_MS,
   validateRequestDocumentFile,
+  validateRequestDocumentBatch,
+  isRetryableRequestDocumentUploadError,
 } from "@/lib/requests";
 import { useAuthStore } from "@/stores/auth-store";
 import {
   REQUEST_CURRENCY,
   REQUEST_DOCUMENT_CATEGORY,
   REQUEST_DOCUMENT_SCOPE_TYPE,
+  REQUEST_DOCUMENT_UPLOAD_QUEUE_ERROR_KIND,
+  REQUEST_DOCUMENT_UPLOAD_QUEUE_STATUS,
   REQUEST_RECEIPT_DUPLICATE_STATUS,
   REQUEST_RECEIPT_OCR_STATUS,
   REQUEST_STATUS,
@@ -47,6 +53,7 @@ import {
   type RequestAllocationRequiredDocumentItem,
   type RequestDocument,
   type RequestDocumentCategory,
+  type RequestDocumentUploadQueueItem,
   type RequiredDocumentChecklistItem,
   type RequestReceiptReview,
   type UpdateRequestReceiptReviewInput,
@@ -61,7 +68,10 @@ interface RequestDocumentsCardProps {
   documents?: RequestDocument[];
   documentsLoading?: boolean;
   documentsError?: Error | null;
+  documentsResource?: ReturnType<typeof useRequestDocuments>;
+  receiptsResource?: ReturnType<typeof useRequestReceiptReviews>;
   onDocumentsChanged?: () => Promise<void> | void;
+  hideOptionalUploader?: boolean;
 }
 
 interface ReceiptReviewFormState {
@@ -128,9 +138,7 @@ function ChecklistAttachButton({ item, disabled, isUploading, onAttach }: Checkl
 }
 
 function getRequestDocumentWebUrl(document: RequestDocument): string | null {
-  const webUrl = document.drive_web_url?.trim();
-
-  return webUrl && webUrl.length > 0 ? webUrl : null;
+  return getSafeDocumentUrl(document.drive_web_url);
 }
 
 function getPendingRequiredDocumentCategories(checklist: RequiredDocumentChecklistItem[]): Set<RequestDocumentCategory> {
@@ -167,6 +175,10 @@ function hasOpenReturnProofObservation(request: PaymentRequest): boolean {
 
 function isReturnProofFollowUpRequired(request: PaymentRequest, documents: RequestDocument[]): boolean {
   if (request.request_type !== REQUEST_TYPE.ADVANCE_SETTLEMENT || request.status !== REQUEST_STATUS.OBSERVED) {
+    return false;
+  }
+
+  if ((request.allocations?.length ?? 0) > 0) {
     return false;
   }
 
@@ -320,6 +332,21 @@ function canConfirmReceiptReview(receiptReview: RequestReceiptReview): boolean {
   );
 }
 
+function getQueueStatusLabel(item: RequestDocumentUploadQueueItem): string {
+  if (item.status === REQUEST_DOCUMENT_UPLOAD_QUEUE_STATUS.PENDING) return "Pendiente";
+  if (item.status === REQUEST_DOCUMENT_UPLOAD_QUEUE_STATUS.UPLOADING) return "Subiendo y procesando";
+  if (item.status === REQUEST_DOCUMENT_UPLOAD_QUEUE_STATUS.COMPLETED) return "Completado";
+  if (item.status === REQUEST_DOCUMENT_UPLOAD_QUEUE_STATUS.FAILED) return item.retryable ? "Falló · reintentar" : "No cargado";
+  return "Retirado";
+}
+
+function getQueueStatusVariant(item: RequestDocumentUploadQueueItem): "default" | "secondary" | "destructive" | "outline" {
+  if (item.status === REQUEST_DOCUMENT_UPLOAD_QUEUE_STATUS.COMPLETED) return "default";
+  if (item.status === REQUEST_DOCUMENT_UPLOAD_QUEUE_STATUS.FAILED) return "destructive";
+  if (item.status === REQUEST_DOCUMENT_UPLOAD_QUEUE_STATUS.REMOVED) return "outline";
+  return "secondary";
+}
+
 function toDateInputValue(value?: string | null): string {
   return value?.match(/^\d{4}-\d{2}-\d{2}/)?.[0] ?? "";
 }
@@ -366,7 +393,10 @@ export function RequestDocumentsCard({
   documents: controlledDocuments,
   documentsLoading,
   documentsError,
+  documentsResource,
+  receiptsResource,
   onDocumentsChanged,
+  hideOptionalUploader = false,
 }: RequestDocumentsCardProps) {
   const user = useAuthStore((state) => state.user);
   const roleCode = user?.role?.code;
@@ -376,17 +406,24 @@ export function RequestDocumentsCard({
   const canManageReturnProofWhileLocked = canManage && !readOnly && effectiveStructuredReportLocked && request.status === REQUEST_STATUS.OBSERVED;
   const permissionMessage = getRequestDocumentPermissionMessage(roleCode, request.status, request, user?.id);
   const internalDocuments = useRequestDocuments(request.id);
-  const documents = controlledDocuments ?? internalDocuments.documents;
-  const isLoading = documentsLoading ?? internalDocuments.isLoading;
-  const error = documentsError ?? internalDocuments.error;
-  const refetch = onDocumentsChanged ?? internalDocuments.refetch;
-  const { receipts, isLoading: receiptsLoading, error: receiptsError, refetch: refetchReceipts } = useRequestReceiptReviews(request.id);
+  const effectiveDocumentsResource = documentsResource ?? internalDocuments;
+  const documents = controlledDocuments ?? effectiveDocumentsResource.documents;
+  const isLoading = documentsLoading ?? effectiveDocumentsResource.isLoading;
+  const isRefreshingDocuments = effectiveDocumentsResource.isRefreshing;
+  const error = documentsError ?? effectiveDocumentsResource.error;
+  const refetch = onDocumentsChanged ?? (() => effectiveDocumentsResource.refetch({ background: true }));
+  const internalReceipts = useRequestReceiptReviews(request.id);
+  const effectiveReceiptsResource = receiptsResource ?? internalReceipts;
+  const { receipts, isLoading: receiptsLoading, isRefreshing: receiptsRefreshing, error: receiptsError, refetch: refetchReceipts, upsertReceipt } = effectiveReceiptsResource;
   const { uploadDocument, isLoading: uploading } = useUploadRequestDocument();
   const { deleteDocument, isLoading: deleting } = useDeleteRequestDocument();
   const { updateReceiptReview, isLoading: updatingReceipt } = useUpdateRequestReceiptReview();
   const { confirmReceiptReview, isLoading: confirmingReceipt } = useConfirmRequestReceiptReview();
   const [category, setCategory] = useState<RequestDocumentCategory | "">(REQUEST_DOCUMENT_CATEGORY.REQUEST_SUPPORT);
   const [file, setFile] = useState<File | null>(null);
+  const [uploadQueue, setUploadQueue] = useState<RequestDocumentUploadQueueItem[]>([]);
+  const uploadQueueRef = useRef<RequestDocumentUploadQueueItem[]>([]);
+  const [isQueueRunning, setIsQueueRunning] = useState(false);
   const [validationError, setValidationError] = useState<string | null>(null);
   const [operationError, setOperationError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
@@ -397,6 +434,7 @@ export function RequestDocumentsCard({
   const [activeUploadAction, setActiveUploadAction] = useState<DocumentUploadAction | null>(null);
   const [uploadAllocationId, setUploadAllocationId] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const operationErrorRef = useRef<HTMLDivElement>(null);
   const allocationGroups = request.allocations ?? [];
   const displayAllocationGroups = allocationGroups.length > 0 ? allocationGroups : guidanceAllocations;
   const isAdvanceSettlement = request.request_type === REQUEST_TYPE.ADVANCE_SETTLEMENT;
@@ -414,7 +452,11 @@ export function RequestDocumentsCard({
   const acceptedFormatsLabel = category ? getRequestDocumentAcceptedFormatsLabel(category) : "selecciona una categoría";
   const uploadActionsDisabled = uploading || activeUploadAction !== null;
   const uploadRequiresAllocationSelection = requiresReceiptAllocation && !uploadAllocationId;
-  const uploadButtonDisabled = uploadActionsDisabled || Boolean(validationError) || !file || uploadRequiresAllocationSelection;
+  const queuedActiveItems = uploadQueue.filter((item) => item.status !== REQUEST_DOCUMENT_UPLOAD_QUEUE_STATUS.REMOVED);
+  const queuedPendingItems = uploadQueue.filter((item) => item.status === REQUEST_DOCUMENT_UPLOAD_QUEUE_STATUS.PENDING);
+  const queuedCompletedCount = uploadQueue.filter((item) => item.status === REQUEST_DOCUMENT_UPLOAD_QUEUE_STATUS.COMPLETED).length;
+  const queuedFailedCount = uploadQueue.filter((item) => item.status === REQUEST_DOCUMENT_UPLOAD_QUEUE_STATUS.FAILED).length;
+  const uploadButtonDisabled = uploadActionsDisabled || isQueueRunning || Boolean(validationError) || queuedPendingItems.length === 0 || uploadRequiresAllocationSelection;
   const selectedUploadAllocation = allocationGroups.find((allocation) => allocation.id === uploadAllocationId) ?? null;
 
   useEffect(() => {
@@ -424,16 +466,42 @@ export function RequestDocumentsCard({
     setValidationError(null);
   }, [category, optionalCategoryOptions]);
 
-  function handleFileChange(nextFile: File | null): void {
-    setFile(nextFile);
-    setValidationError(category ? validateRequestDocumentFile(nextFile, category) : "Selecciona una categoría para adjuntar el documento.");
+  useEffect(() => {
+    if (!operationError) return;
+    operationErrorRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+    operationErrorRef.current?.focus({ preventScroll: true });
+  }, [operationError]);
+
+  function setQueue(nextQueue: RequestDocumentUploadQueueItem[]): void {
+    uploadQueueRef.current = nextQueue;
+    setUploadQueue(nextQueue);
+  }
+
+  function updateQueueItem(itemId: string, patch: Partial<RequestDocumentUploadQueueItem>): void {
+    setQueue(uploadQueueRef.current.map((item) => item.id === itemId ? { ...item, ...patch } : item));
+  }
+
+  function handleQueueFileChange(fileList: FileList | null): void {
+    const selectedFiles = Array.from(fileList ?? []);
+    setFile(selectedFiles[0] ?? null);
     setSuccessMessage(null);
+    if (selectedFiles.length === 0) return;
+    const activeCount = uploadQueueRef.current.filter((item) => item.status !== REQUEST_DOCUMENT_UPLOAD_QUEUE_STATUS.REMOVED).length;
+    const result = validateRequestDocumentBatch(selectedFiles, {
+      category,
+      requiresAllocation: requiresReceiptAllocation,
+      requestAllocationId: uploadAllocationId,
+      existingQueueCount: activeCount,
+    });
+    setQueue([...uploadQueueRef.current, ...result.accepted, ...result.rejected]);
+    setValidationError(null);
   }
 
   function handleCategoryChange(value: string): void {
     const nextCategory = value as RequestDocumentCategory;
     setCategory(nextCategory);
     if (nextCategory !== REQUEST_DOCUMENT_CATEGORY.RECEIPT) setUploadAllocationId("");
+    setQueue([]);
     setValidationError(validateRequestDocumentFile(file, nextCategory));
   }
 
@@ -448,7 +516,8 @@ export function RequestDocumentsCard({
     try {
       setActiveUploadAction(action);
       setOperationError(null);
-      await uploadDocument(request.id, { file: selectedFile, document_category: selectedCategory, ...scope });
+      const uploaded = await uploadDocument(request.id, { file: selectedFile, document_category: selectedCategory, ...scope });
+      effectiveDocumentsResource.upsertDocument?.(uploaded);
       toast.success(REQUEST_DOCUMENT_UPLOAD_SUCCESS_MESSAGE);
       setSuccessMessage(REQUEST_DOCUMENT_UPLOAD_SUCCESS_MESSAGE);
       setFile(null);
@@ -470,8 +539,8 @@ export function RequestDocumentsCard({
       return;
     }
 
-    if (!file) {
-      setValidationError(validateRequestDocumentFile(file, category));
+    if (queuedPendingItems.length === 0) {
+      setValidationError("Selecciona al menos un archivo válido para adjuntar.");
       return;
     }
 
@@ -480,10 +549,74 @@ export function RequestDocumentsCard({
       return;
     }
 
-    await uploadSelectedFile(file, category, DOCUMENT_UPLOAD_ACTION.GENERIC, requiresReceiptAllocation ? {
-      scope_type: REQUEST_DOCUMENT_SCOPE_TYPE.ALLOCATION,
-      request_allocation_id: uploadAllocationId,
-    } : undefined);
+    await processUploadQueue(queuedPendingItems.map((item) => item.id));
+  }
+
+  async function processUploadQueue(itemIds: string[]): Promise<void> {
+    if (isQueueRunning) return;
+    setIsQueueRunning(true);
+    setActiveUploadAction(DOCUMENT_UPLOAD_ACTION.GENERIC);
+    setOperationError(null);
+    let completed = 0;
+    let failed = 0;
+
+    try {
+      for (const [index, itemId] of itemIds.entries()) {
+        const item = uploadQueueRef.current.find((candidate) => candidate.id === itemId);
+        if (!item || item.status === REQUEST_DOCUMENT_UPLOAD_QUEUE_STATUS.REMOVED) continue;
+        updateQueueItem(itemId, { status: REQUEST_DOCUMENT_UPLOAD_QUEUE_STATUS.UPLOADING, error_message: undefined });
+        try {
+          const uploaded = await uploadDocument(request.id, {
+            file: item.file,
+            document_category: item.document_category,
+            scope_type: item.scope_type,
+            request_allocation_id: item.request_allocation_id,
+          });
+          effectiveDocumentsResource.upsertDocument?.(uploaded);
+          completed += 1;
+          updateQueueItem(itemId, { status: REQUEST_DOCUMENT_UPLOAD_QUEUE_STATUS.COMPLETED, retryable: false });
+        } catch (uploadError) {
+          failed += 1;
+          const message = getApiErrorMessage(uploadError);
+          const retryable = isRetryableRequestDocumentUploadError(uploadError);
+          updateQueueItem(itemId, {
+            status: REQUEST_DOCUMENT_UPLOAD_QUEUE_STATUS.FAILED,
+            error_kind: retryable ? REQUEST_DOCUMENT_UPLOAD_QUEUE_ERROR_KIND.TRANSIENT : REQUEST_DOCUMENT_UPLOAD_QUEUE_ERROR_KIND.BACKEND,
+            error_message: message,
+            retryable,
+          });
+        }
+        if (index < itemIds.length - 1) {
+          await new Promise((resolve) => setTimeout(resolve, REQUEST_DOCUMENT_UPLOAD_QUEUE_DELAY_MS));
+        }
+      }
+      await Promise.all([refetch(), refetchReceipts({ background: true })]);
+      if (failed > 0) {
+        setOperationError(`${failed} archivo${failed === 1 ? "" : "s"} no se pudieron adjuntar. Revisa la cola y reintenta los pendientes.`);
+        toast.error("Algunos documentos no se pudieron adjuntar.");
+      } else if (completed > 0) {
+        setSuccessMessage(`${completed} documento${completed === 1 ? " adjuntado" : "s adjuntados"} correctamente.`);
+        toast.success(`${completed} documento${completed === 1 ? " adjuntado" : "s adjuntados"} correctamente.`);
+      }
+      setFile(null);
+      setValidationError(null);
+    } finally {
+      setIsQueueRunning(false);
+      setActiveUploadAction(null);
+    }
+  }
+
+  function removeQueueItem(itemId: string): void {
+    const item = uploadQueueRef.current.find((candidate) => candidate.id === itemId);
+    if (!item || item.status === REQUEST_DOCUMENT_UPLOAD_QUEUE_STATUS.UPLOADING) return;
+    updateQueueItem(itemId, { status: REQUEST_DOCUMENT_UPLOAD_QUEUE_STATUS.REMOVED });
+  }
+
+  function retryQueueItem(itemId: string): void {
+    const item = uploadQueueRef.current.find((candidate) => candidate.id === itemId);
+    if (!item || !item.retryable || isQueueRunning) return;
+    updateQueueItem(itemId, { status: REQUEST_DOCUMENT_UPLOAD_QUEUE_STATUS.PENDING, error_message: undefined });
+    void processUploadQueue([itemId]);
   }
 
   function handleChecklistAttach(nextCategory: RequestDocumentCategory, nextFile: File): void {
@@ -508,14 +641,15 @@ export function RequestDocumentsCard({
     try {
       setOperationError(null);
       await deleteDocument(request.id, documentId);
+      effectiveDocumentsResource.removeDocument?.(documentId);
       toast.success("Documento eliminado correctamente");
       setDocumentToDelete(null);
-      await Promise.all([refetch(), refetchReceipts()]);
+      await Promise.all([refetch(), refetchReceipts({ background: true })]);
     } catch (deleteError) {
       const message = getApiErrorMessage(deleteError);
       setOperationError(message);
       toast.error(message);
-      await Promise.all([refetch(), refetchReceipts()]);
+      await Promise.all([refetch(), refetchReceipts({ background: true })]);
     }
   }
 
@@ -556,10 +690,11 @@ export function RequestDocumentsCard({
     if (!receiptToReview || !receiptForm || effectiveStructuredReportLocked) return;
     try {
       setOperationError(null);
-      await updateReceiptReview(request.id, receiptToReview.receipt.id, getReceiptReviewPayload(receiptForm));
+      const updatedReceipt = await updateReceiptReview(request.id, receiptToReview.receipt.id, getReceiptReviewPayload(receiptForm));
+      upsertReceipt?.(updatedReceipt);
       toast.success("Datos del comprobante actualizados");
       closeReceiptReview();
-      await Promise.all([refetchReceipts(), refetch()]);
+      await refetchReceipts({ background: true });
     } catch (reviewError) {
       const message = getApiErrorMessage(reviewError);
       setOperationError(message);
@@ -571,10 +706,11 @@ export function RequestDocumentsCard({
     if (!receiptToConfirm || effectiveStructuredReportLocked) return;
     try {
       setOperationError(null);
-      await confirmReceiptReview(request.id, receiptToConfirm.receipt.id);
+      const confirmedReceipt = await confirmReceiptReview(request.id, receiptToConfirm.receipt.id);
+      upsertReceipt?.(confirmedReceipt);
       toast.success("Datos del comprobante confirmados");
       closeReceiptConfirm();
-      await Promise.all([refetchReceipts(), refetch()]);
+      await refetchReceipts({ background: true });
     } catch (confirmError) {
       const message = getApiErrorMessage(confirmError);
       setOperationError(message);
@@ -773,6 +909,11 @@ export function RequestDocumentsCard({
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
+        {(isRefreshingDocuments || receiptsRefreshing) && (
+          <p className="rounded-md border bg-muted/40 px-3 py-2 text-sm text-muted-foreground" role="status">
+            Actualizando documentos y lectura automática…
+          </p>
+        )}
         {isAdvanceSettlement && hasDisplayAllocationGroups && (
           <Alert>
             <Info className="h-4 w-4" />
@@ -871,11 +1012,11 @@ export function RequestDocumentsCard({
           )}
         </div>
 
-        {canManageActions ? (
+        {!hideOptionalUploader && (canManageActions ? (
           <div className="rounded-md border p-4">
             <div className="mb-3 space-y-1">
               <h3 className="text-sm font-semibold">Otros documentos</h3>
-              <p className="text-xs text-muted-foreground">Usa este cargador solo para documentos adicionales que no se solicitan en el checklist. Para documentos requeridos pendientes, usa el botón de su fila. Este cargador adjunta un archivo por vez.</p>
+              <p className="text-xs text-muted-foreground">Usa este cargador para documentos adicionales o comprobantes por línea POA. Puedes seleccionar hasta 20 archivos; se adjuntarán de uno en uno para mantener estable la carga.</p>
             </div>
             {hasOptionalCategoryOptions ? (
             <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-[220px_minmax(0,1fr)_minmax(220px,320px)_auto] xl:items-end">
@@ -897,16 +1038,17 @@ export function RequestDocumentsCard({
                   ref={fileInputRef}
                   key={file ? "selected" : "empty"}
                   type="file"
+                  multiple
                   accept={category ? getRequestDocumentAccept(category) : undefined}
                   disabled={uploadActionsDisabled}
-                  onChange={(event) => handleFileChange(event.target.files?.[0] ?? null)}
+                  onChange={(event) => { handleQueueFileChange(event.target.files); event.target.value = ""; }}
                 />
-                <p className="text-xs text-muted-foreground">Máximo 10 MB. Formatos permitidos para esta categoría: {acceptedFormatsLabel}. Selecciona un solo archivo por carga.</p>
+                <p className="text-xs text-muted-foreground">Máximo 10 MB por archivo. Formatos permitidos: {acceptedFormatsLabel}. Máximo 20 archivos por tanda.</p>
               </div>
               {requiresReceiptAllocation && (
                 <div className="min-w-0 space-y-2">
                   <label className="text-sm font-medium" htmlFor="receipt-allocation">Línea POA</label>
-                  <Select value={uploadAllocationId} onValueChange={(value) => { setUploadAllocationId(value); setValidationError(null); }}>
+                  <Select value={uploadAllocationId} onValueChange={(value) => { setUploadAllocationId(value); setQueue([]); setValidationError(null); }}>
                     <SelectTrigger id="receipt-allocation" className="max-w-full" disabled={uploadActionsDisabled}><SelectValue placeholder="Selecciona línea POA" /></SelectTrigger>
                     <SelectContent className="max-w-[min(92vw,28rem)]">
                       {allocationGroups.map((allocation, index) => allocation.id ? (
@@ -921,7 +1063,7 @@ export function RequestDocumentsCard({
               )}
               <Button type="button" className="md:self-end" onClick={() => void handleUpload()} disabled={uploadButtonDisabled}>
                 <Upload className="size-4" />
-                {activeUploadAction === DOCUMENT_UPLOAD_ACTION.GENERIC ? "Subiendo..." : "Adjuntar"}
+                {isQueueRunning ? "Adjuntando..." : "Adjuntar"}
               </Button>
             </div>
             ) : (
@@ -929,10 +1071,43 @@ export function RequestDocumentsCard({
             )}
             {file && (
               <div className="mt-3 rounded-md bg-muted p-3 text-sm">
-                <p className="font-medium">Archivo seleccionado</p>
+                <p className="font-medium">Último archivo seleccionado</p>
                 <p className="text-muted-foreground">
                   {file.name} · {formatRequestDocumentSize(file.size)} · {getRequestDocumentMimeLabel(file.type)}
                 </p>
+              </div>
+            )}
+            {queuedActiveItems.length > 0 && (
+              <div className="mt-3 space-y-3 rounded-md border p-3">
+                <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+                  <p className="text-sm font-medium">Cola de carga</p>
+                  <p className="text-xs text-muted-foreground">
+                    {queuedCompletedCount} completado{queuedCompletedCount === 1 ? "" : "s"} · {queuedFailedCount} con incidencia · {queuedPendingItems.length} pendiente{queuedPendingItems.length === 1 ? "" : "s"}
+                  </p>
+                </div>
+                {isQueueRunning && <p className="text-xs text-muted-foreground">Estamos adjuntando los archivos uno por uno. Puedes seguir viendo el avance aquí.</p>}
+                <div className="space-y-2">
+                  {queuedActiveItems.map((item) => (
+                    <div key={item.id} className="flex flex-col gap-2 rounded-md bg-muted p-3 sm:flex-row sm:items-center sm:justify-between">
+                      <div className="min-w-0 space-y-1">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <p className="truncate text-sm font-medium">{item.file.name}</p>
+                          <Badge variant={getQueueStatusVariant(item)}>{getQueueStatusLabel(item)}</Badge>
+                        </div>
+                        <p className="text-xs text-muted-foreground">{formatRequestDocumentSize(item.file.size)} · {getRequestDocumentCategoryLabel(item.document_category)}</p>
+                        {item.error_message && <p className="text-xs text-destructive">{item.error_message}</p>}
+                      </div>
+                      <div className="flex shrink-0 gap-2">
+                        {item.status === REQUEST_DOCUMENT_UPLOAD_QUEUE_STATUS.FAILED && item.retryable && (
+                          <Button type="button" variant="outline" size="sm" disabled={isQueueRunning} onClick={() => retryQueueItem(item.id)}>Reintentar</Button>
+                        )}
+                        {(item.status === REQUEST_DOCUMENT_UPLOAD_QUEUE_STATUS.PENDING || item.status === REQUEST_DOCUMENT_UPLOAD_QUEUE_STATUS.FAILED) && (
+                          <Button type="button" variant="outline" size="sm" disabled={isQueueRunning && item.status === REQUEST_DOCUMENT_UPLOAD_QUEUE_STATUS.PENDING} onClick={() => removeQueueItem(item.id)}>Retirar</Button>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
               </div>
             )}
             {validationError && <p className="mt-2 text-sm text-destructive">{validationError}</p>}
@@ -942,7 +1117,7 @@ export function RequestDocumentsCard({
           <p className="text-sm text-muted-foreground">
             {readOnly ? "Vista de solo lectura: los documentos se gestionan desde el flujo de edición del borrador." : permissionMessage}
           </p>
-        )}
+        ))}
 
         {successMessage && (
           <Alert>
@@ -950,10 +1125,12 @@ export function RequestDocumentsCard({
           </Alert>
         )}
 
-        {operationError && (
-          <Alert variant="destructive">
-            <AlertDescription>{operationError}</AlertDescription>
-          </Alert>
+        {operationError && !receiptToReview && !receiptToConfirm && (
+          <div ref={operationErrorRef} tabIndex={-1} className="rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2">
+            <Alert variant="destructive">
+              <AlertDescription>{operationError}</AlertDescription>
+            </Alert>
+          </div>
         )}
 
         {error && (
@@ -974,7 +1151,7 @@ export function RequestDocumentsCard({
           </Alert>
         )}
 
-        {isLoading ? (
+        {isLoading && documents.length === 0 ? (
           <p className="text-sm text-muted-foreground">Cargando documentos...</p>
         ) : (
           <section className="space-y-3">
@@ -1029,6 +1206,13 @@ export function RequestDocumentsCard({
                 </div>
               </div>
             )}
+            {operationError && receiptToReview ? (
+              <div ref={operationErrorRef} tabIndex={-1} className="rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2">
+                <Alert variant="destructive">
+                  <AlertDescription>{operationError}. Conservamos este formulario abierto para que corrijas el comprobante sin perder contexto.</AlertDescription>
+                </Alert>
+              </div>
+            ) : null}
             <DialogFooter>
               <Button type="button" variant="outline" onClick={closeReceiptReview} disabled={updatingReceipt}>Cancelar</Button>
               <Button type="button" onClick={() => void handleSaveReceiptReview()} disabled={updatingReceipt || !receiptForm}>
@@ -1061,6 +1245,13 @@ export function RequestDocumentsCard({
                 <p className="text-xs text-muted-foreground">Después de confirmar, podrás seleccionar la línea POA y agregar este comprobante al Informe de rendición.</p>
               </div>
             )}
+            {operationError && receiptToConfirm ? (
+              <div ref={operationErrorRef} tabIndex={-1} className="rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2">
+                <Alert variant="destructive">
+                  <AlertDescription>{operationError}. La confirmación sigue abierta para que revises los datos o vuelvas a intentarlo.</AlertDescription>
+                </Alert>
+              </div>
+            ) : null}
             <DialogFooter>
               <Button type="button" variant="outline" onClick={closeReceiptConfirm} disabled={confirmingReceipt}>Cancelar</Button>
               <Button type="button" variant="outline" onClick={moveReceiptConfirmToReview} disabled={confirmingReceipt}>Revisar datos</Button>

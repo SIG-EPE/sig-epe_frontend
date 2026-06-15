@@ -1,7 +1,7 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { getPaymentQueuePath, getRenditionCountsPath, getRenditionsPath, getRequestsPath, getSettlementContextPath, getStartAdvanceSettlementPath, useBulkMarkPaid, useCompletePaymentDetails, useRequestRenditionReportActions, useSettlementContext, useStartAdvanceSettlement } from "@/hooks/use-requests";
+import { getPaymentQueuePath, getRenditionCountsPath, getRenditionsPath, getRequestsPath, getSettlementContextPath, getStartAdvanceSettlementPath, useBulkMarkPaid, useCompletePaymentDetails, useRequest, useRequestDocuments, useRequestReceiptReviews, useRequestRenditionReport, useRequestRenditionReportActions, useSettlementContext, useStartAdvanceSettlement } from "@/hooks/use-requests";
 import { api } from "@/lib/api-client";
 import { RENDITION_SORT_DIRECTION, RENDITION_SORT_FIELD, RENDITION_STATUS, REQUEST_CURRENCY, REQUEST_STATUS, REQUEST_TYPE, type PaymentRequest } from "@/types/requests";
 
@@ -9,10 +9,26 @@ vi.mock("@/lib/api-client", () => ({
   api: {
     get: vi.fn(),
     post: vi.fn(),
+    postForm: vi.fn(),
     patchForm: vi.fn(),
+    patch: vi.fn(),
     delete: vi.fn(),
   },
 }));
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (error: Error) => void;
+  const promise = new Promise<T>((promiseResolve, promiseReject) => {
+    resolve = promiseResolve;
+    reject = promiseReject;
+  });
+  return { promise, resolve, reject };
+}
+
+beforeEach(() => {
+  vi.clearAllMocks();
+});
 
 vi.mock("@/stores/auth-store", () => ({
   useAuthStore: (selector: (state: { isLoading: boolean; accessToken: string | null }) => unknown) => selector({ isLoading: false, accessToken: "token" }),
@@ -178,6 +194,75 @@ describe("request hook URL helpers", () => {
     expect(formData.has("paid_at")).toBe(false);
   });
 
+  it("mantiene la solicitud visible durante un refetch en segundo plano", async () => {
+    vi.mocked(api.get).mockResolvedValueOnce(makeRequest({ concept: "Inicial" }));
+    const { result } = renderHook(() => useRequest("request-1"));
+
+    await waitFor(() => expect(result.current.request?.concept).toBe("Inicial"));
+    expect(result.current.isInitialLoading).toBe(false);
+
+    const background = deferred<PaymentRequest>();
+    vi.mocked(api.get).mockReturnValueOnce(background.promise);
+
+    let refetchPromise!: Promise<void>;
+    act(() => {
+      refetchPromise = result.current.refetch({ background: true });
+    });
+    await waitFor(() => expect(result.current.isRefreshing).toBe(true));
+    expect(result.current.request?.concept).toBe("Inicial");
+
+    await act(async () => {
+      background.resolve(makeRequest({ concept: "Actualizada" }));
+      await refetchPromise;
+    });
+
+    expect(result.current.request?.concept).toBe("Actualizada");
+    expect(result.current.isRefreshing).toBe(false);
+    expect(result.current.isLoading).toBe(false);
+  });
+
+  it("parcha documentos y comprobantes sin marcar carga inicial", async () => {
+    vi.mocked(api.get)
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([]);
+
+    const { result: documentsResult } = renderHook(() => useRequestDocuments("request-1"));
+    const { result: receiptsResult } = renderHook(() => useRequestReceiptReviews("request-1"));
+
+    await waitFor(() => expect(documentsResult.current.isLoading).toBe(false));
+    await waitFor(() => expect(receiptsResult.current.isLoading).toBe(false));
+
+    act(() => {
+      documentsResult.current.upsertDocument({ id: "doc-1", document_category: "REQUEST_SUPPORT" } as never);
+      receiptsResult.current.upsertReceipt({ id: "receipt-review-1", receipt: { id: "receipt-1" } } as never);
+    });
+
+    expect(documentsResult.current.documents).toHaveLength(1);
+    expect(receiptsResult.current.receipts).toHaveLength(1);
+    expect(documentsResult.current.isLoading).toBe(false);
+    expect(receiptsResult.current.isLoading).toBe(false);
+  });
+
+  it("actualiza filas del informe localmente y conserva el informe montado", async () => {
+    vi.mocked(api.get).mockResolvedValueOnce({ rows: [], totals: { missing_allocations: [] }, allocation_coverage: [] });
+    const { result } = renderHook(() => useRequestRenditionReport("request-1"));
+
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+    act(() => {
+      result.current.upsertReportRow({ id: "row-1", amount: 50 } as never);
+    });
+
+    expect(result.current.report?.rows).toHaveLength(1);
+    expect(result.current.isLoading).toBe(false);
+
+    act(() => {
+      result.current.removeReportRow("row-1");
+    });
+
+    expect(result.current.report?.rows).toHaveLength(0);
+  });
+
   it("genera informe de rendición con respuesta de informe y documento", async () => {
     vi.mocked(api.post).mockResolvedValueOnce({ report: { id: "report-1" }, document: { id: "document-1" } });
     const { result } = renderHook(() => useRequestRenditionReportActions());
@@ -190,5 +275,31 @@ describe("request hook URL helpers", () => {
     });
 
     expect(api.post).toHaveBeenCalledWith("/requests/settlement-1/rendition-report/generate");
+  });
+
+  it("registra y elimina devolución de línea POA usando endpoints allocation-scoped", async () => {
+    vi.mocked(api.patch).mockResolvedValueOnce({ id: "report-1" });
+    vi.mocked(api.delete).mockResolvedValueOnce({ deleted: true });
+    const { result } = renderHook(() => useRequestRenditionReportActions());
+
+    await act(async () => {
+      await expect(result.current.upsertLineReturn("settlement-1", "allocation-1", {
+        returned_amount: 175,
+        justification: "Saldo no utilizado.",
+        return_proof_document_id: "document-1",
+      })).resolves.toMatchObject({ id: "report-1" });
+    });
+
+    expect(api.patch).toHaveBeenCalledWith("/requests/settlement-1/rendition-report/line-returns/allocation-1", {
+      returned_amount: 175,
+      justification: "Saldo no utilizado.",
+      return_proof_document_id: "document-1",
+    });
+
+    await act(async () => {
+      await expect(result.current.deleteLineReturn("settlement-1", "allocation-1")).resolves.toMatchObject({ deleted: true });
+    });
+
+    expect(api.delete).toHaveBeenCalledWith("/requests/settlement-1/rendition-report/line-returns/allocation-1");
   });
 });

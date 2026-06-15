@@ -13,7 +13,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
-import { useBudgetPreview, useCreateRequest, useRequestDocuments, useSubmitRequest, useUpdateRequest } from "@/hooks/use-requests";
+import { useBudgetPreview, useCreateRequest, useRequestDocuments, useRequestReceiptReviews, useSubmitRequest, useUpdateRequest } from "@/hooks/use-requests";
 import { getBusinessDateString } from "@/lib/business-timezone";
 import { ROUTES } from "@/lib/constants";
 import {
@@ -514,6 +514,7 @@ export function RequestForm({
   const { updateRequest, isLoading: updating } = useUpdateRequest();
   const { submitRequest, isLoading: submitting } = useSubmitRequest();
   const reviewDocuments = useRequestDocuments(draftId ?? undefined);
+  const reviewReceipts = useRequestReceiptReviews(draftId ?? undefined);
 
   const isSaving = creating || updating || pendingAction === "save" || pendingAction === "submit";
   const isSubmitting = submitting || pendingAction === "submit";
@@ -526,8 +527,10 @@ export function RequestForm({
   const dataStepBlockingMessages = submitErrors.length > 0 ? submitErrors : currentRequestDataErrors;
 
   async function refreshDocumentsAndStructuredReport(): Promise<void> {
-    await Promise.all([reviewDocuments.refetch(), onRequestChanged?.()]);
-    setStructuredReportRefreshSignal((current) => current + 1);
+    await Promise.all([reviewDocuments.refetch({ background: true }), reviewReceipts.refetch({ background: true })]);
+    if (isAdvanceSettlement) {
+      setStructuredReportRefreshSignal((current) => current + 1);
+    }
   }
   const hasBudgetCeilingSubmitError = dataStepBlockingMessages.includes(REQUEST_BUDGET_CEILING_BLOCK_MESSAGE);
   const stepperItems = getRequestEditStepperItems(mode === "create" ? REQUEST_EDIT_STEP.DATA : activeStep, {
@@ -1088,6 +1091,8 @@ export function RequestForm({
           documents={reviewDocuments.documents}
           documentsLoading={reviewDocuments.isLoading}
           documentsError={reviewDocuments.error}
+          documentsResource={reviewDocuments}
+          receiptsResource={reviewReceipts}
           onDocumentsChanged={refreshDocumentsAndStructuredReport}
         />
         {currentRequest.request_type === REQUEST_TYPE.ADVANCE_SETTLEMENT && (
@@ -1095,8 +1100,10 @@ export function RequestForm({
             request={currentRequest}
             guidanceAllocations={settlementGuidanceAllocations}
             refreshSignal={structuredReportRefreshSignal}
+            documentsResource={reviewDocuments}
+            receiptsResource={reviewReceipts}
             onChanged={async () => {
-              await Promise.all([reviewDocuments.refetch(), onRequestChanged?.()]);
+              await reviewDocuments.refetch({ background: true });
             }}
             onReadinessChange={(ready, messages) => {
               setStructuredReportReady(ready);
@@ -1297,10 +1304,14 @@ export function RequestForm({
           request={currentRequest}
           guidanceAllocations={settlementGuidanceAllocations}
           backendMissingMessages={submitErrors}
+          readOnly
+          hideOptionalUploader
           structuredReportLocked={structuredReportLocked}
           documents={reviewDocuments.documents}
           documentsLoading={reviewDocuments.isLoading}
           documentsError={reviewDocuments.error}
+          documentsResource={reviewDocuments}
+          receiptsResource={reviewReceipts}
           onDocumentsChanged={refreshDocumentsAndStructuredReport}
         />
         {currentRequest.request_type === REQUEST_TYPE.ADVANCE_SETTLEMENT && (
@@ -1309,8 +1320,10 @@ export function RequestForm({
             readOnly
             guidanceAllocations={settlementGuidanceAllocations}
             refreshSignal={structuredReportRefreshSignal}
+            documentsResource={reviewDocuments}
+            receiptsResource={reviewReceipts}
             onChanged={async () => {
-              await Promise.all([reviewDocuments.refetch(), onRequestChanged?.()]);
+              await reviewDocuments.refetch({ background: true });
             }}
             onReadinessChange={(ready, messages) => {
               setStructuredReportReady(ready);

@@ -74,7 +74,7 @@ function getComputedOutcomeDifferenceLabel(outcome: RexanOutcome | null): string
 export function RequestDetailPage() {
   const params = useParams<{ id: string }>();
   const router = useRouter();
-  const { request, isLoading, error, refetch } = useRequest(params.id);
+  const { request, isInitialLoading, isRefreshing, error, refetch, patchRequest } = useRequest(params.id);
   const requestDocuments = useRequestDocuments(params.id);
   const structuredReportState = useRequestRenditionReport(params.id, request?.request_type === REQUEST_TYPE.ADVANCE_SETTLEMENT);
   const user = useAuthStore((state) => state.user);
@@ -95,7 +95,7 @@ export function RequestDetailPage() {
 
   const RETURN_PROOF_OBSERVATION_FIELD = "Constancia de devolución";
 
-  if (isLoading) {
+  if (!request && isInitialLoading) {
     return <p className="rounded-md border p-6 text-sm text-muted-foreground">Cargando solicitud...</p>;
   }
 
@@ -111,8 +111,9 @@ export function RequestDetailPage() {
   const openObservations = (request.observations ?? []).filter((observation) => !observation.is_resolved);
   const allObservations = request.observations ?? [];
   const canReview = canReviewRequest(roleCode, request.status);
-  const canCorrect = canCorrectObservedRequest(roleCode, request.status);
-  const canEditDraft = canEditDraftRequest(roleCode, request.status);
+  const isRequestOwner = Boolean(user?.id && request.requester_id === user.id);
+  const canCorrect = isRequestOwner && canCorrectObservedRequest(roleCode, request.status);
+  const canEditDraft = isRequestOwner && canEditDraftRequest(roleCode, request.status);
   const advanceSettlementCta = getAdvanceSettlementCta(roleCode, request, user?.id);
   const renditionStatus = getPaymentRequestRenditionStatus(request);
   const editHref = `${ROUTES.REQUESTS}/${request.id}/edit`;
@@ -177,15 +178,16 @@ export function RequestDetailPage() {
       return;
     }
     try {
-      await observeRequest(request.id, {
+      const observed = await observeRequest(request.id, {
         comment,
         field_reference: fieldReference.trim() || undefined,
       });
+      patchRequest(observed);
       toast.success("Solicitud observada correctamente");
       setObserveOpen(false);
       setObserveComment("");
       setFieldReference("");
-      await refetch();
+      await refetch({ background: true });
     } catch (reviewError) {
       toast.error(getApiErrorMessage(reviewError));
     }
@@ -223,14 +225,15 @@ export function RequestDetailPage() {
       }
     }
     try {
-      await approveRequest(request.id, payload);
+      const approved = await approveRequest(request.id, payload);
+      patchRequest(approved);
       toast.success(isAdvanceSettlement && rexanPreviewOutcome !== REXAN_OUTCOME.EXCESS ? "Rendición aprobada correctamente" : "Solicitud enviada a gestión de pago");
       setApproveOpen(false);
       setApproveComment("");
       setValidatedSpentAmount("");
       setReturnProofDocumentId("");
-      await refetch();
-      await requestDocuments.refetch();
+      await refetch({ background: true });
+      await requestDocuments.refetch({ background: true });
     } catch (reviewError) {
       toast.error(getApiErrorMessage(reviewError));
     }
@@ -244,11 +247,12 @@ export function RequestDetailPage() {
       return;
     }
     try {
-      await rejectRequest(request.id, { reason });
+      const rejected = await rejectRequest(request.id, { reason });
+      patchRequest(rejected);
       toast.success("Solicitud rechazada correctamente");
       setRejectOpen(false);
       setRejectReason("");
-      await refetch();
+      await refetch({ background: true });
     } catch (reviewError) {
       toast.error(getApiErrorMessage(reviewError));
     }
@@ -262,7 +266,7 @@ export function RequestDetailPage() {
       router.push(`${ROUTES.REQUESTS}/${settlement.id}/edit?step=documents` as Parameters<typeof router.push>[0]);
     } catch (settlementError) {
       toast.error(getApiErrorMessage(settlementError));
-      await refetch();
+      await refetch({ background: true });
     }
   }
 
@@ -278,6 +282,12 @@ export function RequestDetailPage() {
           <Button variant="outline" onClick={() => router.push(ROUTES.REQUESTS)}>Volver</Button>
         </div>
       </div>
+
+      {isRefreshing && (
+        <p className="rounded-md border bg-muted/40 px-3 py-2 text-sm text-muted-foreground" role="status">
+          Actualizando solicitud en segundo plano…
+        </p>
+      )}
 
       {canEditDraft && (
         <Card>
@@ -395,9 +405,9 @@ export function RequestDetailPage() {
         </Card>
       )}
 
-      {isAdvanceSettlement && <StructuredRenditionReportCard request={request} readOnly onChanged={requestDocuments.refetch} />}
+      {isAdvanceSettlement && <StructuredRenditionReportCard request={request} readOnly reportResource={structuredReportState} documentsResource={requestDocuments} onChanged={() => requestDocuments.refetch({ background: true })} />}
 
-      <RequestDocumentsCard request={request} readOnly documents={requestDocuments.documents} documentsLoading={requestDocuments.isLoading} documentsError={requestDocuments.error} onDocumentsChanged={requestDocuments.refetch} />
+      <RequestDocumentsCard request={request} readOnly documentsResource={requestDocuments} />
 
       <Card>
         <CardHeader><CardTitle>Datos principales</CardTitle></CardHeader>

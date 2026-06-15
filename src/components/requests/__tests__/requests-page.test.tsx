@@ -9,12 +9,13 @@ import { REQUEST_CURRENCY, REQUEST_STATUS, REQUEST_TYPE, type PaymentRequest, ty
 const replaceMock = vi.fn((href: string) => {
   currentQuery = href.includes("?") ? href.slice(href.indexOf("?") + 1) : "";
 });
+const pushMock = vi.fn();
 let currentQuery = "";
 const useRequestsMock = vi.fn();
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({
-    push: vi.fn(),
+    push: pushMock,
     replace: replaceMock,
   }),
   useSearchParams: () => new URLSearchParams(currentQuery),
@@ -86,6 +87,7 @@ describe("RequestsPage", () => {
   beforeEach(() => {
     currentQuery = "";
     replaceMock.mockClear();
+    pushMock.mockClear();
     useRequestsMock.mockImplementation((filters: RequestsListFilters) => {
       const allRequests = [
         makeRequest({ id: "submitted", status: REQUEST_STATUS.SUBMITTED }),
@@ -106,11 +108,26 @@ describe("RequestsPage", () => {
     });
   });
 
-  it("renderiza tarjetas GIOF migradas y activa el filtro Nivel 2 en la URL", async () => {
+  it("muestra Mis Solicitudes por defecto para GIOF y permite crear", async () => {
+    const user = userEvent.setup();
+    render(<RequestsPage />);
+
+    expect(screen.getByTestId("requests-page-title")).toHaveTextContent("Mis Solicitudes");
+    expect(screen.getByTestId("new-request-button")).toBeInTheDocument();
+    expect(screen.queryByText("Pendientes Nivel 1")).not.toBeInTheDocument();
+
+    await user.click(screen.getByTestId("new-request-button"));
+
+    expect(pushMock).toHaveBeenCalledWith("/requests/new");
+  });
+
+  it("renderiza tarjetas GIOF en scope de revisión y activa el filtro Nivel 2 en la URL", async () => {
+    currentQuery = "scope=review";
     const user = userEvent.setup();
     render(<RequestsPage />);
 
     expect(screen.getByTestId("requests-page-title")).toHaveTextContent("Bandeja de Revisión");
+    expect(screen.getByTestId("new-request-button")).toBeInTheDocument();
     expect(screen.getByText("Pendientes Nivel 1")).toBeInTheDocument();
     expect(screen.getByText("Pendientes Nivel 2")).toBeInTheDocument();
     expect(screen.getByText("Solicitudes devueltas/observadas")).toBeInTheDocument();
@@ -119,21 +136,34 @@ describe("RequestsPage", () => {
     await user.click(screen.getByTestId(`requests-review-queue-card-${REQUEST_REVIEW_QUEUE.PENDING_LEVEL_2}`));
 
     await waitFor(() => {
-      expect(replaceMock).toHaveBeenLastCalledWith("/requests?queue=pending-level-2&status=IN_VALIDATION&sort=OLDEST_FIRST&page=1");
+      expect(replaceMock).toHaveBeenLastCalledWith("/requests?scope=review&queue=pending-level-2&status=IN_VALIDATION&sort=OLDEST_FIRST&page=1");
     });
   });
 
-  it("carga por defecto solo estados activos de revisión sin forzar una cola individual", () => {
+  it("carga Mis Solicitudes por defecto con scope propio", () => {
     render(<RequestsPage />);
 
     expect(useRequestsMock).toHaveBeenCalledWith(expect.objectContaining({
-      statuses: [...ACTIVE_REVIEW_STATUSES],
+      scope: "mine",
+      statuses: undefined,
       status: undefined,
     }));
     expect(replaceMock).not.toHaveBeenCalled();
   });
 
+  it("carga estados activos de revisión cuando el scope es review", () => {
+    currentQuery = "scope=review";
+    render(<RequestsPage />);
+
+    expect(useRequestsMock).toHaveBeenCalledWith(expect.objectContaining({
+      scope: "review",
+      statuses: [...ACTIVE_REVIEW_STATUSES],
+      status: undefined,
+    }));
+  });
+
   it("oculta la tarjeta no soportada de colaboradores bloqueados", () => {
+    currentQuery = "scope=review";
     render(<RequestsPage />);
 
     expect(screen.queryByTestId(`requests-review-queue-card-${REQUEST_REVIEW_QUEUE.BLOCKED}`)).not.toBeInTheDocument();

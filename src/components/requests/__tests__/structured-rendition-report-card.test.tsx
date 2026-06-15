@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -7,6 +7,7 @@ import { StructuredRenditionReportCard } from "@/components/requests/structured-
 import {
   REQUEST_CURRENCY,
   REQUEST_DOCUMENT_CATEGORY,
+  LINE_RETURN_VALIDATION_STATUS,
   REQUEST_RECEIPT_DUPLICATE_STATUS,
   REQUEST_RECEIPT_OCR_STATUS,
   REQUEST_RENDITION_REPORT_STATUS,
@@ -25,6 +26,7 @@ import {
 const mocks = vi.hoisted(() => ({
   addReceiptRow: vi.fn(),
   createManualRow: vi.fn(),
+  deleteLineReturn: vi.fn(),
   deleteRow: vi.fn(),
   documents: [] as RequestDocument[],
   generateReport: vi.fn(),
@@ -37,6 +39,8 @@ const mocks = vi.hoisted(() => ({
   toastSuccess: vi.fn(),
   toastWarning: vi.fn(),
   updateRow: vi.fn(),
+  uploadDocument: vi.fn(),
+  upsertLineReturn: vi.fn(),
   validateReport: vi.fn(),
 }));
 
@@ -49,19 +53,22 @@ vi.mock("sonner", () => ({
 }));
 
 vi.mock("@/hooks/use-requests", () => ({
-  useRequestDocuments: () => ({ documents: mocks.documents, error: null, isLoading: false, refetch: mocks.refetchDocuments }),
-  useRequestReceiptReviews: () => ({ receipts: mocks.receipts, error: null, isLoading: false, refetch: mocks.refetchReceipts }),
-  useRequestRenditionReport: () => ({ report: mocks.report, error: null, isLoading: false, refetch: mocks.refetchReport }),
+  useRequestDocuments: () => ({ documents: mocks.documents, error: null, isLoading: false, isRefreshing: false, refetch: mocks.refetchDocuments }),
+  useRequestReceiptReviews: () => ({ receipts: mocks.receipts, error: null, isLoading: false, isRefreshing: false, refetch: mocks.refetchReceipts }),
+  useRequestRenditionReport: () => ({ report: mocks.report, error: null, isLoading: false, isRefreshing: false, refetch: mocks.refetchReport, upsertReportRow: vi.fn() }),
   useRequestRenditionReportActions: () => ({
     addReceiptRow: mocks.addReceiptRow,
     createManualRow: mocks.createManualRow,
+    deleteLineReturn: mocks.deleteLineReturn,
     deleteRow: mocks.deleteRow,
     error: null,
     generateReport: mocks.generateReport,
     isLoading: false,
     updateRow: mocks.updateRow,
+    upsertLineReturn: mocks.upsertLineReturn,
     validateReport: mocks.validateReport,
   }),
+  useUploadRequestDocument: () => ({ uploadDocument: mocks.uploadDocument, isLoading: false, error: null }),
 }));
 
 function makeAllocation(overrides: Partial<RequestAllocation> = {}): RequestAllocation {
@@ -353,16 +360,16 @@ describe("StructuredRenditionReportCard", () => {
     render(<StructuredRenditionReportCard request={makeRequest()} />);
 
     await user.click(screen.getByRole("button", { name: "Agregar comprobante adicional" }));
-    await user.type(screen.getByLabelText("Fecha *"), "2026-06-05");
-    await user.type(screen.getByLabelText("Proveedor *"), "Proveedor adicional");
-    await user.type(screen.getByLabelText("Nro. comprobante"), "B001-777");
-    await user.type(screen.getByLabelText("Monto *"), "75.50");
+    fireEvent.change(screen.getByLabelText("Fecha *"), { target: { value: "2026-06-05" } });
+    fireEvent.change(screen.getByLabelText("Proveedor *"), { target: { value: "Proveedor adicional" } });
+    fireEvent.change(screen.getByLabelText("Nro. comprobante"), { target: { value: "B001-777" } });
+    fireEvent.change(screen.getByLabelText("Monto *"), { target: { value: "75.50" } });
 
     await user.click(screen.getAllByRole("combobox")[0]);
     await user.click(await screen.findByRole("option", { name: /POA-001/ }));
     await user.click(screen.getAllByRole("combobox")[1]);
     await user.click(await screen.findByRole("option", { name: "Comprobante.pdf" }));
-    await user.type(screen.getByLabelText("Detalle *"), "Movilidad adicional");
+    fireEvent.change(screen.getByLabelText("Detalle *"), { target: { value: "Movilidad adicional" } });
     await user.click(screen.getByRole("button", { name: "Guardar comprobante" }));
 
     await waitFor(() => {
@@ -432,7 +439,7 @@ describe("StructuredRenditionReportCard", () => {
     render(<StructuredRenditionReportCard request={makeRequest()} />);
 
     expect(screen.getByText("Comprobantes por revisar")).toBeInTheDocument();
-    expect(screen.getByText("Hay comprobantes pendientes de revisión. Confirma sus datos o elimínalos si no corresponden.")).toBeInTheDocument();
+    expect(screen.getByText("Hay 1 comprobante pendiente de revisión. Confirma sus datos o elimínalo si no corresponde antes de generar el informe.")).toBeInTheDocument();
     expect(screen.getByText(/confirma los datos detectados para usar estos comprobantes en el informe/i)).toBeInTheDocument();
     expect(screen.getByText("Pendiente de confirmación")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Agregar al informe" })).toBeDisabled();
@@ -495,8 +502,55 @@ describe("StructuredRenditionReportCard", () => {
     render(<StructuredRenditionReportCard request={makeRequest()} />);
 
     expect(screen.getByText("Pendientes del informe")).toBeInTheDocument();
-    expect(screen.getAllByText("Hay comprobantes pendientes de revisión. Confirma sus datos o elimínalos si no corresponden.")).toHaveLength(1);
+    expect(screen.getAllByText("Hay 1 comprobante pendiente de revisión. Confirma sus datos o elimínalo si no corresponde antes de generar el informe.")).toHaveLength(1);
     expect(screen.getByText("Comprobantes por revisar")).toBeInTheDocument();
+  });
+
+  it("guía el foco al primer comprobante pendiente sin recargar la sección", async () => {
+    mocks.report = makeReport({ status: REQUEST_RENDITION_REPORT_STATUS.DRAFT, rows: [], totals: { total_amount: 0, by_allocation: [], missing_allocations: ["allocation-1"] }, allocation_coverage: [] });
+    mocks.receipts = [makeReceiptReview()];
+
+    const user = userEvent.setup();
+    render(<StructuredRenditionReportCard request={makeRequest()} />);
+
+    await user.click(screen.getByRole("button", { name: "Ir al primer pendiente" }));
+
+    await waitFor(() => expect(document.activeElement).toHaveTextContent("Proveedor SAC"));
+    expect(screen.getByText(/La página se mantiene en esta sección/i)).toBeInTheDocument();
+    expect(screen.getByText("Comprobantes por revisar")).toBeInTheDocument();
+  });
+
+  it("muestra el bloqueo backend de comprobantes pendientes con conteo y mantiene generación deshabilitada", async () => {
+    mocks.report = makeReport({ status: REQUEST_RENDITION_REPORT_STATUS.DRAFT, rows: [], totals: { total_amount: 0, by_allocation: [], missing_allocations: [] }, allocation_coverage: [] });
+    mocks.validateReport.mockResolvedValue({
+      ready: false,
+      report: mocks.report,
+      totals: mocks.report.totals,
+      allocation_coverage: mocks.report.allocation_coverage,
+      blockers: [{
+        code: "UNCONFIRMED_RECEIPT_EVIDENCE",
+        message: "Hay 2 comprobantes pendientes de revisión para Línea 1: POA-001. Confirma sus datos o elimínalos antes de generar el informe.",
+        request_allocation_id: "allocation-1",
+        request_allocation_label: "Línea 1: POA-001",
+        pending_count: 2,
+      }],
+    });
+    mocks.receipts = [
+      makeReceiptReview({ receipt: { ...makeReceiptReview().receipt, id: "receipt-1", document_id: "document-1" } }),
+      makeReceiptReview({ receipt: { ...makeReceiptReview().receipt, id: "receipt-2", document_id: "document-2" } }),
+    ];
+    mocks.documents = [
+      makeDocument({ id: "document-1", original_filename: "Comprobante 1.pdf" }),
+      makeDocument({ id: "document-2", original_filename: "Comprobante 2.pdf" }),
+    ];
+
+    const user = userEvent.setup();
+    render(<StructuredRenditionReportCard request={makeRequest()} />);
+
+    await user.click(screen.getByRole("button", { name: "Validar informe" }));
+
+    expect(await screen.findByText("Hay 2 comprobantes pendientes de revisión para Línea 1: POA-001. Confirma sus datos o elimínalos antes de generar el informe.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Generar informe" })).toBeDisabled();
   });
 
   it("deshabilita generar informe mientras existen bloqueos de cobertura POA", () => {
@@ -548,6 +602,69 @@ describe("StructuredRenditionReportCard", () => {
     await waitFor(() => {
       expect(mocks.addReceiptRow).toHaveBeenCalledWith("request-1", "receipt-1", "allocation-1");
     });
+  });
+
+  it("selecciona todos los comprobantes agregables y los agrega secuencialmente", async () => {
+    mocks.documents = [
+      makeDocument({ id: "document-1", request_allocation_id: "allocation-1", original_filename: "Comprobante 1.pdf" }),
+      makeDocument({ id: "document-2", request_allocation_id: "allocation-2", original_filename: "Comprobante 2.pdf" }),
+      makeDocument({ id: "document-3", request_allocation_id: null, original_filename: "Comprobante sin línea.pdf" }),
+    ];
+    mocks.report = makeReport({ status: REQUEST_RENDITION_REPORT_STATUS.DRAFT, rows: [], totals: { total_amount: 0, by_allocation: [], missing_allocations: ["allocation-1", "allocation-2"] }, allocation_coverage: [] });
+    mocks.receipts = [
+      makeReceiptReview({ receipt: { ...makeReceiptReview().receipt, id: "receipt-1", document_id: "document-1", confirmed_by_id: "user-1", confirmed_at: "2026-06-02T12:00:00.000Z" } }),
+      makeReceiptReview({ receipt: { ...makeReceiptReview().receipt, id: "receipt-2", document_id: "document-2", confirmed_by_id: "user-1", confirmed_at: "2026-06-02T12:00:00.000Z" } }),
+      makeReceiptReview({ receipt: { ...makeReceiptReview().receipt, id: "receipt-3", document_id: "document-3", confirmed_by_id: "user-1", confirmed_at: "2026-06-02T12:00:00.000Z" } }),
+    ];
+    mocks.addReceiptRow
+      .mockResolvedValueOnce(makeRow({ id: "row-1", request_receipt_id: "receipt-1", request_allocation_id: "allocation-1" }))
+      .mockResolvedValueOnce(makeRow({ id: "row-2", request_receipt_id: "receipt-2", request_document_id: "document-2", request_allocation_id: "allocation-2" }));
+
+    const user = userEvent.setup();
+    render(<StructuredRenditionReportCard request={makeTwoAllocationRequest()} />);
+
+    await user.click(screen.getByLabelText(/Seleccionar todos/i));
+
+    const receiptCheckboxes = screen.getAllByRole("checkbox");
+    expect(receiptCheckboxes[1]).toBeChecked();
+    expect(receiptCheckboxes[2]).toBeChecked();
+    expect(receiptCheckboxes[3]).toBeDisabled();
+
+    await user.click(screen.getByRole("button", { name: "Agregar seleccionados al informe" }));
+
+    await waitFor(() => expect(mocks.addReceiptRow).toHaveBeenCalledTimes(2));
+    expect(mocks.addReceiptRow.mock.calls).toEqual([
+      ["request-1", "receipt-1", "allocation-1"],
+      ["request-1", "receipt-2", "allocation-2"],
+    ]);
+    expect(await screen.findByText("2 de 2 comprobantes agregados")).toBeInTheDocument();
+    expect(mocks.refetchReport).toHaveBeenCalledTimes(1);
+  });
+
+  it("mantiene resultados por comprobante cuando el agregado masivo tiene fallas parciales", async () => {
+    mocks.documents = [
+      makeDocument({ id: "document-1", request_allocation_id: "allocation-1", original_filename: "Comprobante 1.pdf" }),
+      makeDocument({ id: "document-2", request_allocation_id: "allocation-2", original_filename: "Comprobante 2.pdf" }),
+    ];
+    mocks.report = makeReport({ status: REQUEST_RENDITION_REPORT_STATUS.DRAFT, rows: [], totals: { total_amount: 0, by_allocation: [], missing_allocations: ["allocation-1", "allocation-2"] }, allocation_coverage: [] });
+    mocks.receipts = [
+      makeReceiptReview({ receipt: { ...makeReceiptReview().receipt, id: "receipt-1", document_id: "document-1", confirmed_by_id: "user-1", confirmed_at: "2026-06-02T12:00:00.000Z" } }),
+      makeReceiptReview({ receipt: { ...makeReceiptReview().receipt, id: "receipt-2", document_id: "document-2", confirmed_by_id: "user-1", confirmed_at: "2026-06-02T12:00:00.000Z" } }),
+    ];
+    mocks.addReceiptRow
+      .mockResolvedValueOnce(makeRow({ id: "row-1", request_receipt_id: "receipt-1", request_allocation_id: "allocation-1" }))
+      .mockRejectedValueOnce(new Error("Backend temporalmente no disponible"));
+
+    const user = userEvent.setup();
+    render(<StructuredRenditionReportCard request={makeTwoAllocationRequest()} />);
+
+    await user.click(screen.getByLabelText(/Seleccionar todos/i));
+    await user.click(screen.getByRole("button", { name: "Agregar seleccionados al informe" }));
+
+    expect(await screen.findByText("1 de 2 comprobantes agregados · 1 con error")).toBeInTheDocument();
+    expect(screen.getByText("Backend temporalmente no disponible")).toBeInTheDocument();
+    expect(mocks.toastError).toHaveBeenCalledWith("1 de 2 comprobantes no se pudieron agregar. Revisa los resultados y reintenta.");
+    expect(mocks.refetchReport).toHaveBeenCalledTimes(1);
   });
 
   it("preselecciona la línea del comprobante confirmado y muestra la fila después de refrescar", async () => {
@@ -767,6 +884,170 @@ describe("StructuredRenditionReportCard", () => {
     expect(screen.getByText("Informe generado")).toBeInTheDocument();
     expect(screen.getByText(/Documento generado: Rendicion\.xlsx/)).toBeInTheDocument();
     expect(screen.getByText(/Generado:/)).toBeInTheDocument();
+  });
+
+  it("muestra panel de devolución por línea con importes y pendiente de constancia", () => {
+    mocks.report = makeReport({
+      status: REQUEST_RENDITION_REPORT_STATUS.DRAFT,
+      allocation_coverage: [{
+        request_allocation_id: "allocation-1",
+        request_allocation_label: "Línea 1: POA-001 · Materiales",
+        planned_amount: 300,
+        row_total_amount: 125,
+        paid_base_amount: 300,
+        rendered_amount: 125,
+        expected_return_amount: 175,
+        returned_amount: 0,
+        excess_amount: 0,
+        row_count: 1,
+        has_rows: true,
+        line_return: null,
+        return_validation_status: LINE_RETURN_VALIDATION_STATUS.MISSING,
+      }],
+    });
+
+    render(<StructuredRenditionReportCard request={makeRequest()} />);
+
+    expect(screen.getByText("Devoluciones por línea POA")).toBeInTheDocument();
+    expect(screen.getByText("Falta registrar devolución")).toBeInTheDocument();
+    expect(screen.getByDisplayValue("175.00")).toBeInTheDocument();
+    expect(screen.getByText(/Registra la devolución exacta/i)).toBeInTheDocument();
+    expect(screen.getAllByLabelText(/Constancia de devolución/i).length).toBeGreaterThan(0);
+  });
+
+  it("valida que el monto devuelto coincida exactamente antes de guardar", async () => {
+    mocks.report = makeReport({
+      status: REQUEST_RENDITION_REPORT_STATUS.DRAFT,
+      allocation_coverage: [{
+        request_allocation_id: "allocation-1",
+        planned_amount: 300,
+        row_total_amount: 125,
+        paid_base_amount: 300,
+        rendered_amount: 125,
+        expected_return_amount: 175,
+        returned_amount: 0,
+        excess_amount: 0,
+        row_count: 1,
+        has_rows: true,
+        line_return: null,
+        return_validation_status: LINE_RETURN_VALIDATION_STATUS.MISMATCH,
+      }],
+    });
+
+    const user = userEvent.setup();
+    render(<StructuredRenditionReportCard request={makeRequest()} />);
+
+    const amountInput = screen.getByLabelText("Monto devuelto *");
+    await user.clear(amountInput);
+    await user.type(amountInput, "170");
+    await user.click(screen.getByRole("button", { name: "Guardar devolución de línea" }));
+
+    expect(mocks.upsertLineReturn).not.toHaveBeenCalled();
+    expect(mocks.toastError).toHaveBeenCalledWith("El monto devuelto debe coincidir exactamente con el saldo esperado de la línea POA.");
+  });
+
+  it("exige constancia y justificación antes de guardar la devolución", async () => {
+    mocks.report = makeReport({
+      status: REQUEST_RENDITION_REPORT_STATUS.DRAFT,
+      allocation_coverage: [{
+        request_allocation_id: "allocation-1",
+        planned_amount: 300,
+        row_total_amount: 125,
+        paid_base_amount: 300,
+        rendered_amount: 125,
+        expected_return_amount: 175,
+        returned_amount: 0,
+        excess_amount: 0,
+        row_count: 1,
+        has_rows: true,
+        line_return: null,
+        return_validation_status: LINE_RETURN_VALIDATION_STATUS.MISSING_PROOF,
+      }],
+    });
+
+    const user = userEvent.setup();
+    render(<StructuredRenditionReportCard request={makeRequest()} />);
+
+    await user.click(screen.getByRole("button", { name: "Guardar devolución de línea" }));
+    expect(mocks.toastError).toHaveBeenCalledWith("Selecciona o adjunta la constancia de devolución de esta línea POA.");
+    expect(mocks.upsertLineReturn).not.toHaveBeenCalled();
+  });
+
+  it("guarda y elimina una devolución por línea con constancia existente", async () => {
+    const proof = makeDocument({
+      id: "return-proof-1",
+      document_category: REQUEST_DOCUMENT_CATEGORY.RETURN_PROOF,
+      original_filename: "Constancia.pdf",
+      safe_filename: "constancia.pdf",
+      request_allocation_id: "allocation-1",
+    });
+    mocks.documents = [makeDocument(), proof];
+    const lineReturn = {
+      id: "line-return-1",
+      returned_amount: 175,
+      justification: "Saldo no utilizado en la línea POA.",
+      return_proof_document_id: proof.id,
+      return_proof_filename: "Constancia.pdf",
+      status: "DRAFT",
+      validated_at: null,
+    };
+    const report = makeReport({
+      status: REQUEST_RENDITION_REPORT_STATUS.DRAFT,
+      allocation_coverage: [{
+        request_allocation_id: "allocation-1",
+        planned_amount: 300,
+        row_total_amount: 125,
+        paid_base_amount: 300,
+        rendered_amount: 125,
+        expected_return_amount: 175,
+        returned_amount: 175,
+        excess_amount: 0,
+        row_count: 1,
+        has_rows: true,
+        line_return: lineReturn,
+        return_validation_status: LINE_RETURN_VALIDATION_STATUS.VALID,
+      }],
+    });
+    mocks.report = report;
+    mocks.upsertLineReturn.mockResolvedValue(report);
+    mocks.deleteLineReturn.mockResolvedValue({ deleted: true });
+
+    const user = userEvent.setup();
+    render(<StructuredRenditionReportCard request={makeRequest()} />);
+
+    await user.click(screen.getByRole("button", { name: "Guardar devolución de línea" }));
+    expect(mocks.upsertLineReturn).toHaveBeenCalledWith("request-1", "allocation-1", {
+      returned_amount: 175,
+      justification: "Saldo no utilizado en la línea POA.",
+      return_proof_document_id: "return-proof-1",
+    });
+
+    await user.click(screen.getByRole("button", { name: "Quitar devolución" }));
+    expect(mocks.deleteLineReturn).toHaveBeenCalledWith("request-1", "allocation-1");
+  });
+
+  it("bloquea generación cuando backend reporta pendiente de devolución por línea", async () => {
+    mocks.report = makeReport({ status: REQUEST_RENDITION_REPORT_STATUS.DRAFT });
+    mocks.validateReport.mockResolvedValue({
+      ready: false,
+      report: mocks.report,
+      totals: mocks.report.totals,
+      allocation_coverage: mocks.report.allocation_coverage,
+      blockers: [{
+        code: "LINE_RETURN_PROOF_REQUIRED",
+        message: "Adjunta una constancia RETURN_PROOF activa para esta línea POA.",
+        request_allocation_id: "allocation-1",
+        request_allocation_label: "Línea 1",
+      }],
+    });
+
+    const user = userEvent.setup();
+    render(<StructuredRenditionReportCard request={makeRequest()} />);
+
+    await user.click(screen.getByRole("button", { name: "Validar informe" }));
+
+    expect(await screen.findByText("Adjunta una constancia RETURN_PROOF activa para esta línea POA.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Generar informe" })).toBeDisabled();
   });
 
   it("notifica la preparación una sola vez aunque el padre use un callback inline", async () => {

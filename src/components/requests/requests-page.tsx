@@ -51,8 +51,9 @@ export function RequestsPage() {
   const limit = Number(searchParams.get("limit") ?? "20") || 20;
   const user = useAuthStore((state) => state.user);
   const roleCode = user?.role?.code;
-  const isReviewInbox = isRequestReviewRole(roleCode);
-  const isGiofReviewInbox = roleCode === ROLE_CODE.GIOF_GESTOR;
+  const requestScope = searchParams.get("scope") === "review" && isRequestReviewRole(roleCode) ? "review" : "mine";
+  const isReviewInbox = requestScope === "review";
+  const isGiofReviewInbox = isReviewInbox && roleCode === ROLE_CODE.GIOF_GESTOR;
   const activeQueueFilter = activeQueue ? getRequestReviewQueueFilter(activeQueue) : undefined;
   const isUnsupportedQueue = Boolean(activeQueueFilter?.unsupportedReason);
   const defaultReviewStatuses = isReviewInbox && !status && !activeQueue && !isExplicitAllStatuses
@@ -64,11 +65,13 @@ export function RequestsPage() {
     search: debouncedSearch || undefined,
     status: isUnsupportedQueue ? undefined : status,
     statuses: isUnsupportedQueue ? undefined : defaultReviewStatuses,
+    scope: requestScope,
   });
   const { requests: summaryRequests } = useRequests({
     page: 1,
     limit: 100,
     search: debouncedSearch || undefined,
+    scope: requestScope,
   });
   const sortedRequests = sortRequestsForList(requests, sort);
   const displayedRequests = isUnsupportedQueue ? [] : sortedRequests;
@@ -133,12 +136,10 @@ export function RequestsPage() {
             {isReviewInbox ? "Abre una solicitud enviada para observar, aprobar o rechazar." : "Consulta y crea solicitudes de pago."}
           </p>
         </div>
-        {!isReviewInbox && (
-          <Button onClick={() => router.push(ROUTES.REQUESTS_NEW)} data-testid="new-request-button">
-            <Plus className="h-4 w-4" />
-            Nueva solicitud
-          </Button>
-        )}
+        <Button onClick={() => router.push(ROUTES.REQUESTS_NEW)} data-testid="new-request-button">
+          <Plus className="h-4 w-4" />
+          Nueva solicitud
+        </Button>
       </div>
 
       <div className={cn("grid gap-3 sm:grid-cols-2", isGiofReviewInbox ? "lg:grid-cols-3" : "lg:grid-cols-5")} data-testid="requests-status-summary">
@@ -243,7 +244,7 @@ export function RequestsPage() {
               <Button size="sm" variant="outline" onClick={() => void refetch()}>Reintentar</Button>
             </div>
           ) : (
-            <RequestListTable requests={displayedRequests} isLoading={isUnsupportedQueue ? false : isLoading} roleCode={roleCode} showResponsible={isReviewInbox} />
+            <RequestListTable requests={displayedRequests} isLoading={isUnsupportedQueue ? false : isLoading} roleCode={roleCode} currentUserId={user?.id} showResponsible={isReviewInbox} />
           )}
         </CardContent>
       </Card>

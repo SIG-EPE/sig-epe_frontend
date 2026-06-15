@@ -69,7 +69,7 @@ describe("RequestListTable", () => {
   it("muestra acciones de fila solo dentro del menú de tres puntos", async () => {
     const user = userEvent.setup();
 
-    render(<RequestListTable requests={[makeRequest()]} isLoading={false} roleCode={ROLE_CODE.SOLICITANTE_EPE} />);
+    render(<RequestListTable requests={[makeRequest()]} isLoading={false} roleCode={ROLE_CODE.SOLICITANTE_EPE} currentUserId="user-1" />);
 
     expect(screen.getByRole("columnheader", { name: "Acciones" })).toBeInTheDocument();
     expect(screen.getByTitle("Más acciones de solicitud")).toBeInTheDocument();

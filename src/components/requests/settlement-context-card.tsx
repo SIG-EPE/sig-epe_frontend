@@ -6,6 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { ROUTES } from "@/lib/constants";
+import { getSafeDocumentUrl } from "@/lib/safe-url";
 import {
   formatRequestCurrency,
   formatRequestDate,
@@ -48,8 +49,7 @@ function getPaidAmount(context: SettlementContextResponse): number {
 }
 
 function getDocumentWebUrl(document: SettlementContextDocument): string | null {
-  const webUrl = document.drive_web_url?.trim();
-  return webUrl && webUrl.length > 0 ? webUrl : null;
+  return getSafeDocumentUrl(document.drive_web_url);
 }
 
 function renderSummaryItem(label: string, value: ReactNode, className = ""): ReactNode {

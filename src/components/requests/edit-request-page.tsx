@@ -14,11 +14,11 @@ export function EditRequestPage() {
   const params = useParams<{ id: string }>();
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { request, isLoading, error, refetch } = useRequest(params.id);
+  const { request, isInitialLoading, isRefreshing, error, refetch } = useRequest(params.id);
   const isSettlement = request?.request_type === REQUEST_TYPE.ADVANCE_SETTLEMENT;
   const settlementContext = useSettlementContext(params.id, Boolean(isSettlement));
 
-  if (isLoading) {
+  if (!request && isInitialLoading) {
     return <p className="rounded-md border p-6 text-sm text-muted-foreground">Cargando solicitud...</p>;
   }
 
@@ -79,6 +79,12 @@ export function EditRequestPage() {
         </p>
       </div>
 
+      {isRefreshing && (
+        <p className="rounded-md border bg-muted/40 px-3 py-2 text-sm text-muted-foreground" role="status">
+          Actualizando solicitud en segundo plano…
+        </p>
+      )}
+
       {openObservations.length > 0 && (
         <Alert className="border-amber-300 bg-amber-50 text-amber-950 dark:bg-amber-950/20">
           <AlertDescription className="space-y-2 text-amber-950 dark:text-amber-100">
@@ -101,7 +107,7 @@ export function EditRequestPage() {
         settlementContextLoading={settlementContext.isLoading}
         onRetrySettlementContext={settlementContext.refetch}
         onRequestChanged={async () => {
-          await Promise.all([refetch(), settlementContext.refetch()]);
+          await Promise.all([refetch({ background: true }), settlementContext.refetch({ background: true })]);
         }}
       />
     </div>

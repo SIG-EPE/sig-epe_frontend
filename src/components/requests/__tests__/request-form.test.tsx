@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useForm } from "react-hook-form";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -42,6 +42,7 @@ vi.mock("@/hooks/use-requests", () => ({
   useBudgetPreview: () => ({ canPreview: Boolean(mocks.budgetPreview), data: mocks.budgetPreview, error: null, isLoading: false, refetch: vi.fn() }),
   useCreateRequest: () => ({ createRequest: mocks.createRequest, isLoading: false }),
   useRequestDocuments: () => ({ documents: mocks.requestDocuments, error: null, isLoading: false, refetch: mocks.refetchDocuments }),
+  useRequestReceiptReviews: () => ({ receipts: [], error: null, isLoading: false, isRefreshing: false, refetch: vi.fn(), upsertReceipt: vi.fn() }),
   useSubmitRequest: () => ({ submitRequest: mocks.submitRequest, isLoading: false }),
   useUpdateRequest: () => ({ updateRequest: mocks.updateRequest, isLoading: false }),
 }));
@@ -55,18 +56,26 @@ vi.mock("@/components/requests/budget-preview-card", () => ({
 }));
 
 vi.mock("@/components/requests/request-documents-card", () => ({
-  RequestDocumentsCard: (props: { documents?: RequestDocument[]; structuredReportLocked?: boolean }) => (
-    <div data-testid="request-documents-card" data-documents-count={props.documents?.length ?? 0} data-structured-report-locked={props.structuredReportLocked ? "true" : "false"} />
+  RequestDocumentsCard: (props: { documents?: RequestDocument[]; structuredReportLocked?: boolean; readOnly?: boolean; hideOptionalUploader?: boolean; onDocumentsChanged?: () => Promise<void> | void }) => (
+    <div
+      data-testid="request-documents-card"
+      data-documents-count={props.documents?.length ?? 0}
+      data-structured-report-locked={props.structuredReportLocked ? "true" : "false"}
+      data-read-only={props.readOnly ? "true" : "false"}
+      data-hide-optional-uploader={props.hideOptionalUploader ? "true" : "false"}
+    >
+      {props.onDocumentsChanged ? <button type="button" onClick={() => void props.onDocumentsChanged?.()}>Simular cambio de documentos</button> : null}
+    </div>
   ),
 }));
 
 vi.mock("@/components/requests/structured-rendition-report-card", () => ({
-  StructuredRenditionReportCard: (props: { onReadinessChange?: (ready: boolean, messages: string[]) => void; onLockChange?: (locked: boolean) => void }) => {
+  StructuredRenditionReportCard: (props: { refreshSignal?: number; onReadinessChange?: (ready: boolean, messages: string[]) => void; onLockChange?: (locked: boolean) => void }) => {
     useEffect(() => {
       props.onReadinessChange?.(mocks.structuredReportReady, mocks.structuredReportReady ? [] : ["Genera el informe antes de continuar a revisión."]);
       props.onLockChange?.(mocks.structuredReportReady);
     }, []);
-    return <div data-testid="structured-rendition-report-card">Informe de rendición estructurado</div>;
+    return <div data-testid="structured-rendition-report-card" data-refresh-signal={props.refreshSignal ?? 0}>Informe de rendición estructurado</div>;
   },
 }));
 
@@ -436,16 +445,14 @@ describe("RequestForm payload helpers", () => {
     expect(screen.getAllByTestId("request-allocation-block")).toHaveLength(1);
   });
 
-  it("limita el concepto a 120 caracteres y muestra contador visible", async () => {
-    const user = userEvent.setup();
-
+  it("limita el concepto a 120 caracteres y muestra contador visible", () => {
     render(<RequestForm />);
     const conceptInput = screen.getByTestId("request-concept-input");
 
     expect(conceptInput).toHaveAttribute("maxLength", "120");
     expect(screen.getByTestId("request-concept-counter")).toHaveTextContent("0/120");
 
-    await user.type(conceptInput, "Justificación operativa");
+    fireEvent.change(conceptInput, { target: { value: "Justificación operativa" } });
 
     expect(screen.getByTestId("request-concept-counter")).toHaveTextContent("23/120");
   });
@@ -810,6 +817,8 @@ describe("RequestForm payload helpers", () => {
     expect(screen.getByText("POA-001 — Materiales operativos")).toBeInTheDocument();
     expect(screen.getByText("Compra de materiales para actividad institucional")).toBeInTheDocument();
     expect(screen.getByTestId("request-documents-card")).toHaveAttribute("data-documents-count", "1");
+    expect(screen.getByTestId("request-documents-card")).toHaveAttribute("data-read-only", "true");
+    expect(screen.getByTestId("request-documents-card")).toHaveAttribute("data-hide-optional-uploader", "true");
     expect(screen.getByRole("button", { name: "Enviar a revisión" })).toBeEnabled();
     expect(screen.queryByRole("button", { name: "Reenviar solicitud" })).not.toBeInTheDocument();
   });
@@ -984,6 +993,18 @@ describe("RequestForm payload helpers", () => {
     expect(screen.getByText("Resumen del anticipo original")).toBeInTheDocument();
     expect(screen.getByTestId("request-documents-card")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Continuar a revisión" })).toBeEnabled();
+  });
+
+  it("emite una señal de refresco del informe estructurado cuando cambian documentos REXAN", async () => {
+    const user = userEvent.setup();
+    render(<RequestForm activeStep={REQUEST_EDIT_STEP.DOCUMENTS} initialRequest={makePaymentRequest()} mode="edit" settlementContext={makeSettlementContext()} />);
+
+    expect(screen.getByTestId("structured-rendition-report-card")).toHaveAttribute("data-refresh-signal", "0");
+
+    await user.click(screen.getByRole("button", { name: "Simular cambio de documentos" }));
+
+    await waitFor(() => expect(screen.getByTestId("structured-rendition-report-card")).toHaveAttribute("data-refresh-signal", "1"));
+    expect(mocks.refetchDocuments).toHaveBeenCalled();
   });
 
   it("bloquea continuar a revisión REXAN hasta que el informe esté generado", async () => {

@@ -882,6 +882,7 @@ describe("requests helpers", () => {
 
     expect(canManageRequestDocuments(ROLE_CODE.SOLICITANTE_EPE, REQUEST_STATUS.DRAFT, draft, "user-1")).toBe(true);
     expect(canManageRequestDocuments(ROLE_CODE.SOLICITANTE_EPE, REQUEST_STATUS.DRAFT, draft, "other-user")).toBe(false);
+    expect(canManageRequestDocuments(ROLE_CODE.AUDITOR_DIRECCION, REQUEST_STATUS.DRAFT, draft, "user-1")).toBe(true);
     expect(canManageRequestDocuments(ROLE_CODE.GIOF_GESTOR, REQUEST_STATUS.OBSERVED, observed, "giof-1")).toBe(true);
     expect(canManageRequestDocuments(ROLE_CODE.GIOF_GESTOR, REQUEST_STATUS.OBSERVED, observedRexan, "giof-1")).toBe(false);
     expect(canManageRequestDocuments(ROLE_CODE.SOLICITANTE_EPE, REQUEST_STATUS.OBSERVED, observedRexan, "user-1")).toBe(true);
@@ -1153,15 +1154,17 @@ describe("requests helpers", () => {
     expect(canReviewRequest(ROLE_CODE.GIOF_GESTOR, REQUEST_STATUS.OBSERVED)).toBe(false);
   });
 
-  it("habilita edición de borrador solo para solicitante", () => {
+  it("habilita edición de borrador para cualquier rol autenticado", () => {
     expect(canEditDraftRequest(ROLE_CODE.SOLICITANTE_EPE, REQUEST_STATUS.DRAFT)).toBe(true);
-    expect(canEditDraftRequest(ROLE_CODE.GIOF_GESTOR, REQUEST_STATUS.DRAFT)).toBe(false);
+    expect(canEditDraftRequest(ROLE_CODE.GIOF_GESTOR, REQUEST_STATUS.DRAFT)).toBe(true);
+    expect(canEditDraftRequest(ROLE_CODE.AUDITOR_DIRECCION, REQUEST_STATUS.DRAFT)).toBe(true);
     expect(canEditDraftRequest(ROLE_CODE.SOLICITANTE_EPE, REQUEST_STATUS.SUBMITTED)).toBe(false);
   });
 
-  it("habilita corrección solo para solicitante en solicitudes observadas", () => {
+  it("habilita corrección para cualquier rol autenticado en solicitudes observadas", () => {
     expect(canCorrectObservedRequest(ROLE_CODE.SOLICITANTE_EPE, REQUEST_STATUS.OBSERVED)).toBe(true);
-    expect(canCorrectObservedRequest(ROLE_CODE.GIOF_GESTOR, REQUEST_STATUS.OBSERVED)).toBe(false);
+    expect(canCorrectObservedRequest(ROLE_CODE.GIOF_GESTOR, REQUEST_STATUS.OBSERVED)).toBe(true);
+    expect(canCorrectObservedRequest(ROLE_CODE.AUDITOR_DIRECCION, REQUEST_STATUS.OBSERVED)).toBe(true);
     expect(canCorrectObservedRequest(ROLE_CODE.SOLICITANTE_EPE, REQUEST_STATUS.SUBMITTED)).toBe(false);
   });
 
@@ -1169,14 +1172,16 @@ describe("requests helpers", () => {
     expect(canEditRequest(ROLE_CODE.SOLICITANTE_EPE, REQUEST_STATUS.DRAFT)).toBe(true);
     expect(canEditRequest(ROLE_CODE.SOLICITANTE_EPE, REQUEST_STATUS.OBSERVED)).toBe(true);
     expect(canEditRequest(ROLE_CODE.SOLICITANTE_EPE, REQUEST_STATUS.SUBMITTED)).toBe(false);
-    expect(canEditRequest(ROLE_CODE.GIOF_GESTOR, REQUEST_STATUS.OBSERVED)).toBe(false);
+    expect(canEditRequest(ROLE_CODE.GIOF_GESTOR, REQUEST_STATUS.OBSERVED)).toBe(true);
   });
 
   it("expone acciones de lista según rol y estado", () => {
     expect(getRequestListActions(ROLE_CODE.GIOF_GESTOR, REQUEST_STATUS.SUBMITTED, "req-1").map((action) => action.label)).toEqual(["Gestionar"]);
     expect(getRequestListActions(ROLE_CODE.ADMIN_SISTEMA, REQUEST_STATUS.APPROVED, "req-1").map((action) => action.label)).toEqual(["Ver detalle"]);
     expect(getRequestListActions(ROLE_CODE.ADMIN_SISTEMA, REQUEST_STATUS.REJECTED, "req-1").map((action) => action.label)).toEqual(["Ver detalle"]);
-    expect(getRequestListActions(ROLE_CODE.SOLICITANTE_EPE, REQUEST_STATUS.DRAFT, "req-1").map((action) => action.label)).toEqual(["Continuar edición"]);
-    expect(getRequestListActions(ROLE_CODE.SOLICITANTE_EPE, REQUEST_STATUS.OBSERVED, "req-1").map((action) => action.label)).toEqual(["Corregir", "Ver"]);
+    expect(getRequestListActions(ROLE_CODE.SOLICITANTE_EPE, REQUEST_STATUS.DRAFT, "req-1", "user-1", "user-1").map((action) => action.label)).toEqual(["Continuar edición"]);
+    expect(getRequestListActions(ROLE_CODE.AUDITOR_DIRECCION, REQUEST_STATUS.DRAFT, "req-1", "auditor-1", "auditor-1").map((action) => action.label)).toEqual(["Continuar edición"]);
+    expect(getRequestListActions(ROLE_CODE.GIOF_GESTOR, REQUEST_STATUS.DRAFT, "req-1", "other", "giof-1").map((action) => action.label)).toEqual(["Ver detalle"]);
+    expect(getRequestListActions(ROLE_CODE.SOLICITANTE_EPE, REQUEST_STATUS.OBSERVED, "req-1", "user-1", "user-1").map((action) => action.label)).toEqual(["Corregir", "Ver"]);
   });
 });

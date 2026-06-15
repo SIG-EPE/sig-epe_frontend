@@ -9,8 +9,11 @@ import {
   BENEFICIARY_DOCUMENT_TYPE,
   REQUEST_STATUS,
   REQUEST_DOCUMENT_CATEGORY,
+  REQUEST_DOCUMENT_SCOPE_TYPE,
   REQUEST_DOCUMENT_STORAGE_PROVIDER,
   REQUEST_DOCUMENT_UPLOAD_STATUS,
+  REQUEST_DOCUMENT_UPLOAD_QUEUE_ERROR_KIND,
+  REQUEST_DOCUMENT_UPLOAD_QUEUE_STATUS,
   REQUEST_TYPE,
   REXAN_OUTCOME,
   ADVANCE_SETTLEMENT_CTA_STATE,
@@ -41,6 +44,7 @@ import {
   type ConditionalDocumentChecklistNote,
   type BulkPaymentItemResult,
   type BulkPaymentRexanResult,
+  type RequestDocumentUploadQueueItem,
   type RequestStatus,
   type RequestType,
   type RexanOutcome,
@@ -322,6 +326,8 @@ export const PAYMENT_PROOF_ACCEPTED_FORMATS_LABEL = "PDF, JPG o PNG";
 const REQUEST_DOCUMENT_EXCEL_EXTENSIONS = [".xls", ".xlsx"] as const;
 
 export const REQUEST_DOCUMENT_MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024;
+export const REQUEST_DOCUMENT_MAX_BATCH_FILES = 20;
+export const REQUEST_DOCUMENT_UPLOAD_QUEUE_DELAY_MS = 750;
 
 export const REQUEST_DOCUMENT_ACCEPT = [
   REQUEST_DOCUMENT_ALLOWED_MIME_TYPES.PDF,
@@ -821,6 +827,94 @@ export function validateRequestDocumentFile(file: File | null, category?: Reques
     return "Formato no permitido. Adjunta PDF, JPG, PNG, XLS o XLSX según la categoría.";
   }
   return null;
+}
+
+export interface RequestDocumentBatchValidationOptions {
+  category: RequestDocumentCategory | "";
+  requestAllocationId?: string;
+  requiresAllocation: boolean;
+  existingQueueCount?: number;
+}
+
+export interface RequestDocumentBatchValidationResult {
+  accepted: RequestDocumentUploadQueueItem[];
+  rejected: RequestDocumentUploadQueueItem[];
+}
+
+export function validateRequestDocumentBatch(files: File[], options: RequestDocumentBatchValidationOptions): RequestDocumentBatchValidationResult {
+  if (!options.category) {
+    return {
+      accepted: [],
+      rejected: files.map((file, index) => buildRejectedQueueItem(file, index, REQUEST_DOCUMENT_CATEGORY.OTHER, "Selecciona una categoría para adjuntar documentos.")),
+    };
+  }
+
+  const category = options.category;
+  const existingCount = options.existingQueueCount ?? 0;
+  const availableSlots = Math.max(REQUEST_DOCUMENT_MAX_BATCH_FILES - existingCount, 0);
+  const accepted: RequestDocumentUploadQueueItem[] = [];
+  const rejected: RequestDocumentUploadQueueItem[] = [];
+
+  files.forEach((file, index) => {
+    const validationError = validateRequestDocumentFile(file, category);
+    const allocationError = options.requiresAllocation && !options.requestAllocationId
+      ? "Selecciona la línea POA a la que corresponden los comprobantes."
+      : null;
+    const capacityError = index >= availableSlots
+      ? `Solo puedes cargar hasta ${REQUEST_DOCUMENT_MAX_BATCH_FILES} archivos por tanda.`
+      : null;
+    const errorMessage = validationError ?? allocationError ?? capacityError;
+    const baseItem = {
+      id: `${Date.now()}-${index}-${file.name}`,
+      file,
+      document_category: category,
+      scope_type: options.requiresAllocation ? REQUEST_DOCUMENT_SCOPE_TYPE.ALLOCATION : undefined,
+      request_allocation_id: options.requiresAllocation ? options.requestAllocationId : undefined,
+    };
+
+    if (errorMessage) {
+      rejected.push({
+        ...baseItem,
+        status: REQUEST_DOCUMENT_UPLOAD_QUEUE_STATUS.FAILED,
+        error_kind: REQUEST_DOCUMENT_UPLOAD_QUEUE_ERROR_KIND.VALIDATION,
+        error_message: errorMessage,
+        retryable: false,
+      });
+      return;
+    }
+
+    accepted.push({
+      ...baseItem,
+      status: REQUEST_DOCUMENT_UPLOAD_QUEUE_STATUS.PENDING,
+      retryable: true,
+    });
+  });
+
+  return { accepted, rejected };
+}
+
+function buildRejectedQueueItem(file: File, index: number, category: RequestDocumentCategory, message: string): RequestDocumentUploadQueueItem {
+  return {
+    id: `${Date.now()}-${index}-${file.name}`,
+    file,
+    document_category: category,
+    status: REQUEST_DOCUMENT_UPLOAD_QUEUE_STATUS.FAILED,
+    error_kind: REQUEST_DOCUMENT_UPLOAD_QUEUE_ERROR_KIND.VALIDATION,
+    error_message: message,
+    retryable: false,
+  };
+}
+
+export function getRequestDocumentUploadErrorCode(error: unknown): string | null {
+  if (!(error instanceof ApiRequestError)) return null;
+  const body = error.body as typeof error.body & { code?: unknown };
+  return typeof body.code === "string" ? body.code : null;
+}
+
+export function isRetryableRequestDocumentUploadError(error: unknown): boolean {
+  const code = getRequestDocumentUploadErrorCode(error);
+  if (code === "DRIVE_RATE_LIMITED" || code === "DRIVE_STORAGE_FAILED") return true;
+  return error instanceof ApiRequestError ? error.status === 429 || error.status >= 500 : false;
 }
 
 export function validatePaymentProofFile(file: File | null): string | null {
@@ -1579,11 +1673,11 @@ export function canReviewRequest(roleCode: string | null | undefined, status: Re
 }
 
 export function canCorrectObservedRequest(roleCode: string | null | undefined, status: RequestStatus): boolean {
-  return isRequesterRole(roleCode) && status === REQUEST_STATUS.OBSERVED;
+  return Boolean(roleCode) && status === REQUEST_STATUS.OBSERVED;
 }
 
 export function canEditDraftRequest(roleCode: string | null | undefined, status: RequestStatus): boolean {
-  return isRequesterRole(roleCode) && status === REQUEST_STATUS.DRAFT;
+  return Boolean(roleCode) && status === REQUEST_STATUS.DRAFT;
 }
 
 export function canEditRequest(roleCode: string | null | undefined, status: RequestStatus): boolean {
@@ -1598,28 +1692,36 @@ export function canManageRequestDocuments(
 ): boolean {
   const isEditable = status === REQUEST_STATUS.DRAFT || status === REQUEST_STATUS.OBSERVED;
   if (!isEditable) return false;
+  if (Boolean(currentUserId) && request.requester_id === currentUserId) return true;
   if (roleCode === ROLE_CODE.ADMIN_SISTEMA) return true;
   if (roleCode === ROLE_CODE.GIOF_GESTOR) {
     return status === REQUEST_STATUS.OBSERVED && request.request_type !== REQUEST_TYPE.ADVANCE_SETTLEMENT;
   }
-  return roleCode === ROLE_CODE.SOLICITANTE_EPE && Boolean(currentUserId) && request.requester_id === currentUserId;
+  return false;
 }
 
-export function getRequestListActions(roleCode: string | null | undefined, status: RequestStatus, requestId: string): RequestListAction[] {
+export function getRequestListActions(
+  roleCode: string | null | undefined,
+  status: RequestStatus,
+  requestId: string,
+  requesterId?: string | null,
+  currentUserId?: string | null,
+): RequestListAction[] {
   const detailHref = `${ROUTES.REQUESTS}/${requestId}` as Route;
   const editHref = `${detailHref}/edit` as Route;
+  const isOwner = Boolean(currentUserId && requesterId && currentUserId === requesterId);
 
   if (canReviewRequest(roleCode, status)) {
     return [{ kind: REQUEST_LIST_ACTION_KIND.DETAIL, label: "Gestionar", href: detailHref, testId: "request-detail-link" }];
   }
 
-  if (canEditDraftRequest(roleCode, status)) {
+  if (isOwner && canEditDraftRequest(roleCode, status)) {
     return [
       { kind: REQUEST_LIST_ACTION_KIND.EDIT, label: "Continuar edición", href: editHref, testId: "request-edit-link" },
     ];
   }
 
-  if (canCorrectObservedRequest(roleCode, status)) {
+  if (isOwner && canCorrectObservedRequest(roleCode, status)) {
     return [
       { kind: REQUEST_LIST_ACTION_KIND.EDIT, label: "Corregir", href: editHref, testId: "request-edit-link" },
       { kind: REQUEST_LIST_ACTION_KIND.DETAIL, label: "Ver", href: detailHref, testId: "request-detail-link" },
