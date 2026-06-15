@@ -1,5 +1,5 @@
 // -------------------------------------------------------
-// Budget page — Dashboard de saldos presupuestales
+// Budget page — Dashboard de ejecución presupuestal
 // -------------------------------------------------------
 
 import { BalanceDashboard } from "@/components/budget/balance";
@@ -11,11 +11,11 @@ export default function BudgetPage() {
       <div>
         <h1 className="text-2xl font-bold tracking-tight">Presupuesto</h1>
         <p className="text-muted-foreground">
-          Saldos disponibles en tiempo real por partida presupuestal
+          Indicadores, evolución y cortes de ejecución presupuestal
         </p>
       </div>
 
-      {/* Dashboard de balance */}
+      {/* Dashboard presupuestal */}
       <BalanceDashboard />
     </div>
   );

@@ -16,8 +16,12 @@ vi.mock("@/stores/auth-store", () => ({
 }));
 
 // Mock next/navigation
+let mockPathname = "/dashboard";
+let mockSearchParams = new URLSearchParams();
+
 vi.mock("next/navigation", () => ({
-  usePathname: () => "/dashboard",
+  usePathname: () => mockPathname,
+  useSearchParams: () => mockSearchParams,
   useRouter: () => ({ push: vi.fn() }),
 }));
 
@@ -172,6 +176,8 @@ describe("AppSidebar", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockSidebarState = "expanded";
+    mockPathname = "/dashboard";
+    mockSearchParams = new URLSearchParams();
   });
 
   it("✅ Muestra skeleton cuando user es null", () => {
@@ -196,13 +202,66 @@ describe("AppSidebar", () => {
 
     expect(screen.getByText("Usuarios")).toBeInTheDocument();
     expect(screen.getByText("Bandeja de Revisión")).toBeInTheDocument();
+    expect(screen.getByText("Mis Solicitudes")).toBeInTheDocument();
     expect(screen.getByText("Bandeja de Rendiciones")).toBeInTheDocument();
     expect(screen.getByText("Log de auditoría")).toBeInTheDocument();
     expect(screen.queryByText("Configuración")).not.toBeInTheDocument();
 
-    // No debe mostrar items de otros roles
-    expect(screen.queryByText("Mis Solicitudes")).not.toBeInTheDocument();
-    expect(screen.queryByText("Dashboard")).not.toBeInTheDocument();
+    expect(screen.getByText("Dashboard GIOF")).toBeInTheDocument();
+    expect(screen.getByText("Presupuesto")).toBeInTheDocument();
+  });
+
+  it("usa scopes distintos para Mis Solicitudes y Bandeja de Revisión", () => {
+    mockUseAuthStore.mockImplementation(
+      (selector: (state: { user: AuthUser }) => unknown) =>
+        selector({ user: adminUser })
+    );
+
+    renderSidebar();
+
+    expect(screen.getByRole("link", { name: /mis solicitudes/i })).toHaveAttribute("href", "/requests?scope=mine");
+    expect(screen.getByRole("link", { name: /bandeja de revisión/i })).toHaveAttribute("href", "/requests?scope=review");
+  });
+
+  it("activa Bandeja de Revisión, no Mis Solicitudes, cuando scope=review", () => {
+    mockPathname = "/requests";
+    mockSearchParams = new URLSearchParams("scope=review");
+    mockUseAuthStore.mockImplementation(
+      (selector: (state: { user: AuthUser }) => unknown) =>
+        selector({ user: adminUser })
+    );
+
+    renderSidebar();
+
+    expect(screen.getByRole("link", { name: /bandeja de revisión/i }).closest("li")).toHaveAttribute("data-active", "true");
+    expect(screen.getByRole("link", { name: /mis solicitudes/i }).closest("li")).toHaveAttribute("data-active", "false");
+  });
+
+  it("activa Mis Solicitudes, no Bandeja de Revisión, cuando scope=mine", () => {
+    mockPathname = "/requests";
+    mockSearchParams = new URLSearchParams("scope=mine");
+    mockUseAuthStore.mockImplementation(
+      (selector: (state: { user: AuthUser }) => unknown) =>
+        selector({ user: adminUser })
+    );
+
+    renderSidebar();
+
+    expect(screen.getByRole("link", { name: /mis solicitudes/i }).closest("li")).toHaveAttribute("data-active", "true");
+    expect(screen.getByRole("link", { name: /bandeja de revisión/i }).closest("li")).toHaveAttribute("data-active", "false");
+  });
+
+  it("mantiene Mis Solicitudes activa como scope por defecto sin query", () => {
+    mockPathname = "/requests";
+    mockUseAuthStore.mockImplementation(
+      (selector: (state: { user: AuthUser }) => unknown) =>
+        selector({ user: adminUser })
+    );
+
+    renderSidebar();
+
+    expect(screen.getByRole("link", { name: /mis solicitudes/i }).closest("li")).toHaveAttribute("data-active", "true");
+    expect(screen.getByRole("link", { name: /bandeja de revisión/i }).closest("li")).toHaveAttribute("data-active", "false");
   });
 
   it("✅ Muestra items correctos para SOLICITANTE_EPE", () => {
@@ -214,7 +273,7 @@ describe("AppSidebar", () => {
     renderSidebar();
 
     expect(screen.getByText("Mis Solicitudes")).toBeInTheDocument();
-    expect(screen.getByText("Nueva Solicitud")).toBeInTheDocument();
+    expect(screen.queryByText("Nueva Solicitud")).not.toBeInTheDocument();
 
     // No debe mostrar items de admin
     expect(screen.queryByText("Usuarios")).not.toBeInTheDocument();
@@ -229,17 +288,21 @@ describe("AppSidebar", () => {
     renderSidebar();
 
     expect(screen.getByText("Bandeja de Revisión")).toBeInTheDocument();
+    expect(screen.getByText("Mis Solicitudes")).toBeInTheDocument();
     expect(screen.getByText("Cola de Pagos")).toBeInTheDocument();
     expect(screen.queryByText("Resumen de Saldos")).not.toBeInTheDocument();
+    expect(screen.getByText("Dashboard GIOF")).toBeInTheDocument();
+    expect(screen.getByText("Presupuesto")).toBeInTheDocument();
     expect(screen.getByText("Años Fiscales")).toBeInTheDocument();
     expect(screen.getByText("Plan Operativo (POA)")).toBeInTheDocument();
     expect(screen.getByText("Aportes de Socios")).toBeInTheDocument();
+    expect(screen.getByText("Reportes")).toBeInTheDocument();
     expect(screen.getByText("Catálogos")).toBeInTheDocument();
     expect(screen.getByText("Usuarios")).toBeInTheDocument();
     expect(screen.queryByText("Bandeja de Gestión")).not.toBeInTheDocument();
   });
 
-  it("✅ Oculta navegación no MVP para AUDITOR_DIRECCION", () => {
+  it("✅ Muestra dashboards y Reportes para AUDITOR_DIRECCION", () => {
     mockUseAuthStore.mockImplementation(
       (selector: (state: { user: AuthUser }) => unknown) =>
         selector({ user: auditorUser })
@@ -247,8 +310,10 @@ describe("AppSidebar", () => {
 
     renderSidebar();
 
-    expect(screen.queryByText("Dashboard")).not.toBeInTheDocument();
-    expect(screen.queryByText("Reportes")).not.toBeInTheDocument();
+    expect(screen.getByText("Dashboard GIOF")).toBeInTheDocument();
+    expect(screen.getByText("Presupuesto")).toBeInTheDocument();
+    expect(screen.getByText("Reportes")).toBeInTheDocument();
+    expect(screen.getByText("Mis Solicitudes")).toBeInTheDocument();
   });
 
   it("✅ Botón chevron llama toggleSidebar al hacer click", async () => {

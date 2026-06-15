@@ -3,7 +3,7 @@ import type { NextRequest } from "next/server";
 import { jwtVerify } from "jose";
 import type { TokenPayload } from "@/types/auth";
 import { getRoleHomePath } from "@/lib/auth/role-redirect";
-import { canAccessRoute } from "@/lib/auth/route-access";
+import { canAccessRoute, getRouteAccessRule } from "@/lib/auth/route-access";
 
 // -------------------------------------------------------
 // Next.js Middleware — Edge Runtime JWT verification
@@ -25,6 +25,10 @@ async function verifyToken(token: string): Promise<TokenPayload | null> {
   } catch {
     return null;
   }
+}
+
+function canUseSessionHintForPath(pathname: string): boolean {
+  return pathname === "/" || Boolean(getRouteAccessRule(pathname));
 }
 
 export async function middleware(request: NextRequest) {
@@ -61,7 +65,7 @@ export async function middleware(request: NextRequest) {
   // or expired, a non-sensitive session hint may admit only the protected shell;
   // AuthGate/RoleGuard and backend APIs make the final auth decision.
   if (!token) {
-    if (hasSessionContinuity) {
+    if (hasSessionContinuity && canUseSessionHintForPath(pathname)) {
       return NextResponse.next();
     }
 
@@ -71,7 +75,7 @@ export async function middleware(request: NextRequest) {
   const tokenPayload = await verifyToken(token);
 
   if (!tokenPayload) {
-    if (hasSessionContinuity) {
+    if (hasSessionContinuity && canUseSessionHintForPath(pathname)) {
       return NextResponse.next();
     }
 

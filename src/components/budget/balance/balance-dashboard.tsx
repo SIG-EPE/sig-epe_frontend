@@ -12,6 +12,7 @@ import { useBudgetBalanceStore } from "@/stores/budget-balance-store";
 import { useBalance, useFiscalYears } from "@/hooks/use-budget";
 import { BalanceFilters } from "./balance-filters";
 import { BalanceCards } from "./balance-cards";
+import { BudgetExecutionDashboard } from "@/components/budget/dashboard/budget-execution-dashboard";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -144,6 +145,7 @@ export function BalanceDashboard() {
     <div className="space-y-6">
       <BalanceFilters />
       <BalanceCards data={balanceData} />
+      <BudgetExecutionDashboard />
     </div>
   );
 }

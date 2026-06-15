@@ -35,6 +35,13 @@ describe("middleware session hint continuity", () => {
     expect(mockJwtVerify).not.toHaveBeenCalled();
   });
 
+  it("does not admit undeclared app routes with only the session hint", async () => {
+    const response = await middleware(requestFor("/unknown-feature", { session_hint: "present" }));
+
+    expect(response.headers.get("location")).toBe("http://localhost:3000/login");
+    expect(mockJwtVerify).not.toHaveBeenCalled();
+  });
+
   it("allows protected shell when access is expired but session hint exists", async () => {
     mockJwtVerify.mockRejectedValue(new Error("JWTExpired"));
 
@@ -44,6 +51,17 @@ describe("middleware session hint continuity", () => {
 
     expect(response.status).toBe(200);
     expect(response.headers.get("location")).toBeNull();
+    expect(mockJwtVerify).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not admit undeclared app routes with expired access and session hint", async () => {
+    mockJwtVerify.mockRejectedValue(new Error("JWTExpired"));
+
+    const response = await middleware(
+      requestFor("/unknown-feature", { access_token: "expired-token", session_hint: "present" }),
+    );
+
+    expect(response.headers.get("location")).toBe("http://localhost:3000/login");
     expect(mockJwtVerify).toHaveBeenCalledTimes(1);
   });
 

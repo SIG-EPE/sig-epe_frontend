@@ -1,12 +1,17 @@
 import { ROLE_CODE, ROUTES, type RoleCode } from "@/lib/constants";
 
 const REQUEST_REVIEW_ROLES = [ROLE_CODE.GIOF_GESTOR, ROLE_CODE.ADMIN_SISTEMA] as const;
-const REQUEST_DETAIL_ROLES = [
+const ALL_REQUEST_ROLES = [
   ROLE_CODE.SOLICITANTE_EPE,
   ROLE_CODE.GIOF_GESTOR,
+  ROLE_CODE.AUDITOR_DIRECCION,
   ROLE_CODE.ADMIN_SISTEMA,
 ] as const;
+const ALL_AUTHENTICATED_ROLES = ALL_REQUEST_ROLES;
 const GIOF_ONLY_ROLES = [ROLE_CODE.GIOF_GESTOR] as const;
+const REQUEST_REVIEW_AND_ADMIN_ROLES = [ROLE_CODE.GIOF_GESTOR, ROLE_CODE.ADMIN_SISTEMA] as const;
+const REPORT_ROLES = [ROLE_CODE.GIOF_GESTOR, ROLE_CODE.AUDITOR_DIRECCION, ROLE_CODE.ADMIN_SISTEMA] as const;
+const DASHBOARD_ROLES = [ROLE_CODE.GIOF_GESTOR, ROLE_CODE.AUDITOR_DIRECCION, ROLE_CODE.ADMIN_SISTEMA] as const;
 const ADMIN_ONLY_ROLES = [ROLE_CODE.ADMIN_SISTEMA] as const;
 const ADMIN_USERS_ROLES = [ROLE_CODE.ADMIN_SISTEMA, ROLE_CODE.GIOF_GESTOR] as const;
 
@@ -23,18 +28,27 @@ export interface RouteAccessDecision {
 }
 
 export const ROUTE_ACCESS_RULES = [
+  { path: ROUTES.DASHBOARD_GIOF, allowedRoles: DASHBOARD_ROLES, match: "prefix" },
+  { path: ROUTES.DASHBOARD, allowedRoles: ALL_AUTHENTICATED_ROLES, match: "exact" },
+  { path: ROUTES.PROFILE, allowedRoles: ALL_AUTHENTICATED_ROLES, match: "prefix" },
+  { path: ROUTES.MANAGEMENT, allowedRoles: ALL_AUTHENTICATED_ROLES, match: "prefix" },
   { path: ROUTES.ADMIN_CONFIG, allowedRoles: ADMIN_ONLY_ROLES, match: "prefix" },
   { path: ROUTES.ADMIN_AUDIT_LOGS, allowedRoles: ADMIN_ONLY_ROLES, match: "prefix" },
   { path: ROUTES.ADMIN_USERS, allowedRoles: ADMIN_USERS_ROLES, match: "prefix" },
   { path: "/admin", allowedRoles: ADMIN_ONLY_ROLES, match: "prefix" },
-  { path: ROUTES.REQUESTS_NEW, allowedRoles: [ROLE_CODE.SOLICITANTE_EPE], match: "exact" },
-  { path: `${ROUTES.REQUESTS}/:id/edit`, allowedRoles: [ROLE_CODE.SOLICITANTE_EPE], match: "request-edit" },
-  { path: `${ROUTES.REQUESTS}/`, allowedRoles: REQUEST_DETAIL_ROLES, match: "prefix" },
-  { path: ROUTES.REQUESTS, allowedRoles: REQUEST_DETAIL_ROLES, match: "exact" },
+  { path: ROUTES.REQUESTS_NEW, allowedRoles: ALL_REQUEST_ROLES, match: "exact" },
+  { path: `${ROUTES.REQUESTS}/:id/edit`, allowedRoles: ALL_REQUEST_ROLES, match: "request-edit" },
+  { path: `${ROUTES.REQUESTS}/`, allowedRoles: ALL_REQUEST_ROLES, match: "prefix" },
+  { path: ROUTES.REQUESTS, allowedRoles: ALL_REQUEST_ROLES, match: "exact" },
   { path: ROUTES.PAYMENTS, allowedRoles: GIOF_ONLY_ROLES, match: "prefix" },
   { path: ROUTES.RENDITIONS, allowedRoles: REQUEST_REVIEW_ROLES, match: "prefix" },
-  { path: ROUTES.BUDGET, allowedRoles: GIOF_ONLY_ROLES, match: "prefix" },
+  { path: ROUTES.BUDGET_FISCAL_YEARS, allowedRoles: GIOF_ONLY_ROLES, match: "prefix" },
+  { path: ROUTES.BUDGET_ALLOCATIONS, allowedRoles: GIOF_ONLY_ROLES, match: "prefix" },
+  { path: ROUTES.BUDGET_PLANNING, allowedRoles: GIOF_ONLY_ROLES, match: "prefix" },
+  { path: ROUTES.BUDGET, allowedRoles: DASHBOARD_ROLES, match: "exact" },
   { path: ROUTES.CATALOGS, allowedRoles: GIOF_ONLY_ROLES, match: "prefix" },
+  { path: ROUTES.ACCOUNTABILITY, allowedRoles: REQUEST_REVIEW_AND_ADMIN_ROLES, match: "prefix" },
+  { path: ROUTES.REPORTS, allowedRoles: REPORT_ROLES, match: "prefix" },
 ] as const satisfies readonly RouteAccessRule[];
 
 function matchesRouteRule(pathname: string, rule: RouteAccessRule): boolean {
@@ -53,8 +67,8 @@ export function canAccessRoute(pathname: string, roleCode: string | null | undef
 
   if (!rule) {
     return {
-      isProtectedRoute: false,
-      isAllowed: true,
+      isProtectedRoute: true,
+      isAllowed: false,
       allowedRoles: null,
     };
   }

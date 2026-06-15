@@ -2,7 +2,7 @@
 
 import { useEffect } from "react";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useSearchParams } from "next/navigation";
 import {
   LayoutDashboard,
   FileText,
@@ -62,6 +62,40 @@ const ICON_MAP: Record<string, LucideIcon> = {
   Handshake,
 };
 
+function splitHref(href: string) {
+  const [path, query = ""] = href.split("?");
+  return { path, queryParams: new URLSearchParams(query) };
+}
+
+function queryParamMatches(key: string, expectedValue: string, currentValue: string | null) {
+  if (key === "scope" && expectedValue === "mine") {
+    return currentValue === null || currentValue === "mine";
+  }
+
+  return currentValue === expectedValue;
+}
+
+export function isSidebarHrefActive(
+  href: string,
+  pathname: string,
+  searchParams: Pick<URLSearchParams, "get">,
+) {
+  const { path, queryParams } = splitHref(href);
+  const isPathMatch = pathname === path || pathname.startsWith(`${path}/`);
+
+  if (!isPathMatch) {
+    return false;
+  }
+
+  if (queryParams.size === 0) {
+    return true;
+  }
+
+  return Array.from(queryParams.entries()).every(([key, expectedValue]) =>
+    queryParamMatches(key, expectedValue, searchParams.get(key)),
+  );
+}
+
 // -------------------------------------------------------
 // SidebarToggleButton — chevron positioned on the right edge of the sidebar
 // -------------------------------------------------------
@@ -97,6 +131,7 @@ function SidebarToggleButton({
 
 export function AppSidebar() {
   const pathname = usePathname();
+  const searchParams = useSearchParams();
   const user = useAuthStore((state) => state.user);
   const { setOpenMobile, toggleSidebar, state: sidebarState } = useSidebar();
 
@@ -171,9 +206,7 @@ export function AppSidebar() {
             <SidebarMenu>
               {menuItems.map((item) => {
                 const Icon = ICON_MAP[item.icon] ?? LayoutDashboard;
-                const isActive =
-                  pathname === item.href ||
-                  pathname.startsWith(item.href + "/");
+                const isActive = isSidebarHrefActive(item.href, pathname, searchParams);
 
                 return (
                   <SidebarMenuItem key={item.href}>
