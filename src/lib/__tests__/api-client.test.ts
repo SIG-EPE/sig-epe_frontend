@@ -50,4 +50,20 @@ describe("api client auth headers", () => {
 
     expect(getLastRequestHeaders().get("Authorization")).toBe("Bearer cookie-token");
   });
+
+  it("sends the access token when loading reports", async () => {
+    vi.mocked(fetch).mockResolvedValue(mockJsonResponse({ data: { groups: [], totals: {} } }));
+
+    await api.get("/reports/requests-by-status");
+
+    expect(getLastRequestHeaders().get("Authorization")).toBe("Bearer stale-admin-token");
+  });
+
+  it("preserves the access token when exporting reports", async () => {
+    vi.mocked(fetch).mockResolvedValue(new Response("xlsx", { status: 200 }));
+
+    await api.download("/reports/requests-by-status/export.xlsx");
+
+    expect(getLastRequestHeaders().get("Authorization")).toBe("Bearer stale-admin-token");
+  });
 });

@@ -17,6 +17,11 @@ const AUTH_HEADER_EXCLUDED_PATHS = [
   "/auth/sso",
 ] as const;
 
+export interface ApiDownloadResult {
+  blob: Blob;
+  filename: string | null;
+}
+
 function shouldAttachAuthHeader(path: string): boolean {
   return !AUTH_HEADER_EXCLUDED_PATHS.some((excludedPath) =>
     path.startsWith(excludedPath),
@@ -125,6 +130,82 @@ async function apiFetch<T>(
   return json.data;
 }
 
+function getFilenameFromContentDisposition(value: string | null): string | null {
+  if (!value) {
+    return null;
+  }
+
+  const utf8Match = /filename\*=UTF-8''([^;]+)/i.exec(value);
+  if (utf8Match?.[1]) {
+    return decodeURIComponent(utf8Match[1].replace(/"/g, ""));
+  }
+
+  const filenameMatch = /filename="?([^";]+)"?/i.exec(value);
+  return filenameMatch?.[1] ?? null;
+}
+
+async function apiDownload(
+  path: string,
+  options: RequestInit = {},
+): Promise<ApiDownloadResult> {
+  const { accessToken } = useAuthStore.getState();
+
+  const headers = new Headers(options.headers);
+  if (
+    accessToken &&
+    shouldAttachAuthHeader(path) &&
+    !headers.has("Authorization")
+  ) {
+    headers.set("Authorization", `Bearer ${accessToken}`);
+  }
+
+  const requestOptions: RequestInit = {
+    ...options,
+    headers,
+    credentials: "include",
+  };
+
+  let res = await fetch(`${API_URL}${path}`, requestOptions);
+
+  if (res.status === 401 && shouldAttachAuthHeader(path)) {
+    const refreshResult = await refreshSession({ reason: "api-401" }).catch(() => null);
+    const newToken = refreshResult?.accessToken ?? null;
+
+    if (newToken) {
+      headers.set("Authorization", `Bearer ${newToken}`);
+      res = await fetch(`${API_URL}${path}`, requestOptions);
+    } else {
+      clearClientAuthSession();
+      if (typeof window !== "undefined") {
+        window.location.href = "/login";
+      }
+      throw new ApiRequestError(401, {
+        statusCode: 401,
+        message: "Session expired",
+        error: "Unauthorized",
+        timestamp: new Date().toISOString(),
+        path,
+      });
+    }
+  }
+
+  if (!res.ok) {
+    const errorBody = (await res.json().catch(() => ({
+      statusCode: res.status,
+      message: res.statusText,
+      error: "Error",
+      timestamp: new Date().toISOString(),
+      path,
+    }))) as ApiError;
+    throw new ApiRequestError(res.status, errorBody);
+  }
+
+  return {
+    blob: await res.blob(),
+    filename: getFilenameFromContentDisposition(res.headers.get("Content-Disposition")),
+  };
+}
+
 // -------------------------------------------------------
 // Public API methods
 // -------------------------------------------------------
@@ -132,6 +213,10 @@ async function apiFetch<T>(
 export const api = {
   get<T>(path: string, options?: RequestInit): Promise<T> {
     return apiFetch<T>(path, { ...options, method: "GET" });
+  },
+
+  download(path: string, options?: RequestInit): Promise<ApiDownloadResult> {
+    return apiDownload(path, { ...options, method: "GET" });
   },
 
   post<T>(path: string, body?: unknown, options?: RequestInit): Promise<T> {
