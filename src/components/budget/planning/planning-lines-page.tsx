@@ -19,8 +19,11 @@ import {
   useOrganizationalUnits,
   usePlanningLineStats,
 } from "@/hooks/use-budget";
-import { ROUTES } from "@/lib/constants";
-import { Plus, FileText, Send, CheckCircle2 } from "lucide-react";
+import { api } from "@/lib/api-client";
+import { ROLE_CODE, ROUTES } from "@/lib/constants";
+import { useAuthStore } from "@/stores/auth-store";
+import { Plus, FileText, Send, CheckCircle2, Download } from "lucide-react";
+import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 
 // -------------------------------------------------------
@@ -39,6 +42,7 @@ const STATUS_OPTIONS = [
 export function PlanningLinesPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
+  const user = useAuthStore((state) => state.user);
 
   const { data: fiscalYearsData } = useFiscalYears();
   const { data: orgUnitsData } = useOrganizationalUnits();
@@ -55,6 +59,8 @@ export function PlanningLinesPage() {
   const effectiveFiscalYearId = fiscalYearId || activeFiscalYear?.id;
 
   const [page, setPage] = useState(1);
+  const [isExporting, setIsExporting] = useState(false);
+  const canExport = user?.role?.code === ROLE_CODE.GIOF_GESTOR;
 
   // Stats para KPI cards
   const { data: stats, isLoading: statsLoading } = usePlanningLineStats(
@@ -117,6 +123,32 @@ export function PlanningLinesPage() {
     updateFilter("status", status === key ? "all" : key);
   }
 
+  async function handleExportExcel() {
+    setIsExporting(true);
+    try {
+      const params = new URLSearchParams();
+      if (fiscalYearId) params.set("fiscal_year_id", fiscalYearId);
+      if (orgUnitId) params.set("org_unit_id", orgUnitId);
+      if (effectiveStatus) params.set("status", effectiveStatus);
+
+      const query = params.toString() ? `?${params.toString()}` : "";
+      const { blob, filename } = await api.download(`/budget/planning-lines/export.xlsx${query}`);
+      const href = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = href;
+      link.download = filename ?? "lineas-poa.xlsx";
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(href);
+      toast.success("Exportación Excel generada");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "No se pudo exportar el Excel");
+    } finally {
+      setIsExporting(false);
+    }
+  }
+
   return (
     <div className="flex flex-col gap-6">
       {/* Encabezado con botón agregar */}
@@ -127,10 +159,18 @@ export function PlanningLinesPage() {
             Líneas del Plan Operativo Anual
           </p>
         </div>
-        <Button onClick={() => router.push(ROUTES.BUDGET_PLANNING_NEW)}>
-          <Plus className="h-4 w-4" />
-          Agregar línea
-        </Button>
+        <div className="flex items-center gap-2">
+          {canExport && (
+            <Button variant="outline" onClick={handleExportExcel} disabled={isExporting}>
+              <Download className="h-4 w-4" />
+              {isExporting ? "Exportando..." : "Exportar Excel"}
+            </Button>
+          )}
+          <Button onClick={() => router.push(ROUTES.BUDGET_PLANNING_NEW)}>
+            <Plus className="h-4 w-4" />
+            Agregar línea
+          </Button>
+        </div>
       </div>
 
       {/* KPI Cards */}
