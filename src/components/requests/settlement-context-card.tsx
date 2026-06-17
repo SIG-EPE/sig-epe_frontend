@@ -18,7 +18,7 @@ import {
   getRequestDocumentMimeLabel,
   getRequestDocumentUploadStatusLabel,
 } from "@/lib/requests";
-import { REQUEST_CURRENCY, type RequestAllocation, type SettlementContextResponse, type SettlementContextDocument } from "@/types/requests";
+import { REQUEST_CURRENCY, type RequestAllocation, type RequestCurrency, type SettlementContextResponse, type SettlementContextDocument } from "@/types/requests";
 
 interface SettlementContextCardProps {
   context: SettlementContextResponse;
@@ -81,6 +81,44 @@ function getAllocationSummary(allocation: RequestAllocation): string {
   ].filter((part): part is string => Boolean(part));
 
   return parts.join(" · ");
+}
+
+function getAllocationOrgUnitLabel(allocation: RequestAllocation): string {
+  const orgUnit = allocation.org_unit ?? allocation.planning_line?.org_unit ?? allocation.budgetPlanningLine?.org_unit ?? null;
+  const label = [orgUnit?.code, orgUnit?.name].filter(Boolean).join(" ").trim();
+  return label || "No informado";
+}
+
+function OriginalAdvanceLines({ allocations, currency }: { allocations: RequestAllocation[]; currency: RequestCurrency }) {
+  return (
+    <section className="space-y-3" data-testid="original-advance-lines">
+      <div>
+        <h3 className="text-sm font-semibold">Líneas del anticipo original</h3>
+        <p className="text-xs text-muted-foreground">
+          El anticipo puede incluir una o más líneas POA y unidades; por eso la referencia se muestra por línea, no como un único POA o una única unidad.
+        </p>
+      </div>
+      {allocations.length === 0 ? <p className="rounded-md border p-3 text-sm text-muted-foreground">El anticipo original no tiene líneas POA disponibles para mostrar.</p> : null}
+      <div className="grid gap-3">
+        {allocations.map((allocation, index) => (
+          <div key={allocation.id ?? `${allocation.budget_planning_line_id}-${index}`} className="grid gap-2 rounded-md border p-3 text-sm md:grid-cols-[minmax(0,1fr)_minmax(0,14rem)_minmax(0,9rem)] md:items-start">
+            <div className="min-w-0">
+              <p className="font-medium">Línea {index + 1}: {getPlanningLineDisplay(allocation.planning_line ?? allocation.budgetPlanningLine)}</p>
+              <p className="text-xs text-muted-foreground">{getAllocationOrgUnitLabel(allocation)}</p>
+            </div>
+            <div>
+              <p className="text-xs text-muted-foreground">Monto del anticipo</p>
+              <p className="font-semibold">{formatRequestCurrency(Number(allocation.amount ?? 0), allocation.currency || currency)}</p>
+            </div>
+            <div>
+              <p className="text-xs text-muted-foreground">Año fiscal</p>
+              <p className="font-medium">{formatOptionalText(allocation.fiscal_year ?? allocation.budgetPlanningLine?.fiscal_year?.year)}</p>
+            </div>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
 }
 
 function DocumentRows({ documents, emptyMessage = "Sin documentos visibles." }: { documents: SettlementContextDocument[]; emptyMessage?: string }) {
@@ -166,8 +204,7 @@ function OriginalAdvanceDocuments({ documents, allocations }: { documents: Settl
 export function SettlementContextCard({ context, showDocuments = true }: SettlementContextCardProps) {
   const advanceCode = getAdvanceCode(context);
   const paidDate = getPaidDate(context);
-  const planningLine = context.original_advance.budgetPlanningLine ?? null;
-  const orgUnit = planningLine?.organizationalUnit ?? context.original_advance.organizationalUnit ?? null;
+  const allocations = context.original_advance.allocations ?? [];
 
   return (
     <Card data-testid="settlement-context-card">
@@ -182,9 +219,7 @@ export function SettlementContextCard({ context, showDocuments = true }: Settlem
           {renderSummaryItem("Monto solicitado", formatRequestCurrency(Number(context.original_advance.requested_amount ?? 0), context.original_advance.currency))}
           {renderSummaryItem("Fecha de pago", formatRequestDate(paidDate))}
           {renderSummaryItem("Fecha límite de rendición", formatRequestDate(context.due_date?.due_date ?? context.original_advance.scheduled_rendition_at))}
-          {renderSummaryItem("Beneficiario", formatOptionalText(context.original_advance.beneficiary_name))}
-          {renderSummaryItem("POA", getPlanningLineDisplay(planningLine), "md:col-span-2")}
-          {renderSummaryItem("Unidad organizacional", formatOptionalText(orgUnit ? [orgUnit.code, orgUnit.name].filter(Boolean).join(" ") : null))}
+          {renderSummaryItem("Cantidad de líneas POA", allocations.length > 0 ? `${allocations.length} línea(s)` : "No informado")}
           {renderSummaryItem("Concepto", formatOptionalText(context.original_advance.concept), "md:col-span-2")}
           {renderSummaryItem(
             "Anticipo original",
@@ -196,6 +231,7 @@ export function SettlementContextCard({ context, showDocuments = true }: Settlem
             "md:col-span-2",
           )}
         </section>
+        <OriginalAdvanceLines allocations={allocations} currency={context.original_advance.currency} />
         {showDocuments && <OriginalAdvanceDocuments documents={context.original_advance_documents} allocations={context.original_advance.allocations ?? []} />}
       </CardContent>
     </Card>

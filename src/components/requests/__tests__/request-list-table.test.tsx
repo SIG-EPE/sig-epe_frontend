@@ -73,6 +73,7 @@ describe("RequestListTable", () => {
 
     expect(screen.getByRole("columnheader", { name: "Acciones" })).toBeInTheDocument();
     expect(screen.getByTitle("Más acciones de solicitud")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Sin documentos" })).toBeDisabled();
     expect(screen.queryByRole("link", { name: "Continuar edición" })).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "Ver" })).not.toBeInTheDocument();
 
@@ -133,5 +134,52 @@ describe("RequestListTable", () => {
 
     expect(screen.getByRole("columnheader", { name: "Responsable" })).toBeInTheDocument();
     expect(screen.getByText("María Responsable")).toBeInTheDocument();
+  });
+
+  it("muestra un acceso directo interno a documentos cuando la solicitud tiene documentos", () => {
+    render(
+      <RequestListTable
+        requests={[makeRequest({ documents_count: 2 })]}
+        isLoading={false}
+        roleCode={ROLE_CODE.GIOF_GESTOR}
+      />,
+    );
+
+    const documentsLink = screen.getByRole("link", { name: "Ver documentos" });
+
+    expect(documentsLink).toHaveAttribute("href", "/requests/req-1#documents");
+    expect(screen.queryByRole("button", { name: "Sin documentos" })).not.toBeInTheDocument();
+  });
+
+  it("mantiene separado el acceso interno a documentos y la carpeta Drive segura", () => {
+    render(
+      <RequestListTable
+        requests={[makeRequest({
+          documents_count: 1,
+          drive_folder_url: "https://drive.google.com/drive/folders/abc",
+        })]}
+        isLoading={false}
+        roleCode={ROLE_CODE.GIOF_GESTOR}
+      />,
+    );
+
+    expect(screen.getByRole("link", { name: "Ver documentos" })).toHaveAttribute("href", "/requests/req-1#documents");
+    expect(screen.getByRole("link", { name: "Abrir carpeta Drive" })).toHaveAttribute("href", "https://drive.google.com/drive/folders/abc");
+  });
+
+  it("oculta la carpeta Drive cuando la URL no es segura", () => {
+    render(
+      <RequestListTable
+        requests={[makeRequest({
+          documents_count: 1,
+          drive_folder_url: "javascript:alert(1)",
+        })]}
+        isLoading={false}
+        roleCode={ROLE_CODE.GIOF_GESTOR}
+      />,
+    );
+
+    expect(screen.getByRole("link", { name: "Ver documentos" })).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Abrir carpeta Drive" })).not.toBeInTheDocument();
   });
 });

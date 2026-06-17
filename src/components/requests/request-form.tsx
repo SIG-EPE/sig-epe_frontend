@@ -71,6 +71,8 @@ import { SettlementContextCard } from "./settlement-context-card";
 import { StructuredRenditionReportCard } from "./structured-rendition-report-card";
 import { SupplierFields } from "./supplier-fields";
 
+const STRUCTURED_REPORT_PENDING_MESSAGE = "Informe pendiente de generación: genera el Excel validado antes de enviar a revisión.";
+
 export const requestFormSchema = z.object({
   request_type: z.enum([
     REQUEST_TYPE.ADVANCE,
@@ -610,6 +612,14 @@ export function RequestForm({
     router.push(`${ROUTES.REQUESTS}/${requestId}/edit?step=${step}` as Parameters<typeof router.push>[0]);
   }
 
+  function focusStructuredReportActions(): void {
+    const target = document.querySelector<HTMLElement>('[data-testid="rendition-generation-actions"]')
+      ?? document.querySelector<HTMLElement>('[data-testid="rendition-readiness-checklist"]')
+      ?? document.querySelector<HTMLElement>('[data-testid="structured-rendition-report-card"]');
+    target?.scrollIntoView?.({ behavior: "smooth", block: "center" });
+    target?.focus({ preventScroll: true });
+  }
+
   function validateStepNavigation(step: RequestEditStep): boolean {
     if (step === REQUEST_EDIT_STEP.REVIEW) {
       if (!areDocumentsReady) {
@@ -632,8 +642,8 @@ export function RequestForm({
       }
 
       if (isAdvanceSettlement && !structuredReportReady) {
-        setDocumentStepErrors(structuredReportMessages.length > 0 ? structuredReportMessages : ["Genera el informe antes de continuar a revisión."]);
-        toast.error("Genera el informe antes de continuar a revisión.");
+        setDocumentStepErrors(structuredReportMessages.length > 0 ? structuredReportMessages : [STRUCTURED_REPORT_PENDING_MESSAGE]);
+        toast.error(structuredReportMessages[0] ?? STRUCTURED_REPORT_PENDING_MESSAGE);
         navigateToStep(REQUEST_EDIT_STEP.DOCUMENTS);
         return false;
       }
@@ -672,8 +682,9 @@ export function RequestForm({
     }
 
     if (isAdvanceSettlement && !structuredReportReady) {
-      setDocumentStepErrors(structuredReportMessages.length > 0 ? structuredReportMessages : ["Genera el informe antes de continuar a revisión."]);
-      toast.error("Genera el informe antes de continuar a revisión.");
+      setDocumentStepErrors(structuredReportMessages.length > 0 ? structuredReportMessages : [STRUCTURED_REPORT_PENDING_MESSAGE]);
+      toast.error(structuredReportMessages[0] ?? STRUCTURED_REPORT_PENDING_MESSAGE);
+      focusStructuredReportActions();
       return;
     }
 
@@ -791,10 +802,10 @@ export function RequestForm({
     }
 
     if (isAdvanceSettlement && !structuredReportReady) {
-      const messages = structuredReportMessages.length > 0 ? structuredReportMessages : ["Genera el informe antes de continuar a revisión."];
+      const messages = structuredReportMessages.length > 0 ? structuredReportMessages : [STRUCTURED_REPORT_PENDING_MESSAGE];
       setSubmitErrors(messages);
       setDocumentStepErrors(messages);
-      toast.error("Genera el informe antes de continuar a revisión.");
+      toast.error(messages[0]);
       setPendingAction(null);
       return;
     }
@@ -1136,7 +1147,7 @@ export function RequestForm({
         <div className="flex flex-col-reverse gap-3 border-t pt-4 sm:flex-row sm:justify-between">
           <Button type="button" variant="outline" onClick={() => navigateToStep(REQUEST_EDIT_STEP.DATA)} disabled={isBusy}>Volver a datos</Button>
           <Button type="button" onClick={handleContinueToReview} disabled={isBusy || !areDocumentsReady}>
-            {isNavigatingStep || !areDocumentsReady ? "Validando..." : currentRequestDataErrors.length > 0 ? "Corregir datos" : !checklist.isComplete ? "Adjuntar documentos para continuar" : isAdvanceSettlement && !structuredReportReady ? "Generar informe para continuar" : "Continuar a revisión"}
+            {isNavigatingStep || !areDocumentsReady ? "Validando..." : currentRequestDataErrors.length > 0 ? "Corregir datos" : !checklist.isComplete ? "Adjuntar documentos para continuar" : isAdvanceSettlement && !structuredReportReady ? "Ir a generar informe" : "Continuar a revisión"}
           </Button>
         </div>
       </>

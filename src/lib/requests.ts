@@ -271,12 +271,13 @@ export const REQUEST_TYPE_OPTIONS = [
 ] as const;
 
 export const REQUEST_STATUS_FILTER_OPTIONS = [
-  { value: REQUEST_STATUS.DRAFT, label: "Borradores" },
-  { value: REQUEST_STATUS.SUBMITTED, label: "Enviadas" },
-  { value: REQUEST_STATUS.OBSERVED, label: "Observadas" },
+  { value: REQUEST_STATUS.DRAFT, label: "Borrador" },
+  { value: REQUEST_STATUS.SUBMITTED, label: "En revisión" },
+  { value: REQUEST_STATUS.OBSERVED, label: "Observada" },
   { value: REQUEST_STATUS.IN_VALIDATION, label: "En validación" },
   { value: REQUEST_STATUS.APPROVED, label: "En gestión de pago" },
-  { value: REQUEST_STATUS.REJECTED, label: "Rechazadas" },
+  { value: REQUEST_STATUS.PAID, label: "Pagada" },
+  { value: REQUEST_STATUS.REJECTED, label: "Rechazada" },
 ] as const;
 
 export const REQUEST_STATUS_SUMMARY_CARDS = [
@@ -401,18 +402,18 @@ export interface RequestReviewQueueCard {
 export const REQUEST_REVIEW_QUEUE_CARDS: RequestReviewQueueCard[] = [
   {
     value: REQUEST_REVIEW_QUEUE.PENDING_LEVEL_1,
-    label: "Pendientes Nivel 1",
-    description: "Solicitudes enviadas para revisión documental inicial.",
+    label: "Por revisar",
+    description: "Solicitudes enviadas que requieren revisión GIOF.",
   },
   {
     value: REQUEST_REVIEW_QUEUE.PENDING_LEVEL_2,
-    label: "Pendientes Nivel 2",
-    description: "Solicitudes en validación o aprobación final.",
+    label: "En validación",
+    description: "Solicitudes en validación operativa antes de la decisión final.",
   },
   {
     value: REQUEST_REVIEW_QUEUE.OBSERVED_RETURNED,
-    label: "Solicitudes devueltas/observadas",
-    description: "Solicitudes observadas y devueltas al solicitante.",
+    label: "Observadas",
+    description: "Solicitudes devueltas al solicitante para subsanación.",
   },
 ];
 

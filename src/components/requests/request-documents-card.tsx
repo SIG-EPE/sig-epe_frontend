@@ -151,6 +151,12 @@ function getOptionalDocumentCategoryOptions(checklist: RequiredDocumentChecklist
   return REQUEST_DOCUMENT_CATEGORY_OPTIONS.filter((option) => !pendingRequiredCategories.has(option.value));
 }
 
+function getGenericDocumentCategoryOptions(checklist: RequiredDocumentChecklistItem[], excludeReturnProof: boolean): typeof REQUEST_DOCUMENT_CATEGORY_OPTIONS {
+  const options = getOptionalDocumentCategoryOptions(checklist);
+  if (!excludeReturnProof) return options;
+  return options.filter((option) => option.value !== REQUEST_DOCUMENT_CATEGORY.RETURN_PROOF);
+}
+
 function getDefaultOptionalDocumentCategory(options: typeof REQUEST_DOCUMENT_CATEGORY_OPTIONS): RequestDocumentCategory | "" {
   return options.find((option) => option.value === REQUEST_DOCUMENT_CATEGORY.REQUEST_SUPPORT)?.value ?? options[0]?.value ?? "";
 }
@@ -444,10 +450,22 @@ export function RequestDocumentsCard({
   const hasAllocationDocumentGroups = hasAllocationGroups && !isAdvanceSettlement;
   const requiresReceiptAllocation = isAdvanceSettlement && hasAllocationGroups && category === REQUEST_DOCUMENT_CATEGORY.RECEIPT;
   const requestLevelDocuments = getRequestLevelDocuments(documents);
-  const checklist = hasAllocationGroups && request.request_type === REQUEST_TYPE.ADVANCE
+  const requestLevelGeneralDocuments = requestLevelDocuments.filter((document) => document.document_category !== REQUEST_DOCUMENT_CATEGORY.RETURN_PROOF);
+  const legacyUnscopedReturnProofs = requestLevelDocuments.filter((document) => document.document_category === REQUEST_DOCUMENT_CATEGORY.RETURN_PROOF);
+  const allocationReturnProofs = documents.filter((document) => document.document_category === REQUEST_DOCUMENT_CATEGORY.RETURN_PROOF && document.request_allocation_id);
+  const restrictGenericReturnProof = isAdvanceSettlement && hasDisplayAllocationGroups;
+  const baseChecklist = hasAllocationGroups && request.request_type === REQUEST_TYPE.ADVANCE
     ? EMPTY_CHECKLIST
     : getGeneralChecklist(request, requestLevelDocuments);
-  const optionalCategoryOptions = getOptionalDocumentCategoryOptions(checklist.items).filter((option) => !hasAllocationGroups || option.value !== REQUEST_DOCUMENT_CATEGORY.PXQ);
+  const checklist = restrictGenericReturnProof
+    ? {
+      ...baseChecklist,
+      items: baseChecklist.items.filter((item) => item.category !== REQUEST_DOCUMENT_CATEGORY.RETURN_PROOF),
+      missingMessages: baseChecklist.missingMessages.filter((message) => !message.toLowerCase().includes("constancia de devolución")),
+      isComplete: baseChecklist.items.some((item) => item.category === REQUEST_DOCUMENT_CATEGORY.RETURN_PROOF) ? baseChecklist.items.filter((item) => item.category !== REQUEST_DOCUMENT_CATEGORY.RETURN_PROOF).every((item) => !item.required || item.satisfied) : baseChecklist.isComplete,
+    }
+    : baseChecklist;
+  const optionalCategoryOptions = getGenericDocumentCategoryOptions(checklist.items, restrictGenericReturnProof).filter((option) => !hasAllocationGroups || option.value !== REQUEST_DOCUMENT_CATEGORY.PXQ);
   const hasOptionalCategoryOptions = optionalCategoryOptions.length > 0;
   const acceptedFormatsLabel = category ? getRequestDocumentAcceptedFormatsLabel(category) : "selecciona una categoría";
   const uploadActionsDisabled = uploading || activeUploadAction !== null;
@@ -879,7 +897,8 @@ export function RequestDocumentsCard({
         </div>
         {displayAllocationGroups.map((allocation, index) => {
           const allocationDocuments = !isUsingGuidanceAllocations && allocation.id ? getAllocationDocuments(allocation, documents) : [];
-          const hasReceipts = allocationDocuments.some((document) => document.document_category === REQUEST_DOCUMENT_CATEGORY.RECEIPT);
+          const receiptDocuments = allocationDocuments.filter((document) => document.document_category === REQUEST_DOCUMENT_CATEGORY.RECEIPT);
+          const hasReceipts = receiptDocuments.length > 0;
 
           return (
             <div key={allocation.id ?? `${allocation.budget_planning_line_id}-${index}`} className="space-y-3 rounded-md border p-4" data-testid="settlement-receipt-group">
@@ -890,7 +909,7 @@ export function RequestDocumentsCard({
                 </div>
                 <Badge variant={hasReceipts ? "secondary" : "destructive"}>{isUsingGuidanceAllocations ? "Referencia" : hasReceipts ? "Con comprobante" : "Pendiente"}</Badge>
               </div>
-              {isUsingGuidanceAllocations ? <p className="text-sm text-muted-foreground">Cuando termine la actualización, adjunta el comprobante seleccionando esta línea POA en el cargador.</p> : renderDocumentRows(allocationDocuments)}
+              {isUsingGuidanceAllocations ? <p className="text-sm text-muted-foreground">Cuando termine la actualización, adjunta el comprobante seleccionando esta línea POA en el cargador.</p> : renderDocumentRows(receiptDocuments)}
             </div>
           );
         })}
@@ -898,8 +917,45 @@ export function RequestDocumentsCard({
     );
   }
 
+  function renderReturnProofGroups(): ReactNode {
+    if (!isAdvanceSettlement || !hasDisplayAllocationGroups) return null;
+
+    return (
+      <section className="space-y-3" data-testid="settlement-return-proof-groups">
+        <div className="space-y-1">
+          <h3 className="text-sm font-semibold">Constancias de devolución por línea POA</h3>
+          <p className="text-xs text-muted-foreground">Estas constancias se registran desde Saldos por línea POA con Registrar devolución. Solo una constancia asociada a la misma línea valida esa devolución.</p>
+        </div>
+        {displayAllocationGroups.map((allocation, index) => {
+          const proofDocuments = allocation.id ? allocationReturnProofs.filter((document) => document.request_allocation_id === allocation.id) : [];
+          return (
+            <div key={allocation.id ?? `${allocation.budget_planning_line_id}-${index}`} className="space-y-3 rounded-md border p-4" data-testid="settlement-return-proof-group">
+              <div className="flex flex-col gap-1 sm:flex-row sm:items-start sm:justify-between">
+                <div>
+                  <h4 className="text-sm font-semibold">Línea {index + 1}: {getPlanningLineDisplay(allocation)}</h4>
+                  <p className="text-xs text-muted-foreground">{getAllocationSummary(allocation)}</p>
+                </div>
+                <Badge variant={proofDocuments.length > 0 ? "secondary" : "outline"}>{proofDocuments.length > 0 ? "Con constancia" : "Sin constancia"}</Badge>
+              </div>
+              {renderDocumentRows(proofDocuments)}
+            </div>
+          );
+        })}
+        {legacyUnscopedReturnProofs.length > 0 ? (
+          <Alert className="border-amber-500/50 bg-amber-50 text-amber-950 dark:bg-amber-950/20 dark:text-amber-100">
+            <Info className="h-4 w-4" />
+            <AlertDescription className="text-amber-950 dark:text-amber-100">
+              Estas constancias no están asociadas a una línea POA y no validan una devolución por línea. Vuelve a registrar la devolución desde Saldos por línea POA → Registrar devolución.
+              <div className="mt-3">{renderDocumentRows(legacyUnscopedReturnProofs)}</div>
+            </AlertDescription>
+          </Alert>
+        ) : null}
+      </section>
+    );
+  }
+
   return (
-    <Card>
+    <Card id="documents">
       <CardHeader>
         <CardTitle>Documentos adjuntos</CardTitle>
         <CardDescription>
@@ -950,6 +1006,7 @@ export function RequestDocumentsCard({
         )}
         {renderAllocationGroups()}
         {renderSettlementReceiptGroups()}
+        {renderReturnProofGroups()}
         <div className="rounded-md border p-4">
           <div className="space-y-1">
             <h3 className="text-sm font-semibold">Checklist de documentos generales</h3>
@@ -1017,6 +1074,7 @@ export function RequestDocumentsCard({
             <div className="mb-3 space-y-1">
               <h3 className="text-sm font-semibold">Otros documentos</h3>
               <p className="text-xs text-muted-foreground">Usa este cargador para documentos adicionales o comprobantes por línea POA. Puedes seleccionar hasta 20 archivos; se adjuntarán de uno en uno para mantener estable la carga.</p>
+              {restrictGenericReturnProof ? <p className="text-xs text-amber-700 dark:text-amber-300">Las constancias de devolución se adjuntan desde Saldos por línea POA → Registrar devolución para que queden vinculadas a la línea correcta.</p> : null}
             </div>
             {hasOptionalCategoryOptions ? (
             <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-[220px_minmax(0,1fr)_minmax(220px,320px)_auto] xl:items-end">
@@ -1156,7 +1214,7 @@ export function RequestDocumentsCard({
         ) : (
           <section className="space-y-3">
             <h3 className="text-sm font-semibold">Documentos generales</h3>
-            {renderDocumentRows(requestLevelDocuments)}
+            {renderDocumentRows(requestLevelGeneralDocuments)}
           </section>
         )}
         <Dialog open={Boolean(receiptToReview)} onOpenChange={(open) => !open && closeReceiptReview()}>

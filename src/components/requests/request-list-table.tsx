@@ -1,10 +1,13 @@
 import Link from "next/link";
-import { MoreHorizontal } from "lucide-react";
+import type { Route } from "next";
+import { FileText, FolderOpen, MoreHorizontal } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { ROUTES } from "@/lib/constants";
 import { REQUEST_TYPE_LABELS, formatRequestCurrency, formatRequestDateTime, getPaymentRequestParty, getPlanningLineDisplay, getRequiredDocumentChecklist, getRequestListActions, getRequestMonthLabel, getRequestTimelineDate, getRequestTimelineLabel } from "@/lib/requests";
+import { getSafeDocumentUrl } from "@/lib/safe-url";
 import { REQUEST_TYPE, type PaymentRequest } from "@/types/requests";
 import { StatusBadge } from "./status-badge";
 
@@ -43,6 +46,10 @@ export function RequestListTable({ requests, isLoading, roleCode, currentUserId,
       <TableBody>
         {requests.map((request) => {
           const actions = getRequestListActions(roleCode, request.status, request.id, request.requester_id, currentUserId);
+          const driveFolderUrl = getSafeDocumentUrl(request.drive_folder_url);
+          const documentsCount = request.documents_count ?? request.documents?.length ?? 0;
+          const hasDocuments = documentsCount > 0;
+          const documentsHref = `${ROUTES.REQUESTS}/${request.id}#documents` as Route;
           const timelineDate = getRequestTimelineDate(request);
           const timelineLabel = getRequestTimelineLabel(request);
           const responsible = getPaymentRequestParty(request) || "—";
@@ -81,7 +88,25 @@ export function RequestListTable({ requests, isLoading, roleCode, currentUserId,
                 </div>
               </TableCell>
               <TableCell className="text-right">
-                <div className="flex justify-end">
+                <div className="flex justify-end gap-1">
+                  {hasDocuments ? (
+                    <Button variant="ghost" size="icon" className="h-8 w-8" asChild title="Ver documentos">
+                      <Link href={documentsHref} data-testid="request-documents-link" aria-label="Ver documentos">
+                        <FileText className="h-4 w-4" />
+                      </Link>
+                    </Button>
+                  ) : (
+                    <Button variant="ghost" size="icon" className="h-8 w-8" disabled title="Sin documentos" aria-label="Sin documentos" data-testid="request-documents-disabled">
+                      <FileText className="h-4 w-4" />
+                    </Button>
+                  )}
+                  {driveFolderUrl && (
+                    <Button variant="ghost" size="icon" className="h-8 w-8" asChild title="Abrir carpeta Drive">
+                      <a href={driveFolderUrl} target="_blank" rel="noopener noreferrer" data-testid="request-drive-folder-link" aria-label="Abrir carpeta Drive">
+                        <FolderOpen className="h-4 w-4" />
+                      </a>
+                    </Button>
+                  )}
                   <DropdownMenu>
                     <DropdownMenuTrigger asChild>
                       <Button

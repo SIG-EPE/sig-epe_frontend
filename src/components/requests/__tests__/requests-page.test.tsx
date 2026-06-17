@@ -114,23 +114,23 @@ describe("RequestsPage", () => {
 
     expect(screen.getByTestId("requests-page-title")).toHaveTextContent("Mis Solicitudes");
     expect(screen.getByTestId("new-request-button")).toBeInTheDocument();
-    expect(screen.queryByText("Pendientes Nivel 1")).not.toBeInTheDocument();
+    expect(screen.queryByText("Por revisar")).not.toBeInTheDocument();
 
     await user.click(screen.getByTestId("new-request-button"));
 
     expect(pushMock).toHaveBeenCalledWith("/requests/new");
   });
 
-  it("renderiza tarjetas GIOF en scope de revisión y activa el filtro Nivel 2 en la URL", async () => {
+  it("renderiza tarjetas GIOF en scope de revisión y activa el filtro de validación en la URL", async () => {
     currentQuery = "scope=review";
     const user = userEvent.setup();
     render(<RequestsPage />);
 
     expect(screen.getByTestId("requests-page-title")).toHaveTextContent("Bandeja de Revisión");
     expect(screen.getByTestId("new-request-button")).toBeInTheDocument();
-    expect(screen.getByText("Pendientes Nivel 1")).toBeInTheDocument();
-    expect(screen.getByText("Pendientes Nivel 2")).toBeInTheDocument();
-    expect(screen.getByText("Solicitudes devueltas/observadas")).toBeInTheDocument();
+    expect(screen.getByTestId(`requests-review-queue-card-${REQUEST_REVIEW_QUEUE.PENDING_LEVEL_1}`)).toHaveTextContent("Por revisar");
+    expect(screen.getByTestId(`requests-review-queue-card-${REQUEST_REVIEW_QUEUE.PENDING_LEVEL_2}`)).toHaveTextContent("En validación");
+    expect(screen.getByTestId(`requests-review-queue-card-${REQUEST_REVIEW_QUEUE.OBSERVED_RETURNED}`)).toHaveTextContent("Observadas");
     expect(screen.queryByText("Colaboradores bloqueados")).not.toBeInTheDocument();
 
     await user.click(screen.getByTestId(`requests-review-queue-card-${REQUEST_REVIEW_QUEUE.PENDING_LEVEL_2}`));
@@ -168,5 +168,18 @@ describe("RequestsPage", () => {
 
     expect(screen.queryByTestId(`requests-review-queue-card-${REQUEST_REVIEW_QUEUE.BLOCKED}`)).not.toBeInTheDocument();
     expect(screen.queryByTestId("requests-review-queue-note")).not.toBeInTheDocument();
+  });
+
+  it("mantiene fecha exacta de historial como mismo date_from y date_to", () => {
+    currentQuery = "scope=history&date_from=2026-06-01&date_to=2026-06-01";
+    render(<RequestsPage />);
+
+    expect(screen.getByLabelText("Fecha exacta")).toHaveValue("2026-06-01");
+    expect(screen.getByText("1 filtros activos")).toBeInTheDocument();
+    expect(useRequestsMock).toHaveBeenCalledWith(expect.objectContaining({
+      scope: "history",
+      date_from: "2026-06-01",
+      date_to: "2026-06-01",
+    }));
   });
 });

@@ -39,8 +39,9 @@ import {
   REQUEST_TYPE_LABELS,
   validateRexanReturnProofSelection,
 } from "@/lib/requests";
+import { getSafeDocumentUrl } from "@/lib/safe-url";
 import { useAuthStore } from "@/stores/auth-store";
-import { ADVANCE_SETTLEMENT_CTA_STATE, REQUEST_RENDITION_REPORT_STATUS, REQUEST_TYPE, REXAN_OUTCOME, type ApproveRequestDto, type RequestRenditionReport, type RexanOutcome } from "@/types/requests";
+import { ADVANCE_SETTLEMENT_CTA_STATE, REQUEST_DOCUMENT_CATEGORY, REQUEST_DOCUMENT_SCOPE_TYPE, REQUEST_DOCUMENT_UPLOAD_STATUS, REQUEST_RENDITION_REPORT_STATUS, REQUEST_TYPE, REXAN_OUTCOME, type ApproveRequestDto, type RequestDocument, type RequestRenditionAllocationCoverage, type RequestRenditionReport, type RexanOutcome } from "@/types/requests";
 import { RequestStatusStepper } from "./request-status-stepper";
 import { RequestDocumentsCard } from "./request-documents-card";
 import { StructuredRenditionReportCard } from "./structured-rendition-report-card";
@@ -69,6 +70,81 @@ function getComputedOutcomeDifferenceLabel(outcome: RexanOutcome | null): string
   if (outcome === REXAN_OUTCOME.DEVOLUCION) return "Diferencia a devolver";
   if (outcome === REXAN_OUTCOME.EXCESS) return "Diferencia por pagar";
   return "Diferencia";
+}
+
+interface StructuredReturnChecklistRow {
+  allocationId: string;
+  label: string;
+  expectedAmount: number;
+  registeredAmount: number | null;
+  proof: RequestDocument | null;
+  proofName: string | null;
+  isComplete: boolean;
+}
+
+function toMoneyCents(value: number | null | undefined): number | null {
+  if (value === null || value === undefined) return null;
+  const numericValue = Number(value);
+  if (!Number.isFinite(numericValue)) return null;
+  return Math.round(numericValue * 100);
+}
+
+function getStructuredReturnExpectedAmount(coverage: RequestRenditionAllocationCoverage): number {
+  const explicitExpected = normalizeMoneyAmount(coverage.expected_return_amount);
+  if (explicitExpected !== null) return Math.max(explicitExpected, 0);
+  const paidBaseAmount = normalizeMoneyAmount(coverage.paid_base_amount);
+  const renderedAmount = normalizeMoneyAmount(coverage.rendered_amount ?? coverage.row_total_amount);
+  if (paidBaseAmount === null || renderedAmount === null) return 0;
+  return Math.max(paidBaseAmount - renderedAmount, 0);
+}
+
+function getStructuredReturnLineLabel(coverage: RequestRenditionAllocationCoverage): string {
+  const code = coverage.line_code?.trim();
+  const name = coverage.request_allocation_label?.trim() || coverage.line_name?.trim() || coverage.resource_description?.trim();
+  if (code && name) return `${code} - ${name}`;
+  return code || name || `Línea POA ${coverage.request_allocation_id}`;
+}
+
+function isValidStructuredReturnProof(document: RequestDocument | undefined, allocationId: string): document is RequestDocument {
+  return Boolean(
+    document
+    && document.document_category === REQUEST_DOCUMENT_CATEGORY.RETURN_PROOF
+    && document.upload_status !== REQUEST_DOCUMENT_UPLOAD_STATUS.FAILED
+    && document.scope_type === REQUEST_DOCUMENT_SCOPE_TYPE.ALLOCATION
+    && document.request_allocation_id === allocationId,
+  );
+}
+
+function getStructuredReturnChecklistRows(report: RequestRenditionReport | null, documents: RequestDocument[]): StructuredReturnChecklistRow[] {
+  if (!report) return [];
+  return report.allocation_coverage
+    .map((coverage) => {
+      const expectedAmount = getStructuredReturnExpectedAmount(coverage);
+      const lineReturn = coverage.line_return ?? null;
+      if (toMoneyCents(expectedAmount) === 0 && !lineReturn) return null;
+      const proof = lineReturn?.return_proof_document_id
+        ? documents.find((document) => document.id === lineReturn.return_proof_document_id)
+        : undefined;
+      const expectedCents = toMoneyCents(expectedAmount) ?? 0;
+      const returnedCents = toMoneyCents(lineReturn?.returned_amount);
+      const validProof = isValidStructuredReturnProof(proof, coverage.request_allocation_id) ? proof : null;
+      const isComplete = expectedCents === 0 || Boolean(
+        lineReturn
+        && returnedCents === expectedCents
+        && lineReturn.justification.trim()
+        && validProof,
+      );
+      return {
+        allocationId: coverage.request_allocation_id,
+        label: getStructuredReturnLineLabel(coverage),
+        expectedAmount,
+        registeredAmount: lineReturn ? normalizeMoneyAmount(lineReturn.returned_amount) : null,
+        proof: validProof,
+        proofName: validProof ? getRequestDocumentDisplayName(validProof) : lineReturn?.return_proof_filename || null,
+        isComplete,
+      };
+    })
+    .filter((row): row is StructuredReturnChecklistRow => row !== null);
 }
 
 export function RequestDetailPage() {
@@ -115,6 +191,7 @@ export function RequestDetailPage() {
   const canCorrect = isRequestOwner && canCorrectObservedRequest(roleCode, request.status);
   const canEditDraft = isRequestOwner && canEditDraftRequest(roleCode, request.status);
   const advanceSettlementCta = getAdvanceSettlementCta(roleCode, request, user?.id);
+  const driveFolderUrl = getSafeDocumentUrl(request.drive_folder_url);
   const renditionStatus = getPaymentRequestRenditionStatus(request);
   const editHref = `${ROUTES.REQUESTS}/${request.id}/edit`;
   const isAdvanceSettlement = request.request_type === REQUEST_TYPE.ADVANCE_SETTLEMENT;
@@ -130,6 +207,9 @@ export function RequestDetailPage() {
   const rexanApprovalPreview = isAdvanceSettlement && effectiveSpentAmount !== null && Number.isFinite(effectiveSpentAmount)
     ? deriveRexanApprovalPreview(request.requested_amount, effectiveSpentAmount, request.currency)
     : null;
+  const isStructuredGeneratedDevolucion = hasStructuredGeneratedReport && rexanPreviewOutcome === REXAN_OUTCOME.DEVOLUCION;
+  const structuredReturnRows = isStructuredGeneratedDevolucion ? getStructuredReturnChecklistRows(structuredReport, requestDocuments.documents) : [];
+  const incompleteStructuredReturnRows = structuredReturnRows.filter((row) => !row.isComplete);
   const storedRexanOutcome = request.rexan_outcome ?? null;
   const shouldShowRexanSummary = isAdvanceSettlement && (
     storedRexanOutcome !== null
@@ -137,10 +217,11 @@ export function RequestDetailPage() {
     || request.rexan_balance_amount != null
     || request.rexan_return_proof_document_id != null
   );
-  const isRexanReturnProofMissing = rexanPreviewOutcome === REXAN_OUTCOME.DEVOLUCION && returnProofDocuments.length === 0;
+  const isRexanReturnProofMissing = rexanPreviewOutcome === REXAN_OUTCOME.DEVOLUCION && !isStructuredGeneratedDevolucion && returnProofDocuments.length === 0;
+  const isStructuredReturnIncomplete = isStructuredGeneratedDevolucion && (structuredReturnRows.length === 0 || incompleteStructuredReturnRows.length > 0);
   const returnProofObservationComment = rexanApprovalPreview
-    ? `Por favor adjunta la constancia de devolución por ${formatRequestCurrency(rexanApprovalPreview.balanceAmount, request.currency)} para continuar con la aprobación de la rendición.`
-    : "Por favor adjunta la constancia de devolución para continuar con la aprobación de la rendición.";
+    ? `Por favor registra la devolución por ${formatRequestCurrency(rexanApprovalPreview.balanceAmount, request.currency)} desde Saldos por línea POA → Registrar devolución, adjunta o selecciona la constancia de esa línea, guarda el cambio y regenera el informe actualizado antes de reenviar la rendición.`
+    : "Por favor registra la devolución desde Saldos por línea POA → Registrar devolución, adjunta o selecciona la constancia de esa línea, guarda el cambio y regenera el informe actualizado antes de reenviar la rendición.";
   const reviewCopy = {
     observeAction: isAdvanceSettlement ? "Observar rendición" : "Observar",
     approveAction: isAdvanceSettlement ? "Aprobar rendición" : "Aprobar",
@@ -212,15 +293,17 @@ export function RequestDetailPage() {
         toast.error("Ingresa el gasto validado de la rendición.");
         return;
       }
-      const returnProofError = validateRexanReturnProofSelection(rexanPreviewOutcome, returnProofDocumentId, requestDocuments.documents);
-      if (returnProofError) {
-        toast.error(returnProofError);
-        return;
+      if (!isStructuredGeneratedDevolucion) {
+        const returnProofError = validateRexanReturnProofSelection(rexanPreviewOutcome, returnProofDocumentId, requestDocuments.documents);
+        if (returnProofError) {
+          toast.error(returnProofError);
+          return;
+        }
       }
       if (!hasStructuredGeneratedReport) {
         payload.validated_spent_amount = parsedValidatedSpentAmount ?? undefined;
       }
-      if (rexanPreviewOutcome === REXAN_OUTCOME.DEVOLUCION) {
+      if (rexanPreviewOutcome === REXAN_OUTCOME.DEVOLUCION && !isStructuredGeneratedDevolucion) {
         payload.return_proof_document_id = returnProofDocumentId;
       }
     }
@@ -279,6 +362,13 @@ export function RequestDetailPage() {
         </div>
         <div className="flex items-center gap-2">
           <StatusBadge status={request.status} context={request} />
+          {driveFolderUrl && (
+            <Button variant="outline" asChild>
+              <a href={driveFolderUrl} target="_blank" rel="noopener noreferrer" data-testid="request-detail-drive-folder-link">
+                Abrir carpeta Drive
+              </a>
+            </Button>
+          )}
           <Button variant="outline" onClick={() => router.push(ROUTES.REQUESTS)}>Volver</Button>
         </div>
       </div>
@@ -603,7 +693,58 @@ export function RequestDetailPage() {
                     <p className="mt-1 text-muted-foreground">{getRexanOutcomeDescription(rexanApprovalPreview.outcome)}</p>
                   </div>
                 )}
-                {rexanPreviewOutcome === REXAN_OUTCOME.DEVOLUCION && (
+                {isStructuredGeneratedDevolucion && (
+                  <div className="space-y-3 rounded-md border bg-background p-3 text-sm">
+                    <div className="space-y-1">
+                      <p className="font-medium">Constancias de devolución por línea POA</p>
+                      <p className="text-muted-foreground">Revisa que cada línea con saldo a devolver tenga monto registrado y constancia propia. No se selecciona una constancia global para este informe generado.</p>
+                    </div>
+                    <div className="overflow-x-auto">
+                      <table className="w-full min-w-[640px] text-left text-sm">
+                        <thead className="text-xs uppercase text-muted-foreground">
+                          <tr>
+                            <th className="py-2 pr-3 font-medium">Línea POA</th>
+                            <th className="py-2 pr-3 font-medium">Debe devolver</th>
+                            <th className="py-2 pr-3 font-medium">Devuelto registrado</th>
+                            <th className="py-2 pr-3 font-medium">Constancia</th>
+                            <th className="py-2 font-medium">Estado</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y">
+                          {structuredReturnRows.length === 0 ? (
+                            <tr>
+                              <td className="py-3 text-muted-foreground" colSpan={5}>No se encontraron líneas de devolución en el informe generado. Observa la rendición para que el solicitante regenere el informe actualizado.</td>
+                            </tr>
+                          ) : structuredReturnRows.map((row) => {
+                            const proofUrl = getSafeDocumentUrl(row.proof?.drive_web_url);
+                            return (
+                              <tr key={row.allocationId}>
+                                <td className="py-2 pr-3 font-medium">{row.label}</td>
+                                <td className="py-2 pr-3">{formatRequestCurrency(row.expectedAmount, request.currency)}</td>
+                                <td className="py-2 pr-3">{row.registeredAmount === null ? "Pendiente" : formatRequestCurrency(row.registeredAmount, request.currency)}</td>
+                                <td className="py-2 pr-3">
+                                  {row.proofName ? (
+                                    proofUrl ? <a className="text-primary underline-offset-4 hover:underline focus-visible:underline" href={proofUrl} target="_blank" rel="noreferrer">{row.proofName}</a> : <span>{row.proofName}</span>
+                                  ) : "Pendiente"}
+                                </td>
+                                <td className="py-2"><Badge variant={row.isComplete ? "default" : "destructive"}>{row.isComplete ? "válida" : "pendiente"}</Badge></td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                    {isStructuredReturnIncomplete && (
+                      <div className="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
+                        <p>{structuredReturnRows.length === 0 ? "No hay detalle de líneas para validar la devolución." : `Hay ${incompleteStructuredReturnRows.length === 1 ? "una línea pendiente" : `${incompleteStructuredReturnRows.length} líneas pendientes`}.`} Observa la rendición y solicita corregir Saldos por línea POA &gt; Registrar devolución; luego el solicitante debe guardar, regenerar el informe actualizado y reenviar.</p>
+                        <Button type="button" className="mt-3" variant="outline" onClick={handleRequestReturnProof}>
+                          Solicitar corrección de devolución
+                        </Button>
+                      </div>
+                    )}
+                  </div>
+                )}
+                {rexanPreviewOutcome === REXAN_OUTCOME.DEVOLUCION && !isStructuredGeneratedDevolucion && (
                   <div className="space-y-2">
                     <label className="text-sm font-medium" htmlFor="return-proof-document">Constancia de devolución *</label>
                     <p className="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
@@ -620,7 +761,7 @@ export function RequestDetailPage() {
                       </Select>
                     ) : (
                       <div className="space-y-3 rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
-                        <p>Para aprobar una devolución, primero solicita al solicitante que adjunte la constancia de devolución en PDF, JPG o PNG.</p>
+                        <p>Para aprobar una devolución, primero solicita al solicitante que vaya a Saldos por línea POA, use Registrar devolución, adjunte o seleccione la constancia de esa línea, guarde el cambio y regenere el informe actualizado.</p>
                         <Button type="button" variant="outline" onClick={handleRequestReturnProof}>
                           Solicitar constancia
                         </Button>
@@ -634,7 +775,7 @@ export function RequestDetailPage() {
           </div>
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => setApproveOpen(false)} disabled={approving}>Cancelar</Button>
-            <Button type="button" onClick={() => void handleApprove()} disabled={approving || isRexanReturnProofMissing}>{approving ? "Aprobando..." : reviewCopy.approveSubmit}</Button>
+            <Button type="button" onClick={() => void handleApprove()} disabled={approving || isRexanReturnProofMissing || isStructuredReturnIncomplete}>{approving ? "Aprobando..." : reviewCopy.approveSubmit}</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

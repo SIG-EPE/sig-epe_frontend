@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { RequestDetailPage } from "@/components/requests/request-detail-page";
-import { REQUEST_CURRENCY, REQUEST_DOCUMENT_CATEGORY, REQUEST_DOCUMENT_STORAGE_PROVIDER, REQUEST_DOCUMENT_UPLOAD_STATUS, REQUEST_RENDITION_REPORT_STATUS, REQUEST_STATUS, REQUEST_TYPE, REXAN_OUTCOME, type PaymentRequest, type RequestDocument, type RequestRenditionReport } from "@/types/requests";
+import { REQUEST_CURRENCY, REQUEST_DOCUMENT_CATEGORY, REQUEST_DOCUMENT_SCOPE_TYPE, REQUEST_DOCUMENT_STORAGE_PROVIDER, REQUEST_DOCUMENT_UPLOAD_STATUS, REQUEST_RENDITION_REPORT_STATUS, REQUEST_STATUS, REQUEST_TYPE, REXAN_OUTCOME, type PaymentRequest, type RequestDocument, type RequestRenditionReport } from "@/types/requests";
 
 const mocks = vi.hoisted(() => ({
   approveRequest: vi.fn(),
@@ -115,9 +115,23 @@ function makeDocument(overrides: Partial<RequestDocument> = {}): RequestDocument
     size_bytes: 1024,
     storage_provider: REQUEST_DOCUMENT_STORAGE_PROVIDER.DRIVE,
     upload_status: REQUEST_DOCUMENT_UPLOAD_STATUS.PERMANENT,
+    scope_type: REQUEST_DOCUMENT_SCOPE_TYPE.REQUEST,
+    request_allocation_id: null,
     created_at: "2026-05-01T10:00:00.000Z",
     ...overrides,
   };
+}
+
+function makeLineReturnProof(overrides: Partial<RequestDocument> = {}): RequestDocument {
+  return makeDocument({
+    id: "line-proof-1",
+    original_filename: "constancia-linea-1.pdf",
+    safe_filename: "constancia-linea-1.pdf",
+    scope_type: REQUEST_DOCUMENT_SCOPE_TYPE.ALLOCATION,
+    request_allocation_id: "allocation-1",
+    drive_web_url: "https://drive.example/constancia-linea-1",
+    ...overrides,
+  });
 }
 
 function makeReport(overrides: Partial<RequestRenditionReport> = {}): RequestRenditionReport {
@@ -138,6 +152,51 @@ function makeReport(overrides: Partial<RequestRenditionReport> = {}): RequestRen
     allocation_coverage: [],
     ...overrides,
   };
+}
+
+function makeStructuredDevolucionReport(incomplete = false): RequestRenditionReport {
+  return makeReport({
+    total_amount: 80,
+    totals: { total_amount: 80, by_allocation: [], missing_allocations: [] },
+    allocation_coverage: [
+      {
+        request_allocation_id: "allocation-1",
+        request_allocation_label: "Materiales escolares",
+        line_code: "POA-001",
+        planned_amount: 100,
+        row_total_amount: 80,
+        paid_base_amount: 100,
+        rendered_amount: 80,
+        expected_return_amount: 20,
+        returned_amount: incomplete ? 0 : 20,
+        row_count: 1,
+        has_rows: true,
+        line_return: incomplete ? null : {
+          id: "line-return-1",
+          returned_amount: 20,
+          justification: "Saldo no utilizado",
+          return_proof_document_id: "line-proof-1",
+          return_proof_filename: "constancia-linea-1.pdf",
+          status: "VALID",
+          validated_at: null,
+        },
+      },
+      {
+        request_allocation_id: "allocation-2",
+        request_allocation_label: "Movilidad local",
+        line_code: "POA-002",
+        planned_amount: 50,
+        row_total_amount: 50,
+        paid_base_amount: 50,
+        rendered_amount: 50,
+        expected_return_amount: 0,
+        returned_amount: 0,
+        row_count: 1,
+        has_rows: true,
+        line_return: null,
+      },
+    ],
+  });
 }
 
 async function openApproveDialogAndSetAmount(amount: string) {
@@ -183,14 +242,15 @@ describe("RequestDetailPage REXAN approval", () => {
 
     expect(screen.getByText(/Devolución: se debe registrar constancia por S\/\s*20\.00\./)).toBeInTheDocument();
     expect(screen.getByText(/Obligatorio para devolución: selecciona una constancia de devolución por S\/\s*20\.00 antes de aprobar\./)).toBeInTheDocument();
-    expect(screen.getByText("Para aprobar una devolución, primero solicita al solicitante que adjunte la constancia de devolución en PDF, JPG o PNG.")).toBeInTheDocument();
+    expect(screen.getByText(/Para aprobar una devolución, primero solicita al solicitante que vaya a Saldos por línea POA, use Registrar devolución/i)).toBeInTheDocument();
     expect(screen.getAllByRole("button", { name: "Aprobar rendición" }).at(-1)!).toBeDisabled();
 
     await user.click(screen.getByRole("button", { name: "Solicitar constancia" }));
 
     expect(mocks.approveRequest).not.toHaveBeenCalled();
     expect(screen.getByLabelText("Campo relacionado")).toHaveValue("Constancia de devolución");
-    expect((screen.getByLabelText("Comentario *") as HTMLTextAreaElement).value).toMatch(/Por favor adjunta la constancia de devolución por S\/\s*20\.00 para continuar con la aprobación de la rendición\./);
+    expect((screen.getByLabelText("Comentario *") as HTMLTextAreaElement).value).toMatch(/Saldos por línea POA → Registrar devolución/);
+    expect((screen.getByLabelText("Comentario *") as HTMLTextAreaElement).value).toMatch(/regenera el informe actualizado antes de reenviar la rendición/);
   });
 
   it("envía la constancia RETURN_PROOF seleccionada para DEVOLUCION", async () => {
@@ -265,22 +325,44 @@ describe("RequestDetailPage REXAN approval", () => {
     expect(screen.getByText(difference)).toBeInTheDocument();
   });
 
-  it("envía solo constancia para devolución de informe generado y omite gasto validado", async () => {
+  it("aprueba devolución estructurada completa con checklist por línea y omite constancia global", async () => {
     const user = userEvent.setup();
-    mocks.useRequestRenditionReport.mockReturnValue({ report: makeReport({ total_amount: 80 }), isLoading: false, error: null, refetch: mocks.reportRefetch });
-    mocks.useRequestDocuments.mockReturnValue({ documents: [makeDocument()], isLoading: false, error: null, refetch: mocks.documentsRefetch });
+    mocks.useRequestRenditionReport.mockReturnValue({ report: makeStructuredDevolucionReport(), isLoading: false, error: null, refetch: mocks.reportRefetch });
+    mocks.useRequestDocuments.mockReturnValue({ documents: [makeLineReturnProof()], isLoading: false, error: null, refetch: mocks.documentsRefetch });
 
     render(<RequestDetailPage />);
     await user.click(screen.getByRole("button", { name: "Aprobar rendición" }));
+
+    expect(screen.getByText("Constancias de devolución por línea POA")).toBeInTheDocument();
+    expect(screen.getByText("POA-001 - Materiales escolares")).toBeInTheDocument();
+    expect(screen.getByText("constancia-linea-1.pdf")).toBeInTheDocument();
+    expect(screen.getByText("válida")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Constancia de devolución *")).not.toBeInTheDocument();
     await user.click(screen.getAllByRole("button", { name: "Aprobar rendición" }).at(-1)!);
 
     await waitFor(() => {
-      expect(mocks.approveRequest).toHaveBeenCalledWith("rexan-1", {
-        comment: undefined,
-        return_proof_document_id: "return-proof-1",
-      });
+      expect(mocks.approveRequest).toHaveBeenCalledWith("rexan-1", { comment: undefined });
     });
     expect(mocks.approveRequest.mock.calls[0][1]).not.toHaveProperty("validated_spent_amount");
+    expect(mocks.approveRequest.mock.calls[0][1]).not.toHaveProperty("return_proof_document_id");
+  });
+
+  it("bloquea devolución estructurada cuando una línea requerida está pendiente", async () => {
+    const user = userEvent.setup();
+    mocks.useRequestRenditionReport.mockReturnValue({ report: makeStructuredDevolucionReport(true), isLoading: false, error: null, refetch: mocks.reportRefetch });
+
+    render(<RequestDetailPage />);
+    await user.click(screen.getByRole("button", { name: "Aprobar rendición" }));
+
+    expect(screen.getByText("POA-001 - Materiales escolares")).toBeInTheDocument();
+    expect(screen.getAllByText("Pendiente").length).toBeGreaterThan(0);
+    expect(screen.getByText("pendiente")).toBeInTheDocument();
+    expect(screen.getByText(/Observa la rendición y solicita corregir Saldos por línea POA > Registrar devolución/i)).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: "Aprobar rendición" }).at(-1)!).toBeDisabled();
+
+    await user.click(screen.getByRole("button", { name: "Solicitar corrección de devolución" }));
+    expect(mocks.approveRequest).not.toHaveBeenCalled();
+    expect((screen.getByLabelText("Comentario *") as HTMLTextAreaElement).value).toMatch(/Saldos por línea POA → Registrar devolución/);
   });
 
   it("mantiene el gasto manual obligatorio cuando no hay informe generado", async () => {

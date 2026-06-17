@@ -26,6 +26,26 @@ export const REQUEST_STATUS = {
 
 export type RequestStatus = (typeof REQUEST_STATUS)[keyof typeof REQUEST_STATUS];
 
+export const DRIVE_SYNC_STATUS = {
+  NOT_CONFIGURED: "NOT_CONFIGURED",
+  PENDING: "PENDING",
+  SYNCED: "SYNCED",
+  FAILED: "FAILED",
+  BLOCKED: "BLOCKED",
+} as const;
+
+export type DriveSyncStatus = (typeof DRIVE_SYNC_STATUS)[keyof typeof DRIVE_SYNC_STATUS];
+
+export const REQUEST_LIST_DATE_FIELD = {
+  CREATED_AT: "created_at",
+  SUBMITTED_AT: "submitted_at",
+  APPROVED_AT: "approved_at",
+  PAID_AT: "paid_at",
+  UPDATED_AT: "updated_at",
+} as const;
+
+export type RequestListDateField = (typeof REQUEST_LIST_DATE_FIELD)[keyof typeof REQUEST_LIST_DATE_FIELD];
+
 export const RENDITION_STATUS = {
   PENDING: "PENDING",
   OVERDUE: "OVERDUE",
@@ -138,6 +158,13 @@ export const REQUEST_RENDITION_REPORT_STATUS = {
 } as const;
 
 export type RequestRenditionReportStatus = (typeof REQUEST_RENDITION_REPORT_STATUS)[keyof typeof REQUEST_RENDITION_REPORT_STATUS];
+
+export const REQUEST_RENDITION_EXPORT_PENDING_STATE = {
+  IN_PROGRESS: "IN_PROGRESS",
+  STALE_RETRY_AVAILABLE: "STALE_RETRY_AVAILABLE",
+} as const;
+
+export type RequestRenditionExportPendingState = (typeof REQUEST_RENDITION_EXPORT_PENDING_STATE)[keyof typeof REQUEST_RENDITION_EXPORT_PENDING_STATE];
 
 export const REQUEST_RENDITION_ROW_TYPE = {
   OCR_RECEIPT: "OCR_RECEIPT",
@@ -641,6 +668,9 @@ export interface PaymentRequest {
   account_type: AccountType | null;
   bank_account: string | null;
   bank_cci: string | null;
+  drive_folder_url?: string | null;
+  drive_folder_name?: string | null;
+  drive_sync_status?: DriveSyncStatus | string | null;
   submitted_at: string | null;
   observed_at: string | null;
   approved_at: string | null;
@@ -660,6 +690,7 @@ export interface PaymentRequest {
   documents?: RequestDocument[];
   allocations?: RequestAllocation[];
   allocation_count?: number;
+  documents_count?: number;
   statusHistory?: RequestStatusHistoryItem[];
   observations?: RequestObservation[];
   payment?: RequestPayment | null;
@@ -858,6 +889,10 @@ export interface RequestRenditionReport {
   drive_sync_error: string | null;
   submitted_at: string | null;
   exported_at: string | null;
+  updated_at?: string;
+  export_pending_state?: RequestRenditionExportPendingState | null;
+  can_retry_generation?: boolean;
+  export_pending_stale_at?: string | null;
   classification_label?: string | null;
   budget_category_label?: string | null;
   area_label?: string | null;
@@ -1013,8 +1048,14 @@ export interface RequestsListFilters {
   request_type?: RequestType;
   budget_planning_line_id?: string;
   org_unit_id?: string;
+  requester_id?: string;
+  date_from?: string;
+  date_to?: string;
+  date_field?: RequestListDateField;
+  has_documents?: boolean;
+  drive_sync_status?: DriveSyncStatus;
   search?: string;
-  scope?: "mine" | "review";
+  scope?: "mine" | "review" | "history";
 }
 
 export interface PaymentQueueFilters {

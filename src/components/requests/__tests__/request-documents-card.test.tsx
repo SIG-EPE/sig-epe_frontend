@@ -476,8 +476,10 @@ describe("RequestDocumentsCard", () => {
     expect(screen.queryByText("Falta adjuntar Excel PxQ.")).not.toBeInTheDocument();
     expect(screen.queryByText("Comprobante de la rendición")).not.toBeInTheDocument();
     expect(screen.getAllByTestId("settlement-receipt-group")).toHaveLength(2);
-    expect(screen.getByText(/POA-1/)).toBeInTheDocument();
-    expect(screen.getByText(/POA-2/)).toBeInTheDocument();
+    expect(screen.getByText("Constancias de devolución por línea POA")).toBeInTheDocument();
+    expect(screen.getAllByTestId("settlement-return-proof-group")).toHaveLength(2);
+    expect(screen.getAllByText(/POA-1/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/POA-2/).length).toBeGreaterThan(0);
     expect(screen.getByText("Comprobante.pdf")).toBeInTheDocument();
   });
 
@@ -505,9 +507,45 @@ describe("RequestDocumentsCard", () => {
 
     expect(await screen.findByText(/líneas POA del anticipo original como referencia/i)).toBeInTheDocument();
     expect(screen.getAllByTestId("settlement-receipt-group")).toHaveLength(2);
-    expect(screen.getByText(/POA-1/)).toBeInTheDocument();
-    expect(screen.getByText(/POA-2/)).toBeInTheDocument();
+    expect(screen.getByText("Constancias de devolución por línea POA")).toBeInTheDocument();
+    expect(screen.getAllByTestId("settlement-return-proof-group")).toHaveLength(2);
+    expect(screen.getAllByText(/POA-1/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/POA-2/).length).toBeGreaterThan(0);
     expect(screen.queryByRole("combobox", { name: /línea poa/i })).not.toBeInTheDocument();
+  });
+
+  it("separa constancias de devolución y no ofrece RETURN_PROOF en otros documentos para rendición por línea", async () => {
+    vi.mocked(api.get).mockResolvedValue([
+      makeDocument({
+        id: "return-proof-unscoped",
+        document_category: REQUEST_DOCUMENT_CATEGORY.RETURN_PROOF,
+        original_filename: "Constancia sin línea.pdf",
+        request_allocation_id: null,
+      }),
+      makeDocument({
+        id: "return-proof-alloc-1",
+        document_category: REQUEST_DOCUMENT_CATEGORY.RETURN_PROOF,
+        original_filename: "Constancia línea 1.pdf",
+        scope_type: REQUEST_DOCUMENT_SCOPE_TYPE.ALLOCATION,
+        request_allocation_id: "alloc-1",
+      }),
+    ]);
+
+    const user = userEvent.setup();
+    render(<RequestDocumentsCard request={makeRequest({
+      request_type: REQUEST_TYPE.ADVANCE_SETTLEMENT,
+      allocations: [makeAllocation({ id: "alloc-1" })],
+    })} />);
+
+    expect(await screen.findByText("Constancias de devolución por línea POA")).toBeInTheDocument();
+    expect(screen.getByText("Constancia línea 1.pdf")).toBeInTheDocument();
+    expect(screen.getByText(/Estas constancias no están asociadas a una línea POA y no validan una devolución por línea/i)).toBeInTheDocument();
+    expect(screen.getByText("Constancia sin línea.pdf")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("combobox", { name: /categoría/i }));
+
+    expect(screen.queryByRole("option", { name: /constancia de devolución/i })).not.toBeInTheDocument();
+    expect(screen.getByText(/Las constancias de devolución se adjuntan desde Saldos por línea POA/i)).toBeInTheDocument();
   });
 
   it("sube un comprobante de rendición asociado a una línea POA", async () => {
