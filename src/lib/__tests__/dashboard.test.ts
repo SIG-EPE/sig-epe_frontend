@@ -3,8 +3,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildBudgetExecutionDashboardPath,
   buildGiofOperationsDashboardPath,
+  buildOrgUnitExecutionDashboardPath,
   getBudgetExecutionDashboard,
   getGiofOperationsDashboard,
+  getOrgUnitExecutionDashboard,
 } from "@/lib/dashboard";
 import { useAuthStore } from "@/stores/auth-store";
 
@@ -41,6 +43,12 @@ describe("dashboard API clients", () => {
   it("builds GIOF operations query params and omits empty optionals", () => {
     expect(buildGiofOperationsDashboardPath({ date_from: "2026-01-01", fiscal_year: 2026 })).toBe(
       "/dashboard/giof/operations?date_from=2026-01-01&fiscal_year=2026",
+    );
+  });
+
+  it("builds org unit execution dashboard params", () => {
+    expect(buildOrgUnitExecutionDashboardPath({ fiscal_year: 2026, month_from: 2, month_to: 3, level: "component", parent_id: "org-1" })).toBe(
+      "/budget/dashboard/org-unit-execution?fiscal_year=2026&month_from=2&month_to=3&level=component&parent_id=org-1",
     );
   });
 
@@ -81,6 +89,27 @@ describe("dashboard API clients", () => {
     );
 
     await getGiofOperationsDashboard({ fiscal_year: 2026 });
+
+    expect(getLastRequestHeaders().get("Authorization")).toBe("Bearer dashboard-token");
+  });
+
+  it("sends auth header to org unit execution endpoint", async () => {
+    vi.mocked(fetch).mockResolvedValue(
+      mockJsonResponse({
+        data: {
+          fiscal_year_id: "fy-1",
+          generated_at: "2026-06-14T00:00:00.000Z",
+          execution_semantics: "poa_spent_v1",
+          applied_filters: { fiscal_year_id: "fy-1", month_from: 1, month_to: 12, level: "area", parent_id: null },
+          totals: { programmed: 0, executed: 0, variance: 0, execution_rate: null, currency: null },
+          rows: [],
+          monthly: [],
+          warnings: [],
+        },
+      }),
+    );
+
+    await getOrgUnitExecutionDashboard({ fiscal_year: 2026 });
 
     expect(getLastRequestHeaders().get("Authorization")).toBe("Bearer dashboard-token");
   });

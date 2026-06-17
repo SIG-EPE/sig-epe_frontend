@@ -72,7 +72,7 @@ vi.mock("@/components/requests/request-documents-card", () => ({
 vi.mock("@/components/requests/structured-rendition-report-card", () => ({
   StructuredRenditionReportCard: (props: { refreshSignal?: number; onReadinessChange?: (ready: boolean, messages: string[]) => void; onLockChange?: (locked: boolean) => void }) => {
     useEffect(() => {
-      props.onReadinessChange?.(mocks.structuredReportReady, mocks.structuredReportReady ? [] : ["Genera el informe antes de continuar a revisión."]);
+      props.onReadinessChange?.(mocks.structuredReportReady, mocks.structuredReportReady ? [] : ["Informe pendiente de generación: genera el Excel validado antes de enviar a revisión."]);
       props.onLockChange?.(mocks.structuredReportReady);
     }, []);
     return <div data-testid="structured-rendition-report-card" data-refresh-signal={props.refreshSignal ?? 0}>Informe de rendición estructurado</div>;
@@ -881,6 +881,11 @@ describe("RequestForm payload helpers", () => {
     expect(screen.getByText("Resumen del anticipo original")).toBeInTheDocument();
     expect(screen.getByText("ANT-2026-001")).toBeInTheDocument();
     expect(screen.getByText("Anticipo para taller regional")).toBeInTheDocument();
+    expect(screen.getByText("Líneas del anticipo original")).toBeInTheDocument();
+    expect(screen.getByText(/El anticipo puede incluir una o más líneas POA/i)).toBeInTheDocument();
+    expect(screen.getByText("Cantidad de líneas POA")).toBeInTheDocument();
+    expect(screen.queryByText("Beneficiario")).not.toBeInTheDocument();
+    expect(screen.queryByText("Unidad organizacional")).not.toBeInTheDocument();
     expect(screen.getByText("Documentos del anticipo original")).toBeInTheDocument();
     expect(screen.getByText("POA original.xlsx")).toBeInTheDocument();
     expect(screen.getByText("Solo lectura")).toBeInTheDocument();
@@ -1013,12 +1018,12 @@ describe("RequestForm payload helpers", () => {
 
     render(<RequestForm activeStep={REQUEST_EDIT_STEP.DOCUMENTS} initialRequest={makePaymentRequest()} mode="edit" settlementContext={makeSettlementContext()} />);
 
-    expect(await screen.findByRole("button", { name: "Generar informe para continuar" })).toBeEnabled();
-    await user.click(screen.getByRole("button", { name: "Generar informe para continuar" }));
+    expect(await screen.findByRole("button", { name: "Ir a generar informe" })).toBeEnabled();
+    await user.click(screen.getByRole("button", { name: "Ir a generar informe" }));
 
     expect(mocks.push).not.toHaveBeenCalledWith("/requests/request-1/edit?step=review");
-    expect(mocks.toastError).toHaveBeenCalledWith("Genera el informe antes de continuar a revisión.");
-    expect(screen.getByText("Genera el informe antes de continuar a revisión.")).toBeInTheDocument();
+    expect(mocks.toastError).toHaveBeenCalledWith("Informe pendiente de generación: genera el Excel validado antes de enviar a revisión.");
+    expect(screen.getByText("Informe pendiente de generación: genera el Excel validado antes de enviar a revisión.")).toBeInTheDocument();
   });
 
   it("permite continuar a revisión REXAN cuando el informe ya fue generado", async () => {

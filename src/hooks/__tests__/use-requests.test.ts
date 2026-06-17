@@ -87,6 +87,15 @@ describe("request hook URL helpers", () => {
     })).toBe("/requests?page=2&limit=10&statuses=SUBMITTED%2CIN_VALIDATION%2COBSERVED&search=SOL-2026");
   });
 
+  it("serializa fecha exacta de historial como rango inclusivo del mismo día", () => {
+    expect(getRequestsPath({
+      scope: "history",
+      date_field: "updated_at",
+      date_from: "2026-06-01",
+      date_to: "2026-06-01",
+    })).toBe("/requests?date_from=2026-06-01&date_to=2026-06-01&date_field=updated_at&scope=history");
+  });
+
   it("serializa la cola de pagos explícita por estado", () => {
     expect(getPaymentQueuePath({ status: REQUEST_STATUS.PAID, page: 1, limit: 20 })).toBe("/requests/payment-queue?page=1&limit=20&status=PAID");
   });

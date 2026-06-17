@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { CheckCircle2, FileSpreadsheet, XCircle } from "lucide-react";
+import { AlertTriangle, CheckCircle2, FileSpreadsheet, XCircle } from "lucide-react";
 import { toast } from "sonner";
 
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -15,14 +15,18 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Textarea } from "@/components/ui/textarea";
 import { useRequestDocuments, useRequestReceiptReviews, useRequestRenditionReport, useRequestRenditionReportActions, useUploadRequestDocument } from "@/hooks/use-requests";
 import { formatRequestCurrency, formatRequestDate, getApiErrorMessage, getPlanningLineDisplay, getRequestDocumentDisplayName } from "@/lib/requests";
+import { cn } from "@/lib/utils";
 import {
   REQUEST_CURRENCY,
   REQUEST_DOCUMENT_CATEGORY,
   REQUEST_DOCUMENT_SCOPE_TYPE,
+  REQUEST_DOCUMENT_UPLOAD_STATUS,
   LINE_RETURN_VALIDATION_STATUS,
+  REQUEST_RENDITION_EXPORT_PENDING_STATE,
   REQUEST_RENDITION_REPORT_STATUS,
   REQUEST_RENDITION_ROW_TYPE,
   REQUEST_STATUS,
+  REQUEST_TYPE,
   type CreateManualRenditionRowInput,
   type PaymentRequest,
   type RequestAllocation,
@@ -67,6 +71,30 @@ interface AllocationOption {
   id: string;
   label: string;
   allocation: RequestAllocation | null;
+}
+
+const RENDITION_CHECKLIST_RESPONSIBLE = {
+  REQUESTER: "Solicitante",
+  GIOF: "GIOF",
+  SYSTEM: "Sistema",
+} as const;
+
+type RenditionChecklistResponsible = (typeof RENDITION_CHECKLIST_RESPONSIBLE)[keyof typeof RENDITION_CHECKLIST_RESPONSIBLE];
+
+const RENDITION_CHECKLIST_STATUS = {
+  OK: "ok",
+  BLOCKER: "blocker",
+  WARNING: "warning",
+} as const;
+
+type RenditionChecklistStatus = (typeof RENDITION_CHECKLIST_STATUS)[keyof typeof RENDITION_CHECKLIST_STATUS];
+
+interface RenditionChecklistItem {
+  id: string;
+  title: string;
+  description: string;
+  responsible: RenditionChecklistResponsible;
+  status: RenditionChecklistStatus;
 }
 
 const BULK_RECEIPT_ADD_STATUS = {
@@ -161,11 +189,26 @@ function getRowSourceLabel(row: RequestRenditionRow): string {
 function getReportStatusLabel(report: RequestRenditionReport | null): string {
   if (!report) return "Preparando";
   if (report.status === REQUEST_RENDITION_REPORT_STATUS.EXPORTED) return "Informe generado";
+  if (isExportPendingRetryAvailable(report)) return "Generación atascada";
+  if (isExportPendingInProgress(report)) return "Generando informe";
   if (report.status === REQUEST_RENDITION_REPORT_STATUS.EXPORT_FAILED) return "Requiere regenerar informe";
   if (report.status === REQUEST_RENDITION_REPORT_STATUS.READY) return "Listo para generar";
   if (report.status === REQUEST_RENDITION_REPORT_STATUS.SUBMITTED) return "En revisión";
   if (report.status === REQUEST_RENDITION_REPORT_STATUS.OBSERVED) return "Observado";
   return "En preparación";
+}
+
+function isExportPendingWithoutDocument(report: RequestRenditionReport | null): boolean {
+  return report?.status === REQUEST_RENDITION_REPORT_STATUS.EXPORT_PENDING && !report.settlement_report_document_id;
+}
+
+function isExportPendingRetryAvailable(report: RequestRenditionReport | null): boolean {
+  return isExportPendingWithoutDocument(report)
+    && (report?.can_retry_generation === true || report?.export_pending_state === REQUEST_RENDITION_EXPORT_PENDING_STATE.STALE_RETRY_AVAILABLE);
+}
+
+function isExportPendingInProgress(report: RequestRenditionReport | null): boolean {
+  return isExportPendingWithoutDocument(report) && !isExportPendingRetryAvailable(report);
 }
 
 function toRowForm(row: RequestRenditionRow): RowFormState {
@@ -208,20 +251,6 @@ function getReceiptSummary(receiptReview: RequestReceiptReview): string {
   return `${provider} · ${number} · ${amount}`;
 }
 
-function renderBlockers(blockers: RequestRenditionValidationBlocker[]): ReactNode {
-  if (blockers.length === 0) return null;
-  return (
-    <Alert variant={blockers.some((blocker) => blocker.code !== "UNCONFIRMED_RECEIPTS_PENDING" && blocker.code !== "UNCONFIRMED_RECEIPT_EVIDENCE") ? "destructive" : undefined}>
-      <AlertDescription>
-        <p className="font-medium">Pendientes del informe</p>
-        <ul className="mt-2 list-disc space-y-1 pl-5">
-          {blockers.map((blocker, index) => <li key={`${blocker.code}-${blocker.row_id ?? blocker.request_allocation_id ?? index}`}>{blocker.message}</li>)}
-        </ul>
-      </AlertDescription>
-    </Alert>
-  );
-}
-
 function isReportStatusReady(report: RequestRenditionReport | null): boolean {
   switch (report?.status) {
     case REQUEST_RENDITION_REPORT_STATUS.READY:
@@ -232,6 +261,80 @@ function isReportStatusReady(report: RequestRenditionReport | null): boolean {
     default:
       return false;
   }
+}
+
+function getLineReturnChecklistTitle(code: string): string {
+  switch (code) {
+    case "LINE_RETURN_MISSING_EXECUTION":
+      return "Pendiente administrativo GIOF";
+    case "LINE_RETURN_REQUIRED":
+    case "LINE_RETURN_PROOF_REQUIRED":
+    case "LINE_RETURN_JUSTIFICATION_REQUIRED":
+    case "LINE_RETURN_AMOUNT_MISMATCH":
+      return "Devolución requerida";
+    default:
+      return "Pendiente de devolución";
+  }
+}
+
+function getChecklistResponsibleForBlocker(code: string): RenditionChecklistResponsible {
+  if (code === "LINE_RETURN_MISSING_EXECUTION") return RENDITION_CHECKLIST_RESPONSIBLE.GIOF;
+  if (code.startsWith("EXPORT") || code.includes("REPORT")) return RENDITION_CHECKLIST_RESPONSIBLE.SYSTEM;
+  return RENDITION_CHECKLIST_RESPONSIBLE.REQUESTER;
+}
+
+function getChecklistTitleForBlocker(blocker: RequestRenditionValidationBlocker): string {
+  switch (blocker.code) {
+    case "ALLOCATION_WITHOUT_ROWS":
+    case "MISSING_ALLOCATION_COVERAGE":
+      return "Comprobantes por completar";
+    case "UNCONFIRMED_RECEIPTS_PENDING":
+    case "UNCONFIRMED_RECEIPT_EVIDENCE":
+      return "Comprobantes pendientes de revisión";
+    case "LINE_RETURN_MISSING_EXECUTION":
+    case "LINE_RETURN_REQUIRED":
+    case "LINE_RETURN_PROOF_REQUIRED":
+    case "LINE_RETURN_JUSTIFICATION_REQUIRED":
+    case "LINE_RETURN_AMOUNT_MISMATCH":
+      return getLineReturnChecklistTitle(blocker.code);
+    default:
+      return "Pendiente para enviar a revisión";
+  }
+}
+
+function getChecklistDescriptionForBlocker(blocker: RequestRenditionValidationBlocker): string {
+  switch (blocker.code) {
+    case "LINE_RETURN_MISSING_EXECUTION":
+      return "Falta registrar o vincular la base efectivamente pagada del anticipo. No se corrige en la rendición: GIOF debe regularizar el pago/ejecución antes de generar el informe.";
+    case "LINE_RETURN_REQUIRED":
+      return "La base pagada del anticipo supera el monto rendido. Registra la devolución exacta del saldo de la línea POA y adjunta la constancia correspondiente.";
+    case "LINE_RETURN_PROOF_REQUIRED":
+      return "La devolución ya requiere constancia: adjunta o selecciona un documento de devolución activo para la misma línea POA.";
+    case "LINE_RETURN_JUSTIFICATION_REQUIRED":
+      return "Completa una justificación breve para documentar la devolución del saldo no utilizado.";
+    case "LINE_RETURN_AMOUNT_MISMATCH":
+      return "El monto devuelto debe coincidir exactamente con el saldo esperado calculado para la línea POA.";
+    default:
+      return blocker.message;
+  }
+}
+
+function getChecklistIcon(status: RenditionChecklistStatus): ReactNode {
+  if (status === RENDITION_CHECKLIST_STATUS.OK) return <CheckCircle2 className="size-4 text-emerald-600" />;
+  if (status === RENDITION_CHECKLIST_STATUS.WARNING) return <AlertTriangle className="size-4 text-amber-600" />;
+  return <XCircle className="size-4 text-destructive" />;
+}
+
+function getChecklistStatusLabel(status: RenditionChecklistStatus): string {
+  if (status === RENDITION_CHECKLIST_STATUS.OK) return "Listo";
+  if (status === RENDITION_CHECKLIST_STATUS.WARNING) return "Revisión";
+  return "Bloquea envío";
+}
+
+function getChecklistStatusClassName(status: RenditionChecklistStatus): string {
+  if (status === RENDITION_CHECKLIST_STATUS.OK) return "border-emerald-200 bg-emerald-50/60 dark:border-emerald-900 dark:bg-emerald-950/20";
+  if (status === RENDITION_CHECKLIST_STATUS.WARNING) return "border-amber-200 bg-amber-50/70 dark:border-amber-900 dark:bg-amber-950/20";
+  return "border-destructive/30 bg-destructive/5";
 }
 
 function isReportLocked(report: RequestRenditionReport | null, isObservedRequest = false): boolean {
@@ -253,7 +356,8 @@ function hasSafeReportCoverage(report: RequestRenditionReport | null): boolean {
   if (report.allocation_coverage.some((coverage) => {
     const expectedReturn = Number(coverage.expected_return_amount ?? 0);
     if (expectedReturn <= 0) return false;
-    return coverage.return_validation_status !== LINE_RETURN_VALIDATION_STATUS.VALID;
+    return coverage.return_validation_status !== LINE_RETURN_VALIDATION_STATUS.VALID
+      && coverage.return_validation_status !== LINE_RETURN_VALIDATION_STATUS.NOT_REQUIRED;
   })) return false;
   return report.rows.every((row) => (
     Boolean(row.request_document_id)
@@ -277,7 +381,7 @@ function getReturnValidationLabel(status?: string | null): string {
     case LINE_RETURN_VALIDATION_STATUS.NOT_REQUIRED:
       return "No requiere devolución";
     case LINE_RETURN_VALIDATION_STATUS.MISSING:
-      return "Falta registrar devolución";
+      return "Devolución requerida";
     case LINE_RETURN_VALIDATION_STATUS.MISSING_PROOF:
       return "Falta constancia";
     case LINE_RETURN_VALIDATION_STATUS.MISSING_JUSTIFICATION:
@@ -285,18 +389,24 @@ function getReturnValidationLabel(status?: string | null): string {
     case LINE_RETURN_VALIDATION_STATUS.MISMATCH:
       return "Monto no coincide";
     case LINE_RETURN_VALIDATION_STATUS.EXCESS:
-      return "Exceso rendido";
+      return "Exceso rendido para revisión GIOF";
     case LINE_RETURN_VALIDATION_STATUS.MISSING_EXECUTION:
-      return "Falta monto pagado";
+      return "Pendiente administrativo GIOF";
     default:
       return "Pendiente";
   }
 }
 
-function getLineReturnBlockerMessage(status?: string | null): string | null {
+function getLineBalanceStatusLabel(status: string | null | undefined, requiresReturnProof: boolean, expectedReturn: number): string {
+  if (!requiresReturnProof && expectedReturn > 0) return "Saldo estimado";
+  return getReturnValidationLabel(status);
+}
+
+function getLineReturnBlockerMessage(status: string | null | undefined, requiresReturnProof: boolean): string | null {
+  if (!requiresReturnProof && status !== LINE_RETURN_VALIDATION_STATUS.MISSING_EXECUTION) return null;
   switch (status) {
     case LINE_RETURN_VALIDATION_STATUS.MISSING:
-      return "Registra la devolución exacta de esta línea POA.";
+      return "Devolución requerida: registra el saldo exacto no utilizado y adjunta la constancia de devolución de esta línea POA.";
     case LINE_RETURN_VALIDATION_STATUS.MISSING_PROOF:
       return "Selecciona o adjunta una constancia de devolución para esta línea.";
     case LINE_RETURN_VALIDATION_STATUS.MISSING_JUSTIFICATION:
@@ -304,10 +414,23 @@ function getLineReturnBlockerMessage(status?: string | null): string | null {
     case LINE_RETURN_VALIDATION_STATUS.MISMATCH:
       return "El monto devuelto debe coincidir exactamente con el saldo esperado.";
     case LINE_RETURN_VALIDATION_STATUS.MISSING_EXECUTION:
-      return "Falta registrar el monto efectivamente pagado para esta línea.";
+      return "Pendiente administrativo GIOF: no se encontró la base efectivamente pagada de esta línea POA. Este dato proviene del pago/ejecución del anticipo original, no se ingresa en la rendición; GIOF debe regularizarlo antes de generar el informe.";
     default:
       return null;
   }
+}
+
+function getLineReturnMeaningMessage(expectedReturn: number, excessAmount: number, currency: string, requiresReturnProof: boolean): string | null {
+  if (expectedReturn > 0) {
+    if (!requiresReturnProof) {
+      return `Saldo estimado: la base pagada supera lo rendido por ${formatRequestCurrency(expectedReturn, currency)}. En esta preparación inicial no se solicita constancia de devolución; GIOF decidirá si observa la rendición y pide sustento de devolución.`;
+    }
+    return `Devolución requerida: la base pagada es mayor al monto rendido. Debes devolver ${formatRequestCurrency(expectedReturn, currency)} y adjuntar una constancia para esta línea POA.`;
+  }
+  if (excessAmount > 0) {
+    return `Exceso rendido para revisión GIOF: los gastos superan la base pagada por ${formatRequestCurrency(excessAmount, currency)}. No se solicita devolución ni constancia, pero GIOF debe revisar si corresponde observar o aceptar el exceso.`;
+  }
+  return null;
 }
 
 function cleanText(value?: string | null): string | null {
@@ -341,6 +464,49 @@ function getCoverageClassificationItems(coverage: RequestRenditionReport["alloca
   return items.filter((item): item is { label: string; value: string } => Boolean(item.value));
 }
 
+function hasLineBalanceAmount(coverage: RequestRenditionReport["allocation_coverage"][number]): boolean {
+  return Number(coverage.expected_return_amount ?? 0) > 0
+    || Number(coverage.returned_amount ?? 0) > 0
+    || Number(coverage.excess_amount ?? 0) > 0;
+}
+
+function hasRenditionActivity(report: RequestRenditionReport | null, confirmedReceiptCount: number): boolean {
+  if (!report) return confirmedReceiptCount > 0;
+  if (report.rows.length > 0 || confirmedReceiptCount > 0) return true;
+  return report.allocation_coverage.some((coverage) => (
+    coverage.has_rows
+    || Number(coverage.row_count ?? 0) > 0
+    || Number(coverage.row_total_amount ?? 0) > 0
+    || Number(coverage.rendered_amount ?? 0) > 0
+  ));
+}
+
+function hasGeneratedOrObservedReportStatus(report: RequestRenditionReport | null, isObservedRequest: boolean): boolean {
+  if (isObservedRequest) return true;
+  switch (report?.status) {
+    case REQUEST_RENDITION_REPORT_STATUS.READY:
+    case REQUEST_RENDITION_REPORT_STATUS.SUBMITTED:
+    case REQUEST_RENDITION_REPORT_STATUS.EXPORT_PENDING:
+    case REQUEST_RENDITION_REPORT_STATUS.EXPORTED:
+    case REQUEST_RENDITION_REPORT_STATUS.OBSERVED:
+      return true;
+    default:
+      return false;
+  }
+}
+
+function shouldRequireLineReturnProof(
+  coverage: RequestRenditionReport["allocation_coverage"][number],
+  isObservedRequest: boolean,
+): boolean {
+  return isObservedRequest || Boolean(coverage.line_return);
+}
+
+function isActiveReturnProofDocument(document: RequestDocument): boolean {
+  return document.document_category === REQUEST_DOCUMENT_CATEGORY.RETURN_PROOF
+    && document.upload_status !== REQUEST_DOCUMENT_UPLOAD_STATUS.FAILED;
+}
+
 export function StructuredRenditionReportCard({ request, guidanceAllocations = [], refreshSignal = 0, readOnly = false, reportResource, documentsResource, receiptsResource, onChanged, onReadinessChange, onLockChange }: StructuredRenditionReportCardProps) {
   const internalReportState = useRequestRenditionReport(request.id);
   const internalDocumentsState = useRequestDocuments(request.id);
@@ -363,6 +529,7 @@ export function StructuredRenditionReportCard({ request, guidanceAllocations = [
   const [bulkReceiptProgress, setBulkReceiptProgress] = useState<{ completed: number; total: number; failed: number } | null>(null);
   const [isBulkAddingReceipts, setIsBulkAddingReceipts] = useState(false);
   const [lineReturnForms, setLineReturnForms] = useState<Record<string, LineReturnFormState>>({});
+  const [openLineReturnForms, setOpenLineReturnForms] = useState<Set<string>>(() => new Set());
   const lastReadinessNotificationRef = useRef<string | null>(null);
   const lastLockNotificationRef = useRef<boolean | null>(null);
   const blockerSummaryRef = useRef<HTMLDivElement>(null);
@@ -375,7 +542,7 @@ export function StructuredRenditionReportCard({ request, guidanceAllocations = [
   const documents = documentsState.documents;
   const rows = report?.rows ?? [];
   const evidenceDocuments = documents.filter((document) => document.document_category !== REQUEST_DOCUMENT_CATEGORY.SETTLEMENT_REPORT && document.document_category !== REQUEST_DOCUMENT_CATEGORY.RETURN_PROOF);
-  const returnProofDocuments = documents.filter((document) => document.document_category === REQUEST_DOCUMENT_CATEGORY.RETURN_PROOF);
+  const returnProofDocuments = documents.filter(isActiveReturnProofDocument);
   const generatedDocument = report?.settlement_report_document_id ? getDocumentById(documents, report.settlement_report_document_id) : null;
   const missingAllocations = report?.totals.missing_allocations ?? [];
   const allocationLabelsById = new Map(allocationOptions.map((option) => [option.id, option.label]));
@@ -395,14 +562,20 @@ export function StructuredRenditionReportCard({ request, guidanceAllocations = [
   );
   const canRegenerateReport = !readOnly && (
     report?.status === REQUEST_RENDITION_REPORT_STATUS.EXPORT_FAILED
+    || isExportPendingRetryAvailable(report)
     || isObservedGeneratedReport
   );
   const reportGeneratedForReview = isReportGeneratedForReview(report);
+  const lineBalanceCoverages = (report?.allocation_coverage ?? []).filter(hasLineBalanceAmount);
+  const hasLineBalanceCandidates = lineBalanceCoverages.length > 0;
+  const shouldShowLineBalances = hasLineBalanceCandidates
+    && (hasRenditionActivity(report, confirmedReceipts.length) || hasGeneratedOrObservedReportStatus(report, isObservedRequest));
   const reportLocked = isReportLocked(report, isObservedRequest);
   const validationReady = ready || isReportStatusReady(report);
-  const derivedReady = reportGeneratedForReview;
+  const generatedReportMatchesCurrentRows = reportGeneratedForReview && hasSafeReportCoverage(report);
+  const derivedReady = generatedReportMatchesCurrentRows;
   const canGenerateFromLoadedReport = validationReady || hasSafeReportCoverage(report) || report?.status === REQUEST_RENDITION_REPORT_STATUS.EXPORT_FAILED;
-  const effectiveBlockers = (blockers.length > 0 ? blockers : missingAllocations.map((allocationId) => ({
+  const effectiveBlockers: RequestRenditionValidationBlocker[] = (blockers.length > 0 ? blockers : missingAllocations.map((allocationId): RequestRenditionValidationBlocker => ({
     code: "MISSING_ALLOCATION_COVERAGE",
     message: `Falta al menos un comprobante para ${allocationLabelsById.get(allocationId) ?? "una línea POA pendiente"}.`,
     request_allocation_id: allocationId,
@@ -424,12 +597,90 @@ export function StructuredRenditionReportCard({ request, guidanceAllocations = [
     ...effectiveBlockers,
     ...(unconfirmedActiveReceipts.length > 0 && !hasUnconfirmedReceiptBlocker ? [{ code: "UNCONFIRMED_RECEIPTS_PENDING", message: unconfirmedReceiptsMessage, pending_count: unconfirmedActiveReceipts.length }] : []),
   ];
-  const hasHardBlockers = effectiveBlockers.length > 0;
-  const hasPendingValidationItems = validationSummaryBlockers.length > 0;
-  const canUseGenerationAction = !hasPendingValidationItems && (canRegenerateReport || (isReportEditable && canGenerateFromLoadedReport && !hasHardBlockers));
-  const generationButtonLabel = canRegenerateReport ? "Regenerar informe" : "Generar informe";
-  const readinessMessages = reportGeneratedForReview ? [] : ["Genera el informe antes de continuar a revisión."];
+  const administrativeCoverageBlockers = (report?.allocation_coverage ?? [])
+    .filter((coverage) => coverage.return_validation_status === LINE_RETURN_VALIDATION_STATUS.MISSING_EXECUTION)
+    .map((coverage, index): RequestRenditionValidationBlocker => ({
+      code: "LINE_RETURN_MISSING_EXECUTION",
+      message: "No se encontró el registro administrativo del monto efectivamente pagado para esta línea POA. GIOF debe regularizar el pago/ejecución del anticipo antes de generar el informe.",
+      request_allocation_id: coverage.request_allocation_id,
+      request_allocation_label: allocationLabelsById.get(coverage.request_allocation_id) ?? coverage.request_allocation_label ?? `Línea POA ${index + 1}`,
+    }));
+  const administrativeBlockerKeys = new Set(validationSummaryBlockers.map((blocker) => `${blocker.code}:${blocker.request_allocation_id ?? blocker.row_id ?? blocker.message}`));
+  const checklistBlockers = [
+    ...validationSummaryBlockers,
+    ...administrativeCoverageBlockers.filter((blocker) => !administrativeBlockerKeys.has(`${blocker.code}:${blocker.request_allocation_id ?? blocker.row_id ?? blocker.message}`)),
+  ];
+  const hasHardBlockers = effectiveBlockers.length > 0 || administrativeCoverageBlockers.length > 0;
+  const hasPendingValidationItems = checklistBlockers.length > 0;
+  const canGeneratePendingReport = !readOnly && !reportGeneratedForReview && !reportLocked && canGenerateFromLoadedReport && !hasHardBlockers;
+  const canUseGenerationAction = !hasPendingValidationItems && (canRegenerateReport || canGeneratePendingReport);
+  const canUseValidationAction = isReportEditable;
+  const generationButtonLabel = isExportPendingRetryAvailable(report) ? "Reintentar generación" : canRegenerateReport ? "Regenerar informe actualizado" : "Generar informe";
+  const exportPendingInProgress = isExportPendingInProgress(report);
+  const exportPendingRetryAvailable = isExportPendingRetryAvailable(report);
+  const paidBaseLabel = request.request_type === REQUEST_TYPE.ADVANCE_SETTLEMENT ? "Base pagada del anticipo" : "Base pagada";
+  const readinessMessages = generatedReportMatchesCurrentRows
+    ? []
+    : reportGeneratedForReview
+      ? ["Informe generado desactualizado: el Excel no coincide con la validación actual. Revisa los pendientes y regenera el informe actualizado antes de enviar."]
+      : ["Informe pendiente de generación: genera el Excel validado antes de enviar a revisión."];
   const readinessMessagesKey = readinessMessages.join("\n");
+  const excessCoverageWarnings = (report?.allocation_coverage ?? []).filter((coverage) => Number(coverage.excess_amount ?? 0) > 0 && coverage.return_validation_status !== LINE_RETURN_VALIDATION_STATUS.MISSING_EXECUTION);
+  const checklistItems: RenditionChecklistItem[] = [
+    ...(checklistBlockers.length > 0
+      ? checklistBlockers.map((blocker, index): RenditionChecklistItem => ({
+        id: `${blocker.code}-${blocker.request_allocation_id ?? blocker.row_id ?? index}`,
+        title: getChecklistTitleForBlocker(blocker),
+        description: getChecklistDescriptionForBlocker(blocker),
+        responsible: getChecklistResponsibleForBlocker(blocker.code),
+        status: RENDITION_CHECKLIST_STATUS.BLOCKER,
+      }))
+      : [{
+        id: "validation-ok",
+        title: "Validación sin bloqueos",
+        description: "Las líneas POA, comprobantes confirmados y devoluciones requeridas no presentan bloqueos para generar el informe.",
+        responsible: RENDITION_CHECKLIST_RESPONSIBLE.REQUESTER,
+        status: RENDITION_CHECKLIST_STATUS.OK,
+      }]),
+    ...(excessCoverageWarnings.length > 0 ? [{
+      id: "excess-review",
+      title: "Exceso rendido para revisión GIOF",
+      description: excessCoverageWarnings.length === 1
+        ? "Hay una línea donde el monto rendido supera la base pagada. No requiere constancia de devolución; GIOF revisará si corresponde aceptar u observar el exceso."
+        : `Hay ${excessCoverageWarnings.length} líneas donde el monto rendido supera la base pagada. No requieren constancia de devolución; GIOF revisará si corresponde aceptar u observar el exceso.`,
+      responsible: RENDITION_CHECKLIST_RESPONSIBLE.GIOF,
+      status: RENDITION_CHECKLIST_STATUS.WARNING,
+    } satisfies RenditionChecklistItem] : []),
+    reportGeneratedForReview
+      ? {
+        id: "generated-report",
+        title: generatedReportMatchesCurrentRows ? "Informe generado alineado" : "Informe generado desactualizado",
+        description: generatedReportMatchesCurrentRows
+          ? "El Excel generado coincide con la validación actual y está listo para adjuntarse al envío a revisión."
+          : "El Excel generado ya no coincide con los datos o validaciones actuales. Regenera el informe actualizado antes de enviarlo a revisión.",
+        responsible: RENDITION_CHECKLIST_RESPONSIBLE.SYSTEM,
+        status: generatedReportMatchesCurrentRows ? RENDITION_CHECKLIST_STATUS.OK : RENDITION_CHECKLIST_STATUS.BLOCKER,
+      }
+      : {
+        id: "generated-report",
+        title: "Informe pendiente de generación",
+        description: canUseGenerationAction
+          ? "La rendición ya puede generar el Excel final desde la validación actual."
+          : "Aún falta generar el Excel final; primero resuelve los bloqueos del checklist y luego genera el informe.",
+        responsible: RENDITION_CHECKLIST_RESPONSIBLE.SYSTEM,
+        status: RENDITION_CHECKLIST_STATUS.BLOCKER,
+      },
+  ];
+  const checklistBlockerCount = checklistItems.filter((item) => item.status === RENDITION_CHECKLIST_STATUS.BLOCKER).length;
+  const checklistWarningCount = checklistItems.filter((item) => item.status === RENDITION_CHECKLIST_STATUS.WARNING).length;
+  const checklistReadyToSend = checklistBlockerCount === 0 && generatedReportMatchesCurrentRows;
+  const finalChecklistCopy = checklistReadyToSend
+    ? "Listo para enviar a revisión: el informe generado está alineado con la validación actual."
+    : canUseGenerationAction
+      ? "Siguiente paso: genera el informe final desde la validación actual."
+      : reportGeneratedForReview && !generatedReportMatchesCurrentRows && canRegenerateReport
+        ? "Siguiente paso: regenera el informe actualizado antes de reenviar."
+        : "Siguiente paso: resuelve los pendientes indicados antes de generar o enviar.";
   const hasEvidenceDocuments = evidenceDocuments.length > 0;
   const manualDisabledReason = allocationOptions.length === 0
     ? hasGuidanceAllocations
@@ -501,6 +752,19 @@ export function StructuredRenditionReportCard({ request, guidanceAllocations = [
     });
   }
 
+  function openLineReturnForm(coverage: RequestRenditionReport["allocation_coverage"][number]): void {
+    setLineReturnForms((current) => ({ ...current, [coverage.request_allocation_id]: getLineReturnForm(coverage) }));
+    setOpenLineReturnForms((current) => new Set(current).add(coverage.request_allocation_id));
+  }
+
+  function closeLineReturnForm(allocationId: string): void {
+    setOpenLineReturnForms((current) => {
+      const next = new Set(current);
+      next.delete(allocationId);
+      return next;
+    });
+  }
+
   async function handleUploadReturnProof(allocationId: string, files: FileList | null): Promise<void> {
     const file = files?.item(0);
     if (!file || !isReportEditable) return;
@@ -553,6 +817,7 @@ export function StructuredRenditionReportCard({ request, guidanceAllocations = [
         delete next[coverage.request_allocation_id];
         return next;
       });
+      closeLineReturnForm(coverage.request_allocation_id);
       toast.success("Devolución de línea POA guardada");
       await refreshReportOnly();
     } catch (error) {
@@ -586,6 +851,15 @@ export function StructuredRenditionReportCard({ request, guidanceAllocations = [
     await reportState.refetch({ background: true });
     setBlockers([]);
     setReady(false);
+  }
+
+  async function handleRefreshExportStatus(): Promise<void> {
+    try {
+      await refreshAll();
+      toast.success("Estado de generación actualizado");
+    } catch (error) {
+      toast.error(getApiErrorMessage(error));
+    }
   }
 
   async function handleAddReceiptRow(receiptReview: RequestReceiptReview): Promise<void> {
@@ -899,75 +1173,131 @@ export function StructuredRenditionReportCard({ request, guidanceAllocations = [
           </div>
         </section>
 
-        {report?.allocation_coverage.some((coverage) => Number(coverage.expected_return_amount ?? 0) > 0 || Number(coverage.returned_amount ?? 0) > 0 || Number(coverage.excess_amount ?? 0) > 0) ? (
+        {hasLineBalanceCandidates && !shouldShowLineBalances ? (
+          <div className="rounded-md border border-dashed p-4 text-sm text-muted-foreground">
+            Agrega y revisa comprobantes para calcular saldos por línea POA.
+          </div>
+        ) : null}
+
+        {shouldShowLineBalances ? (
           <section className="space-y-3 rounded-md border p-4">
             <div>
-              <h3 className="text-sm font-semibold">Devoluciones por línea POA</h3>
-              <p className="text-xs text-muted-foreground">Cuando una línea tiene saldo a devolver, registra el monto exacto, una constancia por esa línea y la justificación. Esto reemplaza la constancia global de devolución.</p>
+              <h3 className="text-sm font-semibold">Saldos por línea POA</h3>
+              <p className="text-xs text-muted-foreground">Durante la preparación inicial los saldos son informativos. La constancia de devolución se solicita solo si GIOF observa la rendición y pide sustento de devolución; el exceso rendido queda visible como advertencia de revisión.</p>
             </div>
             <div className="grid gap-3">
-              {report.allocation_coverage.filter((coverage) => Number(coverage.expected_return_amount ?? 0) > 0 || Number(coverage.returned_amount ?? 0) > 0 || Number(coverage.excess_amount ?? 0) > 0).map((coverage, index) => {
+              {lineBalanceCoverages.map((coverage, index) => {
                 const allocationLabel = allocationLabelsById.get(coverage.request_allocation_id) ?? coverage.request_allocation_label ?? `Línea POA ${index + 1}`;
-                const currency = report.currency || request.currency;
+                const currency = report?.currency || request.currency;
                 const expectedReturn = Number(coverage.expected_return_amount ?? 0);
                 const returnedAmount = Number(coverage.returned_amount ?? coverage.line_return?.returned_amount ?? 0);
                 const excessAmount = Number(coverage.excess_amount ?? 0);
                 const validationStatus = coverage.return_validation_status ?? (expectedReturn > 0 ? LINE_RETURN_VALIDATION_STATUS.MISSING : LINE_RETURN_VALIDATION_STATUS.NOT_REQUIRED);
-                const blockerMessage = getLineReturnBlockerMessage(validationStatus);
+                const requiresReturnProof = shouldRequireLineReturnProof(coverage, isObservedRequest);
+                const isMissingExecution = validationStatus === LINE_RETURN_VALIDATION_STATUS.MISSING_EXECUTION;
+                const blockerMessage = getLineReturnBlockerMessage(validationStatus, requiresReturnProof);
+                const meaningMessage = getLineReturnMeaningMessage(expectedReturn, excessAmount, currency, requiresReturnProof);
                 const form = getLineReturnForm(coverage);
                 const lineReturnProofs = returnProofDocuments.filter((document) => document.request_allocation_id === coverage.request_allocation_id || document.id === coverage.line_return?.return_proof_document_id);
                 const selectedProof = form.return_proof_document_id ? getDocumentById(documents, form.return_proof_document_id) : null;
                 const amountMatches = Math.round(Number(form.returned_amount || 0) * 100) === Math.round(expectedReturn * 100);
+                const isLineReturnFormOpen = openLineReturnForms.has(coverage.request_allocation_id);
+                const savedProof = coverage.line_return?.return_proof_document_id ? getDocumentById(documents, coverage.line_return.return_proof_document_id) : null;
+                const savedProofName = savedProof ? getRequestDocumentDisplayName(savedProof) : coverage.line_return?.return_proof_filename || coverage.line_return?.return_proof_document_id || null;
+                const returnProofSelectId = `return-proof-${coverage.request_allocation_id}`;
+                const returnProofUploadId = `return-proof-upload-${coverage.request_allocation_id}`;
                 return (
                   <div key={coverage.request_allocation_id} className="space-y-4 rounded-md border bg-muted/20 p-3 text-sm" data-testid={`line-return-${coverage.request_allocation_id}`}>
                     <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
                       <div>
                         <p className="font-medium">{allocationLabel}</p>
-                        <p className="text-xs text-muted-foreground">Devolución esperada calculada por línea POA.</p>
+                        <p className="text-xs text-muted-foreground">Saldo calculado contra la base efectivamente pagada para esta línea POA.</p>
                       </div>
-                      <Badge variant={validationStatus === LINE_RETURN_VALIDATION_STATUS.VALID || validationStatus === LINE_RETURN_VALIDATION_STATUS.NOT_REQUIRED ? "secondary" : "destructive"}>{getReturnValidationLabel(validationStatus)}</Badge>
+                      <Badge variant={!requiresReturnProof || validationStatus === LINE_RETURN_VALIDATION_STATUS.VALID || validationStatus === LINE_RETURN_VALIDATION_STATUS.NOT_REQUIRED ? "secondary" : isMissingExecution ? "outline" : "destructive"}>{getLineBalanceStatusLabel(validationStatus, requiresReturnProof, expectedReturn)}</Badge>
                     </div>
                     <dl className="grid gap-2 sm:grid-cols-5">
-                      <div className="rounded-md bg-background p-2"><dt className="text-xs text-muted-foreground">Base pagada</dt><dd className="font-semibold">{formatRequestCurrency(Number(coverage.paid_base_amount ?? coverage.planned_amount ?? 0), currency)}</dd></div>
+                      <div className="rounded-md bg-background p-2"><dt className="text-xs text-muted-foreground">{paidBaseLabel}</dt><dd className="font-semibold">{formatRequestCurrency(Number(coverage.paid_base_amount ?? coverage.planned_amount ?? 0), currency)}</dd></div>
                       <div className="rounded-md bg-background p-2"><dt className="text-xs text-muted-foreground">Rendido</dt><dd className="font-semibold">{formatRequestCurrency(Number(coverage.rendered_amount ?? coverage.row_total_amount ?? 0), currency)}</dd></div>
                       <div className="rounded-md bg-background p-2"><dt className="text-xs text-muted-foreground">Saldo esperado</dt><dd className="font-semibold">{formatRequestCurrency(expectedReturn, currency)}</dd></div>
                       <div className="rounded-md bg-background p-2"><dt className="text-xs text-muted-foreground">Monto devuelto</dt><dd className="font-semibold">{formatRequestCurrency(returnedAmount, currency)}</dd></div>
                       <div className="rounded-md bg-background p-2"><dt className="text-xs text-muted-foreground">Exceso</dt><dd className="font-semibold">{formatRequestCurrency(excessAmount, currency)}</dd></div>
                     </dl>
-                    {blockerMessage ? <Alert variant="destructive"><AlertDescription>{blockerMessage}</AlertDescription></Alert> : null}
-                    {expectedReturn > 0 ? (
-                      <div className="grid gap-3 md:grid-cols-2">
-                        <div className="space-y-2">
-                          <label className="text-sm font-medium" htmlFor={`return-amount-${coverage.request_allocation_id}`}>Monto devuelto *</label>
-                          <Input id={`return-amount-${coverage.request_allocation_id}`} type="number" min="0" step="0.01" value={form.returned_amount} disabled={!isReportEditable || actions.isLoading} onChange={(event) => updateLineReturnForm(coverage.request_allocation_id, { returned_amount: event.target.value })} />
-                          {!amountMatches ? <p className="text-xs text-destructive">Debe coincidir exactamente con {formatRequestCurrency(expectedReturn, currency)}.</p> : <p className="text-xs text-muted-foreground">Se completa con el saldo esperado; solo corrige si el backend recalculó la línea.</p>}
+                    {meaningMessage ? <Alert><AlertDescription>{meaningMessage}</AlertDescription></Alert> : null}
+                    {blockerMessage ? <Alert variant={isMissingExecution ? undefined : "destructive"} className={isMissingExecution ? "border-amber-500/50 bg-amber-50 text-amber-950 dark:bg-amber-950/20 dark:text-amber-100" : undefined}><AlertDescription className={isMissingExecution ? "text-amber-950 dark:text-amber-100" : undefined}>{blockerMessage}</AlertDescription></Alert> : null}
+                    {coverage.line_return ? (
+                      <div className="space-y-3 rounded-md border border-emerald-200 bg-emerald-50/60 p-3 text-emerald-950 dark:border-emerald-900 dark:bg-emerald-950/20 dark:text-emerald-100">
+                        <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                          <div>
+                            <p className="font-medium">Devolución registrada</p>
+                            <p className="text-xs">Monto: {formatRequestCurrency(Number(coverage.line_return.returned_amount), currency)}</p>
+                          </div>
+                          <Badge variant="secondary">Constancia vinculada</Badge>
                         </div>
-                        <div className="space-y-2">
-                          <label className="text-sm font-medium" htmlFor={`return-proof-${coverage.request_allocation_id}`}>Constancia de devolución *</label>
-                          <Select value={form.return_proof_document_id || undefined} onValueChange={(value) => updateLineReturnForm(coverage.request_allocation_id, { return_proof_document_id: value })} disabled={!isReportEditable || actions.isLoading || uploadDocument.isLoading}>
-                            <SelectTrigger id={`return-proof-${coverage.request_allocation_id}`}><SelectValue placeholder="Selecciona constancia de esta línea" /></SelectTrigger>
-                            <SelectContent>
-                              {lineReturnProofs.map((document) => (
-                                <SelectItem key={document.id} value={document.id}>{getRequestDocumentDisplayName(document)}</SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
-                          {selectedProof ? <p className="text-xs text-muted-foreground">Seleccionada: {getRequestDocumentDisplayName(selectedProof)}</p> : <p className="text-xs text-muted-foreground">Debe ser RETURN_PROOF asociado a esta misma línea POA.</p>}
-                          {isReportEditable ? <Input aria-label={`Adjuntar constancia de devolución para ${allocationLabel}`} type="file" accept=".pdf,.jpg,.jpeg,.png,application/pdf,image/jpeg,image/png" disabled={actions.isLoading || uploadDocument.isLoading} onChange={(event) => void handleUploadReturnProof(coverage.request_allocation_id, event.target.files)} /> : null}
-                        </div>
-                        <div className="space-y-2 md:col-span-2">
-                          <label className="text-sm font-medium" htmlFor={`return-justification-${coverage.request_allocation_id}`}>Justificación *</label>
-                          <Textarea id={`return-justification-${coverage.request_allocation_id}`} rows={2} value={form.justification} disabled={!isReportEditable || actions.isLoading} onChange={(event) => updateLineReturnForm(coverage.request_allocation_id, { justification: event.target.value })} placeholder="Ej.: devolución por saldo no utilizado de la línea POA." />
-                        </div>
-                        {isReportEditable ? (
-                          <div className="flex flex-col gap-2 md:col-span-2 sm:flex-row">
-                            <Button type="button" onClick={() => void handleSaveLineReturn(coverage)} disabled={actions.isLoading || uploadDocument.isLoading}>Guardar devolución de línea</Button>
-                            {coverage.line_return ? <Button type="button" variant="outline" onClick={() => void handleDeleteLineReturn(coverage.request_allocation_id)} disabled={actions.isLoading || uploadDocument.isLoading}>Quitar devolución</Button> : null}
+                        <p className="text-xs">Constancia: {savedProofName ?? "pendiente de identificar"}</p>
+                        <p className="text-xs">Justificación: {coverage.line_return.justification}</p>
+                        {isObservedRequest || (reportGeneratedForReview && !generatedReportMatchesCurrentRows) ? (
+                          <Alert className="border-amber-500/50 bg-amber-50 text-amber-950 dark:bg-amber-950/20 dark:text-amber-100">
+                            <AlertDescription className="text-amber-950 dark:text-amber-100">Después de guardar esta devolución, regenera el informe actualizado antes de reenviar la rendición.</AlertDescription>
+                          </Alert>
+                        ) : null}
+                      </div>
+                    ) : null}
+                    {expectedReturn > 0 && requiresReturnProof ? (
+                      <div className="space-y-3">
+                        {!isLineReturnFormOpen && !coverage.line_return ? (
+                          <div className="flex flex-col gap-3 rounded-md border border-dashed bg-background p-3 sm:flex-row sm:items-center sm:justify-between">
+                            <p className="text-sm text-muted-foreground">Registra la devolución de esta línea POA con su monto, justificación y constancia propia. No uses documentos generales para este sustento.</p>
+                            {isReportEditable ? <Button type="button" onClick={() => openLineReturnForm(coverage)}>Registrar devolución</Button> : null}
+                          </div>
+                        ) : null}
+                        {coverage.line_return && isReportEditable && !isLineReturnFormOpen ? (
+                          <div className="flex flex-col gap-2 sm:flex-row">
+                            <Button type="button" variant="outline" onClick={() => openLineReturnForm(coverage)}>Editar devolución</Button>
+                            <Button type="button" variant="outline" onClick={() => void handleDeleteLineReturn(coverage.request_allocation_id)} disabled={actions.isLoading || uploadDocument.isLoading}>Quitar devolución</Button>
+                          </div>
+                        ) : null}
+                        {isLineReturnFormOpen ? (
+                          <div className="grid gap-3 rounded-md border bg-background p-3 md:grid-cols-2">
+                            <div className="space-y-2">
+                              <label className="text-sm font-medium" htmlFor={`return-amount-${coverage.request_allocation_id}`}>Monto devuelto *</label>
+                              <Input id={`return-amount-${coverage.request_allocation_id}`} type="number" min="0" step="0.01" value={form.returned_amount} disabled={!isReportEditable || actions.isLoading} onChange={(event) => updateLineReturnForm(coverage.request_allocation_id, { returned_amount: event.target.value })} />
+                              {!amountMatches ? <p className="text-xs text-destructive">Debe coincidir exactamente con {formatRequestCurrency(expectedReturn, currency)}.</p> : <p className="text-xs text-muted-foreground">Se completa con el saldo esperado; solo corrige si el sistema recalculó la línea.</p>}
+                            </div>
+                            <div className="space-y-2">
+                              <label className="text-sm font-medium" htmlFor={lineReturnProofs.length > 0 ? returnProofSelectId : returnProofUploadId}>Constancia de devolución *</label>
+                              {lineReturnProofs.length > 0 ? (
+                                <Select value={form.return_proof_document_id || undefined} onValueChange={(value) => updateLineReturnForm(coverage.request_allocation_id, { return_proof_document_id: value })} disabled={!isReportEditable || actions.isLoading || uploadDocument.isLoading}>
+                                  <SelectTrigger id={returnProofSelectId}><SelectValue placeholder="Selecciona constancia de esta línea" /></SelectTrigger>
+                                  <SelectContent>
+                                    {lineReturnProofs.map((document) => (
+                                      <SelectItem key={document.id} value={document.id}>{getRequestDocumentDisplayName(document)}</SelectItem>
+                                    ))}
+                                  </SelectContent>
+                                </Select>
+                              ) : (
+                                <p className="rounded-md border border-dashed p-2 text-xs text-muted-foreground">Aún no hay constancia activa para esta línea POA. Adjunta el archivo aquí para vincularlo automáticamente.</p>
+                              )}
+                              {selectedProof ? <p className="text-xs text-muted-foreground">Seleccionada: {getRequestDocumentDisplayName(selectedProof)}</p> : <p className="text-xs text-muted-foreground">Solo se muestran constancias activas de esta misma línea POA.</p>}
+                              {isReportEditable ? <Input id={returnProofUploadId} aria-label={`Adjuntar constancia de devolución para ${allocationLabel}`} type="file" accept=".pdf,.jpg,.jpeg,.png,application/pdf,image/jpeg,image/png" disabled={actions.isLoading || uploadDocument.isLoading} onChange={(event) => void handleUploadReturnProof(coverage.request_allocation_id, event.target.files)} /> : null}
+                            </div>
+                            <div className="space-y-2 md:col-span-2">
+                              <label className="text-sm font-medium" htmlFor={`return-justification-${coverage.request_allocation_id}`}>Justificación *</label>
+                              <Textarea id={`return-justification-${coverage.request_allocation_id}`} rows={2} value={form.justification} disabled={!isReportEditable || actions.isLoading} onChange={(event) => updateLineReturnForm(coverage.request_allocation_id, { justification: event.target.value })} placeholder="Ej.: devolución por saldo no utilizado de la línea POA." />
+                            </div>
+                            {isReportEditable ? (
+                              <div className="flex flex-col gap-2 md:col-span-2 sm:flex-row">
+                                <Button type="button" onClick={() => void handleSaveLineReturn(coverage)} disabled={actions.isLoading || uploadDocument.isLoading}>Guardar devolución de línea</Button>
+                                <Button type="button" variant="outline" onClick={() => closeLineReturnForm(coverage.request_allocation_id)} disabled={actions.isLoading || uploadDocument.isLoading}>Cancelar</Button>
+                                {coverage.line_return ? <Button type="button" variant="outline" onClick={() => void handleDeleteLineReturn(coverage.request_allocation_id)} disabled={actions.isLoading || uploadDocument.isLoading}>Quitar devolución</Button> : null}
+                              </div>
+                            ) : null}
                           </div>
                         ) : null}
                       </div>
                     ) : excessAmount > 0 ? (
-                      <p className="text-xs text-muted-foreground">Esta línea tiene gasto rendido por encima de la base pagada; no requiere constancia de devolución.</p>
+                      <p className="text-xs text-muted-foreground">No adjuntes constancia de devolución para esta línea: no hay saldo a devolver. El exceso queda documentado para la revisión presupuestal de GIOF.</p>
+                    ) : expectedReturn > 0 ? (
+                      <p className="text-xs text-muted-foreground">No adjuntes constancia de devolución en esta preparación inicial. Completa comprobantes y genera el informe; si GIOF observa la rendición, esta línea se reabrirá para cargar la constancia solicitada.</p>
                     ) : null}
                   </div>
                 );
@@ -1005,11 +1335,34 @@ export function StructuredRenditionReportCard({ request, guidanceAllocations = [
           </section>
         ) : null}
 
-        {validationSummaryBlockers.length > 0 ? (
-          <div ref={blockerSummaryRef} tabIndex={-1} className="rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2">
-            {renderBlockers(validationSummaryBlockers)}
+        <section ref={blockerSummaryRef} tabIndex={-1} className="space-y-3 rounded-md border p-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2" data-testid="rendition-readiness-checklist">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+            <div>
+              <h3 className="text-sm font-semibold">Estado para enviar a revisión</h3>
+              <p className="text-xs text-muted-foreground">Checklist único de bloqueos, advertencias de revisión y estado del Excel generado.</p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <Badge variant={checklistBlockerCount > 0 ? "destructive" : "secondary"}>{checklistBlockerCount} bloqueo(s)</Badge>
+              {checklistWarningCount > 0 ? <Badge variant="outline">{checklistWarningCount} revisión GIOF</Badge> : null}
+            </div>
           </div>
-        ) : null}
+          <div className="grid gap-2">
+            {checklistItems.map((item) => (
+              <div key={item.id} className={cn("flex gap-3 rounded-md border p-3 text-sm", getChecklistStatusClassName(item.status))}>
+                <div className="mt-0.5">{getChecklistIcon(item.status)}</div>
+                <div className="min-w-0 flex-1 space-y-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <p className="font-medium">{item.title}</p>
+                    <Badge variant="outline">{item.responsible}</Badge>
+                    <Badge variant={item.status === RENDITION_CHECKLIST_STATUS.BLOCKER ? "destructive" : "secondary"}>{getChecklistStatusLabel(item.status)}</Badge>
+                  </div>
+                  <p className="text-muted-foreground">{item.description}</p>
+                </div>
+              </div>
+            ))}
+          </div>
+          <p className={cn("rounded-md px-3 py-2 text-sm font-medium", checklistReadyToSend ? "bg-emerald-50 text-emerald-800 dark:bg-emerald-950/20 dark:text-emerald-200" : "bg-muted text-foreground")}>{finalChecklistCopy}</p>
+        </section>
 
         {isObservedRequest ? (
           <Alert>
@@ -1017,9 +1370,29 @@ export function StructuredRenditionReportCard({ request, guidanceAllocations = [
           </Alert>
         ) : null}
 
-        {reportLocked ? (
+        {exportPendingInProgress ? (
           <Alert>
-            <AlertDescription>El informe generado bloquea los comprobantes, documentos y filas. Podrás volver a editarlos si el informe es observado/reabierto o si la generación falla.</AlertDescription>
+            <AlertDescription>
+              La generación del informe está en proceso. Actualiza el estado en unos minutos para verificar si el Excel ya quedó disponible.
+            </AlertDescription>
+          </Alert>
+        ) : null}
+
+        {exportPendingRetryAvailable ? (
+          <Alert className="border-amber-500/50 bg-amber-50 text-amber-950 dark:bg-amber-950/20 dark:text-amber-100">
+            <AlertDescription className="text-amber-950 dark:text-amber-100">
+              La generación anterior quedó atascada y no hay documento generado. Puedes reintentar la generación o actualizar el estado antes de hacerlo.
+            </AlertDescription>
+          </Alert>
+        ) : null}
+
+        {reportLocked && !exportPendingRetryAvailable && !exportPendingInProgress ? (
+          <Alert>
+            <AlertDescription>
+              {reportGeneratedForReview || generatedDocument
+                ? "El informe generado bloquea los comprobantes, documentos y filas. Podrás volver a editarlos si el informe es observado/reabierto o si la generación falla."
+                : "La generación del informe está en proceso. Cuando el Excel quede generado se bloquearán los comprobantes, documentos y filas hasta que sea observado/reabierto o falle la generación."}
+            </AlertDescription>
           </Alert>
         ) : null}
 
@@ -1171,25 +1544,29 @@ export function StructuredRenditionReportCard({ request, guidanceAllocations = [
           </section>
         ) : null}
 
-        <section className="space-y-3 rounded-md border p-4">
+        <section className="space-y-3 rounded-md border p-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2" data-testid="rendition-generation-actions" tabIndex={-1}>
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div>
               <h3 className="text-sm font-semibold">Validación y generación</h3>
               <p className="text-xs text-muted-foreground">Valida que todas las líneas POA tengan comprobantes y luego genera el informe final.</p>
-              {hasPendingValidationItems ? <p className="mt-1 text-xs text-muted-foreground">Revisa los pendientes agrupados arriba antes de continuar. La página se mantiene en esta sección para que puedas corregirlos sin recargar.</p> : null}
+              {hasPendingValidationItems ? <p className="mt-1 text-xs text-muted-foreground">Revisa los pendientes del checklist antes de continuar. La página se mantiene en esta sección para que puedas corregirlos sin recargar.</p> : null}
             </div>
-            {isReportEditable || canRegenerateReport ? (
+            {canUseValidationAction || canUseGenerationAction || hasPendingValidationItems || isExportPendingWithoutDocument(report) ? (
               <div className="flex flex-col gap-2 sm:flex-row">
-                {isReportEditable ? <Button type="button" variant="outline" onClick={() => void handleValidate()} disabled={actions.isLoading}>Validar informe</Button> : null}
+                {canUseValidationAction ? <Button type="button" variant="outline" onClick={() => void handleValidate()} disabled={actions.isLoading}>Validar informe</Button> : null}
+                {isExportPendingWithoutDocument(report) ? <Button type="button" variant="outline" onClick={() => void handleRefreshExportStatus()} disabled={actions.isLoading || reportState.isRefreshing}>Actualizar estado</Button> : null}
                 {hasPendingValidationItems ? <Button type="button" variant="outline" onClick={focusFirstBlocker}>Ir al primer pendiente</Button> : null}
-                <Button type="button" onClick={openGenerateConfirmation} disabled={actions.isLoading || !canUseGenerationAction}>{generationButtonLabel}</Button>
+                {!exportPendingInProgress ? <Button type="button" onClick={openGenerateConfirmation} disabled={actions.isLoading || !canUseGenerationAction}>{generationButtonLabel}</Button> : null}
               </div>
             ) : null}
           </div>
           <div className="flex flex-wrap items-center gap-2 text-sm">
             {reportGeneratedForReview ? <CheckCircle2 className="size-4 text-emerald-600" /> : <XCircle className="size-4 text-muted-foreground" />}
             <span>{generatedDocument ? `Documento generado: ${getRequestDocumentDisplayName(generatedDocument)}` : "Documento generado pendiente"}</span>
+            {exportPendingInProgress ? <span className="text-muted-foreground">Generación en progreso; usa Actualizar estado para revisar avances.</span> : null}
+            {exportPendingRetryAvailable ? <span className="text-amber-600">Generación atascada; reintenta para recuperar el informe.</span> : null}
             {report?.drive_sync_error ? <span className="text-destructive">{report.drive_sync_error}</span> : null}
+            {reportGeneratedForReview && !generatedReportMatchesCurrentRows ? <span className="text-amber-600">Informe generado desactualizado: regenera el informe actualizado antes de enviar.</span> : null}
             {report?.exported_at ? <span className="text-muted-foreground">Generado: {formatRequestDate(report.exported_at)}</span> : null}
             <FileSpreadsheet className="size-4 text-muted-foreground" />
           </div>
@@ -1221,9 +1598,9 @@ export function StructuredRenditionReportCard({ request, guidanceAllocations = [
         <Dialog open={isGenerateConfirmOpen} onOpenChange={setIsGenerateConfirmOpen}>
           <DialogContent>
             <DialogHeader>
-              <DialogTitle>Generar informe de rendición</DialogTitle>
+              <DialogTitle>{exportPendingRetryAvailable ? "Reintentar generación del informe" : canRegenerateReport ? "Regenerar informe actualizado" : "Generar informe de rendición"}</DialogTitle>
               <DialogDescription>
-                Al generar el informe se bloqueará los comprobantes, documentos y filas de esta rendición. Solo podrán editarse nuevamente si el informe es observado/reabierto o si la generación falla.
+                Al {exportPendingRetryAvailable ? "reintentar la generación" : canRegenerateReport ? "regenerar el informe actualizado" : "generar el informe"} se bloqueará los comprobantes, documentos y filas de esta rendición. Solo podrán editarse nuevamente si el informe es observado/reabierto o si la generación falla.
               </DialogDescription>
             </DialogHeader>
             <DialogFooter>

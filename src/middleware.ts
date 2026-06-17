@@ -28,7 +28,12 @@ async function verifyToken(token: string): Promise<TokenPayload | null> {
 }
 
 function canUseSessionHintForPath(pathname: string): boolean {
-  return pathname === "/" || Boolean(getRouteAccessRule(pathname));
+  return (
+    pathname === "/" ||
+    pathname === "/onboarding" ||
+    pathname.startsWith("/onboarding/") ||
+    Boolean(getRouteAccessRule(pathname))
+  );
 }
 
 export async function middleware(request: NextRequest) {

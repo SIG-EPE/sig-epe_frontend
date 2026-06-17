@@ -78,6 +78,12 @@ export function getRequestsPath(filters?: RequestsListFilters): string {
   appendIfPresent(params, "request_type", filters?.request_type);
   appendIfPresent(params, "budget_planning_line_id", filters?.budget_planning_line_id);
   appendIfPresent(params, "org_unit_id", filters?.org_unit_id);
+  appendIfPresent(params, "requester_id", filters?.requester_id);
+  appendIfPresent(params, "date_from", filters?.date_from);
+  appendIfPresent(params, "date_to", filters?.date_to);
+  appendIfPresent(params, "date_field", filters?.date_field);
+  appendIfPresent(params, "has_documents", filters?.has_documents);
+  appendIfPresent(params, "drive_sync_status", filters?.drive_sync_status);
   appendIfPresent(params, "search", filters?.search);
   appendIfPresent(params, "scope", filters?.scope);
   const query = params.toString();
@@ -145,6 +151,12 @@ export function useRequests(filters?: RequestsListFilters) {
   const requestTypeFilter = filters?.request_type;
   const planningLineFilter = filters?.budget_planning_line_id;
   const orgUnitFilter = filters?.org_unit_id;
+  const requesterFilter = filters?.requester_id;
+  const dateFromFilter = filters?.date_from;
+  const dateToFilter = filters?.date_to;
+  const dateFieldFilter = filters?.date_field;
+  const hasDocumentsFilter = filters?.has_documents;
+  const driveSyncStatusFilter = filters?.drive_sync_status;
   const searchFilter = filters?.search;
   const scopeFilter = filters?.scope;
 
@@ -173,6 +185,12 @@ export function useRequests(filters?: RequestsListFilters) {
     requestTypeFilter,
     planningLineFilter,
     orgUnitFilter,
+    requesterFilter,
+    dateFromFilter,
+    dateToFilter,
+    dateFieldFilter,
+    hasDocumentsFilter,
+    driveSyncStatusFilter,
     searchFilter,
     scopeFilter,
   ]);

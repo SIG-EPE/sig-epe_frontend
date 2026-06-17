@@ -63,6 +63,12 @@ export function formatMonthLabel(month: number): string {
   return labels[month - 1] ?? `Mes ${month}`;
 }
 
+const BUDGET_DASHBOARD_ALERT_LABELS: Record<string, string> = {
+  NO_ALLOCATION: "Sin presupuesto asignado para los filtros seleccionados",
+  OVER_EXECUTION: "Sobreejecución presupuestal",
+  UNDER_EXECUTION: "Subejecución presupuestal",
+};
+
 const REQUEST_STATUS_DASHBOARD_LABELS: Record<string, string> = {
   DRAFT: "Borrador",
   SUBMITTED: "En revisión",
@@ -88,6 +94,25 @@ export function getRequestStatusDashboardLabel(status: string): string {
 
 export function getGiofExceptionLabel(type: string): string {
   return GIOF_EXCEPTION_LABELS[type] ?? type.replaceAll("_", " ");
+}
+
+export function getBudgetDashboardAlertMessage(alert: {
+  code?: string | null;
+  label?: string | null;
+  severity?: string | null;
+  value?: number | null;
+}): string | null {
+  const label = alert.label?.trim() || (alert.code ? BUDGET_DASHBOARD_ALERT_LABELS[alert.code] : undefined);
+
+  if (!label) {
+    return null;
+  }
+
+  if (alert.value === null || alert.value === undefined || Number.isNaN(alert.value)) {
+    return label;
+  }
+
+  return `${label} (${formatPercentStrict(alert.value)})`;
 }
 
 export function truncateChartLabel(label: string, maxLength = 24): string {

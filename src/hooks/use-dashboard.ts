@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import {
   getBudgetExecutionDashboard,
   getGiofOperationsDashboard,
+  getOrgUnitExecutionDashboard,
 } from "@/lib/dashboard";
 import { useAuthStore } from "@/stores/auth-store";
 import type {
@@ -12,6 +13,8 @@ import type {
   BudgetDashboardExecutionFilters,
   GiofOperationsDashboard,
   GiofOperationsDashboardFilters,
+  OrgUnitExecutionDashboard,
+  OrgUnitExecutionDashboardFilters,
 } from "@/types/dashboard";
 
 interface DashboardHookState<T> {
@@ -127,6 +130,62 @@ export function useGiofOperationsDashboard(
     filters.fiscal_year,
     filters.org_unit_id,
     filters.territory_id,
+    authIsLoading,
+    accessToken,
+    refreshKey,
+  ]);
+
+  return { data, isLoading, error, refetch };
+}
+
+export function useOrgUnitExecutionDashboard(
+  filters: OrgUnitExecutionDashboardFilters,
+): DashboardHookState<OrgUnitExecutionDashboard> {
+  const [data, setData] = useState<OrgUnitExecutionDashboard | null>(null);
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<Error | null>(null);
+  const [refreshKey, setRefreshKey] = useState(0);
+  const authIsLoading = useAuthStore((state) => state.isLoading);
+  const accessToken = useAuthStore((state) => state.accessToken);
+
+  async function refetch() {
+    setRefreshKey((current) => current + 1);
+  }
+
+  useEffect(() => {
+    if (authIsLoading || !accessToken) {
+      return;
+    }
+
+    let cancelled = false;
+    setIsLoading(true);
+    setError(null);
+
+    getOrgUnitExecutionDashboard(filters)
+      .then((result) => {
+        if (!cancelled) setData(result);
+      })
+      .catch((unknownError: unknown) => {
+        if (!cancelled) {
+          setError(unknownError instanceof Error ? unknownError : new Error("Error al cargar Programado vs Ejecutado"));
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setIsLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    filters.fiscal_year_id,
+    filters.fiscal_year,
+    filters.org_unit_id,
+    filters.month_from,
+    filters.month_to,
+    filters.level,
+    filters.parent_id,
+    filters.group_id,
     authIsLoading,
     accessToken,
     refreshKey,

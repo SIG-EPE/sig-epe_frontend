@@ -7,6 +7,7 @@ import { StructuredRenditionReportCard } from "@/components/requests/structured-
 import {
   REQUEST_CURRENCY,
   REQUEST_DOCUMENT_CATEGORY,
+  REQUEST_DOCUMENT_SCOPE_TYPE,
   LINE_RETURN_VALIDATION_STATUS,
   REQUEST_RECEIPT_DUPLICATE_STATUS,
   REQUEST_RECEIPT_OCR_STATUS,
@@ -501,7 +502,8 @@ describe("StructuredRenditionReportCard", () => {
 
     render(<StructuredRenditionReportCard request={makeRequest()} />);
 
-    expect(screen.getByText("Pendientes del informe")).toBeInTheDocument();
+    expect(screen.getByText("Estado para enviar a revisión")).toBeInTheDocument();
+    expect(screen.getByText("Comprobantes pendientes de revisión")).toBeInTheDocument();
     expect(screen.getAllByText("Hay 1 comprobante pendiente de revisión. Confirma sus datos o elimínalo si no corresponde antes de generar el informe.")).toHaveLength(1);
     expect(screen.getByText("Comprobantes por revisar")).toBeInTheDocument();
   });
@@ -559,6 +561,216 @@ describe("StructuredRenditionReportCard", () => {
     render(<StructuredRenditionReportCard request={makeRequest()} />);
 
     expect(screen.getByRole("button", { name: "Generar informe" })).toBeDisabled();
+  });
+
+  it("muestra checklist único con responsables y CTA para generar", () => {
+    mocks.report = makeReport({ status: REQUEST_RENDITION_REPORT_STATUS.DRAFT });
+
+    render(<StructuredRenditionReportCard request={makeRequest()} />);
+
+    expect(screen.getByTestId("rendition-readiness-checklist")).toBeInTheDocument();
+    expect(screen.getByText("Estado para enviar a revisión")).toBeInTheDocument();
+    expect(screen.getByText("Validación sin bloqueos")).toBeInTheDocument();
+    expect(screen.getByText("Informe pendiente de generación")).toBeInTheDocument();
+    expect(screen.getByText("Solicitante")).toBeInTheDocument();
+    expect(screen.getByText("Sistema")).toBeInTheDocument();
+    expect(screen.getByText("Siguiente paso: genera el informe final desde la validación actual.")).toBeInTheDocument();
+  });
+
+  it("muestra generar informe habilitado cuando no hay documento generado ni bloqueos", () => {
+    mocks.report = makeReport({ status: REQUEST_RENDITION_REPORT_STATUS.READY, settlement_report_document_id: null });
+
+    render(<StructuredRenditionReportCard request={makeRequest()} />);
+
+    expect(screen.getByText("Informe pendiente de generación")).toBeInTheDocument();
+    expect(screen.getByText("Documento generado pendiente")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Generar informe" })).toBeEnabled();
+  });
+
+  it("distingue exceso rendido como advertencia de revisión GIOF sin bloquear generación", () => {
+    mocks.report = makeReport({
+      status: REQUEST_RENDITION_REPORT_STATUS.DRAFT,
+      allocation_coverage: [{
+        request_allocation_id: "allocation-1",
+        planned_amount: 300,
+        row_total_amount: 350,
+        paid_base_amount: 300,
+        rendered_amount: 350,
+        expected_return_amount: 0,
+        returned_amount: 0,
+        excess_amount: 50,
+        row_count: 1,
+        has_rows: true,
+        line_return: null,
+        return_validation_status: LINE_RETURN_VALIDATION_STATUS.EXCESS,
+      }],
+    });
+
+    render(<StructuredRenditionReportCard request={makeRequest()} />);
+
+    expect(screen.getAllByText("Exceso rendido para revisión GIOF").length).toBeGreaterThan(0);
+    expect(screen.getByText(/No requiere constancia de devolución/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Generar informe" })).toBeEnabled();
+  });
+
+  it("muestra saldo estimado sin pedir devolución durante la preparación inicial", () => {
+    mocks.report = makeReport({
+      status: REQUEST_RENDITION_REPORT_STATUS.DRAFT,
+      allocation_coverage: [{
+        request_allocation_id: "allocation-1",
+        planned_amount: 300,
+        row_total_amount: 125.5,
+        paid_base_amount: 300,
+        rendered_amount: 125.5,
+        expected_return_amount: 174.5,
+        returned_amount: 0,
+        excess_amount: 0,
+        row_count: 1,
+        has_rows: true,
+        line_return: null,
+        return_validation_status: LINE_RETURN_VALIDATION_STATUS.NOT_REQUIRED,
+      }],
+    });
+
+    render(<StructuredRenditionReportCard request={makeRequest()} />);
+
+    expect(screen.getByText("Saldo estimado")).toBeInTheDocument();
+    expect(screen.getByText(/En esta preparación inicial no se solicita constancia de devolución/i)).toBeInTheDocument();
+    expect(screen.queryByText("Devolución requerida")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/Constancia de devolución \*/i)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Generar informe" })).toBeEnabled();
+  });
+
+  it("requiere constancia de devolución cuando la rendición fue observada", () => {
+    mocks.report = makeReport({
+      status: REQUEST_RENDITION_REPORT_STATUS.OBSERVED,
+      allocation_coverage: [{
+        request_allocation_id: "allocation-1",
+        planned_amount: 300,
+        row_total_amount: 125.5,
+        paid_base_amount: 300,
+        rendered_amount: 125.5,
+        expected_return_amount: 174.5,
+        returned_amount: 0,
+        excess_amount: 0,
+        row_count: 1,
+        has_rows: true,
+        line_return: null,
+        return_validation_status: LINE_RETURN_VALIDATION_STATUS.MISSING,
+      }],
+    });
+
+    render(<StructuredRenditionReportCard request={makeRequest({ status: REQUEST_STATUS.OBSERVED })} />);
+
+    expect(screen.getAllByText("Devolución requerida").length).toBeGreaterThan(0);
+    expect(screen.getByText(/Debes devolver/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Registrar devolución" })).toBeInTheDocument();
+    expect(screen.queryByLabelText(/Monto devuelto \*/i)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/Constancia de devolución \*/i)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/Justificación \*/i)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Generar informe" })).toBeDisabled();
+  });
+
+  it("abre el formulario dedicado para registrar devolución en una rendición observada", async () => {
+    mocks.report = makeReport({
+      status: REQUEST_RENDITION_REPORT_STATUS.OBSERVED,
+      allocation_coverage: [{
+        request_allocation_id: "allocation-1",
+        planned_amount: 300,
+        row_total_amount: 125.5,
+        paid_base_amount: 300,
+        rendered_amount: 125.5,
+        expected_return_amount: 174.5,
+        returned_amount: 0,
+        excess_amount: 0,
+        row_count: 1,
+        has_rows: true,
+        line_return: null,
+        return_validation_status: LINE_RETURN_VALIDATION_STATUS.MISSING,
+      }],
+    });
+
+    const user = userEvent.setup();
+    render(<StructuredRenditionReportCard request={makeRequest({ status: REQUEST_STATUS.OBSERVED })} />);
+
+    await user.click(screen.getByRole("button", { name: "Registrar devolución" }));
+
+    expect(screen.getByLabelText(/Monto devuelto \*/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/Constancia de devolución \*/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/Justificación \*/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Guardar devolución de línea" })).toBeInTheDocument();
+  });
+
+  it("mantiene visible la validación de una devolución ya registrada aunque la solicitud siga en draft", () => {
+    mocks.report = makeReport({
+      status: REQUEST_RENDITION_REPORT_STATUS.DRAFT,
+      allocation_coverage: [{
+        request_allocation_id: "allocation-1",
+        planned_amount: 300,
+        row_total_amount: 125.5,
+        paid_base_amount: 300,
+        rendered_amount: 125.5,
+        expected_return_amount: 174.5,
+        returned_amount: 174.5,
+        excess_amount: 0,
+        row_count: 1,
+        has_rows: true,
+        line_return: {
+          id: "line-return-1",
+          returned_amount: 174.5,
+          justification: "Saldo no utilizado",
+          return_proof_document_id: "",
+          return_proof_filename: null,
+          status: "DRAFT",
+          validated_at: null,
+        },
+        return_validation_status: LINE_RETURN_VALIDATION_STATUS.MISSING_PROOF,
+      }],
+    });
+
+    render(<StructuredRenditionReportCard request={makeRequest()} />);
+
+    expect(screen.getByText("Falta constancia")).toBeInTheDocument();
+    expect(screen.getByText("Devolución registrada")).toBeInTheDocument();
+    expect(screen.getByText("Constancia: pendiente de identificar")).toBeInTheDocument();
+    expect(screen.getByText("Justificación: Saldo no utilizado")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Editar devolución" })).toBeInTheDocument();
+    expect(screen.queryByLabelText(/Constancia de devolución \*/i)).not.toBeInTheDocument();
+  });
+
+  it("abre edición para una devolución registrada en draft", async () => {
+    mocks.report = makeReport({
+      status: REQUEST_RENDITION_REPORT_STATUS.DRAFT,
+      allocation_coverage: [{
+        request_allocation_id: "allocation-1",
+        planned_amount: 300,
+        row_total_amount: 125.5,
+        paid_base_amount: 300,
+        rendered_amount: 125.5,
+        expected_return_amount: 174.5,
+        returned_amount: 174.5,
+        excess_amount: 0,
+        row_count: 1,
+        has_rows: true,
+        line_return: {
+          id: "line-return-1",
+          returned_amount: 174.5,
+          justification: "Saldo no utilizado",
+          return_proof_document_id: "",
+          return_proof_filename: null,
+          status: "DRAFT",
+          validated_at: null,
+        },
+        return_validation_status: LINE_RETURN_VALIDATION_STATUS.MISSING_PROOF,
+      }],
+    });
+
+    const user = userEvent.setup();
+    render(<StructuredRenditionReportCard request={makeRequest()} />);
+
+    await user.click(screen.getByRole("button", { name: "Editar devolución" }));
+
+    expect(screen.getByLabelText(/Constancia de devolución \*/i)).toBeInTheDocument();
   });
 
   it("abre confirmación antes de generar y llama API solo al confirmar", async () => {
@@ -823,7 +1035,11 @@ describe("StructuredRenditionReportCard", () => {
   });
 
   it("oculta controles editables cuando el informe ya fue generado", () => {
-    mocks.report = makeReport({ status: REQUEST_RENDITION_REPORT_STATUS.EXPORTED });
+    mocks.documents = [
+      makeDocument(),
+      makeDocument({ id: "generated-document", document_category: REQUEST_DOCUMENT_CATEGORY.SETTLEMENT_REPORT, original_filename: "Rendicion.xlsx" }),
+    ];
+    mocks.report = makeReport({ status: REQUEST_RENDITION_REPORT_STATUS.EXPORTED, settlement_report_document_id: "generated-document" });
 
     render(<StructuredRenditionReportCard request={makeRequest()} />);
 
@@ -832,7 +1048,7 @@ describe("StructuredRenditionReportCard", () => {
     expect(screen.queryByRole("button", { name: "Agregar comprobante adicional" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Validar informe" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Generar informe" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Regenerar informe" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Regenerar informe actualizado" })).not.toBeInTheDocument();
     expect(screen.getByText(/El informe generado bloquea los comprobantes, documentos y filas/i)).toBeInTheDocument();
   });
 
@@ -846,7 +1062,7 @@ describe("StructuredRenditionReportCard", () => {
     expect(screen.getAllByRole("button", { name: "Quitar" })[0]).toBeEnabled();
     expect(screen.getByRole("button", { name: "Agregar comprobante adicional" })).toBeEnabled();
     expect(screen.getByRole("button", { name: "Validar informe" })).toBeEnabled();
-    expect(screen.getByRole("button", { name: "Regenerar informe" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Regenerar informe actualizado" })).toBeEnabled();
     expect(screen.queryByText(/El informe generado bloquea los comprobantes, documentos y filas/i)).not.toBeInTheDocument();
   });
 
@@ -859,7 +1075,7 @@ describe("StructuredRenditionReportCard", () => {
     expect(screen.queryByRole("button", { name: "Quitar" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Agregar comprobante adicional" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Validar informe" })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Regenerar informe" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Regenerar informe actualizado" })).toBeEnabled();
   });
 
   it("renderiza el estado de informe generado y su documento", () => {
@@ -884,6 +1100,105 @@ describe("StructuredRenditionReportCard", () => {
     expect(screen.getByText("Informe generado")).toBeInTheDocument();
     expect(screen.getByText(/Documento generado: Rendicion\.xlsx/)).toBeInTheDocument();
     expect(screen.getByText(/Generado:/)).toBeInTheDocument();
+    expect(screen.getByText(/El informe generado bloquea los comprobantes, documentos y filas/i)).toBeInTheDocument();
+    expect(screen.getByText("Listo para enviar a revisión: el informe generado está alineado con la validación actual.")).toBeInTheDocument();
+  });
+
+  it("explica bloqueo futuro cuando la generación está pendiente pero todavía no existe documento", () => {
+    mocks.report = makeReport({ status: REQUEST_RENDITION_REPORT_STATUS.EXPORT_PENDING, settlement_report_document_id: null });
+
+    render(<StructuredRenditionReportCard request={makeRequest()} />);
+
+    expect(screen.getByText("Generando informe")).toBeInTheDocument();
+    expect(screen.getByText(/La generación del informe está en proceso/i)).toBeInTheDocument();
+    expect(screen.getByText(/Actualiza el estado en unos minutos/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Actualizar estado" })).toBeEnabled();
+    expect(screen.queryByText(/El informe generado bloquea los comprobantes/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Generar informe" })).not.toBeInTheDocument();
+  });
+
+  it("muestra retry cuando EXPORT_PENDING está atascado y no oculta la acción", async () => {
+    mocks.report = makeReport({
+      status: REQUEST_RENDITION_REPORT_STATUS.EXPORT_PENDING,
+      settlement_report_document_id: null,
+      export_pending_state: "STALE_RETRY_AVAILABLE",
+      can_retry_generation: true,
+      export_pending_stale_at: "2026-06-02T00:10:00.000Z",
+    });
+    mocks.generateReport.mockResolvedValue({ report: makeReport({ status: REQUEST_RENDITION_REPORT_STATUS.EXPORTED, settlement_report_document_id: "generated-document" }), document: makeDocument({ id: "generated-document" }) });
+
+    const user = userEvent.setup();
+    render(<StructuredRenditionReportCard request={makeRequest()} />);
+
+    expect(screen.getByText("Generación atascada")).toBeInTheDocument();
+    expect(screen.getByText(/La generación anterior quedó atascada/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Actualizar estado" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Reintentar generación" })).toBeEnabled();
+
+    await user.click(screen.getByRole("button", { name: "Reintentar generación" }));
+    expect(screen.getByRole("dialog", { name: "Reintentar generación del informe" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Sí, reintentar generación" }));
+
+    await waitFor(() => expect(mocks.generateReport).toHaveBeenCalledWith("request-1"));
+  });
+
+  it("mantiene bloqueada la generación stale si hay blockers del backend", () => {
+    mocks.report = makeReport({
+      status: REQUEST_RENDITION_REPORT_STATUS.EXPORT_PENDING,
+      settlement_report_document_id: null,
+      export_pending_state: "STALE_RETRY_AVAILABLE",
+      can_retry_generation: true,
+      totals: { total_amount: 125.5, by_allocation: [], missing_allocations: ["allocation-1"] },
+      allocation_coverage: [{ request_allocation_id: "allocation-1", planned_amount: 300, row_total_amount: 0, row_count: 0, has_rows: false }],
+    });
+
+    render(<StructuredRenditionReportCard request={makeRequest()} />);
+
+    expect(screen.getByText(/La generación anterior quedó atascada/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Reintentar generación" })).toBeDisabled();
+    expect(screen.getByText(/Falta al menos un comprobante/i)).toBeInTheDocument();
+  });
+
+  it("mantiene read-only cuando EXPORT_PENDING ya tiene documento", () => {
+    mocks.documents = [
+      makeDocument(),
+      makeDocument({ id: "generated-document", document_category: REQUEST_DOCUMENT_CATEGORY.SETTLEMENT_REPORT, original_filename: "Rendicion.xlsx" }),
+    ];
+    mocks.report = makeReport({ status: REQUEST_RENDITION_REPORT_STATUS.EXPORT_PENDING, settlement_report_document_id: "generated-document", can_retry_generation: true });
+
+    render(<StructuredRenditionReportCard request={makeRequest()} />);
+
+    expect(screen.getByText(/Documento generado: Rendicion\.xlsx/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Reintentar generación" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Generar informe" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Agregar comprobante adicional" })).not.toBeInTheDocument();
+  });
+
+  it("no reporta listo para enviar si el documento generado quedó desalineado con pendientes actuales", async () => {
+    const onReadinessChange = vi.fn();
+    mocks.documents = [
+      makeDocument(),
+      makeDocument({
+        id: "generated-document",
+        document_category: REQUEST_DOCUMENT_CATEGORY.SETTLEMENT_REPORT,
+        original_filename: "Rendicion.xlsx",
+        safe_filename: "rendicion.xlsx",
+        mime_type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      }),
+    ];
+    mocks.report = makeReport({
+      status: REQUEST_RENDITION_REPORT_STATUS.EXPORTED,
+      settlement_report_document_id: "generated-document",
+      rows: [],
+      totals: { total_amount: 0, by_allocation: [], missing_allocations: ["allocation-1"] },
+      allocation_coverage: [{ request_allocation_id: "allocation-1", planned_amount: 300, row_total_amount: 0, row_count: 0, has_rows: false }],
+    });
+
+    render(<StructuredRenditionReportCard request={makeRequest()} onReadinessChange={onReadinessChange} />);
+
+    await waitFor(() => expect(onReadinessChange).toHaveBeenCalledWith(false, ["Informe generado desactualizado: el Excel no coincide con la validación actual. Revisa los pendientes y regenera el informe actualizado antes de enviar."]));
+    expect(screen.getByText(/Documento generado: Rendicion\.xlsx/)).toBeInTheDocument();
+    expect(screen.getAllByText(/Informe generado desactualizado/i).length).toBeGreaterThan(0);
   });
 
   it("muestra panel de devolución por línea con importes y pendiente de constancia", () => {
@@ -906,13 +1221,107 @@ describe("StructuredRenditionReportCard", () => {
       }],
     });
 
+    render(<StructuredRenditionReportCard request={makeRequest({ status: REQUEST_STATUS.OBSERVED })} />);
+
+    expect(screen.getByText("Saldos por línea POA")).toBeInTheDocument();
+    expect(screen.getByText("Devolución requerida")).toBeInTheDocument();
+    expect(screen.getByText(/Devolución requerida: la base pagada es mayor al monto rendido/i)).toBeInTheDocument();
+    expect(screen.getByText(/registra el saldo exacto no utilizado/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Registrar devolución" })).toBeInTheDocument();
+    expect(screen.queryByLabelText(/Constancia de devolución/i)).not.toBeInTheDocument();
+  });
+
+  it("no muestra devolución requerida antes de gestionar comprobantes y orienta el siguiente paso", () => {
+    mocks.report = makeReport({
+      status: REQUEST_RENDITION_REPORT_STATUS.DRAFT,
+      rows: [],
+      totals: { total_amount: 0, by_allocation: [], missing_allocations: ["allocation-1"] },
+      allocation_coverage: [{
+        request_allocation_id: "allocation-1",
+        request_allocation_label: "Línea 1: POA-001 · Materiales",
+        planned_amount: 300,
+        row_total_amount: 0,
+        paid_base_amount: 300,
+        rendered_amount: 0,
+        expected_return_amount: 300,
+        returned_amount: 0,
+        excess_amount: 0,
+        row_count: 0,
+        has_rows: false,
+        line_return: null,
+        return_validation_status: LINE_RETURN_VALIDATION_STATUS.MISSING,
+      }],
+    });
+
     render(<StructuredRenditionReportCard request={makeRequest()} />);
 
-    expect(screen.getByText("Devoluciones por línea POA")).toBeInTheDocument();
-    expect(screen.getByText("Falta registrar devolución")).toBeInTheDocument();
-    expect(screen.getByDisplayValue("175.00")).toBeInTheDocument();
-    expect(screen.getByText(/Registra la devolución exacta/i)).toBeInTheDocument();
+    expect(screen.queryByText("Saldos por línea POA")).not.toBeInTheDocument();
+    expect(screen.getByText("Agrega y revisa comprobantes para calcular saldos por línea POA.")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Monto devuelto *")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/Constancia de devolución/i)).not.toBeInTheDocument();
+  });
+
+  it("mantiene visible la devolución observada aunque no haya filas actuales", async () => {
+    mocks.report = makeReport({
+      status: REQUEST_RENDITION_REPORT_STATUS.OBSERVED,
+      rows: [],
+      totals: { total_amount: 0, by_allocation: [], missing_allocations: ["allocation-1"] },
+      allocation_coverage: [{
+        request_allocation_id: "allocation-1",
+        request_allocation_label: "Línea 1: POA-001 · Materiales",
+        planned_amount: 300,
+        row_total_amount: 0,
+        paid_base_amount: 300,
+        rendered_amount: 0,
+        expected_return_amount: 300,
+        returned_amount: 0,
+        excess_amount: 0,
+        row_count: 0,
+        has_rows: false,
+        line_return: null,
+        return_validation_status: LINE_RETURN_VALIDATION_STATUS.MISSING_PROOF,
+      }],
+    });
+
+    const user = userEvent.setup();
+    render(<StructuredRenditionReportCard request={makeRequest({ status: REQUEST_STATUS.OBSERVED })} />);
+
+    expect(screen.getByText("Saldos por línea POA")).toBeInTheDocument();
+    expect(screen.getByText("Falta constancia")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Registrar devolución" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Registrar devolución" }));
+    expect(screen.getByLabelText("Monto devuelto *")).toBeInTheDocument();
     expect(screen.getAllByLabelText(/Constancia de devolución/i).length).toBeGreaterThan(0);
+  });
+
+  it("muestra falta de base pagada como aviso administrativo no ingresable en rendición", () => {
+    mocks.report = makeReport({
+      status: REQUEST_RENDITION_REPORT_STATUS.DRAFT,
+      allocation_coverage: [{
+        request_allocation_id: "allocation-1",
+        request_allocation_label: "Línea 1: POA-001 · Materiales",
+        planned_amount: 300,
+        row_total_amount: 502.22,
+        paid_base_amount: 0,
+        rendered_amount: 502.22,
+        expected_return_amount: 0,
+        returned_amount: 0,
+        excess_amount: 502.22,
+        row_count: 1,
+        has_rows: true,
+        line_return: null,
+        return_validation_status: LINE_RETURN_VALIDATION_STATUS.MISSING_EXECUTION,
+      }],
+    });
+
+    render(<StructuredRenditionReportCard request={makeRequest()} />);
+
+    expect(screen.getAllByText("Pendiente administrativo GIOF").length).toBeGreaterThan(0);
+    expect(screen.getByText(/no se encontró la base efectivamente pagada/i)).toBeInTheDocument();
+    expect(screen.getByText(/no se ingresa en la rendición/i)).toBeInTheDocument();
+    expect(screen.getByText(/Exceso rendido para revisión GIOF: los gastos superan la base pagada/i)).toBeInTheDocument();
+    expect(screen.getByText(/no hay saldo a devolver/i)).toBeInTheDocument();
+    expect(screen.queryByLabelText("Monto devuelto *")).not.toBeInTheDocument();
   });
 
   it("valida que el monto devuelto coincida exactamente antes de guardar", async () => {
@@ -935,8 +1344,9 @@ describe("StructuredRenditionReportCard", () => {
     });
 
     const user = userEvent.setup();
-    render(<StructuredRenditionReportCard request={makeRequest()} />);
+    render(<StructuredRenditionReportCard request={makeRequest({ status: REQUEST_STATUS.OBSERVED })} />);
 
+    await user.click(screen.getByRole("button", { name: "Registrar devolución" }));
     const amountInput = screen.getByLabelText("Monto devuelto *");
     await user.clear(amountInput);
     await user.type(amountInput, "170");
@@ -966,8 +1376,9 @@ describe("StructuredRenditionReportCard", () => {
     });
 
     const user = userEvent.setup();
-    render(<StructuredRenditionReportCard request={makeRequest()} />);
+    render(<StructuredRenditionReportCard request={makeRequest({ status: REQUEST_STATUS.OBSERVED })} />);
 
+    await user.click(screen.getByRole("button", { name: "Registrar devolución" }));
     await user.click(screen.getByRole("button", { name: "Guardar devolución de línea" }));
     expect(mocks.toastError).toHaveBeenCalledWith("Selecciona o adjunta la constancia de devolución de esta línea POA.");
     expect(mocks.upsertLineReturn).not.toHaveBeenCalled();
@@ -1015,6 +1426,10 @@ describe("StructuredRenditionReportCard", () => {
     const user = userEvent.setup();
     render(<StructuredRenditionReportCard request={makeRequest()} />);
 
+    expect(screen.getByText("Devolución registrada")).toBeInTheDocument();
+    expect(screen.getByText("Constancia: Constancia.pdf")).toBeInTheDocument();
+    expect(screen.getByText("Justificación: Saldo no utilizado en la línea POA.")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Editar devolución" }));
     await user.click(screen.getByRole("button", { name: "Guardar devolución de línea" }));
     expect(mocks.upsertLineReturn).toHaveBeenCalledWith("request-1", "allocation-1", {
       returned_amount: 175,
@@ -1022,8 +1437,96 @@ describe("StructuredRenditionReportCard", () => {
       return_proof_document_id: "return-proof-1",
     });
 
-    await user.click(screen.getByRole("button", { name: "Quitar devolución" }));
+    await user.click(screen.getAllByRole("button", { name: "Quitar devolución" })[0]);
     expect(mocks.deleteLineReturn).toHaveBeenCalledWith("request-1", "allocation-1");
+  });
+
+  it("adjunta constancia de devolución con alcance de la misma línea y la autoselecciona al guardar", async () => {
+    const uploadedProof = makeDocument({
+      id: "uploaded-return-proof-1",
+      document_category: REQUEST_DOCUMENT_CATEGORY.RETURN_PROOF,
+      original_filename: "Constancia subida.pdf",
+      safe_filename: "constancia-subida.pdf",
+      request_allocation_id: "allocation-1",
+    });
+    mocks.documents = [makeDocument()];
+    mocks.uploadDocument.mockResolvedValue(uploadedProof);
+    mocks.upsertLineReturn.mockResolvedValue(makeReport());
+    mocks.report = makeReport({
+      status: REQUEST_RENDITION_REPORT_STATUS.OBSERVED,
+      allocation_coverage: [{
+        request_allocation_id: "allocation-1",
+        planned_amount: 300,
+        row_total_amount: 125,
+        paid_base_amount: 300,
+        rendered_amount: 125,
+        expected_return_amount: 175,
+        returned_amount: 0,
+        excess_amount: 0,
+        row_count: 1,
+        has_rows: true,
+        line_return: null,
+        return_validation_status: LINE_RETURN_VALIDATION_STATUS.MISSING_PROOF,
+      }],
+    });
+
+    const user = userEvent.setup();
+    render(<StructuredRenditionReportCard request={makeRequest({ status: REQUEST_STATUS.OBSERVED })} />);
+
+    await user.click(screen.getByRole("button", { name: "Registrar devolución" }));
+    const proofFile = new File(["constancia"], "constancia.pdf", { type: "application/pdf" });
+    await user.upload(screen.getByLabelText(/Adjuntar constancia de devolución para/i), proofFile);
+    fireEvent.change(screen.getByLabelText("Justificación *"), { target: { value: "Saldo no utilizado." } });
+    await user.click(screen.getByRole("button", { name: "Guardar devolución de línea" }));
+
+    await waitFor(() => expect(mocks.uploadDocument).toHaveBeenCalledWith("request-1", {
+      file: proofFile,
+      document_category: REQUEST_DOCUMENT_CATEGORY.RETURN_PROOF,
+      scope_type: REQUEST_DOCUMENT_SCOPE_TYPE.ALLOCATION,
+      request_allocation_id: "allocation-1",
+    }));
+    await waitFor(() => expect(mocks.upsertLineReturn).toHaveBeenCalledWith("request-1", "allocation-1", {
+      returned_amount: 175,
+      justification: "Saldo no utilizado.",
+      return_proof_document_id: "uploaded-return-proof-1",
+    }));
+  });
+
+  it("no ofrece constancias de otra línea en el registro de devolución", async () => {
+    mocks.documents = [
+      makeDocument(),
+      makeDocument({
+        id: "return-proof-other-line",
+        document_category: REQUEST_DOCUMENT_CATEGORY.RETURN_PROOF,
+        original_filename: "Constancia otra línea.pdf",
+        request_allocation_id: "allocation-2",
+      }),
+    ];
+    mocks.report = makeReport({
+      status: REQUEST_RENDITION_REPORT_STATUS.OBSERVED,
+      allocation_coverage: [{
+        request_allocation_id: "allocation-1",
+        planned_amount: 300,
+        row_total_amount: 125,
+        paid_base_amount: 300,
+        rendered_amount: 125,
+        expected_return_amount: 175,
+        returned_amount: 0,
+        excess_amount: 0,
+        row_count: 1,
+        has_rows: true,
+        line_return: null,
+        return_validation_status: LINE_RETURN_VALIDATION_STATUS.MISSING_PROOF,
+      }],
+    });
+
+    const user = userEvent.setup();
+    render(<StructuredRenditionReportCard request={makeRequest({ status: REQUEST_STATUS.OBSERVED })} />);
+
+    await user.click(screen.getByRole("button", { name: "Registrar devolución" }));
+
+    expect(screen.queryByText("Constancia otra línea.pdf")).not.toBeInTheDocument();
+    expect(screen.getByText(/Aún no hay constancia activa para esta línea POA/i)).toBeInTheDocument();
   });
 
   it("bloquea generación cuando backend reporta pendiente de devolución por línea", async () => {
@@ -1046,7 +1549,7 @@ describe("StructuredRenditionReportCard", () => {
 
     await user.click(screen.getByRole("button", { name: "Validar informe" }));
 
-    expect(await screen.findByText("Adjunta una constancia RETURN_PROOF activa para esta línea POA.")).toBeInTheDocument();
+    expect(await screen.findByText(/La devolución ya requiere constancia/i)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Generar informe" })).toBeDisabled();
   });
 

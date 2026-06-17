@@ -11,6 +11,7 @@ import {
   REQUEST_LIST_SORT_OPTIONS,
   REQUEST_REVIEW_QUEUE,
   REQUEST_REVIEW_QUEUE_CARDS,
+  REQUEST_STATUS_FILTER_OPTIONS,
   REQUEST_STATUS_SUMMARY_CARDS,
   canEditDraftRequest,
   canEditRequest,
@@ -923,6 +924,16 @@ describe("requests helpers", () => {
       "Más antiguas primero",
       "Más recientes primero",
     ]);
+    expect(REQUEST_STATUS_FILTER_OPTIONS.map((option) => [option.value, option.label])).toEqual([
+      [REQUEST_STATUS.DRAFT, "Borrador"],
+      [REQUEST_STATUS.SUBMITTED, "En revisión"],
+      [REQUEST_STATUS.OBSERVED, "Observada"],
+      [REQUEST_STATUS.IN_VALIDATION, "En validación"],
+      [REQUEST_STATUS.APPROVED, "En gestión de pago"],
+      [REQUEST_STATUS.PAID, "Pagada"],
+      [REQUEST_STATUS.REJECTED, "Rechazada"],
+    ]);
+    expect(REQUEST_STATUS_FILTER_OPTIONS.map((option) => option.value)).not.toContain(REQUEST_STATUS.CLOSED);
   });
 
   it("mapea las colas operativas GIOF a filtros de la bandeja de revisión", () => {
@@ -930,6 +941,11 @@ describe("requests helpers", () => {
       REQUEST_REVIEW_QUEUE.PENDING_LEVEL_1,
       REQUEST_REVIEW_QUEUE.PENDING_LEVEL_2,
       REQUEST_REVIEW_QUEUE.OBSERVED_RETURNED,
+    ]);
+    expect(REQUEST_REVIEW_QUEUE_CARDS.map((card) => card.label)).toEqual([
+      "Por revisar",
+      "En validación",
+      "Observadas",
     ]);
     expect(getRequestReviewQueueFilter(REQUEST_REVIEW_QUEUE.PENDING_LEVEL_1)).toMatchObject({
       status: REQUEST_STATUS.SUBMITTED,

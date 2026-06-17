@@ -45,6 +45,7 @@ export const ROUTE_ACCESS_RULES = [
   { path: ROUTES.BUDGET_FISCAL_YEARS, allowedRoles: GIOF_ONLY_ROLES, match: "prefix" },
   { path: ROUTES.BUDGET_ALLOCATIONS, allowedRoles: GIOF_ONLY_ROLES, match: "prefix" },
   { path: ROUTES.BUDGET_PLANNING, allowedRoles: GIOF_ONLY_ROLES, match: "prefix" },
+  { path: ROUTES.BUDGET_ORG_UNIT_EXECUTION, allowedRoles: DASHBOARD_ROLES, match: "prefix" },
   { path: ROUTES.BUDGET, allowedRoles: DASHBOARD_ROLES, match: "exact" },
   { path: ROUTES.CATALOGS, allowedRoles: GIOF_ONLY_ROLES, match: "prefix" },
   { path: ROUTES.ACCOUNTABILITY, allowedRoles: REQUEST_REVIEW_AND_ADMIN_ROLES, match: "prefix" },
