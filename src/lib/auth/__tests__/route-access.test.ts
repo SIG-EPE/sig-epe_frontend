@@ -20,6 +20,11 @@ describe("route access matrix", () => {
     expect(canAccessRoute("/budget", ROLE_CODE.AUDITOR_DIRECCION).isAllowed).toBe(true);
     expect(canAccessRoute("/budget", ROLE_CODE.SOLICITANTE_EPE).isAllowed).toBe(false);
 
+    expect(canAccessRoute("/budget/org-unit-execution", ROLE_CODE.GIOF_GESTOR).isAllowed).toBe(true);
+    expect(canAccessRoute("/budget/org-unit-execution", ROLE_CODE.ADMIN_SISTEMA).isAllowed).toBe(true);
+    expect(canAccessRoute("/budget/org-unit-execution", ROLE_CODE.AUDITOR_DIRECCION).isAllowed).toBe(true);
+    expect(canAccessRoute("/budget/org-unit-execution", ROLE_CODE.SOLICITANTE_EPE).isAllowed).toBe(false);
+
     expect(canAccessRoute("/dashboard/giof", ROLE_CODE.GIOF_GESTOR).isAllowed).toBe(true);
     expect(canAccessRoute("/dashboard/giof", ROLE_CODE.ADMIN_SISTEMA).isAllowed).toBe(true);
     expect(canAccessRoute("/dashboard/giof", ROLE_CODE.AUDITOR_DIRECCION).isAllowed).toBe(true);

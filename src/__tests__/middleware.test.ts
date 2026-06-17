@@ -35,6 +35,14 @@ describe("middleware session hint continuity", () => {
     expect(mockJwtVerify).not.toHaveBeenCalled();
   });
 
+  it("allows the Programado vs Ejecutado route when only the non-sensitive session hint exists", async () => {
+    const response = await middleware(requestFor("/budget/org-unit-execution", { session_hint: "present" }));
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("location")).toBeNull();
+    expect(mockJwtVerify).not.toHaveBeenCalled();
+  });
+
   it("allows onboarding when only the non-sensitive session hint exists", async () => {
     const response = await middleware(requestFor("/onboarding", { session_hint: "present" }));
 
@@ -107,6 +115,27 @@ describe("middleware session hint continuity", () => {
     });
 
     const response = await middleware(requestFor("/admin/config", { access_token: "token" }));
+
+    expect(response.headers.get("location")).toBe("http://localhost:3000/requests");
+  });
+
+  it("allows authorized users to open the Programado vs Ejecutado route", async () => {
+    mockJwtVerify.mockResolvedValue({
+      payload: { sub: "user-1", role: "GIOF_GESTOR", scope: "full", iat: 1, exp: 2 },
+    });
+
+    const response = await middleware(requestFor("/budget/org-unit-execution", { access_token: "token" }));
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("location")).toBeNull();
+  });
+
+  it("redirects Solicitante users away from the Programado vs Ejecutado route", async () => {
+    mockJwtVerify.mockResolvedValue({
+      payload: { sub: "user-1", role: "SOLICITANTE_EPE", scope: "full", iat: 1, exp: 2 },
+    });
+
+    const response = await middleware(requestFor("/budget/org-unit-execution", { access_token: "token" }));
 
     expect(response.headers.get("location")).toBe("http://localhost:3000/requests");
   });

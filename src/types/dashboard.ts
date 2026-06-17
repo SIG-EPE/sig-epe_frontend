@@ -76,6 +76,76 @@ export interface BudgetDashboardExecution {
   alerts: BudgetDashboardAlert[];
 }
 
+export const ORG_UNIT_EXECUTION_LEVEL = {
+  AREA: "area",
+  COMPONENT: "component",
+  OPERATIVE_ACTION: "operative_action",
+  RESOURCE: "resource",
+} as const;
+
+export type OrgUnitExecutionLevel =
+  (typeof ORG_UNIT_EXECUTION_LEVEL)[keyof typeof ORG_UNIT_EXECUTION_LEVEL];
+
+export interface OrgUnitExecutionDashboardFilters {
+  fiscal_year_id?: string;
+  fiscal_year?: number;
+  org_unit_id?: string;
+  month_from?: number;
+  month_to?: number;
+  level?: OrgUnitExecutionLevel;
+  parent_id?: string;
+  group_id?: string;
+}
+
+export interface OrgUnitExecutionAppliedFilters {
+  fiscal_year_id: string;
+  fiscal_year?: number;
+  org_unit_id?: string;
+  month_from: number;
+  month_to: number;
+  level: OrgUnitExecutionLevel;
+  parent_id: string | null;
+}
+
+export interface OrgUnitExecutionTotals {
+  programmed: number;
+  executed: number;
+  variance: number;
+  execution_rate: number | null;
+  currency: string | null;
+}
+
+export interface OrgUnitExecutionRow extends OrgUnitExecutionTotals {
+  id: string | null;
+  code: string | null;
+  name: string;
+  level: OrgUnitExecutionLevel;
+  parent_id: string | null;
+  has_children: boolean;
+}
+
+export interface OrgUnitExecutionMonthly {
+  month: number;
+  programmed: number;
+  executed: number;
+}
+
+export interface OrgUnitExecutionWarning {
+  code: string;
+  message: string;
+}
+
+export interface OrgUnitExecutionDashboard {
+  fiscal_year_id: string;
+  generated_at: string;
+  execution_semantics: "poa_spent_v1";
+  applied_filters: OrgUnitExecutionAppliedFilters;
+  totals: OrgUnitExecutionTotals;
+  rows: OrgUnitExecutionRow[];
+  monthly: OrgUnitExecutionMonthly[];
+  warnings: OrgUnitExecutionWarning[];
+}
+
 export interface GiofOperationsDashboardFilters {
   date_from?: string;
   date_to?: string;
