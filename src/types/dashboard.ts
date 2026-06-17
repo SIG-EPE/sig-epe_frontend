@@ -62,9 +62,9 @@ export interface BudgetDashboardBreakdowns {
 export interface BudgetDashboardAlert {
   code: string;
   severity: BudgetDashboardAlertSeverity;
-  label: string;
-  value: number | null;
-  threshold: number | null;
+  label?: string | null;
+  value?: number | null;
+  threshold?: number | null;
 }
 
 export interface BudgetDashboardExecution {

@@ -5,6 +5,7 @@ import {
   formatMoneyStrict,
   formatNumberStrict,
   formatPercentStrict,
+  getBudgetDashboardAlertMessage,
   getGiofExceptionLabel,
   getRequestStatusDashboardLabel,
   truncateChartLabel,
@@ -30,6 +31,19 @@ describe("dashboard strict formatters", () => {
     expect(getRequestStatusDashboardLabel("PAID")).toBe("Pagada");
     expect(getGiofExceptionLabel("overdue_renditions")).toBe("Rendiciones vencidas");
     expect(getGiofExceptionLabel("unassigned_requests")).toBe("Solicitudes sin gestor asignado");
+  });
+
+  it("maps budget alert codes when the API omits labels", () => {
+    expect(getBudgetDashboardAlertMessage({ code: "NO_ALLOCATION", severity: "info" })).toBe(
+      "Sin presupuesto asignado para los filtros seleccionados",
+    );
+    expect(getBudgetDashboardAlertMessage({ code: "UNDER_EXECUTION", severity: "warning", label: "   " })).toBe(
+      "Subejecución presupuestal",
+    );
+  });
+
+  it("returns null for budget alerts that have no displayable message", () => {
+    expect(getBudgetDashboardAlertMessage({ code: "UNKNOWN_ALERT", severity: "warning", label: "" })).toBeNull();
   });
 
   it("truncates long chart labels without changing short labels", () => {

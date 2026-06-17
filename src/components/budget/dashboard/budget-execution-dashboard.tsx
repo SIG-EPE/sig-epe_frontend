@@ -27,11 +27,12 @@ import {
   formatMonthLabel,
   formatNumberStrict,
   formatPercentStrict,
+  getBudgetDashboardAlertMessage,
   truncateChartLabel,
 } from "@/lib/dashboard-formatters";
 import { getTerritoryBusinessBadge, getTerritoryDisplayLabel } from "@/lib/dashboard-territory";
 import { useBudgetBalanceStore } from "@/stores/budget-balance-store";
-import type { BudgetDashboardBreakdownItem, BudgetDashboardExecution } from "@/types/dashboard";
+import type { BudgetDashboardAlert, BudgetDashboardBreakdownItem, BudgetDashboardExecution } from "@/types/dashboard";
 
 function DashboardSkeleton() {
   return (
@@ -293,6 +294,9 @@ export function BudgetExecutionDashboard() {
   }
 
   const hasData = hasAnyBudgetData(data);
+  const displayAlerts = data.alerts
+    .map((alert) => ({ alert, message: getBudgetDashboardAlertMessage(alert) }))
+    .filter((item): item is { alert: BudgetDashboardAlert; message: string } => item.message !== null);
 
   return (
     <div className="space-y-6">
@@ -302,12 +306,10 @@ export function BudgetExecutionDashboard() {
           <AlertDescription>Sin datos para los filtros seleccionados. No se inventan ceros cuando el backend reporta ausencia.</AlertDescription>
         </Alert>
       )}
-      {data.alerts.map((alert) => (
-        <Alert key={`${alert.code}-${alert.label}`} variant={alert.severity === "critical" ? "destructive" : "default"}>
+      {displayAlerts.map(({ alert, message }) => (
+        <Alert key={`${alert.code}-${message}`} variant={alert.severity === "critical" ? "destructive" : "default"}>
           <AlertCircle className="h-4 w-4" />
-          <AlertDescription>
-            {alert.label} {alert.value !== null ? `(${formatPercentStrict(alert.value)})` : "(Sin dato)"}
-          </AlertDescription>
+          <AlertDescription>{message}</AlertDescription>
         </Alert>
       ))}
       <BudgetKpis data={data} />
