@@ -35,6 +35,14 @@ describe("middleware session hint continuity", () => {
     expect(mockJwtVerify).not.toHaveBeenCalled();
   });
 
+  it("allows onboarding when only the non-sensitive session hint exists", async () => {
+    const response = await middleware(requestFor("/onboarding", { session_hint: "present" }));
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("location")).toBeNull();
+    expect(mockJwtVerify).not.toHaveBeenCalled();
+  });
+
   it("does not admit undeclared app routes with only the session hint", async () => {
     const response = await middleware(requestFor("/unknown-feature", { session_hint: "present" }));
 
@@ -47,6 +55,18 @@ describe("middleware session hint continuity", () => {
 
     const response = await middleware(
       requestFor("/requests", { access_token: "expired-token", session_hint: "present" }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("location")).toBeNull();
+    expect(mockJwtVerify).toHaveBeenCalledTimes(1);
+  });
+
+  it("allows onboarding when access verification fails but session hint exists", async () => {
+    mockJwtVerify.mockRejectedValue(new Error("JWTInvalid"));
+
+    const response = await middleware(
+      requestFor("/onboarding", { access_token: "invalid-token", session_hint: "present" }),
     );
 
     expect(response.status).toBe(200);
@@ -89,5 +109,25 @@ describe("middleware session hint continuity", () => {
     const response = await middleware(requestFor("/admin/config", { access_token: "token" }));
 
     expect(response.headers.get("location")).toBe("http://localhost:3000/requests");
+  });
+
+  it("redirects full-scope users away from onboarding", async () => {
+    mockJwtVerify.mockResolvedValue({
+      payload: { sub: "user-1", role: "SOLICITANTE_EPE", scope: "full", iat: 1, exp: 2 },
+    });
+
+    const response = await middleware(requestFor("/onboarding", { access_token: "token" }));
+
+    expect(response.headers.get("location")).toBe("http://localhost:3000/requests");
+  });
+
+  it("redirects onboarding-scope users from protected routes to onboarding", async () => {
+    mockJwtVerify.mockResolvedValue({
+      payload: { sub: "user-1", role: "SOLICITANTE_EPE", scope: "onboarding", iat: 1, exp: 2 },
+    });
+
+    const response = await middleware(requestFor("/requests", { access_token: "token" }));
+
+    expect(response.headers.get("location")).toBe("http://localhost:3000/onboarding");
   });
 });

@@ -98,7 +98,7 @@ export function BulkMarkPaidModal({ requests, open, onOpenChange, onSuccess }: B
         <Form {...form}>
           <form className="space-y-4" onSubmit={form.handleSubmit(submit)}>
             <div className="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
-              Al confirmar, estas solicitudes quedarán como pagadas y se enviará un correo al solicitante. Si falta constancia o referencia, podrás completar esos datos después.
+              Al confirmar, estas solicitudes quedarán como pagadas. Las notificaciones de pagos masivos se agruparán según la política vigente. Si falta constancia o referencia, podrás completar esos datos después.
             </div>
             <div className="grid gap-4 md:grid-cols-2">
               <FormField control={form.control} name="paid_at" render={({ field }) => (
