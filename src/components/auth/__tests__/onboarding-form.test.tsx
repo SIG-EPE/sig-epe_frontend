@@ -52,7 +52,8 @@ vi.mock("@/lib/constants", () => ({
 // Helpers
 // -------------------------------------------------------
 
-import { api } from "@/lib/api-client";
+import { toast } from "sonner";
+import { api, ApiRequestError } from "@/lib/api-client";
 import { OnboardingForm } from "@/components/auth/onboarding-form";
 
 function renderOnboardingForm(epeUserName = "Juan Pérez") {
@@ -157,6 +158,42 @@ describe("OnboardingForm", () => {
         newPassword: "Password123",
         confirmPassword: "Password123",
       });
+    });
+  });
+
+  it("bloquea contraseñas locales menores a 8 caracteres antes de enviar", async () => {
+    renderOnboardingForm();
+
+    fillLocalOnboardingForm({
+      email: "andy.montes@ensenaperu.org",
+      newPassword: "12345",
+      confirmPassword: "12345",
+    });
+    submitOnboardingForm();
+
+    await waitFor(() => {
+      expect(screen.getAllByText(/al menos 8 caracteres/i).length).toBeGreaterThan(0);
+    });
+    expect(api.post).not.toHaveBeenCalled();
+  });
+
+  it("muestra el mensaje de validación recibido al configurar el perfil", async () => {
+    vi.mocked(api.post).mockRejectedValue(
+      new ApiRequestError(400, {
+        statusCode: 400,
+        message: "La contraseña debe tener al menos 8 caracteres",
+        error: "Bad Request",
+        timestamp: "2026-01-01T00:00:00.000Z",
+        path: "/auth/onboarding",
+      }),
+    );
+    renderOnboardingForm();
+
+    fillLocalOnboardingForm({ email: "andy.montes@ensenaperu.org" });
+    submitOnboardingForm();
+
+    await waitFor(() => {
+      expect(toast.error).toHaveBeenCalledWith("La contraseña debe tener al menos 8 caracteres");
     });
   });
 

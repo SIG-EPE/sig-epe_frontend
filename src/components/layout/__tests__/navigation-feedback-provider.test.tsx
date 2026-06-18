@@ -26,6 +26,17 @@ function NavigationHarness() {
   );
 }
 
+function LinkHarness() {
+  return (
+    <div>
+      <a href="/payments">Cola de pagos</a>
+      <a href="/requests" onClick={(event) => event.preventDefault()}>
+        Navegación bloqueada
+      </a>
+    </div>
+  );
+}
+
 describe("NavigationFeedbackProvider", () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -88,6 +99,40 @@ describe("NavigationFeedbackProvider", () => {
     fireEvent.click(screen.getByRole("button", { name: /iniciar/i }));
     await act(async () => {
       vi.advanceTimersByTime(10_000);
+    });
+
+    expect(screen.queryByRole("progressbar", { name: /cargando navegación/i })).not.toBeInTheDocument();
+    expect(screen.getByTestId("pending-href")).toHaveTextContent("none");
+  });
+
+  it("muestra la barra superior para enlaces internos fuera del sidebar", async () => {
+    render(
+      <NavigationFeedbackProvider>
+        <NavigationHarness />
+        <LinkHarness />
+      </NavigationFeedbackProvider>,
+    );
+
+    fireEvent.click(screen.getByRole("link", { name: /cola de pagos/i }));
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(screen.getByRole("progressbar", { name: /cargando navegación/i })).toBeInTheDocument();
+    expect(screen.getByTestId("pending-href")).toHaveTextContent("/payments");
+  });
+
+  it("no muestra la barra si otra protección cancela la navegación", async () => {
+    render(
+      <NavigationFeedbackProvider>
+        <NavigationHarness />
+        <LinkHarness />
+      </NavigationFeedbackProvider>,
+    );
+
+    fireEvent.click(screen.getByRole("link", { name: /navegación bloqueada/i }));
+    await act(async () => {
+      await Promise.resolve();
     });
 
     expect(screen.queryByRole("progressbar", { name: /cargando navegación/i })).not.toBeInTheDocument();
