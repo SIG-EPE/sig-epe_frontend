@@ -4,9 +4,11 @@ import {
   buildBudgetExecutionDashboardPath,
   buildGiofOperationsDashboardPath,
   buildOrgUnitExecutionDashboardPath,
+  buildOrgUnitExecutionDashboardOptionsPath,
   getBudgetExecutionDashboard,
   getGiofOperationsDashboard,
   getOrgUnitExecutionDashboard,
+  getOrgUnitExecutionDashboardOptions,
 } from "@/lib/dashboard";
 import { useAuthStore } from "@/stores/auth-store";
 
@@ -47,8 +49,14 @@ describe("dashboard API clients", () => {
   });
 
   it("builds org unit execution dashboard params", () => {
-    expect(buildOrgUnitExecutionDashboardPath({ fiscal_year: 2026, month_from: 2, month_to: 3, level: "component", parent_id: "org-1" })).toBe(
-      "/budget/dashboard/org-unit-execution?fiscal_year=2026&month_from=2&month_to=3&level=component&parent_id=org-1",
+    expect(buildOrgUnitExecutionDashboardPath({ fiscal_year: 2026, selected_month: 7, program_id: "program-1", funding_source_id: "source-1", search: "beca", top_n: 10, level: "component", parent_id: "org-1" })).toBe(
+      "/budget/dashboard/org-unit-execution?fiscal_year=2026&program_id=program-1&funding_source_id=source-1&selected_month=7&level=component&parent_id=org-1&search=beca&top_n=10",
+    );
+  });
+
+  it("builds org unit execution options params", () => {
+    expect(buildOrgUnitExecutionDashboardOptionsPath({ fiscal_year: 2026, org_unit_id: "org-1", component_id: "component-1" })).toBe(
+      "/budget/dashboard/org-unit-execution/options?fiscal_year=2026&org_unit_id=org-1&component_id=component-1",
     );
   });
 
@@ -110,6 +118,23 @@ describe("dashboard API clients", () => {
     );
 
     await getOrgUnitExecutionDashboard({ fiscal_year: 2026 });
+
+    expect(getLastRequestHeaders().get("Authorization")).toBe("Bearer dashboard-token");
+  });
+
+  it("sends auth header to org unit execution options endpoint", async () => {
+    vi.mocked(fetch).mockResolvedValue(
+      mockJsonResponse({
+        data: {
+          fiscal_year_id: "fy-1",
+          applied_filters: { fiscal_year_id: "fy-1", month_from: 1, month_to: 7, level: "area", parent_id: null },
+          options: { org_units: [], programs: [], components: [], operative_actions: [], resources: [], funding_sources: [] },
+          warnings: [],
+        },
+      }),
+    );
+
+    await getOrgUnitExecutionDashboardOptions({ fiscal_year: 2026, selected_month: 7 });
 
     expect(getLastRequestHeaders().get("Authorization")).toBe("Bearer dashboard-token");
   });

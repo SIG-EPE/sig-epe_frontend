@@ -90,21 +90,49 @@ export interface OrgUnitExecutionDashboardFilters {
   fiscal_year_id?: string;
   fiscal_year?: number;
   org_unit_id?: string;
+  program_id?: string;
+  component_id?: string;
+  operative_action_id?: string;
+  resource_id?: string;
+  funding_source_id?: string;
+  selected_month?: number;
   month_from?: number;
   month_to?: number;
   level?: OrgUnitExecutionLevel;
   parent_id?: string;
   group_id?: string;
+  search?: string;
+  top_n?: number;
 }
 
 export interface OrgUnitExecutionAppliedFilters {
   fiscal_year_id: string;
   fiscal_year?: number;
   org_unit_id?: string;
+  program_id?: string;
+  component_id?: string;
+  operative_action_id?: string;
+  resource_id?: string;
+  funding_source_id?: string;
+  selected_month?: number;
   month_from: number;
   month_to: number;
   level: OrgUnitExecutionLevel;
   parent_id: string | null;
+  search?: string;
+  top_n?: number;
+}
+
+export interface OrgUnitExecutionKpis {
+  annual_programmed: number;
+  period_programmed: number;
+  period_executed: number;
+  period_variance: number;
+  not_executed: number;
+  excedente: number;
+  remaining_programmed: number;
+  execution_rate: number | null;
+  currency: string | null;
 }
 
 export interface OrgUnitExecutionTotals {
@@ -124,6 +152,33 @@ export interface OrgUnitExecutionRow extends OrgUnitExecutionTotals {
   has_children: boolean;
 }
 
+export interface OrgUnitExecutionVarianceRow extends OrgUnitExecutionRow {
+  not_executed: number;
+  excedente: number;
+}
+
+export interface OrgUnitExecutionOption {
+  id: string;
+  label: string;
+  code: string | null;
+  parent_id: string | null;
+}
+
+export interface OrgUnitExecutionOptions {
+  org_units: OrgUnitExecutionOption[];
+  programs: OrgUnitExecutionOption[];
+  components: OrgUnitExecutionOption[];
+  operative_actions: OrgUnitExecutionOption[];
+  resources: OrgUnitExecutionOption[];
+  funding_sources: OrgUnitExecutionOption[];
+}
+
+export interface OrgUnitExecutionBreadcrumb {
+  level: OrgUnitExecutionLevel;
+  id: string | null;
+  label: string;
+}
+
 export interface OrgUnitExecutionMonthly {
   month: number;
   programmed: number;
@@ -141,8 +196,20 @@ export interface OrgUnitExecutionDashboard {
   execution_semantics: "poa_spent_v1";
   applied_filters: OrgUnitExecutionAppliedFilters;
   totals: OrgUnitExecutionTotals;
+  kpis?: OrgUnitExecutionKpis;
   rows: OrgUnitExecutionRow[];
+  no_ejecutado_rows?: OrgUnitExecutionVarianceRow[];
   monthly: OrgUnitExecutionMonthly[];
+  filter_options?: OrgUnitExecutionOptions;
+  breadcrumbs?: OrgUnitExecutionBreadcrumb[];
+  current_filters?: OrgUnitExecutionAppliedFilters;
+  warnings: OrgUnitExecutionWarning[];
+}
+
+export interface OrgUnitExecutionOptionsResponse {
+  fiscal_year_id: string;
+  applied_filters: OrgUnitExecutionAppliedFilters;
+  options: OrgUnitExecutionOptions;
   warnings: OrgUnitExecutionWarning[];
 }
 

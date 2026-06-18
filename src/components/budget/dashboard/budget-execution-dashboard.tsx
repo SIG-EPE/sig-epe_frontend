@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import { AlertCircle, Banknote, CheckCircle2, Clock3, LineChart as LineChartIcon, Wallet } from "lucide-react";
 import {
   Bar,
@@ -19,7 +20,7 @@ import {
 } from "@/components/ui/chart";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Skeleton } from "@/components/ui/skeleton";
+import { BudgetExecutionDashboardSkeleton } from "@/components/performance/route-skeletons";
 import { useBudgetExecutionDashboard } from "@/hooks/use-dashboard";
 import {
   chartNumberOrNull,
@@ -34,18 +35,21 @@ import { getTerritoryBusinessBadge, getTerritoryDisplayLabel } from "@/lib/dashb
 import { useBudgetBalanceStore } from "@/stores/budget-balance-store";
 import type { BudgetDashboardAlert, BudgetDashboardBreakdownItem, BudgetDashboardExecution } from "@/types/dashboard";
 
-function DashboardSkeleton() {
+function useDebouncedValue<T>(value: T, delayMs: number): T {
+  const [debouncedValue, setDebouncedValue] = useState(value);
+
+  useEffect(() => {
+    const timeoutId = window.setTimeout(() => setDebouncedValue(value), delayMs);
+    return () => window.clearTimeout(timeoutId);
+  }, [value, delayMs]);
+
+  return debouncedValue;
+}
+
+function RefreshingNotice() {
   return (
-    <div className="space-y-4">
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-        {[1, 2, 3, 4, 5, 6].map((item) => (
-          <Skeleton key={item} className="h-28 rounded-xl" />
-        ))}
-      </div>
-      <div className="grid gap-4 lg:grid-cols-2">
-        <Skeleton className="h-80 rounded-xl" />
-        <Skeleton className="h-80 rounded-xl" />
-      </div>
+    <div className="rounded-md border border-border bg-muted/40 px-3 py-2 text-sm text-muted-foreground">
+      Actualizando datos del dashboard sin ocultar la información visible...
     </div>
   );
 }
@@ -270,10 +274,11 @@ export function BudgetExecutionDashboard() {
         territory_id: filters.territory_id,
       }
     : null;
-  const { data, isLoading, error } = useBudgetExecutionDashboard(dashboardFilters);
+  const debouncedFilters = useDebouncedValue(dashboardFilters, 250);
+  const { data, isLoading, isRefreshing, error } = useBudgetExecutionDashboard(debouncedFilters);
 
   if (!fiscalYearId || (isLoading && !data)) {
-    return <DashboardSkeleton />;
+    return <BudgetExecutionDashboardSkeleton />;
   }
 
   if (error) {
@@ -300,6 +305,7 @@ export function BudgetExecutionDashboard() {
 
   return (
     <div className="space-y-6">
+      {isRefreshing && <RefreshingNotice />}
       {!hasData && (
         <Alert>
           <AlertCircle className="h-4 w-4" />

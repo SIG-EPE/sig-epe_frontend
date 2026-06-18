@@ -1,13 +1,14 @@
 "use client";
 
-import { useEffect, useState } from "react";
-
+import { useCachedResource } from "@/hooks/use-cached-resource";
 import {
   getBudgetExecutionDashboard,
   getGiofOperationsDashboard,
   getOrgUnitExecutionDashboard,
+  getOrgUnitExecutionDashboardOptions,
 } from "@/lib/dashboard";
-import { useAuthStore } from "@/stores/auth-store";
+import { QUERY_CACHE_TTL_MS } from "@/lib/query-cache";
+import { QUERY_TAGS } from "@/lib/query-tags";
 import type {
   BudgetDashboardExecution,
   BudgetDashboardExecutionFilters,
@@ -15,181 +16,93 @@ import type {
   GiofOperationsDashboardFilters,
   OrgUnitExecutionDashboard,
   OrgUnitExecutionDashboardFilters,
+  OrgUnitExecutionOptionsResponse,
 } from "@/types/dashboard";
 
 interface DashboardHookState<T> {
   data: T | null;
   isLoading: boolean;
+  isInitialLoading: boolean;
+  isRefreshing: boolean;
   error: Error | null;
-  refetch: () => Promise<void>;
+  refetch: (options?: { force?: boolean }) => Promise<void>;
+}
+
+function useCachedDashboardQuery<T>({
+  enabled,
+  key,
+  tags,
+  errorMessage,
+  queryFn,
+}: {
+  enabled: boolean;
+  key: readonly unknown[];
+  tags: readonly string[];
+  errorMessage: string;
+  queryFn: (signal: AbortSignal) => Promise<T>;
+}): DashboardHookState<T> {
+  return useCachedResource<T>({
+    enabled,
+    key,
+    ttlMs: QUERY_CACHE_TTL_MS.DASHBOARD,
+    tags,
+    errorMessage,
+    queryFn,
+  });
 }
 
 export function useBudgetExecutionDashboard(
   filters: BudgetDashboardExecutionFilters | null,
 ): DashboardHookState<BudgetDashboardExecution> {
-  const [data, setData] = useState<BudgetDashboardExecution | null>(null);
-  const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState<Error | null>(null);
-  const [refreshKey, setRefreshKey] = useState(0);
-  const authIsLoading = useAuthStore((state) => state.isLoading);
-  const accessToken = useAuthStore((state) => state.accessToken);
-
-  async function refetch() {
-    setRefreshKey((current) => current + 1);
-  }
-
-  useEffect(() => {
-    if (!filters || authIsLoading || !accessToken) {
-      return;
-    }
-
-    let cancelled = false;
-    setIsLoading(true);
-    setError(null);
-
-    getBudgetExecutionDashboard(filters)
-      .then((result) => {
-        if (!cancelled) {
-          setData(result);
-        }
-      })
-      .catch((unknownError: unknown) => {
-        if (!cancelled) {
-          setError(unknownError instanceof Error ? unknownError : new Error("Error al cargar dashboard presupuestal"));
-        }
-      })
-      .finally(() => {
-        if (!cancelled) {
-          setIsLoading(false);
-        }
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [
-    filters?.fiscal_year_id,
-    filters?.org_unit_id,
-    filters?.territory_id,
-    filters?.program_id,
-    filters?.budget_category_id,
-    authIsLoading,
-    accessToken,
-    refreshKey,
-  ]);
-
-  return { data, isLoading, error, refetch };
+  return useCachedDashboardQuery({
+    enabled: Boolean(filters),
+    key: ["dashboard", "budget-execution", filters ?? {}],
+    tags: [QUERY_TAGS.DASHBOARD, QUERY_TAGS.BUDGET],
+    errorMessage: "Error al cargar dashboard presupuestal",
+    queryFn: () => getBudgetExecutionDashboard(filters as BudgetDashboardExecutionFilters),
+  });
 }
 
 export function useGiofOperationsDashboard(
   filters: GiofOperationsDashboardFilters,
 ): DashboardHookState<GiofOperationsDashboard> {
-  const [data, setData] = useState<GiofOperationsDashboard | null>(null);
-  const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState<Error | null>(null);
-  const [refreshKey, setRefreshKey] = useState(0);
-  const authIsLoading = useAuthStore((state) => state.isLoading);
-  const accessToken = useAuthStore((state) => state.accessToken);
-
-  async function refetch() {
-    setRefreshKey((current) => current + 1);
-  }
-
-  useEffect(() => {
-    if (authIsLoading || !accessToken) {
-      return;
-    }
-
-    let cancelled = false;
-    setIsLoading(true);
-    setError(null);
-
-    getGiofOperationsDashboard(filters)
-      .then((result) => {
-        if (!cancelled) {
-          setData(result);
-        }
-      })
-      .catch((unknownError: unknown) => {
-        if (!cancelled) {
-          setError(unknownError instanceof Error ? unknownError : new Error("Error al cargar dashboard operativo"));
-        }
-      })
-      .finally(() => {
-        if (!cancelled) {
-          setIsLoading(false);
-        }
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [
-    filters.date_from,
-    filters.date_to,
-    filters.fiscal_year,
-    filters.org_unit_id,
-    filters.territory_id,
-    authIsLoading,
-    accessToken,
-    refreshKey,
-  ]);
-
-  return { data, isLoading, error, refetch };
+  return useCachedDashboardQuery({
+    enabled: true,
+    key: ["dashboard", "giof-operations", filters],
+    tags: [QUERY_TAGS.DASHBOARD, QUERY_TAGS.REQUESTS, QUERY_TAGS.PAYMENTS, QUERY_TAGS.RENDITIONS],
+    errorMessage: "Error al cargar dashboard operativo",
+    queryFn: () => getGiofOperationsDashboard(filters),
+  });
 }
 
 export function useOrgUnitExecutionDashboard(
   filters: OrgUnitExecutionDashboardFilters,
 ): DashboardHookState<OrgUnitExecutionDashboard> {
-  const [data, setData] = useState<OrgUnitExecutionDashboard | null>(null);
-  const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState<Error | null>(null);
-  const [refreshKey, setRefreshKey] = useState(0);
-  const authIsLoading = useAuthStore((state) => state.isLoading);
-  const accessToken = useAuthStore((state) => state.accessToken);
+  return useCachedDashboardQuery({
+    enabled: true,
+    key: ["dashboard", "org-unit-execution", filters],
+    tags: [QUERY_TAGS.DASHBOARD, QUERY_TAGS.BUDGET, QUERY_TAGS.POA],
+    errorMessage: "Error al cargar Programado vs Ejecutado",
+    queryFn: () => getOrgUnitExecutionDashboard(filters),
+  });
+}
 
-  async function refetch() {
-    setRefreshKey((current) => current + 1);
-  }
-
-  useEffect(() => {
-    if (authIsLoading || !accessToken) {
-      return;
-    }
-
-    let cancelled = false;
-    setIsLoading(true);
-    setError(null);
-
-    getOrgUnitExecutionDashboard(filters)
-      .then((result) => {
-        if (!cancelled) setData(result);
-      })
-      .catch((unknownError: unknown) => {
-        if (!cancelled) {
-          setError(unknownError instanceof Error ? unknownError : new Error("Error al cargar Programado vs Ejecutado"));
-        }
-      })
-      .finally(() => {
-        if (!cancelled) setIsLoading(false);
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [
-    filters.fiscal_year_id,
-    filters.fiscal_year,
-    filters.org_unit_id,
-    filters.month_from,
-    filters.month_to,
-    filters.level,
-    filters.parent_id,
-    filters.group_id,
-    authIsLoading,
-    accessToken,
-    refreshKey,
-  ]);
-
-  return { data, isLoading, error, refetch };
+export function useOrgUnitExecutionDashboardOptions(
+  filters: OrgUnitExecutionDashboardFilters,
+): DashboardHookState<OrgUnitExecutionOptionsResponse> {
+  const optionsFilters = {
+      ...filters,
+      level: undefined,
+      parent_id: undefined,
+      group_id: undefined,
+      search: undefined,
+      top_n: undefined,
+  };
+  return useCachedDashboardQuery({
+    enabled: true,
+    key: ["dashboard", "org-unit-execution-options", optionsFilters],
+    tags: [QUERY_TAGS.DASHBOARD_OPTIONS, QUERY_TAGS.BUDGET, QUERY_TAGS.CATALOG],
+    errorMessage: "Error al cargar filtros del dashboard",
+    queryFn: () => getOrgUnitExecutionDashboardOptions(optionsFilters),
+  });
 }
