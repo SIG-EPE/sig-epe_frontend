@@ -1,8 +1,10 @@
 "use client";
 
 import { useState } from "react";
+import { api } from "@/lib/api-client";
+import { normalizeAuthUser } from "@/lib/auth/session-sync";
 import { useAuthStore } from "@/stores/auth-store";
-import type { ProfileUpdatePayload } from "@/types/auth";
+import type { BackendAuthUser, ProfileUpdatePayload } from "@/types/auth";
 
 interface UseProfileReturn {
   updateProfile: (data: ProfileUpdatePayload) => Promise<void>;
@@ -22,14 +24,8 @@ export function useProfile(): UseProfileReturn {
     if (!user) throw new Error("No hay usuario autenticado");
     setIsLoading(true);
     try {
-      const res = await fetch("/api/auth/profile", {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(data),
-      });
-      if (!res.ok) throw new Error("Error al actualizar perfil");
-      const updated = await res.json();
-      patchUser(updated);
+      const updated = await api.patch<BackendAuthUser>("/auth/me", data);
+      patchUser(normalizeAuthUser(updated));
     } finally {
       setIsLoading(false);
     }

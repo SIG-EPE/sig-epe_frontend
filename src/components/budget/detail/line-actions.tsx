@@ -13,6 +13,7 @@ import {
 } from "@/components/ui/dialog";
 import { RejectModal } from "@/components/budget/planning/reject-modal";
 import {
+  getPlanningLineMutationErrorMessage,
   getSubmitPlanningLineErrorMessage,
   useApprovePlanningLine,
   useSubmitPlanningLine,
@@ -48,8 +49,8 @@ export function LineActions({ line, isGiof, onRefetch }: LineActionsProps) {
       toast.success("Linea aprobada");
       setApproveConfirmOpen(false);
       onRefetch();
-    } catch {
-      toast.error("Error al aprobar la linea");
+    } catch (error) {
+      toast.error(getPlanningLineMutationErrorMessage(error) ?? "Error al aprobar la linea");
       setApproveConfirmOpen(false);
     }
   }

@@ -483,7 +483,7 @@ function toReadableMessage(value: unknown): string | null {
   return null;
 }
 
-export function getSubmitPlanningLineErrorMessage(error: unknown): string | null {
+export function getPlanningLineMutationErrorMessage(error: unknown): string | null {
   if (error instanceof ApiRequestError) {
     return toReadableMessage(error.body.message) ?? toReadableMessage(error.message);
   }
@@ -507,6 +507,10 @@ export function getSubmitPlanningLineErrorMessage(error: unknown): string | null
   }
 
   return null;
+}
+
+export function getSubmitPlanningLineErrorMessage(error: unknown): string | null {
+  return getPlanningLineMutationErrorMessage(error);
 }
 
 // -------------------------------------------------------
