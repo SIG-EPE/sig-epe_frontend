@@ -24,6 +24,10 @@ import { X } from "lucide-react";
 // Select envolvido em componente controlado pelo Zustand
 // -------------------------------------------------------
 
+interface BalanceFiltersProps {
+  isRefreshing?: boolean;
+}
+
 function FiscalYearSelect() {
   const fiscalYearId = useBudgetBalanceStore((s) => s.fiscalYearId);
   const setFiscalYearId = useBudgetBalanceStore((s) => s.setFiscalYearId);
@@ -62,7 +66,7 @@ function OrgUnitSelect() {
       <Label htmlFor="org-unit">Unidad Organica</Label>
       <Select
         value={filters.org_unit_id ?? ""}
-        onValueChange={(value) => setFilter("org_unit_id", value)}
+        onValueChange={(value) => setFilter("org_unit_id", value === "__all__" ? "" : value)}
         disabled={isLoading}
       >
         <SelectTrigger id="org-unit" className="w-full">
@@ -103,7 +107,7 @@ function TerritorySelectCascade() {
 // Componente principal
 // -------------------------------------------------------
 
-export function BalanceFilters() {
+export function BalanceFilters({ isRefreshing = false }: BalanceFiltersProps) {
   const clearFilters = useBudgetBalanceStore((s) => s.clearFilters);
   const filters = useBudgetBalanceStore((s) => s.filters);
   const hasActiveFilters = Object.keys(filters).length > 0;
@@ -120,6 +124,10 @@ export function BalanceFilters() {
         {/* Segunda fila: selector de territorio en cascada */}
         <TerritorySelectCascade />
       </div>
+
+      {isRefreshing && (
+        <p className="text-sm text-muted-foreground">Actualizando filtros y saldos en segundo plano...</p>
+      )}
 
       {/* Boton limpiar */}
       {hasActiveFilters && (

@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { StatusBadge } from "@/components/requests/status-badge";
 import { PaymentAllocationProofCoverage } from "@/components/payments/payment-allocation-proof-coverage";
+import { QueueTableRowsSkeleton } from "@/components/performance/route-skeletons";
 import { REQUEST_TYPE_LABELS, formatRequestCurrency, formatRequestDate, getPaymentId, getPaymentPendingBadges, getPaymentRequestParty, getPlanningLineDisplay, getRequestPayableAmount, hasPaymentDetailsPending, hasPaymentProofPending, isRexanExcessRequest } from "@/lib/requests";
 import { REQUEST_STATUS, type PaymentRequest } from "@/types/requests";
 
@@ -23,7 +24,7 @@ interface PaymentQueueTableProps {
 
 export function PaymentQueueTable({ requests, isLoading, onRegisterPayment, selectedRequestIds = [], onToggleRequest, onToggleAll, onCompletePaymentDetails, onAttachPaymentProof }: PaymentQueueTableProps) {
   if (isLoading) {
-    return <p className="rounded-md border p-6 text-sm text-muted-foreground">Cargando cola de pagos...</p>;
+    return <QueueTableRowsSkeleton rows={5} columns={7} />;
   }
 
   if (requests.length === 0) {

@@ -8,6 +8,8 @@
 
 import { useState, useCallback, useEffect } from "react";
 import { api } from "@/lib/api-client";
+import { cachedQuery, QUERY_CACHE_TTL_MS } from "@/lib/query-cache";
+import { QUERY_TAGS, invalidateCatalogDomain } from "@/lib/query-tags";
 import { useAuthStore } from "@/stores/auth-store";
 import type {
   BudgetProgram,
@@ -48,7 +50,12 @@ function useCatalogList<T>(path: string) {
     setIsLoading(true);
     setError(null);
     try {
-      const result = await api.get<T[]>(path);
+      const result = await cachedQuery({
+        key: ["catalog", path],
+        ttlMs: QUERY_CACHE_TTL_MS.CATALOG,
+        tags: [QUERY_TAGS.CATALOGS, QUERY_TAGS.CATALOG],
+        queryFn: () => api.get<T[]>(path),
+      });
       setData(result);
     } catch (e) {
       setError(e instanceof Error ? e : new Error("Error al cargar datos"));
@@ -85,7 +92,12 @@ export function useCatalogBudgetPrograms(planningType?: string) {
       const params = new URLSearchParams();
       if (planningType) params.set("planning_type", planningType);
       const query = params.toString() ? `?${params.toString()}` : "";
-      const result = await api.get<BudgetProgram[]>(`/catalogs/budget-programs${query}`);
+      const result = await cachedQuery({
+        key: ["catalog", "budget-programs", { planningType }],
+        ttlMs: QUERY_CACHE_TTL_MS.CATALOG,
+        tags: [QUERY_TAGS.CATALOGS, QUERY_TAGS.CATALOG, QUERY_TAGS.BUDGET],
+        queryFn: () => api.get<BudgetProgram[]>(`/catalogs/budget-programs${query}`),
+      });
       setData(result);
     } catch (e) {
       setError(e instanceof Error ? e : new Error("Error al cargar programas"));
@@ -108,7 +120,9 @@ export function useCreateBudgetProgram() {
   const create = async (dto: CreateBudgetProgramDto): Promise<BudgetProgram> => {
     setIsLoading(true);
     try {
-      return await api.post<BudgetProgram>("/catalogs/budget-programs", dto);
+      const created = await api.post<BudgetProgram>("/catalogs/budget-programs", dto);
+      invalidateCatalogDomain();
+      return created;
     } finally {
       setIsLoading(false);
     }
@@ -123,7 +137,9 @@ export function useUpdateBudgetProgram(id: string) {
   const update = async (dto: UpdateBudgetProgramDto): Promise<BudgetProgram> => {
     setIsLoading(true);
     try {
-      return await api.patch<BudgetProgram>(`/catalogs/budget-programs/${id}`, dto);
+      const updated = await api.patch<BudgetProgram>(`/catalogs/budget-programs/${id}`, dto);
+      invalidateCatalogDomain();
+      return updated;
     } finally {
       setIsLoading(false);
     }
@@ -138,7 +154,9 @@ export function useDeactivateBudgetProgram(id: string) {
   const deactivate = async (): Promise<BudgetProgram> => {
     setIsLoading(true);
     try {
-      return await api.patch<BudgetProgram>(`/catalogs/budget-programs/${id}/deactivate`);
+      const deactivated = await api.patch<BudgetProgram>(`/catalogs/budget-programs/${id}/deactivate`);
+      invalidateCatalogDomain();
+      return deactivated;
     } finally {
       setIsLoading(false);
     }
@@ -168,7 +186,9 @@ export function useCreateFundingSource() {
   const create = async (dto: CreateFundingSourceDto): Promise<FundingSource> => {
     setIsLoading(true);
     try {
-      return await api.post<FundingSource>("/catalogs/funding-sources", dto);
+      const created = await api.post<FundingSource>("/catalogs/funding-sources", dto);
+      invalidateCatalogDomain();
+      return created;
     } finally {
       setIsLoading(false);
     }
@@ -186,7 +206,9 @@ export function useUpdateFundingSource(id: string) {
   const update = async (dto: UpdateFundingSourceDto): Promise<FundingSource> => {
     setIsLoading(true);
     try {
-      return await api.patch<FundingSource>(`/catalogs/funding-sources/${id}`, dto);
+      const updated = await api.patch<FundingSource>(`/catalogs/funding-sources/${id}`, dto);
+      invalidateCatalogDomain();
+      return updated;
     } finally {
       setIsLoading(false);
     }
@@ -204,7 +226,9 @@ export function useDeactivateFundingSource(id: string) {
   const deactivate = async (): Promise<FundingSource> => {
     setIsLoading(true);
     try {
-      return await api.patch<FundingSource>(`/catalogs/funding-sources/${id}/deactivate`);
+      const deactivated = await api.patch<FundingSource>(`/catalogs/funding-sources/${id}/deactivate`);
+      invalidateCatalogDomain();
+      return deactivated;
     } finally {
       setIsLoading(false);
     }
@@ -230,7 +254,9 @@ export function useCreateBudgetCategory() {
   const create = async (dto: CreateBudgetCategoryDto): Promise<BudgetCategory> => {
     setIsLoading(true);
     try {
-      return await api.post<BudgetCategory>("/catalogs/budget-categories", dto);
+      const created = await api.post<BudgetCategory>("/catalogs/budget-categories", dto);
+      invalidateCatalogDomain();
+      return created;
     } finally {
       setIsLoading(false);
     }
@@ -245,7 +271,9 @@ export function useUpdateBudgetCategory(id: string) {
   const update = async (dto: UpdateBudgetCategoryDto): Promise<BudgetCategory> => {
     setIsLoading(true);
     try {
-      return await api.patch<BudgetCategory>(`/catalogs/budget-categories/${id}`, dto);
+      const updated = await api.patch<BudgetCategory>(`/catalogs/budget-categories/${id}`, dto);
+      invalidateCatalogDomain();
+      return updated;
     } finally {
       setIsLoading(false);
     }
@@ -260,7 +288,9 @@ export function useDeactivateBudgetCategory(id: string) {
   const deactivate = async (): Promise<BudgetCategory> => {
     setIsLoading(true);
     try {
-      return await api.patch<BudgetCategory>(`/catalogs/budget-categories/${id}/deactivate`);
+      const deactivated = await api.patch<BudgetCategory>(`/catalogs/budget-categories/${id}/deactivate`);
+      invalidateCatalogDomain();
+      return deactivated;
     } finally {
       setIsLoading(false);
     }
@@ -313,7 +343,9 @@ export function useCreateTerritory() {
   const create = async (dto: CreateTerritoryDto): Promise<Territory> => {
     setIsLoading(true);
     try {
-      return await api.post<Territory>("/catalogs/territories", dto);
+      const created = await api.post<Territory>("/catalogs/territories", dto);
+      invalidateCatalogDomain();
+      return created;
     } finally {
       setIsLoading(false);
     }
@@ -328,7 +360,9 @@ export function useUpdateTerritory(id: string) {
   const update = async (dto: UpdateTerritoryDto): Promise<Territory> => {
     setIsLoading(true);
     try {
-      return await api.patch<Territory>(`/catalogs/territories/${id}`, dto);
+      const updated = await api.patch<Territory>(`/catalogs/territories/${id}`, dto);
+      invalidateCatalogDomain();
+      return updated;
     } finally {
       setIsLoading(false);
     }
@@ -343,7 +377,9 @@ export function useDeactivateTerritory(id: string) {
   const deactivate = async (): Promise<Territory> => {
     setIsLoading(true);
     try {
-      return await api.patch<Territory>(`/catalogs/territories/${id}/deactivate`);
+      const deactivated = await api.patch<Territory>(`/catalogs/territories/${id}/deactivate`);
+      invalidateCatalogDomain();
+      return deactivated;
     } finally {
       setIsLoading(false);
     }
@@ -375,7 +411,9 @@ export function useCreateOrganizationalUnit() {
   const create = async (dto: CreateOrganizationalUnitDto): Promise<OrganizationalUnit> => {
     setIsLoading(true);
     try {
-      return await api.post<OrganizationalUnit>("/catalogs/organizational-units", dto);
+      const created = await api.post<OrganizationalUnit>("/catalogs/organizational-units", dto);
+      invalidateCatalogDomain();
+      return created;
     } finally {
       setIsLoading(false);
     }
@@ -390,7 +428,9 @@ export function useUpdateOrganizationalUnit(id: string) {
   const update = async (dto: UpdateOrganizationalUnitDto): Promise<OrganizationalUnit> => {
     setIsLoading(true);
     try {
-      return await api.patch<OrganizationalUnit>(`/catalogs/organizational-units/${id}`, dto);
+      const updated = await api.patch<OrganizationalUnit>(`/catalogs/organizational-units/${id}`, dto);
+      invalidateCatalogDomain();
+      return updated;
     } finally {
       setIsLoading(false);
     }
@@ -405,7 +445,9 @@ export function useDeactivateOrganizationalUnit(id: string) {
   const deactivate = async (): Promise<OrganizationalUnit> => {
     setIsLoading(true);
     try {
-      return await api.patch<OrganizationalUnit>(`/catalogs/organizational-units/${id}/deactivate`);
+      const deactivated = await api.patch<OrganizationalUnit>(`/catalogs/organizational-units/${id}/deactivate`);
+      invalidateCatalogDomain();
+      return deactivated;
     } finally {
       setIsLoading(false);
     }

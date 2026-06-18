@@ -5,10 +5,13 @@
 // Hooks para consumo del API de presupuesto
 // -------------------------------------------------------
 
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import { toast } from "sonner";
 import { api, ApiRequestError } from "@/lib/api-client";
+import { useCachedResource } from "@/hooks/use-cached-resource";
 import type { PlanningType } from "@/lib/planning-types";
+import { cachedQuery, invalidateQueryTag, logQueryCacheDiagnostic, QUERY_CACHE_TTL_MS } from "@/lib/query-cache";
+import { QUERY_TAGS } from "@/lib/query-tags";
 import { useAuthStore } from "@/stores/auth-store";
 import type {
   BalanceData,
@@ -66,8 +69,10 @@ function normalizePlanningLineStats(
 interface UseBalanceReturn {
   data: BalanceData | null;
   isLoading: boolean;
+  isInitialLoading: boolean;
+  isRefreshing: boolean;
   error: Error | null;
-  refetch: () => Promise<void>;
+  refetch: (options?: { force?: boolean }) => Promise<void>;
 }
 
 export function useBalance(
@@ -75,15 +80,22 @@ export function useBalance(
   filters?: BalanceFilters
 ): UseBalanceReturn {
   const [data, setData] = useState<BalanceData | null>(null);
-  const [isLoading, setIsLoading] = useState(false);
+  const [isInitialLoading, setIsInitialLoading] = useState(false);
+  const [isRefreshing, setIsRefreshing] = useState(false);
   const [error, setError] = useState<Error | null>(null);
+  const requestSequenceRef = useRef(0);
+  const dataRef = useRef<BalanceData | null>(null);
 
   const authIsLoading = useAuthStore((state) => state.isLoading);
   const accessToken = useAuthStore((state) => state.accessToken);
 
-  const refetch = useCallback(async () => {
+  const refetch = useCallback(async (options?: { force?: boolean }) => {
     if (!fiscalYearId || authIsLoading || !accessToken) return;
-    setIsLoading(true);
+    const requestSequence = requestSequenceRef.current + 1;
+    requestSequenceRef.current = requestSequence;
+    const hasPreviousData = dataRef.current !== null;
+    setIsInitialLoading(!hasPreviousData);
+    setIsRefreshing(hasPreviousData);
     setError(null);
     try {
       const params = new URLSearchParams();
@@ -93,12 +105,28 @@ export function useBalance(
       const queryString = params.toString();
       const path = `/budget/balance/${fiscalYearId}${queryString ? `?${queryString}` : ""}`;
 
-      const result = await api.get<BalanceData>(path);
-      setData(result);
+      const result = await cachedQuery({
+        key: ["budget", "balance", fiscalYearId, filters ?? {}],
+        ttlMs: QUERY_CACHE_TTL_MS.DASHBOARD,
+        tags: ["budget", "dashboard"],
+        force: options?.force === true,
+        queryFn: () => api.get<BalanceData>(path),
+      });
+      if (requestSequenceRef.current === requestSequence) {
+        dataRef.current = result;
+        setData(result);
+      } else {
+        logQueryCacheDiagnostic("stale-response-ignore", ["budget", "balance", fiscalYearId, filters ?? {}]);
+      }
     } catch (e) {
-      setError(e instanceof Error ? e : new Error("Error al obtener balance presupuestal"));
+      if (requestSequenceRef.current === requestSequence) {
+        setError(e instanceof Error ? e : new Error("Error al obtener balance presupuestal"));
+      }
     } finally {
-      setIsLoading(false);
+      if (requestSequenceRef.current === requestSequence) {
+        setIsInitialLoading(false);
+        setIsRefreshing(false);
+      }
     }
   }, [fiscalYearId, authIsLoading, accessToken, filters?.org_unit_id, filters?.territory_id]);
 
@@ -107,7 +135,18 @@ export function useBalance(
     void refetch();
   }, [refetch, authIsLoading, accessToken]);
 
-  return { data, isLoading, error, refetch };
+  return { data, isLoading: isInitialLoading, isInitialLoading, isRefreshing, error, refetch };
+}
+
+function invalidateBudgetMutationCaches(): void {
+  invalidateQueryTag("budget");
+  invalidateQueryTag("dashboard");
+  invalidateQueryTag("poa");
+}
+
+function invalidateBudgetCatalogMutationCaches(): void {
+  invalidateBudgetMutationCaches();
+  invalidateQueryTag("catalog");
 }
 
 // -------------------------------------------------------
@@ -136,7 +175,12 @@ export function useFiscalYears(): UseFiscalYearsReturn {
     setIsLoading(true);
     setError(null);
     try {
-      const result = await api.get<FiscalYear[]>("/budget/fiscal-years");
+      const result = await cachedQuery({
+        key: ["budget", "fiscal-years"],
+        ttlMs: QUERY_CACHE_TTL_MS.CATALOG,
+        tags: ["budget", "catalog"],
+        queryFn: () => api.get<FiscalYear[]>("/budget/fiscal-years"),
+      });
       setData(result);
     } catch (e) {
       setError(e instanceof Error ? e : new Error("Error al obtener anos fiscales"));
@@ -188,8 +232,12 @@ export function useOrganizationalUnits(): UseOrganizationalUnitsReturn {
     setIsLoading(true);
     setError(null);
 
-    api
-      .get<OrganizationalUnit[]>("/catalogs/organizational-units")
+    cachedQuery({
+      key: ["catalog", "organizational-units"],
+      ttlMs: QUERY_CACHE_TTL_MS.CATALOG,
+      tags: ["catalog"],
+      queryFn: () => api.get<OrganizationalUnit[]>("/catalogs/organizational-units"),
+    })
       .then((result) => {
         if (!cancelled) setData(result);
       })
@@ -254,8 +302,12 @@ export function useTerritories(level?: string, parentId?: string): UseTerritorie
     const queryString = params.toString();
     const path = `/catalogs/territories${queryString ? `?${queryString}` : ""}`;
 
-    api
-      .get<Territory[]>(path)
+    cachedQuery({
+      key: ["catalog", "territories", { level, parentId }],
+      ttlMs: QUERY_CACHE_TTL_MS.CATALOG,
+      tags: ["catalog"],
+      queryFn: () => api.get<Territory[]>(path),
+    })
       .then((result) => {
         if (!cancelled) setData(result);
       })
@@ -321,17 +373,12 @@ export function usePlanningLines(filters?: {
   created_by?: string;
   page?: number;
 }) {
-  const [data, setData] = useState<PlanningLinesResponse | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  const authIsLoading = useAuthStore((state) => state.isLoading);
-  const accessToken = useAuthStore((state) => state.accessToken);
-
-  const refetch = useCallback(async () => {
-    setIsLoading(true);
-    setError(null);
-    try {
+  const resource = useCachedResource<PlanningLinesResponse>({
+    key: [QUERY_TAGS.BUDGET, "planning-lines", filters ?? {}],
+    ttlMs: QUERY_CACHE_TTL_MS.MUTABLE_LIST,
+    tags: [QUERY_TAGS.BUDGET, QUERY_TAGS.POA],
+    errorMessage: "Error al cargar lineas",
+    queryFn: () => {
       const params = new URLSearchParams();
       if (filters?.fiscal_year_id) params.set("fiscal_year_id", filters.fiscal_year_id);
       if (filters?.org_unit_id) params.set("org_unit_id", filters.org_unit_id);
@@ -340,29 +387,21 @@ export function usePlanningLines(filters?: {
       if (filters?.page) params.set("page", String(filters.page));
 
       const query = params.toString() ? `?${params.toString()}` : "";
-      const result = await api.get<PlanningLinesResponse>(`/budget/planning-lines${query}`);
-      setData(result);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Error al cargar lineas");
-    } finally {
-      setIsLoading(false);
-    }
-  }, [filters?.fiscal_year_id, filters?.org_unit_id, filters?.status, filters?.created_by, filters?.page]);
-
-  useEffect(() => {
-    if (authIsLoading || !accessToken) return;
-    void refetch();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [refetch, authIsLoading, accessToken]);
+      return api.get<PlanningLinesResponse>(`/budget/planning-lines${query}`);
+    },
+  });
+  const data = resource.data;
 
   return {
     lines: data?.lines ?? [],
     total: data?.total ?? 0,
     page: data?.page ?? 1,
     limit: data?.limit ?? 20,
-    isLoading,
-    error,
-    refetch,
+    isLoading: resource.isLoading,
+    isInitialLoading: resource.isInitialLoading,
+    isRefreshing: resource.isRefreshing,
+    error: resource.error?.message ?? null,
+    refetch: resource.refetch,
   };
 }
 
@@ -413,6 +452,8 @@ export function useSubmitPlanningLine(id: string) {
     setIsLoading(true);
     try {
       await api.post(`/budget/planning-lines/${id}/submit`);
+      invalidateQueryTag("poa");
+      invalidateQueryTag("budget");
     } finally {
       setIsLoading(false);
     }
@@ -480,6 +521,8 @@ export function useApprovePlanningLine(id: string) {
     setIsLoading(true);
     try {
       await api.post(`/budget/planning-lines/${id}/approve`);
+      invalidateQueryTag("poa");
+      invalidateQueryTag("budget");
     } finally {
       setIsLoading(false);
     }
@@ -500,6 +543,8 @@ export function useRejectPlanningLine(id: string) {
     setIsLoading(true);
     try {
       await api.post(`/budget/planning-lines/${id}/reject`, body);
+      invalidateQueryTag("poa");
+      invalidateQueryTag("budget");
     } finally {
       setIsLoading(false);
     }
@@ -568,6 +613,7 @@ export function useCreateFiscalYear() {
     setIsLoading(true);
     try {
       const result = await api.post<FiscalYear>("/budget/fiscal-years", dto);
+      invalidateBudgetCatalogMutationCaches();
       return result;
     } catch (error) {
       throw error;
@@ -595,6 +641,7 @@ export function useUpdateFiscalYear(id: string) {
     setIsLoading(true);
     try {
       const result = await api.patch<FiscalYear>(`/budget/fiscal-years/${id}`, dto);
+      invalidateBudgetCatalogMutationCaches();
       return result;
     } catch (error) {
       throw error;
@@ -618,6 +665,7 @@ export function useActivateFiscalYear(id: string) {
     setIsLoading(true);
     try {
       const result = await api.post<FiscalYear>(`/budget/fiscal-years/${id}/activate`);
+      invalidateBudgetCatalogMutationCaches();
       return result;
     } catch (error) {
       if (error instanceof ApiRequestError && error.status === 409) {
@@ -644,6 +692,7 @@ export function useCloseFiscalYear(id: string) {
     setIsLoading(true);
     try {
       const result = await api.post<FiscalYear>(`/budget/fiscal-years/${id}/close`);
+      invalidateBudgetCatalogMutationCaches();
       return result;
     } catch (error) {
       throw error;
@@ -794,35 +843,16 @@ export type UpdatePartnerAllocationDto = UpdateFundingSourceAllocationDto;
 // -------------------------------------------------------
 
 export function useFundingSourceAllocations(fiscalYearId?: string) {
-  const [data, setData] = useState<FundingSourceAllocation[] | null>(null);
-  const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState<Error | null>(null);
+  const resource = useCachedResource<FundingSourceAllocation[]>({
+    enabled: Boolean(fiscalYearId),
+    key: [QUERY_TAGS.BUDGET, "funding-source-allocations", fiscalYearId],
+    ttlMs: QUERY_CACHE_TTL_MS.MUTABLE_LIST,
+    tags: [QUERY_TAGS.BUDGET],
+    errorMessage: "Error al obtener aportes",
+    queryFn: () => api.get<FundingSourceAllocation[]>(`/budget/funding-source-allocations?fiscal_year_id=${fiscalYearId}`),
+  });
 
-  const authIsLoading = useAuthStore((s) => s.isLoading);
-  const accessToken = useAuthStore((s) => s.accessToken);
-
-  const refetch = useCallback(async () => {
-    if (!fiscalYearId || authIsLoading || !accessToken) return;
-    setIsLoading(true);
-    setError(null);
-    try {
-      const result = await api.get<FundingSourceAllocation[]>(
-        `/budget/funding-source-allocations?fiscal_year_id=${fiscalYearId}`
-      );
-      setData(result);
-    } catch (e) {
-      setError(e instanceof Error ? e : new Error("Error al obtener aportes"));
-    } finally {
-      setIsLoading(false);
-    }
-  }, [fiscalYearId, authIsLoading, accessToken]);
-
-  useEffect(() => {
-    if (authIsLoading || !accessToken) return;
-    void refetch();
-  }, [refetch, authIsLoading, accessToken]);
-
-  return { data, isLoading, error, refetch };
+  return { data: resource.data, isLoading: resource.isLoading, isInitialLoading: resource.isInitialLoading, isRefreshing: resource.isRefreshing, error: resource.error, refetch: resource.refetch };
 }
 
 /** @deprecated Use useFundingSourceAllocations */
@@ -839,7 +869,9 @@ export function useCreateFundingSourceAllocation() {
   const create = async (dto: CreateFundingSourceAllocationDto): Promise<FundingSourceAllocation> => {
     setIsLoading(true);
     try {
-      return await api.post<FundingSourceAllocation>("/budget/funding-source-allocations", dto);
+      const result = await api.post<FundingSourceAllocation>("/budget/funding-source-allocations", dto);
+      invalidateBudgetMutationCaches();
+      return result;
     } finally {
       setIsLoading(false);
     }
@@ -862,7 +894,9 @@ export function useUpdateFundingSourceAllocation(id: string) {
   const update = async (dto: UpdateFundingSourceAllocationDto): Promise<FundingSourceAllocation> => {
     setIsLoading(true);
     try {
-      return await api.patch<FundingSourceAllocation>(`/budget/funding-source-allocations/${id}`, dto);
+      const result = await api.patch<FundingSourceAllocation>(`/budget/funding-source-allocations/${id}`, dto);
+      invalidateBudgetMutationCaches();
+      return result;
     } finally {
       setIsLoading(false);
     }
@@ -886,6 +920,7 @@ export function useDeleteFundingSourceAllocation() {
     setIsLoading(true);
     try {
       await api.delete(`/budget/funding-source-allocations/${id}`);
+      invalidateBudgetMutationCaches();
     } finally {
       setIsLoading(false);
     }
@@ -917,38 +952,15 @@ export interface FundingSourceCatalog {
 export type BudgetPartner = FundingSourceCatalog;
 
 export function useFundingSources() {
-  const [data, setData] = useState<FundingSourceCatalog[] | null>(null);
-  const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState<Error | null>(null);
+  const resource = useCachedResource<FundingSourceCatalog[]>({
+    key: [QUERY_TAGS.CATALOGS, "funding-sources"],
+    ttlMs: QUERY_CACHE_TTL_MS.CATALOG,
+    tags: [QUERY_TAGS.CATALOGS, QUERY_TAGS.CATALOG, QUERY_TAGS.BUDGET],
+    errorMessage: "Error al obtener fuentes de financiamiento",
+    queryFn: () => api.get<FundingSourceCatalog[]>("/catalogs/funding-sources"),
+  });
 
-  const authIsLoading = useAuthStore((s) => s.isLoading);
-  const accessToken = useAuthStore((s) => s.accessToken);
-
-  useEffect(() => {
-    if (authIsLoading || !accessToken) return;
-    let cancelled = false;
-    setIsLoading(true);
-    setError(null);
-
-    api
-      .get<FundingSourceCatalog[]>("/catalogs/funding-sources")
-      .then((result) => {
-        if (!cancelled) setData(result);
-      })
-      .catch((e) => {
-        if (!cancelled)
-          setError(e instanceof Error ? e : new Error("Error al obtener fuentes de financiamiento"));
-      })
-      .finally(() => {
-        if (!cancelled) setIsLoading(false);
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [authIsLoading, accessToken]);
-
-  return { data, isLoading, error };
+  return { data: resource.data, isLoading: resource.isLoading, isInitialLoading: resource.isInitialLoading, isRefreshing: resource.isRefreshing, error: resource.error, refetch: resource.refetch };
 }
 
 /** @deprecated Use useFundingSources */
@@ -971,42 +983,20 @@ export interface BudgetProgram {
 }
 
 export function useBudgetPrograms(planningType?: string) {
-  const [data, setData] = useState<BudgetProgram[] | null>(null);
-  const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState<Error | null>(null);
-
-  const authIsLoading = useAuthStore((s) => s.isLoading);
-  const accessToken = useAuthStore((s) => s.accessToken);
-
-  useEffect(() => {
-    if (authIsLoading || !accessToken) return;
-    let cancelled = false;
-    setIsLoading(true);
-    setError(null);
-
+  const resource = useCachedResource<BudgetProgram[]>({
+    key: [QUERY_TAGS.CATALOGS, "budget-programs", { planningType }],
+    ttlMs: QUERY_CACHE_TTL_MS.CATALOG,
+    tags: [QUERY_TAGS.CATALOGS, QUERY_TAGS.CATALOG, QUERY_TAGS.BUDGET],
+    errorMessage: "Error al obtener programas",
+    queryFn: () => {
     const params = new URLSearchParams();
     if (planningType) params.set("planning_type", planningType);
     const qs = params.toString() ? `?${params.toString()}` : "";
+      return api.get<BudgetProgram[]>(`/catalogs/budget-programs${qs}`);
+    },
+  });
 
-    api
-      .get<BudgetProgram[]>(`/catalogs/budget-programs${qs}`)
-      .then((result) => {
-        if (!cancelled) setData(result);
-      })
-      .catch((e) => {
-        if (!cancelled)
-          setError(e instanceof Error ? e : new Error("Error al obtener programas"));
-      })
-      .finally(() => {
-        if (!cancelled) setIsLoading(false);
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [authIsLoading, accessToken, planningType]);
-
-  return { data, isLoading, error };
+  return { data: resource.data, isLoading: resource.isLoading, isInitialLoading: resource.isInitialLoading, isRefreshing: resource.isRefreshing, error: resource.error, refetch: resource.refetch };
 }
 
 // -------------------------------------------------------
@@ -1025,38 +1015,15 @@ export interface BudgetCategory {
 }
 
 export function useBudgetCategories() {
-  const [data, setData] = useState<BudgetCategory[] | null>(null);
-  const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState<Error | null>(null);
+  const resource = useCachedResource<BudgetCategory[]>({
+    key: [QUERY_TAGS.CATALOGS, "budget-categories"],
+    ttlMs: QUERY_CACHE_TTL_MS.CATALOG,
+    tags: [QUERY_TAGS.CATALOGS, QUERY_TAGS.CATALOG, QUERY_TAGS.BUDGET],
+    errorMessage: "Error al obtener categorías",
+    queryFn: () => api.get<BudgetCategory[]>("/catalogs/budget-categories"),
+  });
 
-  const authIsLoading = useAuthStore((s) => s.isLoading);
-  const accessToken = useAuthStore((s) => s.accessToken);
-
-  useEffect(() => {
-    if (authIsLoading || !accessToken) return;
-    let cancelled = false;
-    setIsLoading(true);
-    setError(null);
-
-    api
-      .get<BudgetCategory[]>("/catalogs/budget-categories")
-      .then((result) => {
-        if (!cancelled) setData(result);
-      })
-      .catch((e) => {
-        if (!cancelled)
-          setError(e instanceof Error ? e : new Error("Error al obtener categorías"));
-      })
-      .finally(() => {
-        if (!cancelled) setIsLoading(false);
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [authIsLoading, accessToken]);
-
-  return { data, isLoading, error };
+  return { data: resource.data, isLoading: resource.isLoading, isInitialLoading: resource.isInitialLoading, isRefreshing: resource.isRefreshing, error: resource.error, refetch: resource.refetch };
 }
 
 // -------------------------------------------------------
@@ -1125,7 +1092,9 @@ export function useCreatePlanningLine() {
   const create = async (dto: CreatePlanningLineDto): Promise<{ id: string }> => {
     setIsLoading(true);
     try {
-      return await api.post<{ id: string }>("/budget/planning-lines", dto);
+      const result = await api.post<{ id: string }>("/budget/planning-lines", dto);
+      invalidateBudgetMutationCaches();
+      return result;
     } finally {
       setIsLoading(false);
     }
@@ -1260,9 +1229,11 @@ export function useAddLineFundingSource() {
   ): Promise<LineFundingSource> => {
     setIsLoading(true);
     try {
-      return await api.post<LineFundingSource>(`/budget/planning-lines/${lineId}/funding-sources`, {
+      const result = await api.post<LineFundingSource>(`/budget/planning-lines/${lineId}/funding-sources`, {
         funding_source_id: fundingSourceId,
       });
+      invalidateBudgetMutationCaches();
+      return result;
     } finally {
       setIsLoading(false);
     }
@@ -1286,6 +1257,7 @@ export function useRemoveLineFundingSource() {
     setIsLoading(true);
     try {
       await api.delete(`/budget/planning-lines/${lineId}/funding-sources/${fundingSourceId}`);
+      invalidateBudgetMutationCaches();
     } finally {
       setIsLoading(false);
     }
@@ -1313,6 +1285,7 @@ export function useUpsertMonthly() {
     setIsLoading(true);
     try {
       await api.put(`/budget/planning-lines/${lineId}/monthly`, dto);
+      invalidateBudgetMutationCaches();
     } finally {
       setIsLoading(false);
     }
@@ -1428,6 +1401,7 @@ export function useAddManualExecution(lineId: string) {
     setIsLoading(true);
     try {
       await api.post<ManualExecution>(`/budget/planning-lines/${lineId}/manual-executions`, dto);
+      invalidateBudgetMutationCaches();
       options?.onSuccess?.();
     } catch (e) {
       options?.onError?.(e instanceof Error ? e : new Error("Error al registrar ejecución"));
@@ -1451,6 +1425,7 @@ export function useDeleteManualExecution(lineId: string) {
     setIsLoading(true);
     try {
       await api.delete(`/budget/planning-lines/${lineId}/manual-executions/${execId}`);
+      invalidateBudgetMutationCaches();
     } finally {
       setIsLoading(false);
     }

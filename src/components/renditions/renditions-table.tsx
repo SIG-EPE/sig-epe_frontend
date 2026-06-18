@@ -4,6 +4,7 @@ import Link from "next/link";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { QueueTableRowsSkeleton } from "@/components/performance/route-skeletons";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import {
   formatRequestCurrency,
@@ -22,7 +23,7 @@ interface RenditionsTableProps {
 
 export function RenditionsTable({ renditions, isLoading }: RenditionsTableProps) {
   if (isLoading) {
-    return <p className="rounded-md border p-6 text-sm text-muted-foreground">Cargando rendiciones...</p>;
+    return <QueueTableRowsSkeleton rows={5} columns={8} />;
   }
 
   if (renditions.length === 0) {

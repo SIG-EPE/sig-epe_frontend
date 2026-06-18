@@ -1,8 +1,11 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState } from "react";
 
+import { useCachedResource } from "@/hooks/use-cached-resource";
 import { api } from "@/lib/api-client";
+import { QUERY_CACHE_TTL_MS } from "@/lib/query-cache";
+import { QUERY_TAGS, invalidateUserDomain } from "@/lib/query-tags";
 import { useAuthStore } from "@/stores/auth-store";
 import type { ProfileUpdatePayload } from "@/types/auth";
 
@@ -49,49 +52,28 @@ export interface UpdateUserPayload {
 // -------------------------------------------------------
 
 export function useUsers(page: number, limit: number, search?: string) {
-  const [data, setData] = useState<UsersListResponse | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  // Wait for auth hydration before fetching — accessToken is null until
-  // useAuthHydration resolves /auth/me and calls setAuth (isLoading → false).
-  const authIsLoading = useAuthStore((state) => state.isLoading);
-  const accessToken = useAuthStore((state) => state.accessToken);
-
-  const refetch = useCallback(async () => {
-    setIsLoading(true);
-    setError(null);
-    try {
+  const resource = useCachedResource<UsersListResponse>({
+    key: [QUERY_TAGS.USERS, "list", { page, limit, search }],
+    ttlMs: QUERY_CACHE_TTL_MS.MUTABLE_LIST,
+    tags: [QUERY_TAGS.USERS],
+    errorMessage: "Error al cargar usuarios",
+    queryFn: () => {
       const searchParam = search ? `&search=${encodeURIComponent(search)}` : "";
-      const result = await api.get<UsersListResponse>(
-        `/users?page=${page}&limit=${limit}${searchParam}`,
-      );
-      setData(result);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Error al cargar usuarios");
-    } finally {
-      setIsLoading(false);
-    }
-  }, [page, limit, search]);
-
-  useEffect(() => {
-    // Don't fetch until auth store is hydrated (token is available).
-    // We include accessToken in deps so the fetch triggers as soon as the
-    // token is set by useAuthHydration (e.g. after SSR pre-hydration fills
-    // user but leaves accessToken null until the client-side effect runs).
-    if (authIsLoading || !accessToken) return;
-    void refetch();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [refetch, authIsLoading, accessToken]);
+      return api.get<UsersListResponse>(`/users?page=${page}&limit=${limit}${searchParam}`);
+    },
+  });
+  const data = resource.data;
 
   return {
     users: data?.users ?? [],
     total: data?.total ?? 0,
     page: data?.page ?? page,
     limit: data?.limit ?? limit,
-    isLoading,
-    error,
-    refetch,
+    isLoading: resource.isLoading,
+    isInitialLoading: resource.isInitialLoading,
+    isRefreshing: resource.isRefreshing,
+    error: resource.error?.message ?? null,
+    refetch: resource.refetch,
   };
 }
 
@@ -106,6 +88,7 @@ export function useAssignRole() {
     setIsLoading(true);
     try {
       await api.patch(`/users/${userId}/role`, { roleCode });
+      invalidateUserDomain();
     } catch (error) {
       throw error;
     } finally {
@@ -127,6 +110,7 @@ export function useDeactivateUser() {
     setIsLoading(true);
     try {
       await api.delete(`/users/${userId}`);
+      invalidateUserDomain();
     } catch (error) {
       throw error;
     } finally {
@@ -148,6 +132,7 @@ export function useCreateUser() {
     setIsLoading(true);
     try {
       await api.post("/users", dto);
+      invalidateUserDomain();
     } catch (error) {
       throw error;
     } finally {
@@ -169,6 +154,7 @@ export function useUpdateUser() {
     setIsLoading(true);
     try {
       await api.patch(`/users/${userId}`, dto);
+      invalidateUserDomain();
     } catch (error) {
       throw error;
     } finally {
@@ -190,6 +176,7 @@ export function useReactivateUser() {
     setIsLoading(true);
     try {
       await api.patch(`/users/${userId}/reactivate`);
+      invalidateUserDomain();
     } catch (error) {
       throw error;
     } finally {
@@ -211,6 +198,7 @@ export function useResetPassword() {
     setIsLoading(true);
     try {
       await api.post(`/users/${userId}/reset-password`);
+      invalidateUserDomain();
     } catch (error) {
       throw error;
     } finally {

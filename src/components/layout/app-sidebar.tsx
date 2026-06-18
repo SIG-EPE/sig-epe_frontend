@@ -24,8 +24,9 @@ import {
 import type { LucideIcon } from "lucide-react";
 
 import { useAuthStore } from "@/stores/auth-store";
-import { ROLE_MENU_MAP, type MenuItem } from "@/lib/constants";
+import { ROLE_MENU_MAP, ROUTES, type MenuItem } from "@/lib/constants";
 import { Skeleton } from "@/components/ui/skeleton";
+import { cn } from "@/lib/utils";
 import {
   Sidebar,
   SidebarContent,
@@ -40,6 +41,10 @@ import {
   useSidebar,
 } from "@/components/ui/sidebar";
 import { NavUser } from "@/components/layout/nav-user";
+import {
+  isNavigationHrefCurrent,
+  useNavigationFeedback,
+} from "@/components/layout/navigation-feedback-provider";
 
 // -------------------------------------------------------
 // Icon map — maps icon name strings from constants to components
@@ -62,6 +67,11 @@ const ICON_MAP: Record<string, LucideIcon> = {
   Handshake,
 };
 
+const SIDEBAR_EXACT_ACTIVE_ROUTES = new Set<string>([
+  ROUTES.DASHBOARD,
+  ROUTES.BUDGET,
+]);
+
 function splitHref(href: string) {
   const [path, query = ""] = href.split("?");
   return { path, queryParams: new URLSearchParams(query) };
@@ -81,7 +91,9 @@ export function isSidebarHrefActive(
   searchParams: Pick<URLSearchParams, "get">,
 ) {
   const { path, queryParams } = splitHref(href);
-  const isPathMatch = pathname === path || pathname.startsWith(`${path}/`);
+  const isPathMatch = SIDEBAR_EXACT_ACTIVE_ROUTES.has(path)
+    ? pathname === path
+    : pathname === path || pathname.startsWith(`${path}/`);
 
   if (!isPathMatch) {
     return false;
@@ -134,6 +146,7 @@ export function AppSidebar() {
   const searchParams = useSearchParams();
   const user = useAuthStore((state) => state.user);
   const { setOpenMobile, toggleSidebar, state: sidebarState } = useSidebar();
+  const { pendingHref, startNavigation, clearNavigation } = useNavigationFeedback();
 
   // Close mobile drawer on route change
   useEffect(() => {
@@ -207,6 +220,8 @@ export function AppSidebar() {
               {menuItems.map((item) => {
                 const Icon = ICON_MAP[item.icon] ?? LayoutDashboard;
                 const isActive = isSidebarHrefActive(item.href, pathname, searchParams);
+                const isCurrent = isNavigationHrefCurrent(item.href, pathname, searchParams);
+                const isPending = pendingHref === item.href;
 
                 return (
                   <SidebarMenuItem key={item.href}>
@@ -214,8 +229,36 @@ export function AppSidebar() {
                       asChild
                       isActive={isActive}
                       tooltip={item.label}
+                      className={cn(
+                        isPending &&
+                          "bg-sidebar-accent text-sidebar-accent-foreground ring-1 ring-sidebar-ring",
+                      )}
                     >
-                      <Link href={item.href as never}>
+                      <Link
+                        href={item.href as never}
+                        prefetch={false}
+                        aria-current={isActive ? "page" : undefined}
+                        aria-busy={isPending ? "true" : undefined}
+                        data-pending={isPending ? "true" : undefined}
+                        onClick={(event) => {
+                          if (
+                            event.defaultPrevented ||
+                            event.metaKey ||
+                            event.ctrlKey ||
+                            event.shiftKey ||
+                            event.altKey ||
+                            event.button !== 0
+                          ) {
+                            return;
+                          }
+
+                          if (isCurrent) {
+                            clearNavigation();
+                          } else {
+                            startNavigation(item.href);
+                          }
+                        }}
+                      >
                         <Icon />
                         <span>{item.label}</span>
                       </Link>

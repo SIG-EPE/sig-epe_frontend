@@ -6,6 +6,7 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { useDebouncedValue } from "@/hooks/use-debounced-value";
 import { usePaymentQueue } from "@/hooks/use-requests";
 import { PAYMENT_QUEUE_STATUS, formatRequestCurrency, getApiErrorMessage, getRequestPayableAmount } from "@/lib/requests";
 import { cn } from "@/lib/utils";
@@ -27,6 +28,7 @@ type PaymentQueueTab = (typeof PAYMENT_QUEUE_TAB)[keyof typeof PAYMENT_QUEUE_TAB
 export function PaymentQueuePage() {
   const [status, setStatus] = useState<PaymentQueueTab>(PAYMENT_QUEUE_STATUS.PENDING);
   const [search, setSearch] = useState("");
+  const debouncedSearch = useDebouncedValue(search.trim(), 300);
   const [selectedRequest, setSelectedRequest] = useState<PaymentRequest | null>(null);
   const [completionRequest, setCompletionRequest] = useState<PaymentRequest | null>(null);
   const [proofAssociationRequest, setProofAssociationRequest] = useState<PaymentRequest | null>(null);
@@ -37,18 +39,19 @@ export function PaymentQueuePage() {
   const [isAttachProofModalOpen, setIsAttachProofModalOpen] = useState(false);
   const activeQueue = usePaymentQueue({
     status: status === PAYMENT_QUEUE_TAB.PENDING_DATA ? PAYMENT_QUEUE_STATUS.PAID : status,
-    search: search.trim() || undefined,
+    search: debouncedSearch || undefined,
     page: 1,
     limit: 20,
   });
-  const pendingDataProofQueue = usePaymentQueue({ status: PAYMENT_QUEUE_STATUS.PAID, pending_proof: true, search: search.trim() || undefined, page: 1, limit: 100 });
-  const pendingDataDetailsQueue = usePaymentQueue({ status: PAYMENT_QUEUE_STATUS.PAID, pending_details: true, search: search.trim() || undefined, page: 1, limit: 100 });
+  const pendingDataProofQueue = usePaymentQueue({ status: PAYMENT_QUEUE_STATUS.PAID, pending_proof: true, search: debouncedSearch || undefined, page: 1, limit: 100 });
+  const pendingDataDetailsQueue = usePaymentQueue({ status: PAYMENT_QUEUE_STATUS.PAID, pending_details: true, search: debouncedSearch || undefined, page: 1, limit: 100 });
   const pendingQueue = usePaymentQueue({ status: PAYMENT_QUEUE_STATUS.PENDING, page: 1, limit: 100 });
   const paidQueue = usePaymentQueue({ status: PAYMENT_QUEUE_STATUS.PAID, page: 1, limit: 100 });
   const pendingDataRequests = Array.from(new Map([...pendingDataProofQueue.requests, ...pendingDataDetailsQueue.requests].map((request) => [request.id, request])).values());
   const displayedRequests = status === PAYMENT_QUEUE_TAB.PENDING_DATA ? pendingDataRequests : activeQueue.requests;
   const displayedError = status === PAYMENT_QUEUE_TAB.PENDING_DATA ? pendingDataProofQueue.error ?? pendingDataDetailsQueue.error : activeQueue.error;
   const displayedIsLoading = status === PAYMENT_QUEUE_TAB.PENDING_DATA ? pendingDataProofQueue.isLoading || pendingDataDetailsQueue.isLoading : activeQueue.isLoading;
+  const displayedIsRefreshing = status === PAYMENT_QUEUE_TAB.PENDING_DATA ? pendingDataProofQueue.isRefreshing || pendingDataDetailsQueue.isRefreshing : activeQueue.isRefreshing;
   const pendingTotal = pendingQueue.requests.reduce((total, request) => total + getRequestPayableAmount(request), 0);
   const selectedRequests = displayedRequests.filter((request) => selectedRequestIds.includes(request.id));
   const selectedTotal = selectedRequests.reduce((total, request) => total + getRequestPayableAmount(request), 0);
@@ -147,6 +150,11 @@ export function PaymentQueuePage() {
           </div>
         </CardHeader>
         <CardContent>
+          {displayedIsRefreshing && !displayedError && (
+            <p className="mb-3 rounded-md border bg-muted/40 px-3 py-2 text-sm text-muted-foreground" role="status">
+              Actualizando cola de pagos...
+            </p>
+          )}
           {status === REQUEST_STATUS.APPROVED && selectedRequests.length > 0 && (
             <div className="mb-4 flex flex-col gap-3 rounded-md border bg-muted/40 p-3 sm:flex-row sm:items-center sm:justify-between" data-testid="bulk-payment-action-bar">
               <p className="text-sm">

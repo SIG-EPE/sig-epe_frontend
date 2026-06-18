@@ -1,9 +1,9 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
-
+import { useCachedResource } from "@/hooks/use-cached-resource";
 import { api } from "@/lib/api-client";
-import { useAuthStore } from "@/stores/auth-store";
+import { QUERY_CACHE_TTL_MS } from "@/lib/query-cache";
+import { QUERY_TAGS } from "@/lib/query-tags";
 
 // -------------------------------------------------------
 // Types
@@ -50,17 +50,12 @@ export interface AuditLogsResponse {
 // -------------------------------------------------------
 
 export function useAuditLogs(filters: AuditLogsFilters) {
-  const [data, setData] = useState<AuditLogsResponse | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  const authIsLoading = useAuthStore((state) => state.isLoading);
-  const accessToken = useAuthStore((state) => state.accessToken);
-
-  const refetch = useCallback(async () => {
-    setIsLoading(true);
-    setError(null);
-    try {
+  const resource = useCachedResource<AuditLogsResponse>({
+    key: [QUERY_TAGS.AUDIT, "list", filters],
+    ttlMs: QUERY_CACHE_TTL_MS.MUTABLE_LIST,
+    tags: [QUERY_TAGS.AUDIT],
+    errorMessage: "Error al cargar los registros de auditoría",
+    queryFn: () => {
       const params = new URLSearchParams({
         page: String(filters.page),
         limit: String(filters.limit),
@@ -70,37 +65,20 @@ export function useAuditLogs(filters: AuditLogsFilters) {
       if (filters.dateFrom) params.set("dateFrom", filters.dateFrom);
       if (filters.dateTo) params.set("dateTo", filters.dateTo);
 
-      const result = await api.get<AuditLogsResponse>(
-        `/audit-logs?${params.toString()}`,
-      );
-      setData(result);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Error al cargar los registros de auditoría");
-    } finally {
-      setIsLoading(false);
-    }
-  }, [
-    filters.page,
-    filters.limit,
-    filters.userId,
-    filters.action,
-    filters.dateFrom,
-    filters.dateTo,
-  ]);
-
-  useEffect(() => {
-    if (authIsLoading || !accessToken) return;
-    void refetch();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [refetch, authIsLoading, accessToken]);
+      return api.get<AuditLogsResponse>(`/audit-logs?${params.toString()}`);
+    },
+  });
+  const data = resource.data;
 
   return {
     logs: data?.data ?? [],
     total: data?.total ?? 0,
     page: data?.page ?? filters.page,
     limit: data?.limit ?? filters.limit,
-    isLoading,
-    error,
-    refetch,
+    isLoading: resource.isLoading,
+    isInitialLoading: resource.isInitialLoading,
+    isRefreshing: resource.isRefreshing,
+    error: resource.error?.message ?? null,
+    refetch: resource.refetch,
   };
 }

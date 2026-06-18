@@ -6,16 +6,25 @@
 // -------------------------------------------------------
 
 import { useEffect } from "react";
+import dynamic from "next/dynamic";
 import { AlertTriangle, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
 import { useBudgetBalanceStore } from "@/stores/budget-balance-store";
 import { useBalance, useFiscalYears } from "@/hooks/use-budget";
 import { BalanceFilters } from "./balance-filters";
 import { BalanceCards } from "./balance-cards";
-import { BudgetExecutionDashboard } from "@/components/budget/dashboard/budget-execution-dashboard";
+import { BudgetExecutionDashboardSkeleton } from "@/components/performance/route-skeletons";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Alert, AlertDescription } from "@/components/ui/alert";
+
+const DynamicBudgetExecutionDashboard = dynamic(
+  () => import("@/components/budget/dashboard/budget-execution-dashboard").then((module) => module.BudgetExecutionDashboard),
+  {
+    loading: () => <BudgetExecutionDashboardSkeleton />,
+    ssr: false,
+  },
+);
 
 // -------------------------------------------------------
 // Estado de carga inicial
@@ -79,8 +88,8 @@ export function BalanceDashboard() {
   const fiscalYearId = useBudgetBalanceStore((s) => s.fiscalYearId);
   const setFiscalYearId = useBudgetBalanceStore((s) => s.setFiscalYearId);
   const filters = useBudgetBalanceStore((s) => s.filters);
-  const { data: balanceData, isLoading, error, refetch } = useBalance(fiscalYearId ?? "", filters);
-  const { data: fiscalYears } = useFiscalYears();
+  const { data: balanceData, isInitialLoading, isRefreshing, error, refetch } = useBalance(fiscalYearId ?? "", filters);
+  const { data: fiscalYears, isLoading: fiscalYearsLoading } = useFiscalYears();
 
   // Al montar: si no hay ano fiscal seleccionado, buscar el ACTIVE
   useEffect(() => {
@@ -105,7 +114,7 @@ export function BalanceDashboard() {
     return (
       <div className="space-y-6">
         <BalanceFilters />
-        <DashboardSkeleton />
+        {fiscalYearsLoading ? <DashboardSkeleton /> : <ErrorView message="No hay año fiscal disponible para mostrar saldos." onRetry={() => refetch({ force: true })} />}
       </div>
     );
   }
@@ -115,13 +124,13 @@ export function BalanceDashboard() {
     return (
       <div className="space-y-6">
         <BalanceFilters />
-        <ErrorView message={error.message} onRetry={refetch} />
+        <ErrorView message={error.message} onRetry={() => refetch({ force: true })} />
       </div>
     );
   }
 
   // Loading con datos previos o carga inicial
-  if (isLoading && !balanceData) {
+  if (isInitialLoading && !balanceData) {
     return (
       <div className="space-y-6">
         <BalanceFilters />
@@ -135,7 +144,7 @@ export function BalanceDashboard() {
     return (
       <div className="space-y-6">
         <BalanceFilters />
-        <ErrorView message="No se encontraron datos para los filtros seleccionados." onRetry={refetch} />
+        <ErrorView message="No se encontraron datos para los filtros seleccionados." onRetry={() => refetch({ force: true })} />
       </div>
     );
   }
@@ -143,9 +152,14 @@ export function BalanceDashboard() {
   // Dashboard completo
   return (
     <div className="space-y-6">
-      <BalanceFilters />
+      <BalanceFilters isRefreshing={isRefreshing} />
+      {isRefreshing && (
+        <div className="rounded-md border border-border bg-muted/40 px-3 py-2 text-sm text-muted-foreground">
+          Actualizando saldos sin ocultar las tarjetas visibles...
+        </div>
+      )}
       <BalanceCards data={balanceData} />
-      <BudgetExecutionDashboard />
+      <DynamicBudgetExecutionDashboard />
     </div>
   );
 }

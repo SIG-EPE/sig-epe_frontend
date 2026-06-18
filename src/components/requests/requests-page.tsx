@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { ChevronDown, ChevronUp, Plus, Search, X } from "lucide-react";
 
@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { useDebouncedValue } from "@/hooks/use-debounced-value";
 import { useRequests } from "@/hooks/use-requests";
 import { ROLE_CODE, ROUTES } from "@/lib/constants";
 import {
@@ -49,7 +50,7 @@ export function RequestsPage() {
   const queryQueue = parseRequestReviewQueue(searchParams.get("queue"));
   const isExplicitAllStatuses = rawStatusParam === ALL_STATUSES_FILTER;
   const [search, setSearch] = useState(searchParams.get("search") ?? "");
-  const [debouncedSearch, setDebouncedSearch] = useState(searchParams.get("search")?.trim() ?? "");
+  const debouncedSearch = useDebouncedValue(search.trim(), 300);
   const [status, setStatus] = useState<RequestStatus | undefined>(queryStatus);
   const [activeQueue, setActiveQueue] = useState<RequestReviewQueue | undefined>(queryQueue ?? getRequestReviewQueueForStatus(queryStatus));
   const [sort, setSort] = useState<RequestListSort>(parseRequestListSort(searchParams.get("sort")));
@@ -93,7 +94,7 @@ export function RequestsPage() {
   const defaultReviewStatuses = isReviewInbox && !status && !activeQueue && !isExplicitAllStatuses
     ? [...ACTIVE_REVIEW_STATUSES]
     : undefined;
-  const { requests, total, isLoading, error, refetch } = useRequests({
+  const { requests, total, isLoading, isRefreshing, error, refetch } = useRequests({
     page,
     limit,
     search: debouncedSearch || undefined,
@@ -188,7 +189,6 @@ export function RequestsPage() {
 
   function clearHistoryFilters() {
     setSearch("");
-    setDebouncedSearch("");
     setStatus(undefined);
     setActiveQueue(undefined);
     setDateFrom("");
@@ -234,12 +234,6 @@ export function RequestsPage() {
   function getStatusCount(cardStatus: RequestStatus) {
     return summaryRequests.filter((request) => request.status === cardStatus).length;
   }
-
-  useEffect(() => {
-    const timeoutId = window.setTimeout(() => setDebouncedSearch(search.trim()), 300);
-
-    return () => window.clearTimeout(timeoutId);
-  }, [search]);
 
   return (
     <div className="space-y-6">
@@ -478,6 +472,11 @@ export function RequestsPage() {
           )}
         </CardHeader>
         <CardContent>
+          {isRefreshing && !error && (
+            <p className="mb-3 rounded-md border bg-muted/40 px-3 py-2 text-sm text-muted-foreground" role="status">
+              Actualizando solicitudes...
+            </p>
+          )}
           {error ? (
             <div className="space-y-3 rounded-md border border-destructive/40 p-4">
               <p className="text-sm text-destructive">{error.message}</p>

@@ -1,12 +1,13 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { useDebouncedValue } from "@/hooks/use-debounced-value";
 import { useRenditionsInbox } from "@/hooks/use-requests";
 import { ROUTES } from "@/lib/constants";
 import {
@@ -30,7 +31,7 @@ export function RenditionsInboxPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const [search, setSearch] = useState(searchParams.get("search") ?? "");
-  const [debouncedSearch, setDebouncedSearch] = useState(searchParams.get("search")?.trim() ?? "");
+  const debouncedSearch = useDebouncedValue(search.trim(), 300);
   const [status, setStatus] = useState<RenditionStatus | undefined>(parseRenditionStatusFilter(searchParams.get("status")));
   const [sort, setSort] = useState<RenditionSortField>(parseRenditionSortField(searchParams.get("sort")));
   const [direction, setDirection] = useState<RenditionSortDirection>(parseRenditionSortDirection(searchParams.get("direction")));
@@ -77,11 +78,6 @@ export function RenditionsInboxPage() {
     setSearch(value);
     replaceQuery({ search: value.trim() || undefined, page: 1 });
   }
-
-  useEffect(() => {
-    const timeoutId = window.setTimeout(() => setDebouncedSearch(search.trim()), 300);
-    return () => window.clearTimeout(timeoutId);
-  }, [search]);
 
   const currentPage = inbox.page;
   const hasPreviousPage = currentPage > 1;
@@ -148,6 +144,11 @@ export function RenditionsInboxPage() {
           </div>
         </CardHeader>
         <CardContent className="space-y-4">
+          {inbox.isRefreshing && !inbox.error && (
+            <p className="rounded-md border bg-muted/40 px-3 py-2 text-sm text-muted-foreground" role="status">
+              Actualizando rendiciones...
+            </p>
+          )}
           {inbox.error ? (
             <div className="space-y-3 rounded-md border border-destructive/40 p-4">
               <p className="text-sm text-destructive">{getApiErrorMessage(inbox.error)}</p>

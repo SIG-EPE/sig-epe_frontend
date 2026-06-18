@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { setQueryCacheAuthNamespace, bumpQueryCacheSessionGeneration, clearQueryCache } from "@/lib/query-cache";
 import type { AuthUser } from "@/types/auth";
 
 // -------------------------------------------------------
@@ -27,6 +28,10 @@ interface AuthActions {
 
 type AuthStore = AuthState & AuthActions;
 
+function buildAuthCacheNamespace(user: AuthUser): string {
+  return [user.id, user.role?.code ?? "sin-rol"].join(":");
+}
+
 export const useAuthStore = create<AuthStore>((set) => ({
   user: null,
   accessToken: null,
@@ -34,16 +39,20 @@ export const useAuthStore = create<AuthStore>((set) => ({
   sessionExpiresAt: null,
   isLoading: true,
 
-  setAuth: (user, accessToken, expiries) =>
+  setAuth: (user, accessToken, expiries) => {
+    setQueryCacheAuthNamespace(buildAuthCacheNamespace(user));
     set({
       user,
       accessToken,
       accessTokenExpiresAt: expiries?.accessTokenExpiresAt ?? null,
       sessionExpiresAt: expiries?.sessionExpiresAt ?? null,
       isLoading: false,
-    }),
+    });
+  },
 
   clearAuth: () => {
+    clearQueryCache();
+    bumpQueryCacheSessionGeneration();
     if (typeof document !== "undefined") {
       document.cookie = "access_token=; path=/; max-age=0; SameSite=Strict";
     }

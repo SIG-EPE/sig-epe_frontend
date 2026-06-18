@@ -3,6 +3,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { api } from "@/lib/api-client";
+import { useCachedResource } from "@/hooks/use-cached-resource";
+import { cachedQuery, QUERY_CACHE_TTL_MS, stableSerialize } from "@/lib/query-cache";
+import { QUERY_TAGS, invalidateRequestDomain } from "@/lib/query-tags";
 import { useAuthStore } from "@/stores/auth-store";
 import { REQUEST_DOCUMENT_CATEGORY } from "@/types/requests";
 import type {
@@ -50,6 +53,7 @@ function appendIfPresent(params: URLSearchParams, key: string, value: string | n
 
 export interface RequestResourceRefetchOptions {
   background?: boolean;
+  force?: boolean;
 }
 
 export interface RequestResourceState<T> {
@@ -140,10 +144,6 @@ export function getRenditionReportPath(requestId: string): string {
 }
 
 export function useRequests(filters?: RequestsListFilters) {
-  const [data, setData] = useState<RequestsListResponse | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState<Error | null>(null);
-
   const pageFilter = filters?.page;
   const limitFilter = filters?.limit;
   const statusFilter = filters?.status;
@@ -160,62 +160,29 @@ export function useRequests(filters?: RequestsListFilters) {
   const searchFilter = filters?.search;
   const scopeFilter = filters?.scope;
 
-  const authIsLoading = useAuthStore((state) => state.isLoading);
-  const accessToken = useAuthStore((state) => state.accessToken);
-
-  const refetch = useCallback(async () => {
-    if (authIsLoading || !accessToken) return;
-    setIsLoading(true);
-    setError(null);
-    try {
-      const result = await api.get<RequestsListResponse>(getRequestsPath(filters));
-      setData(result);
-    } catch (e) {
-      setError(e instanceof Error ? e : new Error("Error al cargar solicitudes"));
-    } finally {
-      setIsLoading(false);
-    }
-  }, [
-    accessToken,
-    authIsLoading,
-    pageFilter,
-    limitFilter,
-    statusFilter,
-    statusesFilter,
-    requestTypeFilter,
-    planningLineFilter,
-    orgUnitFilter,
-    requesterFilter,
-    dateFromFilter,
-    dateToFilter,
-    dateFieldFilter,
-    hasDocumentsFilter,
-    driveSyncStatusFilter,
-    searchFilter,
-    scopeFilter,
-  ]);
-
-  useEffect(() => {
-    if (authIsLoading || !accessToken) return;
-    void refetch();
-  }, [accessToken, authIsLoading, refetch]);
+  const resource = useCachedResource<RequestsListResponse>({
+    key: [QUERY_TAGS.REQUESTS, "list", filters ?? {}],
+    ttlMs: QUERY_CACHE_TTL_MS.MUTABLE_LIST,
+    tags: [QUERY_TAGS.REQUESTS],
+    errorMessage: "Error al cargar solicitudes",
+    queryFn: () => api.get<RequestsListResponse>(getRequestsPath(filters)),
+  });
+  const data = resource.data;
 
   return {
     requests: data?.requests ?? [],
     total: data?.total ?? 0,
     page: data?.page ?? pageFilter ?? 1,
     limit: data?.limit ?? limitFilter ?? 20,
-    isLoading,
-    error,
-    refetch,
+    isLoading: resource.isLoading,
+    isInitialLoading: resource.isInitialLoading,
+    isRefreshing: resource.isRefreshing,
+    error: resource.error,
+    refetch: resource.refetch,
   };
 }
 
 export function usePaymentQueue(filters?: PaymentQueueFilters) {
-  const [data, setData] = useState<RequestsListResponse | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState<Error | null>(null);
-
   const pageFilter = filters?.page;
   const limitFilter = filters?.limit;
   const statusFilter = filters?.status;
@@ -223,44 +190,29 @@ export function usePaymentQueue(filters?: PaymentQueueFilters) {
   const pendingDetailsFilter = filters?.pending_details;
   const searchFilter = filters?.search;
 
-  const authIsLoading = useAuthStore((state) => state.isLoading);
-  const accessToken = useAuthStore((state) => state.accessToken);
-
-  const refetch = useCallback(async () => {
-    if (authIsLoading || !accessToken) return;
-    setIsLoading(true);
-    setError(null);
-    try {
-      const result = await api.get<RequestsListResponse>(getPaymentQueuePath(filters));
-      setData(result);
-    } catch (e) {
-      setError(e instanceof Error ? e : new Error("Error al cargar cola de pagos"));
-    } finally {
-      setIsLoading(false);
-    }
-  }, [accessToken, authIsLoading, pageFilter, limitFilter, statusFilter, pendingProofFilter, pendingDetailsFilter, searchFilter]);
-
-  useEffect(() => {
-    if (authIsLoading || !accessToken) return;
-    void refetch();
-  }, [accessToken, authIsLoading, refetch]);
+  const resource = useCachedResource<RequestsListResponse>({
+    key: [QUERY_TAGS.PAYMENTS, "queue", filters ?? {}],
+    ttlMs: QUERY_CACHE_TTL_MS.MUTABLE_LIST,
+    tags: [QUERY_TAGS.PAYMENTS, QUERY_TAGS.REQUESTS, QUERY_TAGS.DASHBOARD],
+    errorMessage: "Error al cargar cola de pagos",
+    queryFn: () => api.get<RequestsListResponse>(getPaymentQueuePath(filters)),
+  });
+  const data = resource.data;
 
   return {
     requests: data?.requests ?? [],
     total: data?.total ?? 0,
     page: data?.page ?? pageFilter ?? 1,
     limit: data?.limit ?? limitFilter ?? 20,
-    isLoading,
-    error,
-    refetch,
+    isLoading: resource.isLoading,
+    isInitialLoading: resource.isInitialLoading,
+    isRefreshing: resource.isRefreshing,
+    error: resource.error,
+    refetch: resource.refetch,
   };
 }
 
 export function useRenditionsInbox(filters?: RenditionsInboxFilters) {
-  const [data, setData] = useState<RenditionsInboxResponse | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState<Error | null>(null);
-
   const pageFilter = filters?.page;
   const limitFilter = filters?.limit;
   const statusFilter = filters?.status;
@@ -270,27 +222,14 @@ export function useRenditionsInbox(filters?: RenditionsInboxFilters) {
   const sortFilter = filters?.sort;
   const directionFilter = filters?.direction;
 
-  const authIsLoading = useAuthStore((state) => state.isLoading);
-  const accessToken = useAuthStore((state) => state.accessToken);
-
-  const refetch = useCallback(async () => {
-    if (authIsLoading || !accessToken) return;
-    setIsLoading(true);
-    setError(null);
-    try {
-      const result = await api.get<RenditionsInboxResponse>(getRenditionsPath(filters));
-      setData(result);
-    } catch (e) {
-      setError(e instanceof Error ? e : new Error("Error al cargar rendiciones"));
-    } finally {
-      setIsLoading(false);
-    }
-  }, [accessToken, authIsLoading, pageFilter, limitFilter, statusFilter, searchFilter, dueFromFilter, dueToFilter, sortFilter, directionFilter]);
-
-  useEffect(() => {
-    if (authIsLoading || !accessToken) return;
-    void refetch();
-  }, [accessToken, authIsLoading, refetch]);
+  const resource = useCachedResource<RenditionsInboxResponse>({
+    key: [QUERY_TAGS.RENDITIONS, "inbox", filters ?? {}],
+    ttlMs: QUERY_CACHE_TTL_MS.MUTABLE_LIST,
+    tags: [QUERY_TAGS.RENDITIONS, QUERY_TAGS.REQUESTS, QUERY_TAGS.DASHBOARD],
+    errorMessage: "Error al cargar rendiciones",
+    queryFn: () => api.get<RenditionsInboxResponse>(getRenditionsPath(filters)),
+  });
+  const data = resource.data;
 
   return {
     renditions: data?.renditions ?? [],
@@ -298,45 +237,24 @@ export function useRenditionsInbox(filters?: RenditionsInboxFilters) {
     page: data?.page ?? pageFilter ?? 1,
     limit: data?.limit ?? limitFilter ?? 20,
     counts: data?.counts,
-    isLoading,
-    error,
-    refetch,
+    isLoading: resource.isLoading,
+    isInitialLoading: resource.isInitialLoading,
+    isRefreshing: resource.isRefreshing,
+    error: resource.error,
+    refetch: resource.refetch,
   };
 }
 
 export function useRenditionCounts(filters?: Omit<RenditionsInboxFilters, "status" | "page" | "limit">) {
-  const [counts, setCounts] = useState<RenditionInboxCounts | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState<Error | null>(null);
+  const resource = useCachedResource<RenditionInboxCounts>({
+    key: [QUERY_TAGS.RENDITIONS, "counts", filters ?? {}],
+    ttlMs: QUERY_CACHE_TTL_MS.MUTABLE_LIST,
+    tags: [QUERY_TAGS.RENDITIONS, QUERY_TAGS.REQUESTS, QUERY_TAGS.DASHBOARD],
+    errorMessage: "Error al cargar resumen de rendiciones",
+    queryFn: () => api.get<RenditionInboxCounts>(getRenditionCountsPath(filters)),
+  });
 
-  const searchFilter = filters?.search;
-  const dueFromFilter = filters?.due_from;
-  const dueToFilter = filters?.due_to;
-  const sortFilter = filters?.sort;
-  const directionFilter = filters?.direction;
-
-  const authIsLoading = useAuthStore((state) => state.isLoading);
-  const accessToken = useAuthStore((state) => state.accessToken);
-
-  const refetch = useCallback(async () => {
-    if (authIsLoading || !accessToken) return;
-    setIsLoading(true);
-    setError(null);
-    try {
-      setCounts(await api.get<RenditionInboxCounts>(getRenditionCountsPath(filters)));
-    } catch (e) {
-      setError(e instanceof Error ? e : new Error("Error al cargar resumen de rendiciones"));
-    } finally {
-      setIsLoading(false);
-    }
-  }, [accessToken, authIsLoading, searchFilter, dueFromFilter, dueToFilter, sortFilter, directionFilter]);
-
-  useEffect(() => {
-    if (authIsLoading || !accessToken) return;
-    void refetch();
-  }, [accessToken, authIsLoading, refetch]);
-
-  return { counts, isLoading, error, refetch };
+  return { counts: resource.data, isLoading: resource.isLoading, isInitialLoading: resource.isInitialLoading, isRefreshing: resource.isRefreshing, error: resource.error, refetch: resource.refetch };
 }
 
 export function useRegisterPayment() {
@@ -358,7 +276,9 @@ export function useRegisterPayment() {
         formData.append("notes", input.notes.trim());
       }
       formData.append("proof", input.proof);
-      return await api.postForm<PaymentRequest>(`/requests/${requestId}/register-payment`, formData);
+      const result = await api.postForm<PaymentRequest>(`/requests/${requestId}/register-payment`, formData);
+      invalidateRequestCaches();
+      return result;
     } catch (e) {
       const nextError = e instanceof Error ? e : new Error("Error al registrar pago");
       setError(nextError);
@@ -379,7 +299,9 @@ export function useBulkMarkPaid() {
     setIsLoading(true);
     setError(null);
     try {
-      return await api.post<BulkMarkPaidResponse>("/requests/bulk/mark-paid", input);
+      const result = await api.post<BulkMarkPaidResponse>("/requests/bulk/mark-paid", input);
+      invalidateRequestCaches();
+      return result;
     } catch (e) {
       const nextError = e instanceof Error ? e : new Error("Error al marcar pagos");
       setError(nextError);
@@ -406,7 +328,9 @@ export function useCompletePaymentDetails() {
       if (input.bank_commission !== undefined) formData.append("bank_commission", String(input.bank_commission));
       if (input.notes?.trim()) formData.append("notes", input.notes.trim());
       if (input.proof_document_id?.trim()) formData.append("proof_document_id", input.proof_document_id.trim());
-      return await api.patchForm<PaymentRequest>(`/request-payments/${paymentId}/details`, formData);
+      const result = await api.patchForm<PaymentRequest>(`/request-payments/${paymentId}/details`, formData);
+      invalidateRequestCaches();
+      return result;
     } catch (e) {
       const nextError = e instanceof Error ? e : new Error("Error al completar datos del pago");
       setError(nextError);
@@ -429,7 +353,9 @@ export async function attachPaymentProof(paymentId: string, input: AttachPayment
   if (input.notes?.trim()) formData.append("notes", input.notes.trim());
   if (input.request_allocation_ids?.length) formData.append("request_allocation_ids", JSON.stringify(input.request_allocation_ids));
   if (input.allocations?.length) formData.append("allocations", JSON.stringify(input.allocations));
-  return await api.postForm<PaymentRequest>(`/request-payments/${paymentId}/proofs`, formData);
+  const result = await api.postForm<PaymentRequest>(`/request-payments/${paymentId}/proofs`, formData);
+  invalidateRequestCaches();
+  return result;
 }
 
 export function useAttachPaymentProof() {
@@ -461,7 +387,9 @@ export function useStartAdvanceSettlement() {
     setIsLoading(true);
     setError(null);
     try {
-      return await api.post<StartAdvanceSettlementResponse>(getStartAdvanceSettlementPath(requestId));
+      const result = await api.post<StartAdvanceSettlementResponse>(getStartAdvanceSettlementPath(requestId));
+      invalidateRequestCaches();
+      return result;
     } catch (e) {
       const nextError = e instanceof Error ? e : new Error("Error al iniciar la rendición");
       setError(nextError);
@@ -705,7 +633,9 @@ export function useRequestRenditionReportActions() {
     setIsLoading(true);
     setError(null);
     try {
-      return await action();
+      const result = await action();
+      invalidateRequestCaches();
+      return result;
     } catch (e) {
       const nextError = e instanceof Error ? e : new Error(fallbackMessage);
       setError(nextError);
@@ -765,7 +695,9 @@ export function useUpdateRequestReceiptReview() {
     setIsLoading(true);
     setError(null);
     try {
-      return await api.patch<RequestReceiptReview>(`/requests/${requestId}/receipts/${receiptId}`, input);
+      const result = await api.patch<RequestReceiptReview>(`/requests/${requestId}/receipts/${receiptId}`, input);
+      invalidateRequestCaches();
+      return result;
     } catch (e) {
       const nextError = e instanceof Error ? e : new Error("Error al actualizar datos del comprobante");
       setError(nextError);
@@ -786,7 +718,9 @@ export function useConfirmRequestReceiptReview() {
     setIsLoading(true);
     setError(null);
     try {
-      return await api.post<RequestReceiptReview>(`/requests/${requestId}/receipts/${receiptId}/confirm`);
+      const result = await api.post<RequestReceiptReview>(`/requests/${requestId}/receipts/${receiptId}/confirm`);
+      invalidateRequestCaches();
+      return result;
     } catch (e) {
       const nextError = e instanceof Error ? e : new Error("Error al confirmar datos del comprobante");
       setError(nextError);
@@ -822,7 +756,9 @@ export function useUploadRequestDocument() {
       if (input.metadata_json) {
         formData.append("metadata_json", JSON.stringify(input.metadata_json));
       }
-      return await api.postForm<RequestDocument>(`/requests/${requestId}/documents`, formData);
+      const result = await api.postForm<RequestDocument>(`/requests/${requestId}/documents`, formData);
+      invalidateRequestCaches();
+      return result;
     } catch (e) {
       const nextError = e instanceof Error ? e : new Error("Error al adjuntar documento");
       setError(nextError);
@@ -844,6 +780,7 @@ export function useDeleteRequestDocument() {
     setError(null);
     try {
       await api.delete<void>(`/requests/${requestId}/documents/${documentId}`);
+      invalidateRequestCaches();
     } catch (e) {
       const nextError = e instanceof Error ? e : new Error("Error al eliminar documento");
       setError(nextError);
@@ -856,7 +793,7 @@ export function useDeleteRequestDocument() {
   return { deleteDocument, isLoading, error };
 }
 
-interface RequestPlanningLineLookupFilters {
+export interface RequestPlanningLineLookupFilters {
   search?: string;
   fiscal_year_id?: string;
   org_unit_id?: string;
@@ -873,44 +810,79 @@ function appendPlanningLineLookupParam(params: URLSearchParams, key: keyof Reque
   if (normalized) params.set(key, normalized);
 }
 
+export function buildRequestPlanningLinesPath(filters: RequestPlanningLineLookupFilters = {}): string {
+  const params = new URLSearchParams();
+  appendPlanningLineLookupParam(params, "search", filters.search);
+  appendPlanningLineLookupParam(params, "fiscal_year_id", filters.fiscal_year_id);
+  appendPlanningLineLookupParam(params, "org_unit_id", filters.org_unit_id);
+  appendPlanningLineLookupParam(params, "planning_type", filters.planning_type);
+  appendPlanningLineLookupParam(params, "program_id", filters.program_id);
+  appendPlanningLineLookupParam(params, "component_id", filters.component_id);
+  appendPlanningLineLookupParam(params, "operative_action_id", filters.operative_action_id);
+  appendPlanningLineLookupParam(params, "category_id", filters.category_id);
+  appendPlanningLineLookupParam(params, "territory_id", filters.territory_id);
+  const query = params.toString();
+  return `/requests/lookups/planning-lines${query ? `?${query}` : ""}`;
+}
+
+export function invalidateRequestCaches(): void {
+  invalidateRequestDomain();
+}
+
+function normalizeLookupFilters(filters?: RequestPlanningLineLookupFilters | string): RequestPlanningLineLookupFilters {
+  return typeof filters === "string" ? { search: filters } : filters ?? {};
+}
+
 export function useRequestPlanningLines(filters?: RequestPlanningLineLookupFilters | string) {
   const [data, setData] = useState<RequestPlanningLineLookupResponse | null>(null);
-  const [isLoading, setIsLoading] = useState(false);
+  const [isInitialLoading, setIsInitialLoading] = useState(false);
+  const [isRefreshing, setIsRefreshing] = useState(false);
   const [error, setError] = useState<Error | null>(null);
+  const [refreshNonce, setRefreshNonce] = useState(0);
+  const [forceNonce, setForceNonce] = useState(0);
 
   const authIsLoading = useAuthStore((state) => state.isLoading);
   const accessToken = useAuthStore((state) => state.accessToken);
-  const lookupFilters: RequestPlanningLineLookupFilters = typeof filters === "string" ? { search: filters } : filters ?? {};
+  const lookupFilters = normalizeLookupFilters(filters);
+  const lookupKey = stableSerialize(lookupFilters);
 
-  const refetch = useCallback(async () => {
-    if (authIsLoading || !accessToken) return;
-    setIsLoading(true);
-    setError(null);
-    try {
-      const params = new URLSearchParams();
-      appendPlanningLineLookupParam(params, "search", lookupFilters.search);
-      appendPlanningLineLookupParam(params, "fiscal_year_id", lookupFilters.fiscal_year_id);
-      appendPlanningLineLookupParam(params, "org_unit_id", lookupFilters.org_unit_id);
-      appendPlanningLineLookupParam(params, "planning_type", lookupFilters.planning_type);
-      appendPlanningLineLookupParam(params, "program_id", lookupFilters.program_id);
-      appendPlanningLineLookupParam(params, "component_id", lookupFilters.component_id);
-      appendPlanningLineLookupParam(params, "operative_action_id", lookupFilters.operative_action_id);
-      appendPlanningLineLookupParam(params, "category_id", lookupFilters.category_id);
-      appendPlanningLineLookupParam(params, "territory_id", lookupFilters.territory_id);
-      const query = params.toString();
-      const result = await api.get<RequestPlanningLineLookupResponse>(`/requests/lookups/planning-lines${query ? `?${query}` : ""}`);
-      setData(result);
-    } catch (e) {
-      setError(e instanceof Error ? e : new Error("Error al cargar líneas POA"));
-    } finally {
-      setIsLoading(false);
-    }
-  }, [accessToken, authIsLoading, lookupFilters.category_id, lookupFilters.component_id, lookupFilters.fiscal_year_id, lookupFilters.operative_action_id, lookupFilters.org_unit_id, lookupFilters.planning_type, lookupFilters.program_id, lookupFilters.search, lookupFilters.territory_id]);
+  const refetch = useCallback(async (options?: RequestResourceRefetchOptions & { force?: boolean }) => {
+    if (options?.force) setForceNonce((current) => current + 1);
+    else setRefreshNonce((current) => current + 1);
+  }, []);
 
   useEffect(() => {
     if (authIsLoading || !accessToken) return;
-    void refetch();
-  }, [accessToken, authIsLoading, refetch]);
+    let cancelled = false;
+    const hasPreviousData = data !== null;
+    setIsInitialLoading(!hasPreviousData);
+    setIsRefreshing(hasPreviousData);
+    setError(null);
+
+    cachedQuery<RequestPlanningLineLookupResponse>({
+      key: ["requests", "planning-lines", lookupFilters],
+      ttlMs: QUERY_CACHE_TTL_MS.POA_LOOKUP,
+      tags: ["requests", "poa", "budget"],
+      force: forceNonce > 0,
+      queryFn: () => api.get<RequestPlanningLineLookupResponse>(buildRequestPlanningLinesPath(lookupFilters)),
+    })
+      .then((result) => {
+        if (!cancelled) setData(result);
+      })
+      .catch((e: unknown) => {
+        if (!cancelled) setError(e instanceof Error ? e : new Error("Error al cargar líneas POA"));
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setIsInitialLoading(false);
+          setIsRefreshing(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [accessToken, authIsLoading, lookupKey, refreshNonce, forceNonce]);
 
   const normalizedSearch = lookupFilters.search?.trim().toLowerCase() ?? "";
   const lines = (data?.lines ?? []).filter((line) => {
@@ -920,7 +892,7 @@ export function useRequestPlanningLines(filters?: RequestPlanningLineLookupFilte
       .some((value) => value.toLowerCase().includes(normalizedSearch));
   });
 
-  return { lines, total: data?.total ?? 0, isLoading, error, refetch };
+  return { lines, total: data?.total ?? 0, isLoading: isInitialLoading, isInitialLoading, isRefreshing, error, refetch };
 }
 
 export function useBudgetPreview(input: BudgetPreviewInput) {
@@ -988,7 +960,9 @@ export function useCreateRequest() {
   const createRequest = async (dto: CreateRequestDto): Promise<PaymentRequest> => {
     setIsLoading(true);
     try {
-      return await api.post<PaymentRequest>("/requests", dto);
+      const created = await api.post<PaymentRequest>("/requests", dto);
+      invalidateRequestCaches();
+      return created;
     } finally {
       setIsLoading(false);
     }
@@ -1003,7 +977,9 @@ export function useUpdateRequest() {
   const updateRequest = async (id: string, dto: UpdateRequestDto): Promise<PaymentRequest> => {
     setIsLoading(true);
     try {
-      return await api.patch<PaymentRequest>(`/requests/${id}`, dto);
+      const updated = await api.patch<PaymentRequest>(`/requests/${id}`, dto);
+      invalidateRequestCaches();
+      return updated;
     } finally {
       setIsLoading(false);
     }
@@ -1018,7 +994,9 @@ export function useSubmitRequest() {
   const submitRequest = async (id: string): Promise<PaymentRequest> => {
     setIsLoading(true);
     try {
-      return await api.post<PaymentRequest>(`/requests/${id}/submit`);
+      const submitted = await api.post<PaymentRequest>(`/requests/${id}/submit`);
+      invalidateRequestCaches();
+      return submitted;
     } finally {
       setIsLoading(false);
     }
@@ -1033,7 +1011,9 @@ export function useObserveRequest() {
   const observeRequest = async (id: string, dto: ObserveRequestDto): Promise<PaymentRequest> => {
     setIsLoading(true);
     try {
-      return await api.post<PaymentRequest>(`/requests/${id}/observe`, dto);
+      const observed = await api.post<PaymentRequest>(`/requests/${id}/observe`, dto);
+      invalidateRequestCaches();
+      return observed;
     } finally {
       setIsLoading(false);
     }
@@ -1048,7 +1028,9 @@ export function useApproveRequest() {
   const approveRequest = async (id: string, dto: ApproveRequestDto = {}): Promise<PaymentRequest> => {
     setIsLoading(true);
     try {
-      return await api.post<PaymentRequest>(`/requests/${id}/approve`, dto);
+      const approved = await api.post<PaymentRequest>(`/requests/${id}/approve`, dto);
+      invalidateRequestCaches();
+      return approved;
     } finally {
       setIsLoading(false);
     }
@@ -1063,7 +1045,9 @@ export function useRejectRequest() {
   const rejectRequest = async (id: string, dto: RejectRequestDto): Promise<PaymentRequest> => {
     setIsLoading(true);
     try {
-      return await api.post<PaymentRequest>(`/requests/${id}/reject`, dto);
+      const rejected = await api.post<PaymentRequest>(`/requests/${id}/reject`, dto);
+      invalidateRequestCaches();
+      return rejected;
     } finally {
       setIsLoading(false);
     }

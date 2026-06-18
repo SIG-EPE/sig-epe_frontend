@@ -1,4 +1,4 @@
-import { GiofOperationsDashboardView } from "@/components/dashboard/giof-operations-dashboard";
+import { DynamicGiofOperationsDashboardView } from "@/components/dashboard/giof-operations-dashboard-dynamic";
 
 export default function GiofDashboardPage() {
   return (
@@ -9,7 +9,7 @@ export default function GiofDashboardPage() {
           Seguimiento diario de solicitudes, pagos, rendiciones, carga y excepciones críticas.
         </p>
       </div>
-      <GiofOperationsDashboardView />
+      <DynamicGiofOperationsDashboardView />
     </div>
   );
 }

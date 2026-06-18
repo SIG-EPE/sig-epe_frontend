@@ -27,8 +27,16 @@ vi.mock("next/navigation", () => ({
 
 // Mock next/link
 vi.mock("next/link", () => ({
-  default: ({ href, children }: { href: string; children: React.ReactNode }) => (
-    <a href={href}>{children}</a>
+  default: ({
+    href,
+    children,
+    prefetch: _prefetch,
+    ...props
+  }: React.AnchorHTMLAttributes<HTMLAnchorElement> & {
+    href: string;
+    prefetch?: boolean;
+  }) => (
+    <a href={href} {...props}>{children}</a>
   ),
 }));
 
@@ -161,11 +169,16 @@ const auditorUser: AuthUser = {
 // Helpers
 // -------------------------------------------------------
 
-import { AppSidebar } from "@/components/layout/app-sidebar";
+import { AppSidebar, isSidebarHrefActive } from "@/components/layout/app-sidebar";
+import { NavigationFeedbackProvider } from "@/components/layout/navigation-feedback-provider";
 import type React from "react";
 
 function renderSidebar() {
-  return render(<AppSidebar />);
+  return render(
+    <NavigationFeedbackProvider>
+      <AppSidebar />
+    </NavigationFeedbackProvider>,
+  );
 }
 
 // -------------------------------------------------------
@@ -331,6 +344,86 @@ describe("AppSidebar", () => {
     await user.click(collapseBtn);
 
     expect(mockToggleSidebar).toHaveBeenCalledTimes(1);
+  });
+
+  it("marca el enlace clicado como pendiente y muestra progreso global", async () => {
+    mockUseAuthStore.mockImplementation(
+      (selector: (state: { user: AuthUser }) => unknown) =>
+        selector({ user: adminUser })
+    );
+
+    const user = userEvent.setup();
+    renderSidebar();
+
+    const usersLink = screen.getByRole("link", { name: /usuarios/i });
+    await user.click(usersLink);
+
+    expect(usersLink).toHaveAttribute("data-pending", "true");
+    expect(usersLink).toHaveAttribute("aria-busy", "true");
+    expect(screen.getByRole("progressbar", { name: /cargando navegación/i })).toBeInTheDocument();
+  });
+
+  it("no deja estado pendiente al hacer click en la ruta actual", async () => {
+    mockPathname = "/dashboard/giof";
+    mockUseAuthStore.mockImplementation(
+      (selector: (state: { user: AuthUser }) => unknown) =>
+        selector({ user: adminUser })
+    );
+
+    const user = userEvent.setup();
+    renderSidebar();
+
+    const dashboardLink = screen.getByRole("link", { name: /dashboard giof/i });
+    await user.click(dashboardLink);
+
+    expect(dashboardLink).toHaveAttribute("aria-current", "page");
+    expect(dashboardLink).not.toHaveAttribute("data-pending");
+    expect(screen.queryByRole("progressbar", { name: /cargando navegación/i })).not.toBeInTheDocument();
+  });
+
+  it("activa solo Programado vs Ejecutado en su ruta y no el padre Presupuesto", () => {
+    mockPathname = "/budget/org-unit-execution";
+    mockUseAuthStore.mockImplementation(
+      (selector: (state: { user: AuthUser }) => unknown) =>
+        selector({ user: adminUser })
+    );
+
+    renderSidebar();
+
+    expect(screen.getByRole("link", { name: /programado vs ejecutado/i }).closest("li")).toHaveAttribute("data-active", "true");
+    expect(screen.getByRole("link", { name: /^presupuesto$/i }).closest("li")).toHaveAttribute("data-active", "false");
+  });
+
+  it("usa matching exacto para Dashboard y Presupuesto, pero mantiene prefijo para rutas hijas específicas", () => {
+    const emptySearch = new URLSearchParams();
+
+    expect(isSidebarHrefActive("/dashboard", "/dashboard/giof", emptySearch)).toBe(false);
+    expect(isSidebarHrefActive("/dashboard/giof", "/dashboard/giof", emptySearch)).toBe(true);
+    expect(isSidebarHrefActive("/budget", "/budget/org-unit-execution", emptySearch)).toBe(false);
+    expect(isSidebarHrefActive("/budget/planning", "/budget/planning/new", emptySearch)).toBe(true);
+  });
+
+  it("limpia un pendiente previo al hacer click en la ruta actual", async () => {
+    mockPathname = "/dashboard/giof";
+    mockUseAuthStore.mockImplementation(
+      (selector: (state: { user: AuthUser }) => unknown) =>
+        selector({ user: adminUser })
+    );
+
+    const user = userEvent.setup();
+    renderSidebar();
+
+    const usersLink = screen.getByRole("link", { name: /usuarios/i });
+    const dashboardLink = screen.getByRole("link", { name: /dashboard giof/i });
+
+    await user.click(usersLink);
+    expect(usersLink).toHaveAttribute("data-pending", "true");
+
+    await user.click(dashboardLink);
+
+    expect(usersLink).not.toHaveAttribute("data-pending");
+    expect(dashboardLink).toHaveAttribute("aria-current", "page");
+    expect(screen.queryByRole("progressbar", { name: /cargando navegación/i })).not.toBeInTheDocument();
   });
 
   it("✅ Muestra botón 'Expandir sidebar' cuando está colapsado", () => {
