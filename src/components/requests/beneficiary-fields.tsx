@@ -1,4 +1,4 @@
-import type { Control, UseFormSetValue, UseFormWatch } from "react-hook-form";
+import { useFormContext, type Control, type UseFormSetValue, type UseFormWatch } from "react-hook-form";
 
 import { Button } from "@/components/ui/button";
 import { FormControl, FormDescription, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
@@ -28,9 +28,11 @@ interface BeneficiaryFieldsProps {
   user: AuthUser | null;
   setValue: UseFormSetValue<RequestFormValues>;
   watch: UseFormWatch<RequestFormValues>;
+  onDocumentFieldsChange?: () => void;
 }
 
-export function BeneficiaryFields({ control, user, setValue, watch }: BeneficiaryFieldsProps) {
+export function BeneficiaryFields({ control, user, setValue, watch, onDocumentFieldsChange }: BeneficiaryFieldsProps) {
+  const { clearErrors, getFieldState, trigger } = useFormContext<RequestFormValues>();
   const documentType = watch("beneficiary_document_type") as BeneficiaryDocumentType | "" | undefined;
   const documentNumber = watch("beneficiary_document_number") ?? "";
   const selectedBankCode = watch("bank_code") as BankCode | "" | undefined;
@@ -38,16 +40,40 @@ export function BeneficiaryFields({ control, user, setValue, watch }: Beneficiar
   const cciRequired = isBankCciRequired(normalizedBankCode);
   const otherBankSelected = isOtherBank(normalizedBankCode);
 
+  function hasBeneficiaryDocumentError(): boolean {
+    return Boolean(getFieldState("beneficiary_document_type").error || getFieldState("beneficiary_document_number").error);
+  }
+
+  function clearAndRevalidateBeneficiaryDocument(shouldRevalidate: boolean): void {
+    clearErrors(["beneficiary_document_type", "beneficiary_document_number"]);
+    if (shouldRevalidate) {
+      void trigger(["beneficiary_document_type", "beneficiary_document_number"]);
+    }
+  }
+
   function useRequesterAsBeneficiary(): void {
+    const shouldRevalidate = hasBeneficiaryDocumentError();
     const fullName = [user?.firstName, user?.lastName].filter((value): value is string => Boolean(value?.trim())).join(" ");
     setValue("beneficiary_name", fullName, { shouldDirty: true, shouldValidate: true });
-    setValue("beneficiary_document_type", BENEFICIARY_DOCUMENT_TYPE.DNI, { shouldDirty: true, shouldValidate: true });
-    setValue("beneficiary_document_number", sanitizeBeneficiaryDocumentNumber(user?.documentNumber ?? "", BENEFICIARY_DOCUMENT_TYPE.DNI), { shouldDirty: true, shouldValidate: true });
+    setValue("beneficiary_document_type", BENEFICIARY_DOCUMENT_TYPE.DNI, { shouldDirty: true, shouldValidate: false });
+    setValue("beneficiary_document_number", sanitizeBeneficiaryDocumentNumber(user?.documentNumber ?? "", BENEFICIARY_DOCUMENT_TYPE.DNI), { shouldDirty: true, shouldValidate: false });
+    clearAndRevalidateBeneficiaryDocument(shouldRevalidate);
+    onDocumentFieldsChange?.();
   }
 
   function changeDocumentType(nextDocumentType: BeneficiaryDocumentType): void {
-    setValue("beneficiary_document_type", nextDocumentType, { shouldDirty: true, shouldValidate: true });
-    setValue("beneficiary_document_number", sanitizeBeneficiaryDocumentNumber(documentNumber, nextDocumentType), { shouldDirty: true, shouldValidate: true });
+    const shouldRevalidate = hasBeneficiaryDocumentError();
+    setValue("beneficiary_document_type", nextDocumentType, { shouldDirty: true, shouldValidate: false });
+    setValue("beneficiary_document_number", sanitizeBeneficiaryDocumentNumber(documentNumber, nextDocumentType), { shouldDirty: true, shouldValidate: false });
+    clearAndRevalidateBeneficiaryDocument(shouldRevalidate);
+    onDocumentFieldsChange?.();
+  }
+
+  function changeDocumentNumber(nextDocumentNumber: string): void {
+    const shouldRevalidate = hasBeneficiaryDocumentError();
+    setValue("beneficiary_document_number", sanitizeBeneficiaryDocumentNumber(nextDocumentNumber, documentType), { shouldDirty: true, shouldTouch: true, shouldValidate: false });
+    clearAndRevalidateBeneficiaryDocument(shouldRevalidate);
+    onDocumentFieldsChange?.();
   }
 
   function changeBank(nextBankCode: string): void {
@@ -74,7 +100,7 @@ export function BeneficiaryFields({ control, user, setValue, watch }: Beneficiar
           <FormItem>
             <FormLabel>Tipo de documento *</FormLabel>
             <Select value={field.value ?? ""} onValueChange={changeDocumentType}>
-              <FormControl><SelectTrigger><SelectValue placeholder="Selecciona tipo" /></SelectTrigger></FormControl>
+              <FormControl><SelectTrigger data-testid="request-beneficiary-document-type-select"><SelectValue placeholder="Selecciona tipo" /></SelectTrigger></FormControl>
               <SelectContent>
                 {BENEFICIARY_DOCUMENT_TYPE_OPTIONS.map((option) => (
                   <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
@@ -93,7 +119,8 @@ export function BeneficiaryFields({ control, user, setValue, watch }: Beneficiar
                 inputMode={getBeneficiaryDocumentInputMode(documentType)}
                 maxLength={getBeneficiaryDocumentMaxLength(documentType)}
                 placeholder={getBeneficiaryDocumentPlaceholder(documentType)}
-                onChange={(event) => field.onChange(sanitizeBeneficiaryDocumentNumber(event.target.value, documentType))}
+                data-testid="request-beneficiary-document-number-input"
+                onChange={(event) => changeDocumentNumber(event.target.value)}
               />
             </FormControl>
             <FormDescription>{getBeneficiaryDocumentHelp(documentType)}</FormDescription>

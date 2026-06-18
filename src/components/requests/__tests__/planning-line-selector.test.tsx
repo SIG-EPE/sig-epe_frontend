@@ -12,14 +12,6 @@ const mocks = vi.hoisted(() => ({
   lines: [] as RequestPlanningLineLookupItem[],
 }));
 
-vi.mock("@/hooks/use-requests", () => ({
-  useRequestPlanningLines: () => ({
-    lines: mocks.lines,
-    isLoading: false,
-    error: null,
-  }),
-}));
-
 function makeLine(overrides: Partial<RequestPlanningLineLookupItem> = {}): RequestPlanningLineLookupItem {
   return {
     id: "line-1",
@@ -69,7 +61,7 @@ function PlanningLineSelectorHarness({ selectedLine }: { selectedLine: RequestPl
 
   return (
     <Form {...form}>
-      <PlanningLineSelector control={form.control} selectedLine={selectedLine} onSelectedLineChange={vi.fn()} />
+      <PlanningLineSelector control={form.control} selectedLine={selectedLine} lines={mocks.lines} onSelectedLineChange={vi.fn()} />
     </Form>
   );
 }

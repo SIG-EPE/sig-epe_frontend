@@ -13,7 +13,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
-import { useBudgetPreview, useCreateRequest, useRequestDocuments, useRequestReceiptReviews, useSubmitRequest, useUpdateRequest } from "@/hooks/use-requests";
+import { useBudgetPreview, useCreateRequest, useRequestDocuments, useRequestPlanningLines, useRequestReceiptReviews, useSubmitRequest, useUpdateRequest } from "@/hooks/use-requests";
 import { getBusinessDateString } from "@/lib/business-timezone";
 import { ROUTES } from "@/lib/constants";
 import {
@@ -512,6 +512,7 @@ export function RequestForm({
       amount: Number(allocation.amount || 0),
     })),
   });
+  const planningLinesLookup = useRequestPlanningLines();
   const { createRequest, isLoading: creating } = useCreateRequest();
   const { updateRequest, isLoading: updating } = useUpdateRequest();
   const { submitRequest, isLoading: submitting } = useSubmitRequest();
@@ -604,6 +605,14 @@ export function RequestForm({
     issues.forEach((issue) => {
       form.setError(issue.field, { type: "manual", message: issue.message });
     });
+  }
+
+  function isBeneficiaryDocumentSubmitMessage(message: string): boolean {
+    return /documento del beneficiario|DNI del beneficiario|RUC del beneficiario|carné de extranjería del beneficiario/i.test(message);
+  }
+
+  function clearBeneficiaryDocumentSubmitErrors(): void {
+    setSubmitErrors((messages) => messages.filter((message) => !isBeneficiaryDocumentSubmitMessage(message)));
   }
 
   function navigateToStep(step: RequestEditStep, requestId = draftId): void {
@@ -923,8 +932,10 @@ export function RequestForm({
             <h2 className="text-base font-semibold">2. Líneas POA y montos</h2>
             <p className="text-sm text-muted-foreground">Agrega una o más líneas POA. El total se calcula automáticamente.</p>
           </div>
-          <Button type="button" variant="outline" onClick={addAllocationBlock} disabled={isBusy} data-testid="request-add-allocation-button">Agregar línea POA</Button>
+          <Button type="button" variant="outline" onClick={addAllocationBlock} disabled={isBusy || planningLinesLookup.isInitialLoading} data-testid="request-add-allocation-button">Agregar línea POA</Button>
         </div>
+        {planningLinesLookup.isRefreshing && <p className="text-xs text-muted-foreground">Actualizando líneas POA en segundo plano...</p>}
+        {planningLinesLookup.error && <p className="text-xs text-destructive">{planningLinesLookup.error.message}</p>}
 
         {hasMixedFiscalYears && (
           <Alert variant="destructive">
@@ -949,6 +960,10 @@ export function RequestForm({
                   control={form.control}
                   name={`allocations.${index}.budget_planning_line_id`}
                   selectedLine={selectedLines[index] ?? null}
+                  lines={planningLinesLookup.lines}
+                  isLoading={planningLinesLookup.isInitialLoading}
+                  isRefreshing={planningLinesLookup.isRefreshing}
+                  error={planningLinesLookup.error}
                   onSelectedLineChange={(line) => setAllocationLine(index, line)}
                 />
                 <FormField control={form.control} name={`allocations.${index}.amount`} render={({ field: amountField }) => (
@@ -1066,7 +1081,7 @@ export function RequestForm({
               )} />
             </section>
 
-            <BeneficiaryFields control={form.control} user={user} setValue={form.setValue} watch={form.watch} />
+            <BeneficiaryFields control={form.control} user={user} setValue={form.setValue} watch={form.watch} onDocumentFieldsChange={clearBeneficiaryDocumentSubmitErrors} />
             {requestType === REQUEST_TYPE.SUPPLIER_PAYMENT && <SupplierFields control={form.control} />}
 
             <BudgetPreviewCard

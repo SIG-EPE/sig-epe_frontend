@@ -1,4 +1,5 @@
 import { useEffect } from "react";
+import { zodResolver } from "@hookform/resolvers/zod";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useForm } from "react-hook-form";
@@ -8,7 +9,7 @@ import { BeneficiaryFields } from "@/components/requests/beneficiary-fields";
 import { Form } from "@/components/ui/form";
 import { getRequestSaveSuccessToast, getRequestSubmitFailureToast, getRequestSubmitSavingToast, getRequestSubmitSuccessToast, getScheduledRenditionMinDate, normalizeRequestAmountInput, REQUEST_BUDGET_CEILING_BLOCK_MESSAGE, RequestForm, requestFormSchema, toCreateRequestDto, toUpdateRequestDto, type RequestFormValues } from "@/components/requests/request-form";
 import { BANK_OPTIONS, REQUEST_EDIT_STEP } from "@/lib/requests";
-import { ACCOUNT_TYPE, BANK_CODE, BENEFICIARY_DOCUMENT_TYPE, REQUEST_CURRENCY, REQUEST_DOCUMENT_CATEGORY, REQUEST_DOCUMENT_SCOPE_TYPE, REQUEST_STATUS, REQUEST_TYPE, type PaymentRequest, type RequestAllocation, type RequestBudgetPreview, type RequestDocument, type SettlementContextResponse } from "@/types/requests";
+import { ACCOUNT_TYPE, BANK_CODE, BENEFICIARY_DOCUMENT_TYPE, REQUEST_CURRENCY, REQUEST_DOCUMENT_CATEGORY, REQUEST_DOCUMENT_SCOPE_TYPE, REQUEST_STATUS, REQUEST_TYPE, type BeneficiaryDocumentType, type PaymentRequest, type RequestAllocation, type RequestBudgetPreview, type RequestDocument, type SettlementContextResponse } from "@/types/requests";
 
 const mocks = vi.hoisted(() => ({
   createRequest: vi.fn(),
@@ -21,6 +22,7 @@ const mocks = vi.hoisted(() => ({
   toastSuccess: vi.fn(),
   updateRequest: vi.fn(),
   budgetPreview: null as RequestBudgetPreview | null,
+  useRequestPlanningLines: vi.fn(),
 }));
 
 vi.mock("next/navigation", () => ({
@@ -41,6 +43,7 @@ vi.mock("@/stores/auth-store", () => ({
 vi.mock("@/hooks/use-requests", () => ({
   useBudgetPreview: () => ({ canPreview: Boolean(mocks.budgetPreview), data: mocks.budgetPreview, error: null, isLoading: false, refetch: vi.fn() }),
   useCreateRequest: () => ({ createRequest: mocks.createRequest, isLoading: false }),
+  useRequestPlanningLines: mocks.useRequestPlanningLines,
   useRequestDocuments: () => ({ documents: mocks.requestDocuments, error: null, isLoading: false, refetch: mocks.refetchDocuments }),
   useRequestReceiptReviews: () => ({ receipts: [], error: null, isLoading: false, isRefreshing: false, refetch: vi.fn(), upsertReceipt: vi.fn() }),
   useSubmitRequest: () => ({ submitRequest: mocks.submitRequest, isLoading: false }),
@@ -48,7 +51,7 @@ vi.mock("@/hooks/use-requests", () => ({
 }));
 
 vi.mock("@/components/requests/planning-line-selector", () => ({
-  PlanningLineSelector: () => <div data-testid="planning-line-selector" />,
+  PlanningLineSelector: (props: { lines?: unknown[] }) => <div data-testid="planning-line-selector" data-lines-count={props.lines?.length ?? 0} />,
 }));
 
 vi.mock("@/components/requests/budget-preview-card", () => ({
@@ -78,6 +81,16 @@ vi.mock("@/components/requests/structured-rendition-report-card", () => ({
     return <div data-testid="structured-rendition-report-card" data-refresh-signal={props.refreshSignal ?? 0}>Informe de rendición estructurado</div>;
   },
 }));
+
+Object.defineProperty(window.HTMLElement.prototype, "scrollIntoView", {
+  configurable: true,
+  value: vi.fn(),
+});
+
+Object.defineProperty(window.HTMLElement.prototype, "hasPointerCapture", {
+  configurable: true,
+  value: vi.fn(() => false),
+});
 
 function makeValues(overrides: Partial<RequestFormValues> = {}): RequestFormValues {
   return {
@@ -319,13 +332,14 @@ beforeEach(() => {
   mocks.createRequest.mockReset();
   mocks.push.mockReset();
   mocks.refetchDocuments.mockReset();
-    mocks.requestDocuments = [];
-    mocks.structuredReportReady = true;
-    mocks.submitRequest.mockReset();
+  mocks.requestDocuments = [];
+  mocks.structuredReportReady = true;
+  mocks.submitRequest.mockReset();
   mocks.toastError.mockReset();
   mocks.toastSuccess.mockReset();
   mocks.updateRequest.mockReset();
   mocks.budgetPreview = null;
+  mocks.useRequestPlanningLines.mockReturnValue({ lines: [], total: 0, isLoading: false, isInitialLoading: false, isRefreshing: false, error: null, refetch: vi.fn() });
 });
 
 function BeneficiaryFieldsErrorHarness() {
@@ -361,6 +375,32 @@ function BeneficiaryFieldsOtherBankHarness() {
       bank_cci: "",
     }),
   });
+
+  return (
+    <Form {...form}>
+      <BeneficiaryFields control={form.control} user={null} setValue={form.setValue} watch={form.watch} />
+    </Form>
+  );
+}
+
+interface BeneficiaryFieldsDocumentErrorHarnessProps {
+  documentType: BeneficiaryDocumentType;
+  documentNumber: string;
+  message: string;
+}
+
+function BeneficiaryFieldsDocumentErrorHarness({ documentType, documentNumber, message }: BeneficiaryFieldsDocumentErrorHarnessProps) {
+  const form = useForm<RequestFormValues>({
+    resolver: zodResolver(requestFormSchema),
+    defaultValues: makeValues({
+      beneficiary_document_type: documentType,
+      beneficiary_document_number: documentNumber,
+    }),
+  });
+
+  useEffect(() => {
+    form.setError("beneficiary_document_number", { type: "manual", message });
+  }, [form, message]);
 
   return (
     <Form {...form}>
@@ -443,6 +483,19 @@ describe("RequestForm payload helpers", () => {
     await user.click(screen.getAllByRole("button", { name: "Quitar bloque" })[0]);
 
     expect(screen.getAllByTestId("request-allocation-block")).toHaveLength(1);
+  });
+
+  it("comparte una sola búsqueda POA precargada entre todos los selectores de asignación", async () => {
+    const user = userEvent.setup();
+    mocks.useRequestPlanningLines.mockReturnValue({ lines: [{ id: "line-1" }], total: 1, isLoading: false, isInitialLoading: false, isRefreshing: false, error: null, refetch: vi.fn() });
+
+    render(<RequestForm activeStep={REQUEST_EDIT_STEP.DATA} initialRequest={makePaymentRequest({ request_type: REQUEST_TYPE.ADVANCE })} mode="edit" />);
+
+    await user.click(screen.getByTestId("request-add-allocation-button"));
+    await user.click(screen.getByTestId("request-add-allocation-button"));
+
+    expect(screen.getAllByTestId("request-allocation-block")).toHaveLength(3);
+    expect(screen.getAllByTestId("planning-line-selector").map((selector) => selector.getAttribute("data-lines-count"))).toEqual(["1", "1", "1"]);
   });
 
   it("limita el concepto a 120 caracteres y muestra contador visible", () => {
@@ -715,6 +768,69 @@ describe("RequestForm payload helpers", () => {
     expect(screen.getByTestId("request-bank-name-input")).toHaveAttribute("maxLength", "100");
     expect(screen.getByTestId("request-bank-cci-input")).toBeInTheDocument();
     expect(screen.getByText("Requerido cuando seleccionas Otros Bancos. Máximo 100 caracteres.")).toBeInTheDocument();
+  });
+
+  it("limpia el error manual obsoleto de RUC cuando se corrige a 11 dígitos", async () => {
+    const user = userEvent.setup();
+    render(
+      <BeneficiaryFieldsDocumentErrorHarness
+        documentType={BENEFICIARY_DOCUMENT_TYPE.RUC}
+        documentNumber="2036653262"
+        message="El RUC debe tener 11 dígitos"
+      />,
+    );
+
+    expect(await screen.findByText("El RUC debe tener 11 dígitos")).toBeInTheDocument();
+
+    const documentInput = screen.getByTestId("request-beneficiary-document-number-input");
+    await user.clear(documentInput);
+    await user.type(documentInput, "20366532626");
+
+    await waitFor(() => expect(screen.queryByText("El RUC debe tener 11 dígitos")).not.toBeInTheDocument());
+    expect(documentInput).toHaveValue("20366532626");
+  });
+
+  it("limpia el error manual obsoleto de DNI cuando se corrige a 8 dígitos", async () => {
+    const user = userEvent.setup();
+    render(
+      <BeneficiaryFieldsDocumentErrorHarness
+        documentType={BENEFICIARY_DOCUMENT_TYPE.DNI}
+        documentNumber="1234567"
+        message="El DNI debe tener 8 dígitos"
+      />,
+    );
+
+    expect(await screen.findByText("El DNI debe tener 8 dígitos")).toBeInTheDocument();
+
+    const documentInput = screen.getByTestId("request-beneficiary-document-number-input");
+    await user.clear(documentInput);
+    await user.type(documentInput, "12345678");
+
+    await waitFor(() => expect(screen.queryByText("El DNI debe tener 8 dígitos")).not.toBeInTheDocument());
+    expect(documentInput).toHaveValue("12345678");
+  });
+
+  it("al cambiar tipo de documento limpia error de longitud obsoleto y aplica nuevo máximo", async () => {
+    const user = userEvent.setup();
+    render(
+      <BeneficiaryFieldsDocumentErrorHarness
+        documentType={BENEFICIARY_DOCUMENT_TYPE.RUC}
+        documentNumber="2036653262"
+        message="El RUC debe tener 11 dígitos"
+      />,
+    );
+
+    expect(await screen.findByText("El RUC debe tener 11 dígitos")).toBeInTheDocument();
+
+    const documentTypeSelect = screen.getByTestId("request-beneficiary-document-type-select");
+    documentTypeSelect.focus();
+    fireEvent.keyDown(documentTypeSelect, { key: "ArrowDown" });
+    fireEvent.keyDown(await screen.findByRole("option", { name: "DNI" }), { key: "Enter" });
+
+    const documentInput = screen.getByTestId("request-beneficiary-document-number-input");
+    await waitFor(() => expect(screen.queryByText("El RUC debe tener 11 dígitos")).not.toBeInTheDocument());
+    expect(documentInput).toHaveAttribute("maxLength", "8");
+    expect(documentInput).toHaveValue("20366532");
   });
 
   it("bloquea Datos -> Documentos cuando el monto supera el techo presupuestal", async () => {

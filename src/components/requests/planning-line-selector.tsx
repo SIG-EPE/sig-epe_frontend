@@ -1,11 +1,10 @@
 import { useEffect, useState } from "react";
-import { Control } from "react-hook-form";
+import type { Control } from "react-hook-form";
 
 import { Button } from "@/components/ui/button";
 import { SearchSelectModal } from "@/components/ui/search-select-modal";
 import { FormControl, FormDescription, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { useRequestPlanningLines } from "@/hooks/use-requests";
 import { PLANNING_TYPES } from "@/lib/planning-types";
 import { getPlanningLineDisplay } from "@/lib/requests";
 import { cn } from "@/lib/utils";
@@ -44,6 +43,10 @@ interface PlanningLineSelectorProps {
   control: Control<RequestFormValues>;
   name?: "budget_planning_line_id" | `allocations.${number}.budget_planning_line_id`;
   selectedLine?: RequestPlanningLineLookupItem | null;
+  lines: RequestPlanningLineLookupItem[];
+  isLoading?: boolean;
+  isRefreshing?: boolean;
+  error?: Error | null;
   onSelectedLineChange: (line: RequestPlanningLineLookupItem | null) => void;
 }
 
@@ -114,8 +117,7 @@ function getFilteredLines(lines: RequestPlanningLineLookupItem[], selection: Par
   }));
 }
 
-export function PlanningLineSelector({ control, name = "budget_planning_line_id", selectedLine, onSelectedLineChange }: PlanningLineSelectorProps) {
-  const { lines, isLoading, error } = useRequestPlanningLines();
+export function PlanningLineSelector({ control, name = "budget_planning_line_id", selectedLine, lines, isLoading = false, isRefreshing = false, error = null, onSelectedLineChange }: PlanningLineSelectorProps) {
   const [mode, setMode] = useState<PoaSelectorMode>(POA_SELECTOR_MODE.DIRECT);
   const [hierarchy, setHierarchy] = useState<HierarchySelection>({
     planningType: null,
@@ -220,24 +222,27 @@ export function PlanningLineSelector({ control, name = "budget_planning_line_id"
               </div>
 
               {mode === POA_SELECTOR_MODE.DIRECT ? (
-                <SearchSelectModal
-                  value={field.value || null}
-                  placeholder={isLoading ? "Cargando líneas..." : "Seleccionar línea POA"}
-                  displayValue={selectedLine ? getPlanningLineDisplay(selectedLine) : undefined}
-                  title="Seleccionar línea POA aprobada"
-                  items={lines}
-                  getItemId={(line) => line.id}
-                  getItemLabel={(line) => getPlanningLineDisplay(line)}
-                  getItemSubLabel={getLineSubLabel}
-                  searchPlaceholder="Buscar por código, descripción, jerarquía o unidad..."
-                  testId="request-planning-line-trigger"
-                  onChange={(id) => {
-                    field.onChange(id ?? "");
-                    onSelectedLineChange(lines.find((line) => line.id === id) ?? null);
-                  }}
-                  disabled={isLoading}
-                  hasError={Boolean(error)}
-                />
+                <>
+                  <SearchSelectModal
+                    value={field.value || null}
+                    placeholder={isLoading ? "Cargando líneas..." : "Seleccionar línea POA"}
+                    displayValue={selectedLine ? getPlanningLineDisplay(selectedLine) : undefined}
+                    title="Seleccionar línea POA aprobada"
+                    items={lines}
+                    getItemId={(line) => line.id}
+                    getItemLabel={(line) => getPlanningLineDisplay(line)}
+                    getItemSubLabel={getLineSubLabel}
+                    searchPlaceholder="Buscar por código, descripción, jerarquía o unidad..."
+                    testId="request-planning-line-trigger"
+                    onChange={(id) => {
+                      field.onChange(id ?? "");
+                      onSelectedLineChange(lines.find((line) => line.id === id) ?? null);
+                    }}
+                    disabled={isLoading}
+                    hasError={Boolean(error)}
+                  />
+                  {isRefreshing && <p className="text-xs text-muted-foreground">Actualizando líneas POA en segundo plano...</p>}
+                </>
               ) : (
                 <div className="space-y-3 rounded-md border bg-muted/20 p-3">
                   <div className="grid gap-3 md:grid-cols-2">
