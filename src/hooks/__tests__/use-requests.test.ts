@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { getPaymentQueuePath, getRenditionCountsPath, getRenditionsPath, getRequestsPath, getSettlementContextPath, getStartAdvanceSettlementPath, useBulkMarkPaid, useCompletePaymentDetails, useRequest, useRequestDocuments, useRequestReceiptReviews, useRequestRenditionReport, useRequestRenditionReportActions, useSettlementContext, useStartAdvanceSettlement } from "@/hooks/use-requests";
 import { api } from "@/lib/api-client";
-import { RENDITION_SORT_DIRECTION, RENDITION_SORT_FIELD, RENDITION_STATUS, REQUEST_CURRENCY, REQUEST_STATUS, REQUEST_TYPE, type PaymentRequest } from "@/types/requests";
+import { RENDITION_BUCKET, RENDITION_SORT_DIRECTION, RENDITION_SORT_FIELD, RENDITION_STATUS, REQUEST_CURRENCY, REQUEST_STATUS, REQUEST_TYPE, type PaymentRequest } from "@/types/requests";
 
 vi.mock("@/lib/api-client", () => ({
   api: {
@@ -117,12 +117,13 @@ describe("request hook URL helpers", () => {
       page: 2,
       limit: 10,
       status: RENDITION_STATUS.OVERDUE,
+      bucket: RENDITION_BUCKET.DUE_SOON,
       search: "REXAN",
       due_from: "2026-06-01",
       due_to: "2026-06-30",
       sort: RENDITION_SORT_FIELD.PAID_AT,
       direction: RENDITION_SORT_DIRECTION.DESC,
-    })).toBe("/requests/renditions?page=2&limit=10&status=OVERDUE&search=REXAN&due_from=2026-06-01&due_to=2026-06-30&sort=paid_at&direction=desc");
+    })).toBe("/requests/renditions?page=2&limit=10&status=OVERDUE&bucket=due_soon&search=REXAN&due_from=2026-06-01&due_to=2026-06-30&sort=paid_at&direction=desc");
     expect(getRenditionCountsPath({ search: "SOL-2026", sort: RENDITION_SORT_FIELD.DUE_DATE })).toBe("/requests/renditions/counts?search=SOL-2026&sort=due_date");
   });
 

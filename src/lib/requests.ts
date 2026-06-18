@@ -17,9 +17,11 @@ import {
   REQUEST_TYPE,
   REXAN_OUTCOME,
   ADVANCE_SETTLEMENT_CTA_STATE,
+  RENDITION_BUCKET,
   RENDITION_STATUS,
   RENDITION_SORT_DIRECTION,
   RENDITION_SORT_FIELD,
+  type RenditionBucket,
   type AdvanceSettlementCta,
   type PaymentRequest,
   type RenditionInboxCounts,
@@ -206,11 +208,12 @@ export interface RenditionSummaryCard {
   label: string;
   description: string;
   status?: RenditionStatus;
+  bucket?: RenditionBucket;
 }
 
 export const RENDITION_SUMMARY_CARDS: RenditionSummaryCard[] = [
   { key: "pending", label: "Pendientes de rendición", description: "Anticipos pagados aún sin rendición.", status: RENDITION_STATUS.PENDING },
-  { key: "due-soon", label: "Próximas a vencer", description: "Pendientes con fecha límite cercana.", status: RENDITION_STATUS.PENDING },
+  { key: "due-soon", label: "Próximas a vencer", description: "Vencen en los próximos 15 días.", bucket: RENDITION_BUCKET.DUE_SOON },
   { key: "overdue", label: "Vencidas", description: "Anticipos que superaron la fecha límite.", status: RENDITION_STATUS.OVERDUE },
   { key: "in-review", label: "En revisión", description: "Rendiciones enviadas para validación.", status: RENDITION_STATUS.IN_REVIEW },
   { key: "observed", label: "Observadas", description: "Rendiciones devueltas con comentarios.", status: RENDITION_STATUS.OBSERVED },
@@ -662,7 +665,9 @@ function getDateOnlyTime(value?: string | null): number | null {
   return getDateOnlyUtcTime(value);
 }
 
-export function getRenditionDaysRemaining(row: Pick<RenditionInboxRow, "scheduled_rendition_at" | "days_overdue" | "rendition_status">, today = new Date()): number | null {
+export function getRenditionDaysRemaining(row: Pick<RenditionInboxRow, "scheduled_rendition_at" | "days_overdue" | "days_until_due" | "days_remaining" | "rendition_status">, today = new Date()): number | null {
+  if (typeof row.days_remaining === "number") return row.days_remaining;
+  if (typeof row.days_until_due === "number") return row.days_until_due;
   if (typeof row.days_overdue === "number") return -Math.abs(row.days_overdue);
   if (!row.scheduled_rendition_at || row.rendition_status !== RENDITION_STATUS.PENDING) return null;
   const dueTime = getDateOnlyTime(row.scheduled_rendition_at);
@@ -671,7 +676,7 @@ export function getRenditionDaysRemaining(row: Pick<RenditionInboxRow, "schedule
   return Math.ceil((dueTime - todayTime) / (24 * 60 * 60 * 1000));
 }
 
-export function getRenditionDueLabel(row: Pick<RenditionInboxRow, "scheduled_rendition_at" | "days_overdue" | "rendition_status">, today = new Date()): string {
+export function getRenditionDueLabel(row: Pick<RenditionInboxRow, "scheduled_rendition_at" | "days_overdue" | "days_until_due" | "days_remaining" | "rendition_status">, today = new Date()): string {
   const days = getRenditionDaysRemaining(row, today);
   if (days === null) return "Sin fecha límite";
   if (days < 0) return `${Math.abs(days)} día${Math.abs(days) === 1 ? "" : "s"} vencida`;
@@ -679,13 +684,13 @@ export function getRenditionDueLabel(row: Pick<RenditionInboxRow, "scheduled_ren
   return `${days} día${days === 1 ? "" : "s"} restante${days === 1 ? "" : "s"}`;
 }
 
-export function isRenditionDueSoon(row: Pick<RenditionInboxRow, "scheduled_rendition_at" | "days_overdue" | "rendition_status">, today = new Date()): boolean {
+export function isRenditionDueSoon(row: Pick<RenditionInboxRow, "scheduled_rendition_at" | "days_overdue" | "days_until_due" | "days_remaining" | "rendition_status">, today = new Date()): boolean {
   const days = getRenditionDaysRemaining(row, today);
-  return row.rendition_status === RENDITION_STATUS.PENDING && days !== null && days >= 0 && days <= 7;
+  return row.rendition_status === RENDITION_STATUS.PENDING && days !== null && days >= 0 && days <= 15;
 }
 
 export function getRenditionSummaryCount(card: RenditionSummaryCard, counts: RenditionInboxCounts | null | undefined, rows: RenditionInboxRow[]): number {
-  if (card.key === "due-soon") return rows.filter((row) => isRenditionDueSoon(row)).length;
+  if (card.key === "due-soon") return counts?.due_soon ?? rows.filter((row) => isRenditionDueSoon(row)).length;
   if (!card.status) return 0;
   return counts?.[card.status] ?? rows.filter((row) => row.rendition_status === card.status).length;
 }

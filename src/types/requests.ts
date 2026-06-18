@@ -56,6 +56,12 @@ export const RENDITION_STATUS = {
 
 export type RenditionStatus = (typeof RENDITION_STATUS)[keyof typeof RENDITION_STATUS];
 
+export const RENDITION_BUCKET = {
+  DUE_SOON: "due_soon",
+} as const;
+
+export type RenditionBucket = (typeof RENDITION_BUCKET)[keyof typeof RENDITION_BUCKET];
+
 export const RENDITION_SORT_FIELD = {
   LAST_ACTIVITY: "last_activity",
   DUE_DATE: "due_date",
@@ -1170,6 +1176,8 @@ export interface RenditionInboxRow {
   scheduled_rendition_at: string | null;
   rendition_status: RenditionStatus;
   days_overdue: number | null;
+  days_until_due: number | null;
+  days_remaining: number | null;
   settlement_request_id: string | null;
   settlement_status: RequestStatus | null;
   settlement_updated_at: string | null;
@@ -1180,7 +1188,9 @@ export interface RenditionInboxRow {
   last_activity_at: string | null;
 }
 
-export interface RenditionInboxCounts extends Record<RenditionStatus, number> {}
+export interface RenditionInboxCounts extends Record<RenditionStatus, number> {
+  due_soon?: number;
+}
 
 export interface RenditionsInboxResponse {
   renditions: RenditionInboxRow[];
@@ -1194,6 +1204,7 @@ export interface RenditionsInboxFilters {
   page?: number;
   limit?: number;
   status?: RenditionStatus;
+  bucket?: RenditionBucket;
   search?: string;
   due_from?: string;
   due_to?: string;

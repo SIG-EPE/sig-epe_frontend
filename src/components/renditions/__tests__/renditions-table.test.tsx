@@ -17,6 +17,8 @@ function makeRendition(overrides: Partial<RenditionInboxRow> = {}): RenditionInb
     scheduled_rendition_at: "2026-05-10",
     rendition_status: RENDITION_STATUS.OVERDUE,
     days_overdue: 5,
+    days_until_due: null,
+    days_remaining: -5,
     settlement_request_id: "settlement-1",
     settlement_status: REQUEST_STATUS.SUBMITTED,
     settlement_updated_at: "2026-05-02T00:00:00.000Z",

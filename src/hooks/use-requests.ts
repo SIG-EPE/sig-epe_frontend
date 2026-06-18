@@ -111,6 +111,7 @@ export function getRenditionsPath(filters?: RenditionsInboxFilters): string {
   appendIfPresent(params, "page", filters?.page);
   appendIfPresent(params, "limit", filters?.limit);
   appendIfPresent(params, "status", filters?.status);
+  appendIfPresent(params, "bucket", filters?.bucket);
   appendIfPresent(params, "search", filters?.search);
   appendIfPresent(params, "due_from", filters?.due_from);
   appendIfPresent(params, "due_to", filters?.due_to);
@@ -120,7 +121,7 @@ export function getRenditionsPath(filters?: RenditionsInboxFilters): string {
   return `/requests/renditions${query ? `?${query}` : ""}`;
 }
 
-export function getRenditionCountsPath(filters?: Omit<RenditionsInboxFilters, "status" | "page" | "limit">): string {
+export function getRenditionCountsPath(filters?: Omit<RenditionsInboxFilters, "status" | "bucket" | "page" | "limit">): string {
   const params = new URLSearchParams();
   appendIfPresent(params, "search", filters?.search);
   appendIfPresent(params, "due_from", filters?.due_from);
@@ -216,6 +217,7 @@ export function useRenditionsInbox(filters?: RenditionsInboxFilters) {
   const pageFilter = filters?.page;
   const limitFilter = filters?.limit;
   const statusFilter = filters?.status;
+  const bucketFilter = filters?.bucket;
   const searchFilter = filters?.search;
   const dueFromFilter = filters?.due_from;
   const dueToFilter = filters?.due_to;
@@ -245,7 +247,7 @@ export function useRenditionsInbox(filters?: RenditionsInboxFilters) {
   };
 }
 
-export function useRenditionCounts(filters?: Omit<RenditionsInboxFilters, "status" | "page" | "limit">) {
+export function useRenditionCounts(filters?: Omit<RenditionsInboxFilters, "status" | "bucket" | "page" | "limit">) {
   const resource = useCachedResource<RenditionInboxCounts>({
     key: [QUERY_TAGS.RENDITIONS, "counts", filters ?? {}],
     ttlMs: QUERY_CACHE_TTL_MS.MUTABLE_LIST,

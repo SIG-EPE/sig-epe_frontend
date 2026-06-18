@@ -189,6 +189,8 @@ function makeRenditionRow(overrides: Partial<RenditionInboxRow> = {}): Rendition
     scheduled_rendition_at: "2026-05-20",
     rendition_status: RENDITION_STATUS.PENDING,
     days_overdue: null,
+    days_until_due: null,
+    days_remaining: null,
     settlement_request_id: null,
     settlement_status: null,
     settlement_updated_at: null,
@@ -349,9 +351,10 @@ describe("requests helpers", () => {
       [RENDITION_STATUS.IN_REVIEW]: 1,
       [RENDITION_STATUS.OBSERVED]: 0,
       [RENDITION_STATUS.SETTLED]: 3,
+      due_soon: 1,
     };
-    const pendingDueSoon = makeRenditionRow({ scheduled_rendition_at: "2026-05-20" });
-    const overdue = makeRenditionRow({ rendition_status: RENDITION_STATUS.OVERDUE, days_overdue: 2 });
+    const pendingDueSoon = makeRenditionRow({ scheduled_rendition_at: "2026-05-20", days_until_due: 5, days_remaining: 5 });
+    const overdue = makeRenditionRow({ rendition_status: RENDITION_STATUS.OVERDUE, days_overdue: 2, days_remaining: -2 });
     const paidAdvance = makeRequest({ status: REQUEST_STATUS.PAID, scheduled_rendition_at: "2026-05-20" });
     const overdueAdvance = makeRequest({ status: REQUEST_STATUS.PAID, scheduled_rendition_at: "2026-05-14" });
     const observedSettlement = {
@@ -377,6 +380,7 @@ describe("requests helpers", () => {
       expect(getRenditionStatusLabel(RENDITION_STATUS.IN_REVIEW)).toBe("En revisión");
       expect(getRenditionDueLabel(overdue, new Date("2026-05-15T00:00:00.000Z"))).toBe("2 días vencida");
       expect(getRenditionSummaryCount({ key: "due-soon", label: "Próximas a vencer", description: "" }, counts, [pendingDueSoon, overdue])).toBe(1);
+      expect(getRenditionDueLabel(pendingDueSoon, new Date("2026-05-15T00:00:00.000Z"))).toBe("5 días restantes");
       expect(getPaymentRequestRenditionStatus(paidAdvance)).toBe(RENDITION_STATUS.PENDING);
       expect(getPaymentRequestRenditionStatus(makeRequest({ status: REQUEST_STATUS.PAID, advanceSettlements: [observedSettlement] }))).toBe(RENDITION_STATUS.OBSERVED);
       expect(getPaymentRequestRenditionStatus(makeRequest({ status: REQUEST_STATUS.PAID, scheduled_rendition_at: "2026-05-20", advanceSettlements: [rejectedSettlement] }))).toBe(RENDITION_STATUS.PENDING);
@@ -390,7 +394,7 @@ describe("requests helpers", () => {
     expect(formatRequestDate("2026-06-01T04:59:59.000Z")).toContain("31 may");
     expect(formatRequestDateTime("2026-06-01T05:00:00.000Z")).toContain("1 jun");
 
-    const pendingDueToday = makeRenditionRow({ scheduled_rendition_at: "2026-05-31" });
+    const pendingDueToday = makeRenditionRow({ scheduled_rendition_at: "2026-05-31", days_until_due: 0, days_remaining: 0 });
     expect(getRenditionDueLabel(pendingDueToday, new Date("2026-06-01T04:59:59.000Z"))).toBe("Vence hoy");
   });
 
