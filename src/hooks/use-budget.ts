@@ -204,8 +204,9 @@ export function useFiscalYears(): UseFiscalYearsReturn {
 
 interface OrganizationalUnit {
   id: string;
-  code: string;
+  code: string | null;
   name: string;
+  short_name?: string | null;
   description?: string;
   is_active: boolean;
   created_at: string;

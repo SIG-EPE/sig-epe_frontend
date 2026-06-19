@@ -25,6 +25,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Plus } from "lucide-react";
+import { getFiscalYearSelectLabel } from "@/lib/ui-labels";
 
 // -------------------------------------------------------
 // AllocationPage component
@@ -94,8 +95,7 @@ export function AllocationPage() {
             <SelectContent>
               {fiscalYears?.map((fy) => (
                 <SelectItem key={fy.id} value={fy.id}>
-                  {fy.year}{" "}
-                  {fy.status === "ACTIVE" ? "(Activo)" : fy.status === "CLOSED" ? "(Cerrado)" : "(Borrador)"}
+                  {getFiscalYearSelectLabel(fy)}
                 </SelectItem>
               ))}
             </SelectContent>

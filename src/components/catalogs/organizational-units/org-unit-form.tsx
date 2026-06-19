@@ -9,13 +9,33 @@ import type { OrganizationalUnit, CreateOrganizationalUnitDto, UpdateOrganizatio
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import {
+  POA_PREFIX_HELP_TEXT,
+  POA_PREFIX_INVALID_MESSAGE,
+  isValidPoaPrefix,
+  normalizeOptionalPoaPrefix,
+} from "@/lib/poa-prefix";
+
+const poaPrefixSchema = (maxLength: number) =>
+  z.string()
+    .max(maxLength, `Máximo ${maxLength} caracteres`)
+    .optional()
+    .refine((value) => !value?.trim() || isValidPoaPrefix(value), POA_PREFIX_INVALID_MESSAGE);
 
 const OrgUnitSchema = z.object({
-  code: z.string().max(20, "Máximo 20 caracteres").optional(),
+  code: poaPrefixSchema(20),
   name: z.string().min(1, "El nombre es requerido").max(200, "Máximo 200 caracteres"),
-  short_name: z.string().max(50, "Máximo 50 caracteres").optional(),
+  short_name: poaPrefixSchema(50),
   responsibleName: z.string().max(200, "Máximo 200 caracteres").nullable().optional(),
   budgetCeiling: z.number().min(0, "El techo no puede ser negativo").nullable().optional(),
+}).superRefine((value, ctx) => {
+  if (!normalizeOptionalPoaPrefix(value.short_name) && !normalizeOptionalPoaPrefix(value.code)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["short_name"],
+      message: "Ingresa una sigla o código válido para generar el código POA oficial.",
+    });
+  }
 });
 
 type OrgUnitFormData = z.infer<typeof OrgUnitSchema>;
@@ -77,9 +97,9 @@ export function OrgUnitForm({
       const resolvedParentId = isEdit ? (item?.parentId ?? null) : (parentId ?? null);
 
       const dto = {
-        code: parsed.data.code || undefined,
+        code: normalizeOptionalPoaPrefix(parsed.data.code),
         name: parsed.data.name,
-        short_name: parsed.data.short_name || undefined,
+        short_name: normalizeOptionalPoaPrefix(parsed.data.short_name),
         parentId: resolvedParentId,
         responsibleName: parsed.data.responsibleName ?? null,
         budgetCeiling: parsed.data.budgetCeiling ?? null,
@@ -110,7 +130,7 @@ export function OrgUnitForm({
       )}
 
       <div className="space-y-1">
-        <Label htmlFor="code">Código (opcional)</Label>
+        <Label htmlFor="code">Código / prefijo POA</Label>
         <Input
           id="code"
           value={form.code ?? ""}
@@ -119,11 +139,12 @@ export function OrgUnitForm({
           className={errors.code ? "border-destructive" : ""}
           maxLength={20}
         />
+        <p className="text-xs text-muted-foreground">{POA_PREFIX_HELP_TEXT}</p>
         {errors.code && <p className="text-xs text-destructive">{errors.code}</p>}
       </div>
 
       <div className="space-y-1">
-        <Label htmlFor="short_name">Sigla / Nombre corto (opcional)</Label>
+        <Label htmlFor="short_name">Sigla / nombre corto para POA</Label>
         <Input
           id="short_name"
           value={form.short_name ?? ""}
@@ -131,6 +152,9 @@ export function OrgUnitForm({
           placeholder="Ej: GIOF"
           maxLength={50}
         />
+        <p className="text-xs text-muted-foreground">
+          Si se informa, esta sigla se usará antes que el código para crear el line_code oficial.
+        </p>
         {errors.short_name && <p className="text-xs text-destructive">{errors.short_name}</p>}
       </div>
 

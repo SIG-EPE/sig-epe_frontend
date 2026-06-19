@@ -25,6 +25,7 @@ import { useAuthStore } from "@/stores/auth-store";
 import { Plus, FileText, Send, CheckCircle2, Download } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
+import { getOrgUnitFilterLabel } from "@/lib/ui-labels";
 
 // -------------------------------------------------------
 // PlanningLinesPage
@@ -69,7 +70,7 @@ export function PlanningLinesPage() {
   );
 
   const { lines, total, limit, isLoading, refetch } = usePlanningLines({
-    fiscal_year_id: fiscalYearId || undefined,
+    fiscal_year_id: effectiveFiscalYearId,
     org_unit_id: orgUnitId || undefined,
     status: effectiveStatus,
     page,
@@ -127,7 +128,7 @@ export function PlanningLinesPage() {
     setIsExporting(true);
     try {
       const params = new URLSearchParams();
-      if (fiscalYearId) params.set("fiscal_year_id", fiscalYearId);
+      if (effectiveFiscalYearId) params.set("fiscal_year_id", effectiveFiscalYearId);
       if (orgUnitId) params.set("org_unit_id", orgUnitId);
       if (effectiveStatus) params.set("status", effectiveStatus);
 
@@ -238,7 +239,7 @@ export function PlanningLinesPage() {
             <SelectItem value="all">Todas las unidades</SelectItem>
             {orgUnits.map((ou) => (
               <SelectItem key={ou.id} value={ou.id}>
-                {ou.name}
+                {getOrgUnitFilterLabel(ou)}
               </SelectItem>
             ))}
           </SelectContent>

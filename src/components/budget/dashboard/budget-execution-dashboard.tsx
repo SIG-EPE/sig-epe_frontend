@@ -300,6 +300,7 @@ export function BudgetExecutionDashboard() {
 
   const hasData = hasAnyBudgetData(data);
   const displayAlerts = data.alerts
+    .filter((alert) => alert.severity !== "info")
     .map((alert) => ({ alert, message: getBudgetDashboardAlertMessage(alert) }))
     .filter((item): item is { alert: BudgetDashboardAlert; message: string } => item.message !== null);
 
@@ -307,10 +308,9 @@ export function BudgetExecutionDashboard() {
     <div className="space-y-6">
       {isRefreshing && <RefreshingNotice />}
       {!hasData && (
-        <Alert>
-          <AlertCircle className="h-4 w-4" />
-          <AlertDescription>Sin datos para los filtros seleccionados. No se inventan ceros cuando el backend reporta ausencia.</AlertDescription>
-        </Alert>
+        <div className="rounded-lg border border-dashed border-border p-6 text-center text-sm text-muted-foreground">
+          Sin datos para los filtros seleccionados
+        </div>
       )}
       {displayAlerts.map(({ alert, message }) => (
         <Alert key={`${alert.code}-${message}`} variant={alert.severity === "critical" ? "destructive" : "default"}>

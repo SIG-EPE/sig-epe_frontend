@@ -2,7 +2,7 @@
 
 // -------------------------------------------------------
 // BalanceFilters — Filtros para el dashboard de balance
-// Ano fiscal, unidad organica, territorio, tipo de presupuesto
+// Año fiscal, unidad orgánica, territorio, tipo de presupuesto
 // -------------------------------------------------------
 
 import { useBudgetBalanceStore } from "@/stores/budget-balance-store";
@@ -19,6 +19,7 @@ import {
 } from "@/components/ui/select";
 import { TerritorySelector } from "@/components/shared/territory-selector";
 import { X } from "lucide-react";
+import { getFiscalYearSelectLabel, getOrgUnitFilterLabel } from "@/lib/ui-labels";
 
 // -------------------------------------------------------
 // Select envolvido em componente controlado pelo Zustand
@@ -35,19 +36,19 @@ function FiscalYearSelect() {
 
   return (
     <div className="flex flex-col gap-1.5">
-      <Label htmlFor="fiscal-year">Ano Fiscal</Label>
+      <Label htmlFor="fiscal-year">Año fiscal</Label>
       <Select
         value={fiscalYearId ?? ""}
         onValueChange={(value) => setFiscalYearId(value)}
         disabled={isLoading}
       >
         <SelectTrigger id="fiscal-year" className="w-full">
-          <SelectValue placeholder="Seleccionar ano fiscal" />
+          <SelectValue placeholder="Seleccionar año fiscal" />
         </SelectTrigger>
         <SelectContent>
           {fiscalYears?.map((fy) => (
             <SelectItem key={fy.id} value={fy.id}>
-              {fy.year} — {fy.status}
+              {getFiscalYearSelectLabel(fy)}
             </SelectItem>
           ))}
         </SelectContent>
@@ -63,7 +64,7 @@ function OrgUnitSelect() {
 
   return (
     <div className="flex flex-col gap-1.5">
-      <Label htmlFor="org-unit">Unidad Organica</Label>
+      <Label htmlFor="org-unit">Unidad orgánica</Label>
       <Select
         value={filters.org_unit_id ?? ""}
         onValueChange={(value) => setFilter("org_unit_id", value === "__all__" ? "" : value)}
@@ -76,7 +77,7 @@ function OrgUnitSelect() {
           <SelectItem value="__all__">Todas las unidades</SelectItem>
           {orgUnits?.map((unit) => (
             <SelectItem key={unit.id} value={unit.id}>
-              {unit.code} — {unit.name}
+              {getOrgUnitFilterLabel(unit)}
             </SelectItem>
           ))}
         </SelectContent>
@@ -116,7 +117,7 @@ export function BalanceFilters({ isRefreshing = false }: BalanceFiltersProps) {
     <div className="flex flex-col gap-4">
       {/* Fila de filtros */}
       <div className="flex flex-col gap-4">
-        {/* Primera fila: ano fiscal, unidad organica */}
+        {/* Primera fila: año fiscal, unidad orgánica */}
         <div className="grid gap-4 sm:grid-cols-2">
           <FiscalYearSelect />
           <OrgUnitSelect />

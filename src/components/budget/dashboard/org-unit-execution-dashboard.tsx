@@ -10,6 +10,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useOrgUnitExecutionDashboard, useOrgUnitExecutionDashboardOptions } from "@/hooks/use-dashboard";
 import { formatMoneyStrict, formatMonthLabel, formatPercentStrict, truncateChartLabel } from "@/lib/dashboard-formatters";
+import { formatBusinessName } from "@/lib/ui-labels";
 import { ORG_UNIT_EXECUTION_LEVEL, type OrgUnitExecutionLevel, type OrgUnitExecutionOption, type OrgUnitExecutionRow } from "@/types/dashboard";
 
 const LEVEL_LABEL: Record<OrgUnitExecutionLevel, string> = {
@@ -58,6 +59,7 @@ function FilterSelect({
   options,
   placeholder,
   disabledMessage,
+  showCode = true,
   onChange,
 }: {
   label: string;
@@ -65,6 +67,7 @@ function FilterSelect({
   options: OrgUnitExecutionOption[];
   placeholder: string;
   disabledMessage: string;
+  showCode?: boolean;
   onChange: (value: string) => void;
 }) {
   const disabled = options.length === 0;
@@ -74,7 +77,7 @@ function FilterSelect({
       <select className="w-full rounded-md border border-input bg-background px-3 py-2" value={value} disabled={disabled} onChange={(event) => onChange(event.target.value)}>
         <option value="">{disabled ? disabledMessage : placeholder}</option>
         {options.map((option) => (
-          <option key={option.id} value={option.id}>{option.code ? `${option.code} · ${option.label}` : option.label}</option>
+          <option key={option.id} value={option.id}>{showCode && option.code ? `${option.code} · ${formatBusinessName(option.label)}` : formatBusinessName(option.label)}</option>
         ))}
       </select>
     </label>
@@ -198,7 +201,7 @@ export function OrgUnitExecutionDashboard() {
               {Array.from({ length: 12 }, (_, index) => index + 1).map((month) => <option key={month} value={month}>{formatMonthLabel(month)}</option>)}
             </select>
           </label>
-          <FilterSelect label="Unidad orgánica" value={orgUnitId} options={options?.org_units ?? []} placeholder="Todas las unidades" disabledMessage={optionsLoading ? "Cargando..." : "Sin unidades"} onChange={(value) => { setOrgUnitId(value); clearFrom("org"); }} />
+          <FilterSelect label="Unidad orgánica" value={orgUnitId} options={options?.org_units ?? []} placeholder="Todas las unidades" disabledMessage={optionsLoading ? "Cargando..." : "Sin unidades"} showCode={false} onChange={(value) => { setOrgUnitId(value); clearFrom("org"); }} />
           <FilterSelect label="Programa" value={programId} options={options?.programs ?? []} placeholder="Todos los programas" disabledMessage="Sin programas" onChange={(value) => { setProgramId(value); clearFrom("program"); }} />
           <FilterSelect label="Componente" value={componentId} options={options?.components ?? []} placeholder="Todos los componentes" disabledMessage="Sin componentes" onChange={(value) => { setComponentId(value); clearFrom("component"); }} />
           <FilterSelect label="Acción operativa" value={operativeActionId} options={options?.operative_actions ?? []} placeholder="Todas las acciones" disabledMessage="Sin acciones" onChange={(value) => { setOperativeActionId(value); clearFrom("action"); }} />
