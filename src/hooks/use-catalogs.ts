@@ -17,6 +17,8 @@ import type {
   UpdateBudgetProgramDto,
   FundingSource,
   FundingSourceType,
+  CreateFundingSourceTypeDto,
+  UpdateFundingSourceTypeDto,
   CreateFundingSourceDto,
   UpdateFundingSourceDto,
   BudgetCategory,
@@ -178,6 +180,78 @@ export const useCatalogBudgetPartners = useCatalogFundingSources;
 
 export function useFundingSourceTypes() {
   return useCatalogList<FundingSourceType>("/catalogs/funding-source-types");
+}
+
+export function useCatalogFundingSourceTypes() {
+  return useCatalogList<FundingSourceType>("/catalogs/funding-source-types?include_inactive=true");
+}
+
+export function useCreateFundingSourceType() {
+  const [isLoading, setIsLoading] = useState(false);
+
+  const create = async (dto: CreateFundingSourceTypeDto): Promise<FundingSourceType> => {
+    setIsLoading(true);
+    try {
+      const created = await api.post<FundingSourceType>("/catalogs/funding-source-types", dto);
+      invalidateCatalogDomain();
+      return created;
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  return { create, isLoading };
+}
+
+export function useUpdateFundingSourceType(id: string) {
+  const [isLoading, setIsLoading] = useState(false);
+
+  const update = async (dto: UpdateFundingSourceTypeDto): Promise<FundingSourceType> => {
+    setIsLoading(true);
+    try {
+      const updated = await api.patch<FundingSourceType>(`/catalogs/funding-source-types/${id}`, dto);
+      invalidateCatalogDomain();
+      return updated;
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  return { update, isLoading };
+}
+
+export function useDeactivateFundingSourceType(id: string) {
+  const [isLoading, setIsLoading] = useState(false);
+
+  const deactivate = async (): Promise<FundingSourceType> => {
+    setIsLoading(true);
+    try {
+      const deactivated = await api.patch<FundingSourceType>(`/catalogs/funding-source-types/${id}/deactivate`);
+      invalidateCatalogDomain();
+      return deactivated;
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  return { deactivate, isLoading };
+}
+
+export function useReactivateFundingSourceType(id: string) {
+  const [isLoading, setIsLoading] = useState(false);
+
+  const reactivate = async (): Promise<FundingSourceType> => {
+    setIsLoading(true);
+    try {
+      const reactivated = await api.patch<FundingSourceType>(`/catalogs/funding-source-types/${id}/reactivate`);
+      invalidateCatalogDomain();
+      return reactivated;
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  return { reactivate, isLoading };
 }
 
 export function useCreateFundingSource() {

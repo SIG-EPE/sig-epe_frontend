@@ -49,6 +49,18 @@ export interface FundingSourceType {
   is_active: boolean;
 }
 
+export interface CreateFundingSourceTypeDto {
+  name: string;
+  description?: string;
+  is_active?: boolean;
+}
+
+export interface UpdateFundingSourceTypeDto {
+  name?: string;
+  description?: string;
+  is_active?: boolean;
+}
+
 // -------------------------------------------------------
 // FundingSource — Fuentes de financiamiento (ex BudgetPartner)
 // -------------------------------------------------------
