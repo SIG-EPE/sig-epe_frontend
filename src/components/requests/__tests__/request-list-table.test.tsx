@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 
 import { RequestListTable } from "@/components/requests/request-list-table";
 import { ROLE_CODE } from "@/lib/constants";
-import { REQUEST_CURRENCY, REQUEST_DOCUMENT_CATEGORY, REQUEST_DOCUMENT_STORAGE_PROVIDER, REQUEST_DOCUMENT_UPLOAD_STATUS, REQUEST_STATUS, REQUEST_TYPE, type PaymentRequest, type RequestDocument } from "@/types/requests";
+import { REQUEST_CURRENCY, REQUEST_DOCUMENT_CATEGORY, REQUEST_DOCUMENT_STORAGE_PROVIDER, REQUEST_DOCUMENT_UPLOAD_STATUS, REQUEST_STATUS, REQUEST_TYPE, type PaymentRequest, type RequestAllocation, type RequestDocument } from "@/types/requests";
 
 function makeRequest(overrides: Partial<PaymentRequest> = {}): PaymentRequest {
   return {
@@ -61,6 +61,40 @@ function makeDocument(overrides: Partial<RequestDocument> = {}): RequestDocument
     storage_provider: REQUEST_DOCUMENT_STORAGE_PROVIDER.LOCAL,
     upload_status: REQUEST_DOCUMENT_UPLOAD_STATUS.PERMANENT,
     created_at: "2026-05-01T10:00:00.000Z",
+    ...overrides,
+  };
+}
+
+function makeAllocation(overrides: Partial<RequestAllocation> = {}): RequestAllocation {
+  return {
+    id: "allocation-1",
+    payment_request_id: "req-1",
+    budget_planning_line_id: "line-1",
+    amount: 60,
+    currency: REQUEST_CURRENCY.PEN,
+    budget_month: 1,
+    fiscal_year: 2026,
+    org_unit_id: "org-1",
+    sort_order: 1,
+    budgetPlanningLine: null,
+    planning_line: {
+      id: "line-1",
+      line_code: "POA-001",
+      resource_description: "Materiales educativos para talleres regionales",
+      total_cost: 100,
+      status: "APPROVED",
+      fiscal_year: { id: "fy-2026", year: 2026 },
+      org_unit: { id: "org-1", name: "Unidad 1" },
+      category: null,
+      program: null,
+      action: null,
+      monthly_summary: [],
+      funding_sources: [],
+    },
+    org_unit: { id: "org-1", name: "Unidad 1" },
+    financiers: [],
+    funding_sources: [],
+    payment_execution: null,
     ...overrides,
   };
 }
@@ -181,5 +215,56 @@ describe("RequestListTable", () => {
 
     expect(screen.getByRole("link", { name: "Ver documentos" })).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "Abrir carpeta Drive" })).not.toBeInTheDocument();
+  });
+
+  it("muestra línea POA y concepto en varias líneas para facilitar el seguimiento", () => {
+    render(
+      <RequestListTable
+        requests={[makeRequest({
+          concept: "Compra de materiales para el seguimiento de actividades territoriales",
+          allocations: [makeAllocation()],
+          allocation_count: 1,
+        })]}
+        isLoading={false}
+        roleCode={ROLE_CODE.SOLICITANTE_EPE}
+        currentUserId="user-1"
+      />,
+    );
+
+    expect(screen.getByText(/POA-001/)).toBeInTheDocument();
+    expect(screen.getByText(/Materiales educativos para talleres regionales/)).toBeInTheDocument();
+    expect(screen.getByText(/Concepto: Compra de materiales/)).toBeInTheDocument();
+  });
+
+  it("resume múltiples líneas POA y deja el detalle accesible", async () => {
+    const user = userEvent.setup();
+    const secondAllocation = makeAllocation({
+      id: "allocation-2",
+      budget_planning_line_id: "line-2",
+      amount: 40,
+      sort_order: 2,
+      planning_line: {
+        ...makeAllocation().planning_line!,
+        id: "line-2",
+        line_code: "POA-002",
+        resource_description: "Servicios logísticos para capacitación",
+      },
+    });
+
+    render(
+      <RequestListTable
+        requests={[makeRequest({ allocations: [makeAllocation(), secondAllocation], allocation_count: 2 })]}
+        isLoading={false}
+        roleCode={ROLE_CODE.SOLICITANTE_EPE}
+        currentUserId="user-1"
+      />,
+    );
+
+    const summary = screen.getByText(/2 líneas POA/);
+    expect(summary).toBeInTheDocument();
+    await user.click(summary);
+
+    expect(screen.getByText(/POA-002/)).toBeInTheDocument();
+    expect(screen.getByText(/Servicios logísticos para capacitación/)).toBeInTheDocument();
   });
 });

@@ -1476,6 +1476,7 @@ describe("StructuredRenditionReportCard", () => {
     await user.click(screen.getByRole("button", { name: "Registrar devolución" }));
     const proofFile = new File(["constancia"], "constancia.pdf", { type: "application/pdf" });
     await user.upload(screen.getByLabelText(/Adjuntar constancia de devolución para/i), proofFile);
+    expect(await screen.findByText(/Constancia adjuntada y seleccionada para esta línea POA/i)).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText("Justificación *"), { target: { value: "Saldo no utilizado." } });
     await user.click(screen.getByRole("button", { name: "Guardar devolución de línea" }));
 
@@ -1490,6 +1491,38 @@ describe("StructuredRenditionReportCard", () => {
       justification: "Saldo no utilizado.",
       return_proof_document_id: "uploaded-return-proof-1",
     }));
+  });
+
+  it("muestra el error de carga de constancia de devolución dentro del formulario", async () => {
+    mocks.documents = [makeDocument()];
+    mocks.uploadDocument.mockRejectedValue(new Error("Drive no respondió"));
+    mocks.report = makeReport({
+      status: REQUEST_RENDITION_REPORT_STATUS.OBSERVED,
+      allocation_coverage: [{
+        request_allocation_id: "allocation-1",
+        planned_amount: 300,
+        row_total_amount: 125,
+        paid_base_amount: 300,
+        rendered_amount: 125,
+        expected_return_amount: 175,
+        returned_amount: 0,
+        excess_amount: 0,
+        row_count: 1,
+        has_rows: true,
+        line_return: null,
+        return_validation_status: LINE_RETURN_VALIDATION_STATUS.MISSING_PROOF,
+      }],
+    });
+
+    const user = userEvent.setup();
+    render(<StructuredRenditionReportCard request={makeRequest({ status: REQUEST_STATUS.OBSERVED })} />);
+
+    await user.click(screen.getByRole("button", { name: "Registrar devolución" }));
+    const proofFile = new File(["constancia"], "constancia.pdf", { type: "application/pdf" });
+    await user.upload(screen.getByLabelText(/Adjuntar constancia de devolución para/i), proofFile);
+
+    expect(await screen.findByText(/Drive no respondió/i)).toBeInTheDocument();
+    expect(mocks.toastError).toHaveBeenCalledWith("Drive no respondió");
   });
 
   it("no ofrece constancias de otra línea en el registro de devolución", async () => {

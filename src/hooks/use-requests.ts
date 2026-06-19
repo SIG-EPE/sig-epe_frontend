@@ -166,7 +166,7 @@ export function useRequests(filters?: RequestsListFilters) {
     ttlMs: QUERY_CACHE_TTL_MS.MUTABLE_LIST,
     tags: [QUERY_TAGS.REQUESTS],
     errorMessage: "Error al cargar solicitudes",
-    queryFn: () => api.get<RequestsListResponse>(getRequestsPath(filters)),
+    queryFn: (signal) => api.get<RequestsListResponse>(getRequestsPath(filters), { signal }),
   });
   const data = resource.data;
 
@@ -353,8 +353,6 @@ export async function attachPaymentProof(paymentId: string, input: AttachPayment
   if (input.paid_at?.trim()) formData.append("paid_at", input.paid_at.trim());
   if (input.amount_paid !== undefined) formData.append("amount_paid", String(input.amount_paid));
   if (input.notes?.trim()) formData.append("notes", input.notes.trim());
-  if (input.request_allocation_ids?.length) formData.append("request_allocation_ids", JSON.stringify(input.request_allocation_ids));
-  if (input.allocations?.length) formData.append("allocations", JSON.stringify(input.allocations));
   const result = await api.postForm<PaymentRequest>(`/request-payments/${paymentId}/proofs`, formData);
   invalidateRequestCaches();
   return result;

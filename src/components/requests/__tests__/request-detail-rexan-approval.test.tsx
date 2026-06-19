@@ -218,6 +218,32 @@ describe("RequestDetailPage REXAN approval", () => {
     mocks.useRequestRenditionReport.mockReturnValue({ report: null, isLoading: false, error: null, refetch: mocks.reportRefetch });
   });
 
+  it("muestra a GIOF que el solicitante prepara la rendición después del pago", () => {
+    mocks.useRequest.mockReturnValue({
+      request: makeRequest({
+        id: "advance-1",
+        request_code: "SOL-2026-0001",
+        request_type: REQUEST_TYPE.ADVANCE,
+        status: REQUEST_STATUS.PAID,
+        requester_id: "user-1",
+        scheduled_rendition_at: "2026-06-30",
+        paid_at: "2026-06-01T10:00:00.000Z",
+      }),
+      isInitialLoading: false,
+      isRefreshing: false,
+      error: null,
+      refetch: mocks.requestRefetch,
+      patchRequest: vi.fn(),
+    });
+
+    render(<RequestDetailPage />);
+
+    expect(screen.getByText("Siguiente paso: espera de rendición del solicitante")).toBeInTheDocument();
+    expect(screen.getByText(/El solicitante prepara y envía la rendición/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Ir a Bandeja de Rendiciones" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Iniciar rendición" })).not.toBeInTheDocument();
+  });
+
   it("aprueba REXAN EXACT con validated_spent_amount y sin campos de devolución ni nota legacy", async () => {
     const user = await openApproveDialogAndSetAmount("100");
 

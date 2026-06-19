@@ -11,12 +11,14 @@ import { REQUEST_CURRENCY, REQUEST_DOCUMENT_CATEGORY, REQUEST_DOCUMENT_STORAGE_P
 const mocks = vi.hoisted(() => ({
   registerPayment: vi.fn(),
   attachPaymentProof: vi.fn(),
+  registerPaymentLoading: vi.fn(() => false),
+  attachPaymentProofLoading: vi.fn(() => false),
   usePaymentQueue: vi.fn(),
 }));
 
 vi.mock("@/hooks/use-requests", () => ({
-  useRegisterPayment: () => ({ registerPayment: mocks.registerPayment, isLoading: false, error: null }),
-  useAttachPaymentProof: () => ({ attachPaymentProof: mocks.attachPaymentProof, isLoading: false, error: null }),
+  useRegisterPayment: () => ({ registerPayment: mocks.registerPayment, isLoading: mocks.registerPaymentLoading(), error: null }),
+  useAttachPaymentProof: () => ({ attachPaymentProof: mocks.attachPaymentProof, isLoading: mocks.attachPaymentProofLoading(), error: null }),
   useBulkMarkPaid: () => ({ bulkMarkPaid: vi.fn(), isLoading: false, error: null }),
   useCompletePaymentDetails: () => ({ completePaymentDetails: vi.fn(), isLoading: false, error: null }),
   usePaymentQueue: mocks.usePaymentQueue,
@@ -107,6 +109,8 @@ describe("REXAN payment queue and modal", () => {
     vi.clearAllMocks();
     mocks.registerPayment.mockResolvedValue(makeRequest());
     mocks.attachPaymentProof.mockResolvedValue(makeRequest());
+    mocks.registerPaymentLoading.mockReturnValue(false);
+    mocks.attachPaymentProofLoading.mockReturnValue(false);
     mocks.usePaymentQueue.mockReturnValue({ requests: [], total: 0, isLoading: false, error: null, refetch: vi.fn() });
   });
 
@@ -312,7 +316,7 @@ describe("REXAN payment queue and modal", () => {
     expect(screen.getByRole("button", { name: "Agregar comprobante POA" })).toBeInTheDocument();
   });
 
-  it("asocia comprobante adicional con ids de asignación seleccionados", async () => {
+  it("asocia comprobante POA automáticamente a todas las líneas sin selección manual", async () => {
     const user = userEvent.setup();
     const request = makeRequest({
       status: REQUEST_STATUS.PAID,
@@ -337,7 +341,7 @@ describe("REXAN payment queue and modal", () => {
 
     render(<AttachPaymentProofModal request={request} open onOpenChange={vi.fn()} onSuccess={vi.fn()} />);
 
-    await user.click(screen.getByTestId("attach-proof-allocation-checkbox"));
+    expect(screen.getByText("Líneas POA que quedarán cubiertas automáticamente")).toBeInTheDocument();
     await user.type(screen.getByTestId("attach-payment-reference-input"), "OP-POA-1");
     const file = new File(["proof"], "constancia.pdf", { type: "application/pdf" });
     await user.upload(screen.getByTestId("attach-payment-proof-input"), file);
@@ -346,10 +350,38 @@ describe("REXAN payment queue and modal", () => {
     await waitFor(() => {
       expect(mocks.attachPaymentProof).toHaveBeenCalledWith("payment-1", expect.objectContaining({
         proof: file,
-        request_allocation_ids: ["allocation-1"],
         operation_reference: "OP-POA-1",
       }));
     });
+    expect(mocks.attachPaymentProof.mock.calls[0][1]).not.toHaveProperty("request_allocation_ids");
+  });
+
+  it("mantiene abierto el modal de registro mientras se carga la constancia", async () => {
+    const user = userEvent.setup();
+    const onOpenChange = vi.fn();
+    mocks.registerPaymentLoading.mockReturnValue(true);
+
+    render(<RegisterPaymentModal request={makeRequest()} open onOpenChange={onOpenChange} onSuccess={vi.fn()} />);
+
+    expect(screen.getByText("No cierres esta ventana mientras se carga el archivo")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Cerrar" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Cancelar" })).toBeDisabled();
+
+    await user.keyboard("{Escape}");
+
+    expect(onOpenChange).not.toHaveBeenCalledWith(false);
+  });
+
+  it("mantiene abierto el modal de comprobante POA mientras se carga el archivo", () => {
+    const onOpenChange = vi.fn();
+    mocks.attachPaymentProofLoading.mockReturnValue(true);
+
+    render(<AttachPaymentProofModal request={makeRequest({ status: REQUEST_STATUS.PAID, payment_id: "payment-1", allocations: [makeAllocation()] })} open onOpenChange={onOpenChange} onSuccess={vi.fn()} />);
+
+    expect(screen.getByText("No cierres esta ventana mientras se carga el archivo")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Cerrar" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Cancelar" })).toBeDisabled();
+    expect(onOpenChange).not.toHaveBeenCalled();
   });
 
   it("refresca cola e indicadores de datos pendientes después de asociar constancia", async () => {
@@ -406,7 +438,6 @@ describe("REXAN payment queue and modal", () => {
 
     await user.click(screen.getByTestId("payment-filter-pending-data"));
     await user.click(screen.getByTestId("attach-payment-proof-button"));
-    await user.click(screen.getByTestId("attach-proof-allocation-checkbox"));
     const file = new File(["proof"], "constancia.pdf", { type: "application/pdf" });
     await user.upload(screen.getByTestId("attach-payment-proof-input"), file);
     await user.click(screen.getByRole("button", { name: "Asociar comprobante" }));

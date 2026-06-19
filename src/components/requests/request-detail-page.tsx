@@ -27,6 +27,7 @@ import {
   getPaymentRequestRenditionStatus,
   getRequestDocumentDisplayName,
   getRequestDisplayCode,
+  getRenditionNextStepGuidance,
   getPlanningLineDisplay,
   getRenditionStatusLabel,
   getReturnProofDocuments,
@@ -41,7 +42,7 @@ import {
 } from "@/lib/requests";
 import { getSafeDocumentUrl } from "@/lib/safe-url";
 import { useAuthStore } from "@/stores/auth-store";
-import { ADVANCE_SETTLEMENT_CTA_STATE, REQUEST_DOCUMENT_CATEGORY, REQUEST_DOCUMENT_SCOPE_TYPE, REQUEST_DOCUMENT_UPLOAD_STATUS, REQUEST_RENDITION_REPORT_STATUS, REQUEST_TYPE, REXAN_OUTCOME, type ApproveRequestDto, type RequestDocument, type RequestRenditionAllocationCoverage, type RequestRenditionReport, type RexanOutcome } from "@/types/requests";
+import { RENDITION_NEXT_STEP_ACTION, REQUEST_DOCUMENT_CATEGORY, REQUEST_DOCUMENT_SCOPE_TYPE, REQUEST_DOCUMENT_UPLOAD_STATUS, REQUEST_RENDITION_REPORT_STATUS, REQUEST_TYPE, REXAN_OUTCOME, type ApproveRequestDto, type RequestDocument, type RequestRenditionAllocationCoverage, type RequestRenditionReport, type RexanOutcome } from "@/types/requests";
 import { RequestStatusStepper } from "./request-status-stepper";
 import { RequestDocumentsCard } from "./request-documents-card";
 import { StructuredRenditionReportCard } from "./structured-rendition-report-card";
@@ -191,6 +192,7 @@ export function RequestDetailPage() {
   const canCorrect = isRequestOwner && canCorrectObservedRequest(roleCode, request.status);
   const canEditDraft = isRequestOwner && canEditDraftRequest(roleCode, request.status);
   const advanceSettlementCta = getAdvanceSettlementCta(roleCode, request, user?.id);
+  const renditionNextStepGuidance = getRenditionNextStepGuidance(roleCode, request, user?.id);
   const driveFolderUrl = getSafeDocumentUrl(request.drive_folder_url);
   const renditionStatus = getPaymentRequestRenditionStatus(request);
   const editHref = `${ROUTES.REQUESTS}/${request.id}/edit`;
@@ -421,9 +423,9 @@ export function RequestDetailPage() {
         </Card>
       )}
 
-      {advanceSettlementCta && (
+      {renditionNextStepGuidance && (
         <Card>
-          <CardHeader><CardTitle>Rendición de anticipo</CardTitle></CardHeader>
+          <CardHeader><CardTitle>{renditionNextStepGuidance.title}</CardTitle></CardHeader>
           <CardContent className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
             <div className="grid gap-2 text-sm sm:grid-cols-2">
               <div>
@@ -434,18 +436,18 @@ export function RequestDetailPage() {
                 <p className="text-xs text-muted-foreground">Fecha límite de rendición</p>
                 <p className="font-medium">{formatRequestDate(request.scheduled_rendition_at)}</p>
               </div>
-              <p className="text-muted-foreground sm:col-span-2">{advanceSettlementCta.description}</p>
+              <p className="text-muted-foreground sm:col-span-2">{renditionNextStepGuidance.description}</p>
             </div>
-            {advanceSettlementCta.href ? (
+            {renditionNextStepGuidance.action === RENDITION_NEXT_STEP_ACTION.NAVIGATE && renditionNextStepGuidance.href ? (
               <Button
-                variant={advanceSettlementCta.state === ADVANCE_SETTLEMENT_CTA_STATE.COMPLETED ? "outline" : "default"}
-                onClick={() => router.push(advanceSettlementCta.href as Parameters<typeof router.push>[0])}
+                variant={advanceSettlementCta?.canStartNew === false ? "outline" : "default"}
+                onClick={() => router.push(renditionNextStepGuidance.href as Parameters<typeof router.push>[0])}
               >
-                {advanceSettlementCta.label}
+                {renditionNextStepGuidance.actionLabel}
               </Button>
             ) : (
               <Button onClick={() => void handleStartSettlement()} disabled={startingSettlement}>
-                {startingSettlement ? "Iniciando..." : advanceSettlementCta.label}
+                {startingSettlement ? "Iniciando..." : renditionNextStepGuidance.actionLabel}
               </Button>
             )}
           </CardContent>

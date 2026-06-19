@@ -1,11 +1,14 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { Info } from "lucide-react";
 
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { useUploadNavigationGuard } from "@/hooks/use-upload-navigation-guard";
 import { useAttachPaymentProof } from "@/hooks/use-requests";
 import { getBusinessDateTimeLocalValue, parseBusinessDateTimeLocalToIso } from "@/lib/business-timezone";
 import { PAYMENT_PROOF_ACCEPT, PAYMENT_PROOF_ACCEPTED_FORMATS_LABEL, formatRequestCurrency, getApiErrorMessage, getPaymentId, getPlanningLineDisplay, getRequestDisplayCode, validatePaymentProofFile } from "@/lib/requests";
@@ -20,17 +23,23 @@ interface AttachPaymentProofModalProps {
 
 export function AttachPaymentProofModal({ request, open, onOpenChange, onSuccess }: AttachPaymentProofModalProps) {
   const { attachPaymentProof, isLoading } = useAttachPaymentProof();
-  const [selectedAllocationIds, setSelectedAllocationIds] = useState<string[]>([]);
   const [proofFile, setProofFile] = useState<File | null>(null);
   const [operationReference, setOperationReference] = useState("");
   const [paidAt, setPaidAt] = useState(getBusinessDateTimeLocalValue());
   const [notes, setNotes] = useState("");
   const [proofError, setProofError] = useState<string | null>(null);
   const [submitError, setSubmitError] = useState<string | null>(null);
+  const uploadWarningMessage = "No cierres esta ventana mientras se carga el archivo";
+
+  useUploadNavigationGuard({ active: isLoading, message: "Hay una constancia de pago cargándose. Si sales o actualizas la página, la carga en curso puede cancelarse." });
+
+  function handleOpenChange(nextOpen: boolean): void {
+    if (!nextOpen && isLoading) return;
+    onOpenChange(nextOpen);
+  }
 
   useEffect(() => {
     if (!open) return;
-    setSelectedAllocationIds([]);
     setProofFile(null);
     setOperationReference("");
     setPaidAt(getBusinessDateTimeLocalValue());
@@ -38,12 +47,6 @@ export function AttachPaymentProofModal({ request, open, onOpenChange, onSuccess
     setProofError(null);
     setSubmitError(null);
   }, [open, request]);
-
-  function toggleAllocation(allocationId: string, checked: boolean): void {
-    setSelectedAllocationIds((current) => checked
-      ? Array.from(new Set([...current, allocationId]))
-      : current.filter((id) => id !== allocationId));
-  }
 
   function handleProofChange(file: File | null): void {
     setProofFile(file);
@@ -59,16 +62,11 @@ export function AttachPaymentProofModal({ request, open, onOpenChange, onSuccess
       setSubmitError("No se encontró un pago existente para asociar el comprobante.");
       return;
     }
-    if (selectedAllocationIds.length === 0) {
-      setSubmitError("Selecciona al menos una línea POA respaldada por este comprobante.");
-      return;
-    }
     if (!proofFile || nextProofError) return;
 
     try {
       await attachPaymentProof(paymentId, {
         proof: proofFile,
-        request_allocation_ids: selectedAllocationIds,
         operation_reference: operationReference.trim() || undefined,
         paid_at: paidAt ? parseBusinessDateTimeLocalToIso(paidAt) : undefined,
         notes: notes.trim() || undefined,
@@ -83,37 +81,31 @@ export function AttachPaymentProofModal({ request, open, onOpenChange, onSuccess
   const allocations = request?.allocations?.filter((allocation) => allocation.id) ?? [];
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[90vh] max-w-2xl overflow-y-auto">
+    <Dialog open={open} onOpenChange={handleOpenChange}>
+      <DialogContent className="max-h-[90vh] max-w-2xl overflow-y-auto" closeDisabled={isLoading}>
         <DialogHeader>
-          <DialogTitle>Asociar comprobante a líneas POA</DialogTitle>
+          <DialogTitle>Agregar comprobante POA</DialogTitle>
           <DialogDescription>
-            {request ? `Solicitud ${getRequestDisplayCode(request)}. El pago es de la solicitud completa; estos comprobantes respaldan líneas POA específicas.` : "Selecciona las líneas POA respaldadas por el comprobante."}
+            {request ? `Solicitud ${getRequestDisplayCode(request)}. Subirás una sola constancia; el sistema la asociará automáticamente a todas las líneas POA del pago.` : "Sube la constancia de pago para asociarla a todas las líneas POA."}
           </DialogDescription>
         </DialogHeader>
 
         <div className="space-y-4">
           <div className="space-y-2 rounded-md border p-3" data-testid="attach-proof-allocation-list">
-            <p className="text-sm font-medium">Líneas POA respaldadas</p>
+            <p className="text-sm font-medium">Líneas POA que quedarán cubiertas automáticamente</p>
             {allocations.length === 0 ? (
               <p className="text-sm text-muted-foreground">No hay líneas POA disponibles para asociar.</p>
             ) : allocations.map((allocation, index) => {
               const allocationId = allocation.id!;
               const line = allocation.planning_line ?? allocation.budgetPlanningLine;
               return (
-                <label key={allocationId} className="flex items-start gap-3 rounded-md border bg-muted/30 p-2 text-sm">
-                  <input
-                    type="checkbox"
-                    className="mt-1 size-4"
-                    checked={selectedAllocationIds.includes(allocationId)}
-                    onChange={(event) => toggleAllocation(allocationId, event.target.checked)}
-                    data-testid="attach-proof-allocation-checkbox"
-                  />
+                <div key={allocationId} className="flex items-start gap-3 rounded-md border bg-muted/30 p-2 text-sm">
+                  <span className="mt-0.5 inline-flex size-5 items-center justify-center rounded-full bg-primary text-xs font-semibold text-primary-foreground" aria-hidden="true">✓</span>
                   <span className="flex-1">
                     <span className="block font-medium">Línea POA {index + 1}: {getPlanningLineDisplay(line)}</span>
                     <span className="block text-muted-foreground">{formatRequestCurrency(allocation.amount, request?.currency ?? "PEN")}</span>
                   </span>
-                </label>
+                </div>
               );
             })}
           </div>
@@ -141,10 +133,16 @@ export function AttachPaymentProofModal({ request, open, onOpenChange, onSuccess
           </div>
 
           {submitError && <p className="rounded-md border border-destructive/40 p-3 text-sm text-destructive">{submitError}</p>}
+          {isLoading && (
+            <Alert className="border-amber-500/50 bg-amber-50 text-amber-950 dark:bg-amber-950/20 dark:text-amber-100">
+              <Info className="h-4 w-4" />
+              <AlertDescription className="text-amber-950 dark:text-amber-100">{uploadWarningMessage}</AlertDescription>
+            </Alert>
+          )}
         </div>
 
         <DialogFooter>
-          <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={isLoading}>Cancelar</Button>
+          <Button type="button" variant="outline" onClick={() => handleOpenChange(false)} disabled={isLoading}>Cancelar</Button>
           <Button type="button" onClick={() => void submit()} disabled={isLoading || !request}>{isLoading ? "Asociando..." : "Asociar comprobante"}</Button>
         </DialogFooter>
       </DialogContent>

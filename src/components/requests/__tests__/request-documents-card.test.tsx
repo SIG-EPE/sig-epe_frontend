@@ -390,6 +390,46 @@ describe("RequestDocumentsCard", () => {
     expect(await screen.findByText("1 documento adjuntado correctamente.")).toBeInTheDocument();
   });
 
+  it("permite retirar un archivo pendiente de la cola local antes de subirlo", async () => {
+    vi.mocked(api.get).mockResolvedValue([]);
+
+    const user = userEvent.setup();
+    render(<RequestDocumentsCard request={makeRequest({ request_type: REQUEST_TYPE.SUPPLIER_PAYMENT })} />);
+
+    const file = new File(["contenido"], "one.png", { type: "image/png" });
+    fireEvent.change(screen.getByLabelText(/archivo/i), { target: { files: [file] } });
+
+    expect(await screen.findByText("Pendiente de adjuntar")).toBeInTheDocument();
+    expect(screen.getAllByText(/Presiona Adjuntar para iniciar la carga/i).length).toBeGreaterThan(0);
+    await user.click(screen.getByRole("button", { name: /retirar/i }));
+
+    expect(screen.queryByText("Pendiente de adjuntar")).not.toBeInTheDocument();
+    expect(api.postForm).not.toHaveBeenCalled();
+  });
+
+  it("advierte al refrescar o cerrar la página mientras una carga está en curso", async () => {
+    vi.mocked(api.get).mockResolvedValue([]);
+    const uploadDeferred = createDeferred<RequestDocument>();
+    vi.mocked(api.postForm).mockReturnValue(uploadDeferred.promise);
+
+    const user = userEvent.setup();
+    render(<RequestDocumentsCard request={makeRequest({ request_type: REQUEST_TYPE.SUPPLIER_PAYMENT })} />);
+
+    const file = new File(["contenido"], "nuevo.pdf", { type: "application/pdf" });
+    fireEvent.change(screen.getByLabelText(/archivo/i), { target: { files: [file] } });
+    await user.click(screen.getByRole("button", { name: /^adjuntar$/i }));
+
+    expect(await screen.findByText("Subiendo y procesando")).toBeInTheDocument();
+    expect(screen.getByText(/No actualices ni cambies de página/i)).toBeInTheDocument();
+
+    const event = new Event("beforeunload", { cancelable: true });
+    window.dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(true);
+
+    uploadDeferred.resolve(makeDocument({ id: "doc-2", original_filename: "nuevo.pdf" }));
+    await waitFor(() => expect(screen.getByText("Completado")).toBeInTheDocument());
+  });
+
   it("sube el PxQ de una línea POA con alcance de asignación", async () => {
     vi.mocked(api.get).mockResolvedValue([]);
     vi.mocked(api.postForm).mockResolvedValue(makeDocument({ id: "doc-alloc-1", original_filename: "pxq.xlsx" }));
@@ -514,7 +554,7 @@ describe("RequestDocumentsCard", () => {
     expect(screen.queryByRole("combobox", { name: /línea poa/i })).not.toBeInTheDocument();
   });
 
-  it("separa constancias de devolución y no ofrece RETURN_PROOF en otros documentos para rendición por línea", async () => {
+  it("separa documentos de rendición y no ofrece RETURN_PROOF ni SETTLEMENT_REPORT en otros documentos", async () => {
     vi.mocked(api.get).mockResolvedValue([
       makeDocument({
         id: "return-proof-unscoped",
@@ -545,7 +585,9 @@ describe("RequestDocumentsCard", () => {
     await user.click(screen.getByRole("combobox", { name: /categoría/i }));
 
     expect(screen.queryByRole("option", { name: /constancia de devolución/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: /informe de rendición/i })).not.toBeInTheDocument();
     expect(screen.getByText(/Las constancias de devolución se adjuntan desde Saldos por línea POA/i)).toBeInTheDocument();
+    expect(screen.getByText(/El Informe de rendición se genera desde la acción de rendición/i)).toBeInTheDocument();
   });
 
   it("sube un comprobante de rendición asociado a una línea POA", async () => {

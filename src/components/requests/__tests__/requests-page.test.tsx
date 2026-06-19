@@ -1,8 +1,9 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { RequestsPage } from "@/components/requests/requests-page";
+import { ApiRequestError } from "@/lib/api-client";
 import { ACTIVE_REVIEW_STATUSES, REQUEST_REVIEW_QUEUE } from "@/lib/requests";
 import { REQUEST_CURRENCY, REQUEST_STATUS, REQUEST_TYPE, type PaymentRequest, type RequestsListFilters } from "@/types/requests";
 
@@ -181,5 +182,53 @@ describe("RequestsPage", () => {
       date_from: "2026-06-01",
       date_to: "2026-06-01",
     }));
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("debouncea la búsqueda y no consulta el backend por términos demasiado cortos", () => {
+    vi.useFakeTimers();
+    render(<RequestsPage />);
+    useRequestsMock.mockClear();
+
+    fireEvent.change(screen.getByTestId("requests-search-input"), { target: { value: "2" } });
+    act(() => vi.advanceTimersByTime(500));
+
+    expect(useRequestsMock).toHaveBeenCalledWith(expect.objectContaining({ search: undefined }));
+    expect(useRequestsMock).not.toHaveBeenCalledWith(expect.objectContaining({ search: "2" }));
+
+    useRequestsMock.mockClear();
+    fireEvent.change(screen.getByTestId("requests-search-input"), { target: { value: "2 l" } });
+    expect(useRequestsMock).not.toHaveBeenCalledWith(expect.objectContaining({ search: "2 l" }));
+
+    act(() => vi.advanceTimersByTime(499));
+    expect(useRequestsMock).not.toHaveBeenCalledWith(expect.objectContaining({ search: "2 l" }));
+
+    act(() => vi.advanceTimersByTime(1));
+
+    expect(useRequestsMock).toHaveBeenCalledWith(expect.objectContaining({ search: "2 l" }));
+  });
+
+  it("muestra un mensaje amigable para errores 429 sin exponer ThrottlerException", () => {
+    useRequestsMock.mockImplementation((filters: RequestsListFilters) => ({
+      requests: [],
+      total: 0,
+      isLoading: false,
+      error: filters.limit === 100 ? null : new ApiRequestError(429, {
+        statusCode: 429,
+        message: "ThrottlerException: Too Many Requests",
+        error: "Too Many Requests",
+        timestamp: "2026-06-19T00:00:00.000Z",
+        path: "/requests",
+      }),
+      refetch: vi.fn(),
+    }));
+
+    render(<RequestsPage />);
+
+    expect(screen.getByText("Hay muchas búsquedas seguidas. Espera unos segundos e inténtalo nuevamente.")).toBeInTheDocument();
+    expect(screen.queryByText(/ThrottlerException|Too Many Requests/i)).not.toBeInTheDocument();
   });
 });

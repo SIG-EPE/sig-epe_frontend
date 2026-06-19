@@ -723,6 +723,13 @@ export const ADVANCE_SETTLEMENT_CTA_STATE = {
 
 export type AdvanceSettlementCtaState = (typeof ADVANCE_SETTLEMENT_CTA_STATE)[keyof typeof ADVANCE_SETTLEMENT_CTA_STATE];
 
+export const RENDITION_NEXT_STEP_ACTION = {
+  START: "start",
+  NAVIGATE: "navigate",
+} as const;
+
+export type RenditionNextStepAction = (typeof RENDITION_NEXT_STEP_ACTION)[keyof typeof RENDITION_NEXT_STEP_ACTION];
+
 export interface AdvanceSettlementCta {
   state: AdvanceSettlementCtaState;
   label: string;
@@ -730,6 +737,14 @@ export interface AdvanceSettlementCta {
   href: string | null;
   settlement: RelatedRequestSummary | null;
   canStartNew: boolean;
+}
+
+export interface RenditionNextStepGuidance {
+  title: string;
+  description: string;
+  actionLabel: string;
+  action: RenditionNextStepAction;
+  href: string | null;
 }
 
 export interface RequestDocument {

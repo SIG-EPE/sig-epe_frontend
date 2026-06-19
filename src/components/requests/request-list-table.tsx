@@ -19,6 +19,34 @@ interface RequestListTableProps {
   showResponsible?: boolean;
 }
 
+interface RequestPoaLineDisplay {
+  key: string;
+  label: string;
+  amount: number | null;
+}
+
+function getRequestPoaLines(request: PaymentRequest): RequestPoaLineDisplay[] {
+  const allocations = request.allocations ?? [];
+  const allocationLines = allocations.map((allocation, index) => {
+    const line = allocation.planning_line ?? allocation.budgetPlanningLine;
+    return {
+      key: allocation.id ?? `${allocation.budget_planning_line_id}-${index}`,
+      label: getPlanningLineDisplay(line),
+      amount: Number.isFinite(Number(allocation.amount)) ? Number(allocation.amount) : null,
+    };
+  }).filter((line) => line.label !== "—");
+
+  if (allocationLines.length > 0) return allocationLines;
+
+  const fallbackLine = getPlanningLineDisplay(request.budgetPlanningLine);
+  return fallbackLine === "—" ? [] : [{ key: request.budget_planning_line_id ?? request.id, label: fallbackLine, amount: null }];
+}
+
+function getRequestConceptLabel(request: PaymentRequest): string | null {
+  const concept = request.concept?.trim();
+  return concept ? concept : null;
+}
+
 export function RequestListTable({ requests, isLoading, roleCode, currentUserId, showResponsible = false }: RequestListTableProps) {
   if (isLoading) {
     return <p className="rounded-md border p-6 text-sm text-muted-foreground">Cargando solicitudes...</p>;
@@ -58,10 +86,10 @@ export function RequestListTable({ requests, isLoading, roleCode, currentUserId,
             : null;
 
           const allocationCount = request.allocation_count ?? request.allocations?.length ?? 0;
-          const firstAllocationLine = request.allocations?.[0]?.planning_line ?? request.allocations?.[0]?.budgetPlanningLine;
-          const poaSummary = allocationCount > 1
-            ? `${allocationCount} líneas POA · ${getPlanningLineDisplay(firstAllocationLine)}`
-            : getPlanningLineDisplay(firstAllocationLine ?? request.budgetPlanningLine);
+          const poaLines = getRequestPoaLines(request);
+          const firstPoaLine = poaLines[0]?.label ?? "—";
+          const poaSummary = allocationCount > 1 ? `${allocationCount} líneas POA` : firstPoaLine;
+          const conceptLabel = getRequestConceptLabel(request);
 
           return (
             <TableRow key={request.id} data-testid="request-list-row">
@@ -78,7 +106,28 @@ export function RequestListTable({ requests, isLoading, roleCode, currentUserId,
                   )}
                 </div>
               </TableCell>
-              <TableCell className="max-w-xs truncate">{poaSummary}</TableCell>
+              <TableCell className="min-w-64 max-w-md align-top">
+                <div className="space-y-1 text-sm">
+                  {allocationCount > 1 ? (
+                    <details className="group" data-testid="request-poa-details">
+                      <summary className="cursor-pointer font-medium leading-snug text-foreground marker:text-muted-foreground">
+                        {poaSummary} · {firstPoaLine}
+                      </summary>
+                      <ul className="mt-2 space-y-1 text-xs text-muted-foreground">
+                        {poaLines.map((line, index) => (
+                          <li key={line.key}>
+                            <span className="font-medium text-foreground">{index + 1}. {line.label}</span>
+                            {line.amount !== null ? <span> · {formatRequestCurrency(line.amount, request.currency)}</span> : null}
+                          </li>
+                        ))}
+                      </ul>
+                    </details>
+                  ) : (
+                    <p className="font-medium leading-snug text-foreground">{poaSummary}</p>
+                  )}
+                  {conceptLabel ? <p className="line-clamp-2 leading-snug text-muted-foreground" title={conceptLabel}>Concepto: {conceptLabel}</p> : null}
+                </div>
+              </TableCell>
               <TableCell className="whitespace-nowrap">{getRequestMonthLabel(request.budget_month)}</TableCell>
               <TableCell className="text-right font-medium">{formatRequestCurrency(Number(request.requested_amount), request.currency)}</TableCell>
               <TableCell className="whitespace-nowrap">

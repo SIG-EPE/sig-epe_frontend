@@ -60,6 +60,7 @@ import {
   getRexanOutcomeLabel,
   getPaymentRequestRenditionStatus,
   getRenditionDueLabel,
+  getRenditionNextStepGuidance,
   getRenditionStatusLabel,
   getRenditionSummaryCount,
   getRequestListActions,
@@ -339,6 +340,40 @@ describe("requests helpers", () => {
       href: "/requests/settlement-approved",
       settlement: approvedSettlement,
     });
+  });
+
+  it("aclara el siguiente paso de rendición según responsable", () => {
+    const paidAdvance = makeRequest({ status: REQUEST_STATUS.PAID, requester_id: "user-1" });
+    const draftSettlement = {
+      id: "settlement-draft",
+      request_code: "REXAN-1",
+      sequential_number: null,
+      request_type: REQUEST_TYPE.ADVANCE_SETTLEMENT,
+      status: REQUEST_STATUS.DRAFT,
+      requested_amount: 100,
+      currency: REQUEST_CURRENCY.PEN,
+      concept: "Rendición",
+      requester_id: "user-1",
+      created_at: "2026-05-01T10:00:00.000Z",
+    };
+
+    expect(getRenditionNextStepGuidance(ROLE_CODE.SOLICITANTE_EPE, paidAdvance, "user-1")).toMatchObject({
+      title: "Siguiente paso: preparar rendición",
+      actionLabel: "Iniciar rendición",
+      action: "start",
+      href: null,
+    });
+    expect(getRenditionNextStepGuidance(ROLE_CODE.GIOF_GESTOR, paidAdvance, "giof-1")).toMatchObject({
+      title: "Siguiente paso: espera de rendición del solicitante",
+      actionLabel: "Ir a Bandeja de Rendiciones",
+      action: "navigate",
+      href: "/renditions",
+    });
+    expect(getRenditionNextStepGuidance(ROLE_CODE.GIOF_GESTOR, makeRequest({ status: REQUEST_STATUS.PAID, advanceSettlements: [draftSettlement] }), "giof-1")).toMatchObject({
+      actionLabel: "Ver rendición vinculada",
+      href: "/requests/settlement-draft",
+    });
+    expect(getRenditionNextStepGuidance(ROLE_CODE.SOLICITANTE_EPE, makeRequest({ request_type: REQUEST_TYPE.REIMBURSEMENT, status: REQUEST_STATUS.PAID }), "user-1")).toBeNull();
   });
 
   it("etiqueta y deriva estados de bandeja de rendiciones", () => {

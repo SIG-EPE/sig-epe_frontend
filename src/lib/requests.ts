@@ -14,6 +14,7 @@ import {
   REQUEST_DOCUMENT_UPLOAD_STATUS,
   REQUEST_DOCUMENT_UPLOAD_QUEUE_ERROR_KIND,
   REQUEST_DOCUMENT_UPLOAD_QUEUE_STATUS,
+  RENDITION_NEXT_STEP_ACTION,
   REQUEST_TYPE,
   REXAN_OUTCOME,
   ADVANCE_SETTLEMENT_CTA_STATE,
@@ -50,6 +51,7 @@ import {
   type RequestStatus,
   type RequestType,
   type RexanOutcome,
+  type RenditionNextStepGuidance,
 } from "@/types/requests";
 
 export const ACTIVE_REVIEW_STATUSES = [
@@ -1057,6 +1059,40 @@ export function getAdvanceSettlementCta(
     settlement: null,
     canStartNew: true,
   };
+}
+
+export function getRenditionNextStepGuidance(
+  roleCode: string | null | undefined,
+  request: Pick<PaymentRequest, "request_type" | "status" | "requester_id" | "advanceSettlements">,
+  currentUserId?: string | null,
+): RenditionNextStepGuidance | null {
+  if (request.request_type !== REQUEST_TYPE.ADVANCE || request.status !== REQUEST_STATUS.PAID) return null;
+
+  const requesterCta = getAdvanceSettlementCta(ROLE_CODE.SOLICITANTE_EPE, request, request.requester_id);
+  const isRequester = roleCode === ROLE_CODE.SOLICITANTE_EPE && Boolean(currentUserId) && currentUserId === request.requester_id;
+
+  if (isRequester && requesterCta) {
+    return {
+      title: "Siguiente paso: preparar rendición",
+      description: `Debes preparar la rendición de este anticipo desde Bandeja de Rendiciones o con la acción ${requesterCta.label}. GIOF la revisará cuando la envíes.`,
+      actionLabel: requesterCta.label,
+      action: requesterCta.href ? RENDITION_NEXT_STEP_ACTION.NAVIGATE : RENDITION_NEXT_STEP_ACTION.START,
+      href: requesterCta.href,
+    };
+  }
+
+  if (roleCode === ROLE_CODE.GIOF_GESTOR || roleCode === ROLE_CODE.ADMIN_SISTEMA) {
+    const activeSettlement = getActiveAdvanceSettlement(request);
+    return {
+      title: "Siguiente paso: espera de rendición del solicitante",
+      description: "El solicitante prepara y envía la rendición. GIOF revisa cuando la rendición aparezca enviada en la Bandeja de Rendiciones.",
+      actionLabel: activeSettlement ? "Ver rendición vinculada" : "Ir a Bandeja de Rendiciones",
+      action: RENDITION_NEXT_STEP_ACTION.NAVIGATE,
+      href: activeSettlement ? `${ROUTES.REQUESTS}/${activeSettlement.id}` : ROUTES.RENDITIONS,
+    };
+  }
+
+  return null;
 }
 
 export function getPaymentRequestRenditionStatus(request: Pick<PaymentRequest, "request_type" | "status" | "scheduled_rendition_at" | "advanceSettlements">): RenditionStatus | null {

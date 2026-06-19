@@ -10,7 +10,7 @@ vi.mock("@/lib/api-client", () => ({
 }));
 
 describe("attachPaymentProof", () => {
-  it("envía archivo e ids de asignación al endpoint canónico", async () => {
+  it("envía una constancia sin ids de asignación porque backend cubre todas las líneas POA", async () => {
     const response = { id: "req-1" };
     vi.mocked(api.postForm).mockResolvedValueOnce(response);
     const proof = new File(["proof"], "constancia.pdf", { type: "application/pdf" });
@@ -26,7 +26,7 @@ describe("attachPaymentProof", () => {
     expect(api.postForm).toHaveBeenCalledWith("/request-payments/payment-1/proofs", expect.any(FormData));
     const formData = vi.mocked(api.postForm).mock.calls[0][1] as FormData;
     expect(formData.get("proof")).toBe(proof);
-    expect(formData.get("request_allocation_ids")).toBe(JSON.stringify(["allocation-1", "allocation-2"]));
+    expect(formData.get("request_allocation_ids")).toBeNull();
     expect(formData.get("operation_reference")).toBe("OP-123");
     expect(formData.get("notes")).toBe("Línea 1 y 2");
   });

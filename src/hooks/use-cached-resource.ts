@@ -58,6 +58,7 @@ export function useCachedResource<T>({
   useEffect(() => {
     if (!enabled || authIsLoading || !accessToken) return;
 
+    const controller = new AbortController();
     const sequence = sequenceRef.current + 1;
     sequenceRef.current = sequence;
     const hasPreviousData = keepPreviousData && dataRef.current !== null;
@@ -71,6 +72,7 @@ export function useCachedResource<T>({
       ttlMs,
       tags,
       force: forceNonce > 0,
+      signal: controller.signal,
       queryFn: (signal) => queryFn(signal),
     })
       .then((result) => {
@@ -93,6 +95,8 @@ export function useCachedResource<T>({
           setIsRefreshing(false);
         }
       });
+
+    return () => controller.abort();
   }, [enabled, authIsLoading, accessToken, keySignature, tagsSignature, ttlMs, keepPreviousData, refreshNonce, forceNonce]);
 
   return { data, isLoading: isInitialLoading, isInitialLoading, isRefreshing, error, refetch };

@@ -57,6 +57,20 @@ interface LineReturnFormState {
   return_proof_document_id: string;
 }
 
+const LINE_RETURN_PROOF_UPLOAD_STATUS = {
+  UPLOADING: "uploading",
+  COMPLETED: "completed",
+  FAILED: "failed",
+} as const;
+
+type LineReturnProofUploadStatus = (typeof LINE_RETURN_PROOF_UPLOAD_STATUS)[keyof typeof LINE_RETURN_PROOF_UPLOAD_STATUS];
+
+interface LineReturnProofUploadState {
+  status: LineReturnProofUploadStatus;
+  fileName: string;
+  message: string;
+}
+
 interface RowFormState {
   request_document_id: string;
   request_allocation_id: string;
@@ -530,6 +544,7 @@ export function StructuredRenditionReportCard({ request, guidanceAllocations = [
   const [isBulkAddingReceipts, setIsBulkAddingReceipts] = useState(false);
   const [lineReturnForms, setLineReturnForms] = useState<Record<string, LineReturnFormState>>({});
   const [openLineReturnForms, setOpenLineReturnForms] = useState<Set<string>>(() => new Set());
+  const [lineReturnProofUploads, setLineReturnProofUploads] = useState<Record<string, LineReturnProofUploadState>>({});
   const lastReadinessNotificationRef = useRef<string | null>(null);
   const lastLockNotificationRef = useRef<boolean | null>(null);
   const blockerSummaryRef = useRef<HTMLDivElement>(null);
@@ -540,6 +555,7 @@ export function StructuredRenditionReportCard({ request, guidanceAllocations = [
   const allocationOptions = getAllocationOptions(request, report);
   const hasGuidanceAllocations = guidanceAllocations.length > 0;
   const documents = documentsState.documents;
+  const hasLineReturnProofUploadInProgress = Object.values(lineReturnProofUploads).some((item) => item.status === LINE_RETURN_PROOF_UPLOAD_STATUS.UPLOADING);
   const rows = report?.rows ?? [];
   const evidenceDocuments = documents.filter((document) => document.document_category !== REQUEST_DOCUMENT_CATEGORY.SETTLEMENT_REPORT && document.document_category !== REQUEST_DOCUMENT_CATEGORY.RETURN_PROOF);
   const returnProofDocuments = documents.filter(isActiveReturnProofDocument);
@@ -728,6 +744,32 @@ export function StructuredRenditionReportCard({ request, guidanceAllocations = [
     });
   }, [addableReceiptIds.join("|")]);
 
+  useEffect(() => {
+    if (!hasLineReturnProofUploadInProgress) return;
+
+    const warningMessage = "Hay una constancia de devolución cargándose. Si sales o actualizas la página, la carga en curso puede cancelarse.";
+    function handleBeforeUnload(event: BeforeUnloadEvent): void {
+      event.preventDefault();
+      event.returnValue = warningMessage;
+    }
+    function handleDocumentClick(event: MouseEvent): void {
+      const target = event.target instanceof Element ? event.target.closest("a[href]") : null;
+      if (!target) return;
+      const confirmed = window.confirm(`${warningMessage}\n\n¿Deseas salir de todos modos?`);
+      if (!confirmed) {
+        event.preventDefault();
+        event.stopPropagation();
+      }
+    }
+
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    document.addEventListener("click", handleDocumentClick, true);
+    return () => {
+      window.removeEventListener("beforeunload", handleBeforeUnload);
+      document.removeEventListener("click", handleDocumentClick, true);
+    };
+  }, [hasLineReturnProofUploadInProgress]);
+
   function focusFirstBlocker(): void {
     const target = firstReceiptBlockerRef.current ?? blockerSummaryRef.current;
     target?.scrollIntoView({ behavior: "smooth", block: "center" });
@@ -768,6 +810,14 @@ export function StructuredRenditionReportCard({ request, guidanceAllocations = [
   async function handleUploadReturnProof(allocationId: string, files: FileList | null): Promise<void> {
     const file = files?.item(0);
     if (!file || !isReportEditable) return;
+    setLineReturnProofUploads((current) => ({
+      ...current,
+      [allocationId]: {
+        status: LINE_RETURN_PROOF_UPLOAD_STATUS.UPLOADING,
+        fileName: file.name,
+        message: "Subiendo constancia de devolución. No cierres ni cambies de página hasta que finalice.",
+      },
+    }));
     try {
       const document = await uploadDocument.uploadDocument(request.id, {
         file,
@@ -777,10 +827,27 @@ export function StructuredRenditionReportCard({ request, guidanceAllocations = [
       });
       documentsState.upsertDocument?.(document);
       updateLineReturnForm(allocationId, { return_proof_document_id: document.id });
+      setLineReturnProofUploads((current) => ({
+        ...current,
+        [allocationId]: {
+          status: LINE_RETURN_PROOF_UPLOAD_STATUS.COMPLETED,
+          fileName: file.name,
+          message: "Constancia adjuntada y seleccionada para esta línea POA.",
+        },
+      }));
       toast.success("Constancia de devolución adjuntada a la línea POA");
       await documentsState.refetch({ background: true });
     } catch (error) {
-      toast.error(getApiErrorMessage(error));
+      const message = getApiErrorMessage(error);
+      setLineReturnProofUploads((current) => ({
+        ...current,
+        [allocationId]: {
+          status: LINE_RETURN_PROOF_UPLOAD_STATUS.FAILED,
+          fileName: file.name,
+          message,
+        },
+      }));
+      toast.error(message);
     }
   }
 
@@ -1206,6 +1273,7 @@ export function StructuredRenditionReportCard({ request, guidanceAllocations = [
                 const savedProofName = savedProof ? getRequestDocumentDisplayName(savedProof) : coverage.line_return?.return_proof_filename || coverage.line_return?.return_proof_document_id || null;
                 const returnProofSelectId = `return-proof-${coverage.request_allocation_id}`;
                 const returnProofUploadId = `return-proof-upload-${coverage.request_allocation_id}`;
+                const returnProofUploadState = lineReturnProofUploads[coverage.request_allocation_id];
                 return (
                   <div key={coverage.request_allocation_id} className="space-y-4 rounded-md border bg-muted/20 p-3 text-sm" data-testid={`line-return-${coverage.request_allocation_id}`}>
                     <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
@@ -1278,7 +1346,14 @@ export function StructuredRenditionReportCard({ request, guidanceAllocations = [
                                 <p className="rounded-md border border-dashed p-2 text-xs text-muted-foreground">Aún no hay constancia activa para esta línea POA. Adjunta el archivo aquí para vincularlo automáticamente.</p>
                               )}
                               {selectedProof ? <p className="text-xs text-muted-foreground">Seleccionada: {getRequestDocumentDisplayName(selectedProof)}</p> : <p className="text-xs text-muted-foreground">Solo se muestran constancias activas de esta misma línea POA.</p>}
-                              {isReportEditable ? <Input id={returnProofUploadId} aria-label={`Adjuntar constancia de devolución para ${allocationLabel}`} type="file" accept=".pdf,.jpg,.jpeg,.png,application/pdf,image/jpeg,image/png" disabled={actions.isLoading || uploadDocument.isLoading} onChange={(event) => void handleUploadReturnProof(coverage.request_allocation_id, event.target.files)} /> : null}
+                              {isReportEditable ? <Input id={returnProofUploadId} aria-label={`Adjuntar constancia de devolución para ${allocationLabel}`} type="file" accept=".pdf,.jpg,.jpeg,.png,application/pdf,image/jpeg,image/png" disabled={actions.isLoading || uploadDocument.isLoading} onChange={(event) => { void handleUploadReturnProof(coverage.request_allocation_id, event.target.files); event.target.value = ""; }} /> : null}
+                              {returnProofUploadState ? (
+                                <Alert variant={returnProofUploadState.status === LINE_RETURN_PROOF_UPLOAD_STATUS.FAILED ? "destructive" : undefined} className={returnProofUploadState.status === LINE_RETURN_PROOF_UPLOAD_STATUS.UPLOADING ? "border-amber-500/50 bg-amber-50 text-amber-950 dark:bg-amber-950/20 dark:text-amber-100" : undefined}>
+                                  <AlertDescription className={returnProofUploadState.status === LINE_RETURN_PROOF_UPLOAD_STATUS.UPLOADING ? "text-amber-950 dark:text-amber-100" : undefined}>
+                                    <span className="font-medium">{returnProofUploadState.fileName}</span>: {returnProofUploadState.message}
+                                  </AlertDescription>
+                                </Alert>
+                              ) : null}
                             </div>
                             <div className="space-y-2 md:col-span-2">
                               <label className="text-sm font-medium" htmlFor={`return-justification-${coverage.request_allocation_id}`}>Justificación *</label>

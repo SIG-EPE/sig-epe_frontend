@@ -46,7 +46,6 @@ import {
   REQUEST_RECEIPT_DUPLICATE_STATUS,
   REQUEST_RECEIPT_OCR_STATUS,
   REQUEST_STATUS,
-  REXAN_OUTCOME,
   REQUEST_TYPE,
   type PaymentRequest,
   type RequestAllocation,
@@ -151,10 +150,10 @@ function getOptionalDocumentCategoryOptions(checklist: RequiredDocumentChecklist
   return REQUEST_DOCUMENT_CATEGORY_OPTIONS.filter((option) => !pendingRequiredCategories.has(option.value));
 }
 
-function getGenericDocumentCategoryOptions(checklist: RequiredDocumentChecklistItem[], excludeReturnProof: boolean): typeof REQUEST_DOCUMENT_CATEGORY_OPTIONS {
+function getGenericDocumentCategoryOptions(checklist: RequiredDocumentChecklistItem[], excludedCategories: Set<RequestDocumentCategory>): typeof REQUEST_DOCUMENT_CATEGORY_OPTIONS {
   const options = getOptionalDocumentCategoryOptions(checklist);
-  if (!excludeReturnProof) return options;
-  return options.filter((option) => option.value !== REQUEST_DOCUMENT_CATEGORY.RETURN_PROOF);
+  if (excludedCategories.size === 0) return options;
+  return options.filter((option) => !excludedCategories.has(option.value));
 }
 
 function getDefaultOptionalDocumentCategory(options: typeof REQUEST_DOCUMENT_CATEGORY_OPTIONS): RequestDocumentCategory | "" {
@@ -169,53 +168,8 @@ function getRequestLevelDocuments(documents: RequestDocument[]): RequestDocument
   return documents.filter((document) => !isAllocationScopedDocument(document));
 }
 
-function hasOpenReturnProofObservation(request: PaymentRequest): boolean {
-  return Boolean(request.observations?.some((observation) => {
-    if (observation.is_resolved) return false;
-    const fieldReference = observation.field_reference?.toLowerCase() ?? "";
-    const comment = observation.comment.toLowerCase();
-
-    return fieldReference.includes("constancia de devolución") || comment.includes("constancia de devolución");
-  }));
-}
-
-function isReturnProofFollowUpRequired(request: PaymentRequest, documents: RequestDocument[]): boolean {
-  if (request.request_type !== REQUEST_TYPE.ADVANCE_SETTLEMENT || request.status !== REQUEST_STATUS.OBSERVED) {
-    return false;
-  }
-
-  if ((request.allocations?.length ?? 0) > 0) {
-    return false;
-  }
-
-  const existingReturnProof = documents.some((document) => document.document_category === REQUEST_DOCUMENT_CATEGORY.RETURN_PROOF);
-  if (existingReturnProof || request.rexan_return_proof_document_id) return false;
-
-  return request.rexan_outcome === REXAN_OUTCOME.DEVOLUCION || hasOpenReturnProofObservation(request);
-}
-
 function getGeneralChecklist(request: PaymentRequest, requestLevelDocuments: RequestDocument[]): ReturnType<typeof getRequiredDocumentChecklist> {
-  const checklist = getRequiredDocumentChecklist(request.request_type, requestLevelDocuments);
-  if (!isReturnProofFollowUpRequired(request, requestLevelDocuments)) return checklist;
-
-  return {
-    ...checklist,
-    items: [
-      ...checklist.items,
-      {
-        key: "return-proof-follow-up",
-        category: REQUEST_DOCUMENT_CATEGORY.RETURN_PROOF,
-        label: "Constancia de devolución",
-        description: "Adjunta la constancia solicitada para completar la aprobación de la devolución. Este documento no modifica el informe generado.",
-        required: true,
-        satisfied: false,
-        acceptedFormatsLabel: getRequestDocumentAcceptedFormatsLabel(REQUEST_DOCUMENT_CATEGORY.RETURN_PROOF),
-        missingMessage: "Falta adjuntar la constancia de devolución solicitada.",
-      },
-    ],
-    missingMessages: [...checklist.missingMessages, "Falta adjuntar la constancia de devolución solicitada."],
-    isComplete: false,
-  };
+  return getRequiredDocumentChecklist(request.request_type, requestLevelDocuments);
 }
 
 function getAllocationDocuments(allocation: RequestAllocation, documents: RequestDocument[]): RequestDocument[] {
@@ -339,11 +293,19 @@ function canConfirmReceiptReview(receiptReview: RequestReceiptReview): boolean {
 }
 
 function getQueueStatusLabel(item: RequestDocumentUploadQueueItem): string {
-  if (item.status === REQUEST_DOCUMENT_UPLOAD_QUEUE_STATUS.PENDING) return "Pendiente";
+  if (item.status === REQUEST_DOCUMENT_UPLOAD_QUEUE_STATUS.PENDING) return "Pendiente de adjuntar";
   if (item.status === REQUEST_DOCUMENT_UPLOAD_QUEUE_STATUS.UPLOADING) return "Subiendo y procesando";
   if (item.status === REQUEST_DOCUMENT_UPLOAD_QUEUE_STATUS.COMPLETED) return "Completado";
   if (item.status === REQUEST_DOCUMENT_UPLOAD_QUEUE_STATUS.FAILED) return item.retryable ? "Falló · reintentar" : "No cargado";
   return "Retirado";
+}
+
+function getQueueStatusDescription(item: RequestDocumentUploadQueueItem): string {
+  if (item.status === REQUEST_DOCUMENT_UPLOAD_QUEUE_STATUS.PENDING) return "Listo en la cola. Presiona Adjuntar para iniciar la carga.";
+  if (item.status === REQUEST_DOCUMENT_UPLOAD_QUEUE_STATUS.UPLOADING) return "No cierres ni cambies de página hasta que termine la carga.";
+  if (item.status === REQUEST_DOCUMENT_UPLOAD_QUEUE_STATUS.COMPLETED) return "Documento adjuntado; estamos actualizando la lista.";
+  if (item.status === REQUEST_DOCUMENT_UPLOAD_QUEUE_STATUS.FAILED) return item.error_message ?? "No pudimos adjuntar este archivo.";
+  return "Archivo retirado de la cola local.";
 }
 
 function getQueueStatusVariant(item: RequestDocumentUploadQueueItem): "default" | "secondary" | "destructive" | "outline" {
@@ -454,6 +416,11 @@ export function RequestDocumentsCard({
   const legacyUnscopedReturnProofs = requestLevelDocuments.filter((document) => document.document_category === REQUEST_DOCUMENT_CATEGORY.RETURN_PROOF);
   const allocationReturnProofs = documents.filter((document) => document.document_category === REQUEST_DOCUMENT_CATEGORY.RETURN_PROOF && document.request_allocation_id);
   const restrictGenericReturnProof = isAdvanceSettlement && hasDisplayAllocationGroups;
+  const genericExcludedCategories = new Set<RequestDocumentCategory>();
+  if (isAdvanceSettlement) {
+    genericExcludedCategories.add(REQUEST_DOCUMENT_CATEGORY.RETURN_PROOF);
+    genericExcludedCategories.add(REQUEST_DOCUMENT_CATEGORY.SETTLEMENT_REPORT);
+  }
   const baseChecklist = hasAllocationGroups && request.request_type === REQUEST_TYPE.ADVANCE
     ? EMPTY_CHECKLIST
     : getGeneralChecklist(request, requestLevelDocuments);
@@ -465,7 +432,7 @@ export function RequestDocumentsCard({
       isComplete: baseChecklist.items.some((item) => item.category === REQUEST_DOCUMENT_CATEGORY.RETURN_PROOF) ? baseChecklist.items.filter((item) => item.category !== REQUEST_DOCUMENT_CATEGORY.RETURN_PROOF).every((item) => !item.required || item.satisfied) : baseChecklist.isComplete,
     }
     : baseChecklist;
-  const optionalCategoryOptions = getGenericDocumentCategoryOptions(checklist.items, restrictGenericReturnProof).filter((option) => !hasAllocationGroups || option.value !== REQUEST_DOCUMENT_CATEGORY.PXQ);
+  const optionalCategoryOptions = getGenericDocumentCategoryOptions(checklist.items, genericExcludedCategories).filter((option) => !hasAllocationGroups || option.value !== REQUEST_DOCUMENT_CATEGORY.PXQ);
   const hasOptionalCategoryOptions = optionalCategoryOptions.length > 0;
   const acceptedFormatsLabel = category ? getRequestDocumentAcceptedFormatsLabel(category) : "selecciona una categoría";
   const uploadActionsDisabled = uploading || activeUploadAction !== null;
@@ -476,6 +443,7 @@ export function RequestDocumentsCard({
   const queuedFailedCount = uploadQueue.filter((item) => item.status === REQUEST_DOCUMENT_UPLOAD_QUEUE_STATUS.FAILED).length;
   const uploadButtonDisabled = uploadActionsDisabled || isQueueRunning || Boolean(validationError) || queuedPendingItems.length === 0 || uploadRequiresAllocationSelection;
   const selectedUploadAllocation = allocationGroups.find((allocation) => allocation.id === uploadAllocationId) ?? null;
+  const hasUploadInProgress = isQueueRunning || activeUploadAction !== null;
 
   useEffect(() => {
     if (optionalCategoryOptions.some((option) => option.value === category)) return;
@@ -489,6 +457,32 @@ export function RequestDocumentsCard({
     operationErrorRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
     operationErrorRef.current?.focus({ preventScroll: true });
   }, [operationError]);
+
+  useEffect(() => {
+    if (!hasUploadInProgress) return;
+
+    const warningMessage = "Hay documentos cargándose. Si sales o actualizas la página, la carga en curso puede cancelarse.";
+    function handleBeforeUnload(event: BeforeUnloadEvent): void {
+      event.preventDefault();
+      event.returnValue = warningMessage;
+    }
+    function handleDocumentClick(event: MouseEvent): void {
+      const target = event.target instanceof Element ? event.target.closest("a[href]") : null;
+      if (!target) return;
+      const confirmed = window.confirm(`${warningMessage}\n\n¿Deseas salir de todos modos?`);
+      if (!confirmed) {
+        event.preventDefault();
+        event.stopPropagation();
+      }
+    }
+
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    document.addEventListener("click", handleDocumentClick, true);
+    return () => {
+      window.removeEventListener("beforeunload", handleBeforeUnload);
+      document.removeEventListener("click", handleDocumentClick, true);
+    };
+  }, [hasUploadInProgress]);
 
   function setQueue(nextQueue: RequestDocumentUploadQueueItem[]): void {
     uploadQueueRef.current = nextQueue;
@@ -772,7 +766,14 @@ export function RequestDocumentsCard({
                           {receiptReview.receipt.issuer_document_number && <p>RUC: {receiptReview.receipt.issuer_document_number}</p>}
                           {receiptReview.receipt.issue_date && <p>Fecha: {receiptReview.receipt.issue_date}</p>}
                           {!receiptReview.receipt.confirmed_at && (
-                            <p className="font-medium text-foreground">Confirma los datos para usar este comprobante en el Informe de rendición. Si algún valor no coincide, selecciona Revisar datos antes de confirmar.</p>
+                            <div className="space-y-2 rounded-md border border-primary/30 bg-background p-2">
+                              <p className="font-medium text-foreground">Confirma los datos para usar este comprobante en el Informe de rendición. Si algún valor no coincide, selecciona Revisar datos antes de confirmar.</p>
+                              {canManageActions && (
+                                <Button type="button" variant="secondary" size="sm" className="w-full sm:w-auto" onClick={() => openReceiptReview(receiptReview)} autoFocus>
+                                  Revisar datos del comprobante
+                                </Button>
+                              )}
+                            </div>
                           )}
                           {receiptReview.latest_extraction?.error_message && <p>Necesita revisión manual para completar la información.</p>}
                           {receiptReview.duplicate_candidates.length > 0 && <p>Ya existe un comprobante con la misma serie y número en otra solicitud activa.</p>}
@@ -795,7 +796,7 @@ export function RequestDocumentsCard({
                 ) : (
                   <p className="text-xs text-muted-foreground">Enlace no disponible</p>
                 )}
-                {receiptReview && canManageActions && (
+                {receiptReview && canManageActions && receiptReview.receipt.confirmed_at && (
                   <Button type="button" variant="outline" size="sm" onClick={() => openReceiptReview(receiptReview)}>
                     Revisar datos
                   </Button>
@@ -990,9 +991,7 @@ export function RequestDocumentsCard({
           <Alert>
             <Info className="h-4 w-4" />
             <AlertDescription>
-              {canManageReturnProofWhileLocked && isReturnProofFollowUpRequired(request, requestLevelDocuments)
-                ? "El informe generado mantiene bloqueados comprobantes, eliminación y revisión de datos. Puedes adjuntar la constancia de devolución solicitada; este documento no modifica el informe generado."
-                : "El informe generado bloquea la carga, eliminación y revisión de comprobantes. Si el informe es observado/reabierto o la generación falla, estas acciones volverán a estar disponibles."}
+              El informe generado bloquea la carga, eliminación y revisión de comprobantes. Si el informe es observado/reabierto o la generación falla, estas acciones volverán a estar disponibles.
             </AlertDescription>
           </Alert>
         ) : null}
@@ -1074,7 +1073,12 @@ export function RequestDocumentsCard({
             <div className="mb-3 space-y-1">
               <h3 className="text-sm font-semibold">Otros documentos</h3>
               <p className="text-xs text-muted-foreground">Usa este cargador para documentos adicionales o comprobantes por línea POA. Puedes seleccionar hasta 20 archivos; se adjuntarán de uno en uno para mantener estable la carga.</p>
-              {restrictGenericReturnProof ? <p className="text-xs text-amber-700 dark:text-amber-300">Las constancias de devolución se adjuntan desde Saldos por línea POA → Registrar devolución para que queden vinculadas a la línea correcta.</p> : null}
+              {isAdvanceSettlement ? (
+                <div className="space-y-1 text-xs text-amber-700 dark:text-amber-300">
+                  <p>Las constancias de devolución se adjuntan desde Saldos por línea POA → Registrar devolución para que queden vinculadas a la línea correcta.</p>
+                  <p>El Informe de rendición se genera desde la acción de rendición; no se adjunta manualmente en este cargador.</p>
+                </div>
+              ) : null}
             </div>
             {hasOptionalCategoryOptions ? (
             <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-[220px_minmax(0,1fr)_minmax(220px,320px)_auto] xl:items-end">
@@ -1143,7 +1147,15 @@ export function RequestDocumentsCard({
                     {queuedCompletedCount} completado{queuedCompletedCount === 1 ? "" : "s"} · {queuedFailedCount} con incidencia · {queuedPendingItems.length} pendiente{queuedPendingItems.length === 1 ? "" : "s"}
                   </p>
                 </div>
-                {isQueueRunning && <p className="text-xs text-muted-foreground">Estamos adjuntando los archivos uno por uno. Puedes seguir viendo el avance aquí.</p>}
+                {queuedPendingItems.length > 0 && !isQueueRunning ? <p className="text-xs text-muted-foreground">Los archivos pendientes todavía no se envían. Presiona Adjuntar para iniciar la carga o Retirar para quitarlos de esta cola.</p> : null}
+                {hasUploadInProgress && (
+                  <Alert className="border-amber-500/50 bg-amber-50 text-amber-950 dark:bg-amber-950/20 dark:text-amber-100">
+                    <Info className="h-4 w-4" />
+                    <AlertDescription className="text-amber-950 dark:text-amber-100">
+                      Estamos adjuntando documentos. No actualices ni cambies de página hasta que finalice; si sales, la carga en curso puede cancelarse.
+                    </AlertDescription>
+                  </Alert>
+                )}
                 <div className="space-y-2">
                   {queuedActiveItems.map((item) => (
                     <div key={item.id} className="flex flex-col gap-2 rounded-md bg-muted p-3 sm:flex-row sm:items-center sm:justify-between">
@@ -1153,14 +1165,14 @@ export function RequestDocumentsCard({
                           <Badge variant={getQueueStatusVariant(item)}>{getQueueStatusLabel(item)}</Badge>
                         </div>
                         <p className="text-xs text-muted-foreground">{formatRequestDocumentSize(item.file.size)} · {getRequestDocumentCategoryLabel(item.document_category)}</p>
-                        {item.error_message && <p className="text-xs text-destructive">{item.error_message}</p>}
+                        <p className={item.status === REQUEST_DOCUMENT_UPLOAD_QUEUE_STATUS.FAILED ? "text-xs text-destructive" : "text-xs text-muted-foreground"}>{getQueueStatusDescription(item)}</p>
                       </div>
                       <div className="flex shrink-0 gap-2">
                         {item.status === REQUEST_DOCUMENT_UPLOAD_QUEUE_STATUS.FAILED && item.retryable && (
                           <Button type="button" variant="outline" size="sm" disabled={isQueueRunning} onClick={() => retryQueueItem(item.id)}>Reintentar</Button>
                         )}
                         {(item.status === REQUEST_DOCUMENT_UPLOAD_QUEUE_STATUS.PENDING || item.status === REQUEST_DOCUMENT_UPLOAD_QUEUE_STATUS.FAILED) && (
-                          <Button type="button" variant="outline" size="sm" disabled={isQueueRunning && item.status === REQUEST_DOCUMENT_UPLOAD_QUEUE_STATUS.PENDING} onClick={() => removeQueueItem(item.id)}>Retirar</Button>
+                          <Button type="button" variant="outline" size="sm" onClick={() => removeQueueItem(item.id)}>Retirar</Button>
                         )}
                       </div>
                     </div>

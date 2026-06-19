@@ -10,6 +10,7 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useDebouncedValue } from "@/hooks/use-debounced-value";
 import { useRequests } from "@/hooks/use-requests";
+import { ApiRequestError } from "@/lib/api-client";
 import { ROLE_CODE, ROUTES } from "@/lib/constants";
 import {
   ACTIVE_REVIEW_STATUSES,
@@ -35,12 +36,26 @@ import { DRIVE_SYNC_STATUS, REQUEST_LIST_DATE_FIELD, REQUEST_STATUS, REQUEST_TYP
 import { RequestListTable } from "./request-list-table";
 
 const ALL_STATUSES_FILTER = "ALL";
+const REQUEST_SEARCH_DEBOUNCE_MS = 500;
+const REQUEST_SEARCH_MIN_LENGTH = 2;
+const REQUESTS_RATE_LIMIT_MESSAGE = "Hay muchas búsquedas seguidas. Espera unos segundos e inténtalo nuevamente.";
 const REQUEST_HISTORY_DATE_MODE = {
   EXACT: "exact",
   RANGE: "range",
 } as const;
 
 type RequestHistoryDateMode = (typeof REQUEST_HISTORY_DATE_MODE)[keyof typeof REQUEST_HISTORY_DATE_MODE];
+
+function getServerSearchValue(value: string): string | undefined {
+  const trimmedValue = value.trim();
+  return trimmedValue.length >= REQUEST_SEARCH_MIN_LENGTH ? trimmedValue : undefined;
+}
+
+function getRequestsListErrorMessage(error: Error): string {
+  if (error instanceof ApiRequestError && error.status === 429) return REQUESTS_RATE_LIMIT_MESSAGE;
+  if (/throttlerexception|too many requests/i.test(error.message)) return REQUESTS_RATE_LIMIT_MESSAGE;
+  return error.message;
+}
 
 export function RequestsPage() {
   const router = useRouter();
@@ -50,7 +65,8 @@ export function RequestsPage() {
   const queryQueue = parseRequestReviewQueue(searchParams.get("queue"));
   const isExplicitAllStatuses = rawStatusParam === ALL_STATUSES_FILTER;
   const [search, setSearch] = useState(searchParams.get("search") ?? "");
-  const debouncedSearch = useDebouncedValue(search.trim(), 300);
+  const debouncedSearch = useDebouncedValue(search.trim(), REQUEST_SEARCH_DEBOUNCE_MS);
+  const serverSearch = getServerSearchValue(debouncedSearch);
   const [status, setStatus] = useState<RequestStatus | undefined>(queryStatus);
   const [activeQueue, setActiveQueue] = useState<RequestReviewQueue | undefined>(queryQueue ?? getRequestReviewQueueForStatus(queryStatus));
   const [sort, setSort] = useState<RequestListSort>(parseRequestListSort(searchParams.get("sort")));
@@ -97,7 +113,7 @@ export function RequestsPage() {
   const { requests, total, isLoading, isRefreshing, error, refetch } = useRequests({
     page,
     limit,
-    search: debouncedSearch || undefined,
+    search: serverSearch,
     status: isUnsupportedQueue ? undefined : status,
     statuses: isUnsupportedQueue ? undefined : defaultReviewStatuses,
     scope: requestScope,
@@ -114,7 +130,7 @@ export function RequestsPage() {
   const { requests: summaryRequests } = useRequests({
     page: 1,
     limit: 100,
-    search: debouncedSearch || undefined,
+    search: serverSearch,
     scope: requestScope,
   });
   const sortedRequests = sortRequestsForList(requests, sort);
@@ -219,7 +235,7 @@ export function RequestsPage() {
   }
 
   const activeHistoryFiltersCount = [
-    debouncedSearch,
+    serverSearch,
     status,
     dateFrom || dateTo,
     dateField !== REQUEST_LIST_DATE_FIELD.UPDATED_AT ? dateField : undefined,
@@ -479,7 +495,7 @@ export function RequestsPage() {
           )}
           {error ? (
             <div className="space-y-3 rounded-md border border-destructive/40 p-4">
-              <p className="text-sm text-destructive">{error.message}</p>
+              <p className="text-sm text-destructive">{getRequestsListErrorMessage(error)}</p>
               <Button size="sm" variant="outline" onClick={() => void refetch()}>Reintentar</Button>
             </div>
           ) : (
