@@ -5,12 +5,20 @@ import { useEffect, useRef, useState } from "react";
 import { cachedQuery, logQueryCacheDiagnostic, stableSerialize } from "@/lib/query-cache";
 import { useAuthStore } from "@/stores/auth-store";
 
+export const CACHED_RESOURCE_CACHE_MODE = {
+  CACHE_FIRST: "cache-first",
+  NO_STORE: "no-store",
+} as const;
+
+export type CachedResourceCacheMode = (typeof CACHED_RESOURCE_CACHE_MODE)[keyof typeof CACHED_RESOURCE_CACHE_MODE];
+
 export interface CachedResourceOptions<T> {
   enabled?: boolean;
   key: readonly unknown[];
   ttlMs: number;
   tags?: readonly string[];
   keepPreviousData?: boolean;
+  cacheMode?: CachedResourceCacheMode;
   errorMessage?: string;
   queryFn: (signal: AbortSignal) => Promise<T>;
 }
@@ -25,7 +33,7 @@ export interface CachedResourceState<T> {
 }
 
 function isAbortError(error: unknown): boolean {
-  return error instanceof DOMException && error.name === "AbortError";
+  return error instanceof Error && error.name === "AbortError";
 }
 
 export function useCachedResource<T>({
@@ -34,13 +42,16 @@ export function useCachedResource<T>({
   ttlMs,
   tags = [],
   keepPreviousData = true,
+  cacheMode = CACHED_RESOURCE_CACHE_MODE.CACHE_FIRST,
   errorMessage = "Error al cargar datos",
   queryFn,
 }: CachedResourceOptions<T>): CachedResourceState<T> {
   const [data, setData] = useState<T | null>(null);
+  const [loadedKeySignature, setLoadedKeySignature] = useState<string | null>(null);
   const [isInitialLoading, setIsInitialLoading] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [error, setError] = useState<Error | null>(null);
+  const [errorKeySignature, setErrorKeySignature] = useState<string | null>(null);
   const [refreshNonce, setRefreshNonce] = useState(0);
   const [forceNonce, setForceNonce] = useState(0);
   const sequenceRef = useRef(0);
@@ -49,8 +60,10 @@ export function useCachedResource<T>({
   const accessToken = useAuthStore((state) => state.accessToken);
   const keySignature = stableSerialize(key);
   const tagsSignature = stableSerialize(tags);
+  const isWaitingForAuth = enabled && (authIsLoading || !accessToken);
 
   async function refetch(options?: { force?: boolean }): Promise<void> {
+    setError(null);
     if (options?.force) setForceNonce((current) => current + 1);
     else setRefreshNonce((current) => current + 1);
   }
@@ -62,19 +75,28 @@ export function useCachedResource<T>({
     const sequence = sequenceRef.current + 1;
     sequenceRef.current = sequence;
     const hasPreviousData = keepPreviousData && dataRef.current !== null;
-    if (!keepPreviousData) dataRef.current = null;
+    if (!keepPreviousData) {
+      dataRef.current = null;
+      setData(null);
+      setLoadedKeySignature(null);
+    }
     setIsInitialLoading(!hasPreviousData);
     setIsRefreshing(hasPreviousData);
     setError(null);
+    setErrorKeySignature(null);
 
-    cachedQuery<T>({
-      key,
-      ttlMs,
-      tags,
-      force: forceNonce > 0,
-      signal: controller.signal,
-      queryFn: (signal) => queryFn(signal),
-    })
+    const request = cacheMode === CACHED_RESOURCE_CACHE_MODE.NO_STORE
+      ? queryFn(controller.signal)
+      : cachedQuery<T>({
+        key,
+        ttlMs,
+        tags,
+        force: forceNonce > 0,
+        signal: controller.signal,
+        queryFn: (signal) => queryFn(signal),
+      });
+
+    request
       .then((result) => {
         if (sequenceRef.current !== sequence) {
           logQueryCacheDiagnostic("stale-response-ignore", key);
@@ -82,11 +104,13 @@ export function useCachedResource<T>({
         }
         dataRef.current = result;
         setData(result);
+        setLoadedKeySignature(keySignature);
       })
       .catch((unknownError: unknown) => {
         if (sequenceRef.current !== sequence) return;
         if (!isAbortError(unknownError)) {
           setError(unknownError instanceof Error ? unknownError : new Error(errorMessage));
+          setErrorKeySignature(keySignature);
         }
       })
       .finally(() => {
@@ -97,7 +121,22 @@ export function useCachedResource<T>({
       });
 
     return () => controller.abort();
-  }, [enabled, authIsLoading, accessToken, keySignature, tagsSignature, ttlMs, keepPreviousData, refreshNonce, forceNonce]);
+  }, [enabled, authIsLoading, accessToken, keySignature, tagsSignature, ttlMs, keepPreviousData, cacheMode, refreshNonce, forceNonce]);
 
-  return { data, isLoading: isInitialLoading, isInitialLoading, isRefreshing, error, refetch };
+  const hasDataForCurrentKey = data !== null && loadedKeySignature === keySignature;
+  const canExposePreviousData = keepPreviousData && data !== null;
+  const visibleData = hasDataForCurrentKey || canExposePreviousData ? data : null;
+  const visibleError = errorKeySignature === keySignature ? error : null;
+  const effectiveIsInitialLoading = isWaitingForAuth
+    || isInitialLoading
+    || (enabled && !hasDataForCurrentKey && !canExposePreviousData && visibleError === null);
+
+  return {
+    data: visibleData,
+    isLoading: effectiveIsInitialLoading,
+    isInitialLoading: effectiveIsInitialLoading,
+    isRefreshing,
+    error: visibleError,
+    refetch,
+  };
 }

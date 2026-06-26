@@ -6,6 +6,7 @@ import { RequestsPage } from "@/components/requests/requests-page";
 import { ApiRequestError } from "@/lib/api-client";
 import { ACTIVE_REVIEW_STATUSES, REQUEST_REVIEW_QUEUE } from "@/lib/requests";
 import { REQUEST_CURRENCY, REQUEST_STATUS, REQUEST_TYPE, type PaymentRequest, type RequestsListFilters } from "@/types/requests";
+import type { AuthUser } from "@/types/auth";
 
 const replaceMock = vi.fn((href: string) => {
   currentQuery = href.includes("?") ? href.slice(href.indexOf("?") + 1) : "";
@@ -13,6 +14,7 @@ const replaceMock = vi.fn((href: string) => {
 const pushMock = vi.fn();
 let currentQuery = "";
 const useRequestsMock = vi.fn();
+let authUser: AuthUser | null = null;
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({
@@ -24,22 +26,26 @@ vi.mock("next/navigation", () => ({
 
 vi.mock("@/stores/auth-store", () => ({
   useAuthStore: (selector: (state: unknown) => unknown) => selector({
-    user: {
-      id: "giof-1",
-      firstName: "Giof",
-      lastName: "Gestor",
-      email: "giof@example.com",
-      documentNumber: "12345679",
-      onboardingCompleted: true,
-      authSource: "LOCAL",
-      role: { code: "GIOF_GESTOR", name: "GIOF Gestor" },
-    },
+    user: authUser,
   }),
 }));
 
 vi.mock("@/hooks/use-requests", () => ({
-  useRequests: (filters: RequestsListFilters) => useRequestsMock(filters),
+  useRequests: (filters: RequestsListFilters, options?: { keepPreviousData?: boolean; cacheMode?: string }) => useRequestsMock(filters, options),
 }));
+
+function makeGiofUser(): AuthUser {
+  return {
+    id: "giof-1",
+    firstName: "Giof",
+    lastName: "Gestor",
+    email: "giof@example.com",
+    documentNumber: "12345679",
+    onboardingCompleted: true,
+    authSource: "LOCAL",
+    role: { code: "GIOF_GESTOR", name: "GIOF Gestor" },
+  };
+}
 
 function makeRequest(overrides: Partial<PaymentRequest> = {}): PaymentRequest {
   return {
@@ -87,6 +93,7 @@ function makeRequest(overrides: Partial<PaymentRequest> = {}): PaymentRequest {
 describe("RequestsPage", () => {
   beforeEach(() => {
     currentQuery = "";
+    authUser = makeGiofUser();
     replaceMock.mockClear();
     pushMock.mockClear();
     useRequestsMock.mockImplementation((filters: RequestsListFilters) => {
@@ -148,8 +155,43 @@ describe("RequestsPage", () => {
       scope: "mine",
       statuses: undefined,
       status: undefined,
-    }));
+    }), expect.objectContaining({ keepPreviousData: false }));
     expect(replaceMock).not.toHaveBeenCalled();
+  });
+
+  it("carga el link directo de Mis Solicitudes con scope mine explícito", () => {
+    currentQuery = "scope=mine&page=2&status=OBSERVED&search=abc";
+
+    render(<RequestsPage />);
+
+    expect(screen.getByTestId("requests-page-title")).toHaveTextContent("Mis Solicitudes");
+    expect(useRequestsMock).toHaveBeenCalledWith(expect.objectContaining({
+      scope: "mine",
+      page: 2,
+      status: REQUEST_STATUS.OBSERVED,
+      search: "abc",
+    }), expect.objectContaining({ keepPreviousData: false }));
+  });
+
+  it("al volver desde Nueva Solicitud sin scope mantiene loading y no muestra vacío falso", () => {
+    useRequestsMock.mockImplementation((filters: RequestsListFilters) => ({
+      requests: [],
+      total: 0,
+      isLoading: filters.scope === "mine" && filters.limit !== 100,
+      isRefreshing: false,
+      error: null,
+      refetch: vi.fn(),
+    }));
+
+    render(<RequestsPage />);
+
+    expect(useRequestsMock).toHaveBeenCalledWith(expect.objectContaining({
+      scope: "mine",
+      page: 1,
+      limit: 20,
+    }), expect.objectContaining({ keepPreviousData: false }));
+    expect(screen.getByText("Cargando solicitudes...")).toBeInTheDocument();
+    expect(screen.queryByText("Aún no hay solicitudes registradas.")).not.toBeInTheDocument();
   });
 
   it("carga estados activos de revisión cuando el scope es review", () => {
@@ -160,7 +202,126 @@ describe("RequestsPage", () => {
       scope: "review",
       statuses: [...ACTIVE_REVIEW_STATUSES],
       status: undefined,
+    }), expect.objectContaining({ keepPreviousData: false }));
+  });
+
+  it("usa carga directa sin caché para Mis Solicitudes, Bandeja e Historial", () => {
+    const { rerender } = render(<RequestsPage />);
+
+    expect(useRequestsMock).toHaveBeenCalledWith(expect.objectContaining({ scope: "mine" }), expect.objectContaining({
+      keepPreviousData: false,
+      cacheMode: "no-store",
     }));
+
+    useRequestsMock.mockClear();
+    currentQuery = "scope=review";
+    rerender(<RequestsPage />);
+    expect(useRequestsMock).toHaveBeenCalledWith(expect.objectContaining({ scope: "review" }), expect.objectContaining({
+      keepPreviousData: false,
+      cacheMode: "no-store",
+    }));
+
+    useRequestsMock.mockClear();
+    currentQuery = "scope=history";
+    rerender(<RequestsPage />);
+    expect(useRequestsMock).toHaveBeenCalledWith(expect.objectContaining({ scope: "history" }), expect.objectContaining({
+      keepPreviousData: false,
+      cacheMode: "no-store",
+    }));
+  });
+
+  it("en link directo scope=review muestra loading inicial y no vacío hasta terminar fetch", () => {
+    currentQuery = "scope=review";
+    useRequestsMock.mockImplementation((filters: RequestsListFilters) => ({
+      requests: [],
+      total: 0,
+      isLoading: filters.scope === "review" && filters.limit !== 100,
+      isRefreshing: false,
+      error: null,
+      refetch: vi.fn(),
+    }));
+
+    render(<RequestsPage />);
+
+    expect(screen.getByText("Cargando solicitudes...")).toBeInTheDocument();
+    expect(screen.queryByText("Aún no hay solicitudes registradas.")).not.toBeInTheDocument();
+  });
+
+  it("muestra vacío solo cuando la respuesta exitosa del scope vigente terminó vacía", () => {
+    currentQuery = "scope=history";
+    useRequestsMock.mockImplementation(() => ({
+      requests: [],
+      total: 0,
+      isLoading: false,
+      isRefreshing: false,
+      error: null,
+      refetch: vi.fn(),
+    }));
+
+    render(<RequestsPage />);
+
+    expect(screen.queryByText("Cargando solicitudes...")).not.toBeInTheDocument();
+    expect(screen.getByText("Aún no hay solicitudes registradas.")).toBeInTheDocument();
+  });
+
+  it("muestra quién creó un reembolso sin usar el beneficiario como responsable", () => {
+    currentQuery = "scope=review";
+    useRequestsMock.mockImplementation(() => ({
+      requests: [makeRequest({
+        id: "reimbursement-1",
+        request_type: REQUEST_TYPE.REIMBURSEMENT,
+        beneficiary_name: "Beneficiario cuenta",
+        requester_name: "Ana Paredes",
+      })],
+      total: 1,
+      isLoading: false,
+      error: null,
+      refetch: vi.fn(),
+    }));
+
+    render(<RequestsPage />);
+
+    expect(screen.getByRole("columnheader", { name: "Registrado por" })).toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: "A nombre de" })).toBeInTheDocument();
+    expect(screen.getByText("Ana Paredes")).toBeInTheDocument();
+    expect(screen.getByText("Beneficiario cuenta")).toBeInTheDocument();
+  });
+
+  it("no emite una carga inicial de Mis Solicitudes cuando la URL directa solicita revisión y el rol aún no está hidratado", () => {
+    currentQuery = "scope=review";
+    authUser = null;
+
+    render(<RequestsPage />);
+
+    expect(useRequestsMock).toHaveBeenCalledWith(expect.objectContaining({
+      scope: "review",
+    }), expect.objectContaining({ keepPreviousData: false }));
+    expect(useRequestsMock).not.toHaveBeenCalledWith(expect.objectContaining({
+      scope: "mine",
+    }), expect.anything());
+  });
+
+  it("sincroniza los filtros con la URL al volver a Bandeja de Revisión", async () => {
+    currentQuery = "scope=mine&status=OBSERVED&search=antiguo";
+    const { rerender } = render(<RequestsPage />);
+
+    expect(screen.getByTestId("requests-search-input")).toHaveValue("antiguo");
+    expect(useRequestsMock).toHaveBeenCalledWith(expect.objectContaining({
+      scope: "mine",
+      status: REQUEST_STATUS.OBSERVED,
+    }), expect.objectContaining({ keepPreviousData: false }));
+
+    useRequestsMock.mockClear();
+    currentQuery = "scope=review";
+    rerender(<RequestsPage />);
+
+    await waitFor(() => expect(screen.getByTestId("requests-search-input")).toHaveValue(""));
+    expect(useRequestsMock).toHaveBeenCalledWith(expect.objectContaining({
+      scope: "review",
+      statuses: [...ACTIVE_REVIEW_STATUSES],
+      status: undefined,
+      search: undefined,
+    }), expect.objectContaining({ keepPreviousData: false }));
   });
 
   it("oculta la tarjeta no soportada de colaboradores bloqueados", () => {
@@ -181,7 +342,35 @@ describe("RequestsPage", () => {
       scope: "history",
       date_from: "2026-06-01",
       date_to: "2026-06-01",
-    }));
+    }), expect.objectContaining({ keepPreviousData: false }));
+  });
+
+  it("limpia filtros exclusivos de Historial al navegar de vuelta a Mis Solicitudes", async () => {
+    currentQuery = "scope=history&date_from=2026-06-01&date_to=2026-06-01&request_type=ADVANCE&requester_id=user-2";
+    const { rerender } = render(<RequestsPage />);
+
+    expect(useRequestsMock).toHaveBeenCalledWith(expect.objectContaining({
+      scope: "history",
+      date_from: "2026-06-01",
+      date_to: "2026-06-01",
+      request_type: REQUEST_TYPE.ADVANCE,
+      requester_id: "user-2",
+    }), expect.objectContaining({ keepPreviousData: false }));
+
+    useRequestsMock.mockClear();
+    currentQuery = "scope=mine";
+    rerender(<RequestsPage />);
+
+    await waitFor(() => {
+      expect(useRequestsMock).toHaveBeenCalledWith(expect.objectContaining({
+        scope: "mine",
+        date_from: undefined,
+        date_to: undefined,
+        date_field: undefined,
+        request_type: undefined,
+        requester_id: undefined,
+      }), expect.objectContaining({ keepPreviousData: false }));
+    });
   });
 
   afterEach(() => {
@@ -196,19 +385,19 @@ describe("RequestsPage", () => {
     fireEvent.change(screen.getByTestId("requests-search-input"), { target: { value: "2" } });
     act(() => vi.advanceTimersByTime(500));
 
-    expect(useRequestsMock).toHaveBeenCalledWith(expect.objectContaining({ search: undefined }));
-    expect(useRequestsMock).not.toHaveBeenCalledWith(expect.objectContaining({ search: "2" }));
+    expect(useRequestsMock).toHaveBeenCalledWith(expect.objectContaining({ search: undefined }), expect.anything());
+    expect(useRequestsMock).not.toHaveBeenCalledWith(expect.objectContaining({ search: "2" }), expect.anything());
 
     useRequestsMock.mockClear();
     fireEvent.change(screen.getByTestId("requests-search-input"), { target: { value: "2 l" } });
-    expect(useRequestsMock).not.toHaveBeenCalledWith(expect.objectContaining({ search: "2 l" }));
+    expect(useRequestsMock).not.toHaveBeenCalledWith(expect.objectContaining({ search: "2 l" }), expect.anything());
 
     act(() => vi.advanceTimersByTime(499));
-    expect(useRequestsMock).not.toHaveBeenCalledWith(expect.objectContaining({ search: "2 l" }));
+    expect(useRequestsMock).not.toHaveBeenCalledWith(expect.objectContaining({ search: "2 l" }), expect.anything());
 
     act(() => vi.advanceTimersByTime(1));
 
-    expect(useRequestsMock).toHaveBeenCalledWith(expect.objectContaining({ search: "2 l" }));
+    expect(useRequestsMock).toHaveBeenCalledWith(expect.objectContaining({ search: "2 l" }), expect.anything());
   });
 
   it("muestra un mensaje amigable para errores 429 sin exponer ThrottlerException", () => {

@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { api } from "@/lib/api-client";
-import { useCachedResource } from "@/hooks/use-cached-resource";
+import { useCachedResource, type CachedResourceCacheMode } from "@/hooks/use-cached-resource";
 import { cachedQuery, QUERY_CACHE_TTL_MS, stableSerialize } from "@/lib/query-cache";
 import { QUERY_TAGS, invalidateRequestDomain } from "@/lib/query-tags";
 import { useAuthStore } from "@/stores/auth-store";
@@ -63,6 +63,11 @@ export interface RequestResourceState<T> {
   isLoading: boolean;
   error: Error | null;
   refetch: (options?: RequestResourceRefetchOptions) => Promise<void>;
+}
+
+export interface UseRequestsOptions {
+  keepPreviousData?: boolean;
+  cacheMode?: CachedResourceCacheMode;
 }
 
 function upsertById<T extends { id: string }>(items: T[], item: T): T[] {
@@ -144,7 +149,7 @@ export function getRenditionReportPath(requestId: string): string {
   return `/requests/${requestId}/rendition-report`;
 }
 
-export function useRequests(filters?: RequestsListFilters) {
+export function useRequests(filters?: RequestsListFilters, options?: UseRequestsOptions) {
   const pageFilter = filters?.page;
   const limitFilter = filters?.limit;
   const statusFilter = filters?.status;
@@ -165,6 +170,8 @@ export function useRequests(filters?: RequestsListFilters) {
     key: [QUERY_TAGS.REQUESTS, "list", filters ?? {}],
     ttlMs: QUERY_CACHE_TTL_MS.MUTABLE_LIST,
     tags: [QUERY_TAGS.REQUESTS],
+    keepPreviousData: options?.keepPreviousData,
+    cacheMode: options?.cacheMode,
     errorMessage: "Error al cargar solicitudes",
     queryFn: (signal) => api.get<RequestsListResponse>(getRequestsPath(filters), { signal }),
   });

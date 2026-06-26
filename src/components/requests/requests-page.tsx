@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { ChevronDown, ChevronUp, Plus, Search, X } from "lucide-react";
 
@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { CACHED_RESOURCE_CACHE_MODE } from "@/hooks/use-cached-resource";
 import { useDebouncedValue } from "@/hooks/use-debounced-value";
 import { useRequests } from "@/hooks/use-requests";
 import { ApiRequestError } from "@/lib/api-client";
@@ -44,7 +45,14 @@ const REQUEST_HISTORY_DATE_MODE = {
   RANGE: "range",
 } as const;
 
+const REQUEST_SCOPE = {
+  MINE: "mine",
+  REVIEW: "review",
+  HISTORY: "history",
+} as const;
+
 type RequestHistoryDateMode = (typeof REQUEST_HISTORY_DATE_MODE)[keyof typeof REQUEST_HISTORY_DATE_MODE];
+type RequestScope = (typeof REQUEST_SCOPE)[keyof typeof REQUEST_SCOPE];
 
 function getServerSearchValue(value: string): string | undefined {
   const trimmedValue = value.trim();
@@ -61,12 +69,14 @@ export function RequestsPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const rawStatusParam = searchParams.get("status");
+  const searchParamsSignature = searchParams.toString();
   const queryStatus = parseRequestStatusFilter(rawStatusParam);
   const queryQueue = parseRequestReviewQueue(searchParams.get("queue"));
   const isExplicitAllStatuses = rawStatusParam === ALL_STATUSES_FILTER;
-  const [search, setSearch] = useState(searchParams.get("search") ?? "");
+  const querySearch = searchParams.get("search") ?? "";
+  const [search, setSearch] = useState(querySearch);
   const debouncedSearch = useDebouncedValue(search.trim(), REQUEST_SEARCH_DEBOUNCE_MS);
-  const serverSearch = getServerSearchValue(debouncedSearch);
+  const serverSearch = searchParams.has("search") ? getServerSearchValue(debouncedSearch) : undefined;
   const [status, setStatus] = useState<RequestStatus | undefined>(queryStatus);
   const [activeQueue, setActiveQueue] = useState<RequestReviewQueue | undefined>(queryQueue ?? getRequestReviewQueueForStatus(queryStatus));
   const [sort, setSort] = useState<RequestListSort>(parseRequestListSort(searchParams.get("sort")));
@@ -90,18 +100,48 @@ export function RequestsPage() {
       || searchParams.get("budget_planning_line_id")
       || searchParams.get("has_documents")
       || searchParams.get("drive_sync_status"),
-  ));
+    ));
+
+  useEffect(() => {
+    const nextStatus = parseRequestStatusFilter(searchParams.get("status"));
+    const nextQueue = parseRequestReviewQueue(searchParams.get("queue")) ?? getRequestReviewQueueForStatus(nextStatus);
+    const nextDateFrom = searchParams.get("date_from") ?? "";
+    const nextDateTo = searchParams.get("date_to") ?? "";
+
+    setSearch(searchParams.get("search") ?? "");
+    setStatus(nextStatus);
+    setActiveQueue(nextQueue);
+    setSort(parseRequestListSort(searchParams.get("sort")));
+    setDateFrom(nextDateFrom);
+    setDateTo(nextDateTo);
+    setDateMode(nextDateFrom && nextDateFrom === nextDateTo ? REQUEST_HISTORY_DATE_MODE.EXACT : REQUEST_HISTORY_DATE_MODE.RANGE);
+    setDateField((searchParams.get("date_field") as RequestListDateField | null) ?? REQUEST_LIST_DATE_FIELD.UPDATED_AT);
+    setRequestType((searchParams.get("request_type") as RequestType | null) ?? undefined);
+    setRequesterId(searchParams.get("requester_id") ?? "");
+    setOrgUnitId(searchParams.get("org_unit_id") ?? "");
+    setPlanningLineId(searchParams.get("budget_planning_line_id") ?? "");
+    setHasDocuments(searchParams.get("has_documents") ?? "ALL");
+    setDriveSyncStatus((searchParams.get("drive_sync_status") as DriveSyncStatus | null) ?? undefined);
+    setShowAdvancedFilters(Boolean(
+      searchParams.get("requester_id")
+        || searchParams.get("org_unit_id")
+        || searchParams.get("budget_planning_line_id")
+        || searchParams.get("has_documents")
+        || searchParams.get("drive_sync_status"),
+    ));
+  }, [searchParamsSignature]);
   const page = Number(searchParams.get("page") ?? "1") || 1;
   const limit = Number(searchParams.get("limit") ?? "20") || 20;
   const user = useAuthStore((state) => state.user);
   const roleCode = user?.role?.code;
+  const isRolePending = roleCode === undefined;
   const canUseHistory = roleCode === ROLE_CODE.GIOF_GESTOR || roleCode === ROLE_CODE.ADMIN_SISTEMA || roleCode === ROLE_CODE.AUDITOR_DIRECCION;
   const rawScope = searchParams.get("scope");
-  const requestScope = rawScope === "history" && canUseHistory
-    ? "history"
-    : rawScope === "review" && isRequestReviewRole(roleCode)
-      ? "review"
-      : "mine";
+  const requestScope: RequestScope = rawScope === REQUEST_SCOPE.HISTORY && (canUseHistory || isRolePending)
+    ? REQUEST_SCOPE.HISTORY
+    : rawScope === REQUEST_SCOPE.REVIEW && (isRequestReviewRole(roleCode) || isRolePending)
+      ? REQUEST_SCOPE.REVIEW
+      : REQUEST_SCOPE.MINE;
   const isReviewInbox = requestScope === "review";
   const isHistory = requestScope === "history";
   const isGiofReviewInbox = isReviewInbox && roleCode === ROLE_CODE.GIOF_GESTOR;
@@ -117,21 +157,27 @@ export function RequestsPage() {
     status: isUnsupportedQueue ? undefined : status,
     statuses: isUnsupportedQueue ? undefined : defaultReviewStatuses,
     scope: requestScope,
-    date_from: dateFrom || undefined,
-    date_to: dateTo || undefined,
+    date_from: isHistory ? dateFrom || undefined : undefined,
+    date_to: isHistory ? dateTo || undefined : undefined,
     date_field: isHistory ? dateField : undefined,
-    request_type: requestType,
+    request_type: isHistory ? requestType : undefined,
     requester_id: isHistory ? requesterId.trim() || undefined : undefined,
     org_unit_id: isHistory ? orgUnitId.trim() || undefined : undefined,
     budget_planning_line_id: isHistory ? planningLineId.trim() || undefined : undefined,
     has_documents: isHistory && hasDocuments !== "ALL" ? hasDocuments === "true" : undefined,
     drive_sync_status: isHistory ? driveSyncStatus : undefined,
+  }, {
+    keepPreviousData: false,
+    cacheMode: CACHED_RESOURCE_CACHE_MODE.NO_STORE,
   });
   const { requests: summaryRequests } = useRequests({
     page: 1,
     limit: 100,
     search: serverSearch,
     scope: requestScope,
+  }, {
+    keepPreviousData: false,
+    cacheMode: CACHED_RESOURCE_CACHE_MODE.NO_STORE,
   });
   const sortedRequests = sortRequestsForList(requests, sort);
   const displayedRequests = isUnsupportedQueue ? [] : sortedRequests;
@@ -177,7 +223,7 @@ export function RequestsPage() {
     replaceQuery({ search: value.trim() || undefined, page: 1 });
   }
 
-  function setScopeFilter(scope: "mine" | "review" | "history") {
+  function setScopeFilter(scope: RequestScope) {
     setActiveQueue(undefined);
     setStatus(undefined);
     replaceQuery({ scope, status: undefined, queue: undefined, page: 1 });
