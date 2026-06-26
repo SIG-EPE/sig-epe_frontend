@@ -130,7 +130,7 @@ describe("bulk payment modals", () => {
       />,
     );
 
-    expect(screen.getByText(/El monto y la fecha de pago no se modifican/)).toBeInTheDocument();
+    expect(screen.getByText(/no cambia el monto ni la fecha de pago/)).toBeInTheDocument();
     expect(screen.queryByTestId("payment-amount-input")).not.toBeInTheDocument();
 
     await user.type(screen.getByTestId("complete-payment-reference-input"), "OP-456");
