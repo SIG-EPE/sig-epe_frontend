@@ -28,6 +28,10 @@ interface DashboardHookState<T> {
   refetch: (options?: { force?: boolean }) => Promise<void>;
 }
 
+interface DashboardHookOptions {
+  enabled?: boolean;
+}
+
 function useCachedDashboardQuery<T>({
   enabled,
   key,
@@ -76,33 +80,37 @@ export function useGiofOperationsDashboard(
 }
 
 export function useOrgUnitExecutionDashboard(
-  filters: OrgUnitExecutionDashboardFilters,
+  filters: OrgUnitExecutionDashboardFilters | null,
+  options: DashboardHookOptions = {},
 ): DashboardHookState<OrgUnitExecutionDashboard> {
+  const enabled = (options.enabled ?? true) && Boolean(filters?.org_unit_id);
   return useCachedDashboardQuery({
-    enabled: true,
-    key: ["dashboard", "org-unit-execution", filters],
+    enabled,
+    key: ["dashboard", "org-unit-execution", filters ?? {}],
     tags: [QUERY_TAGS.DASHBOARD, QUERY_TAGS.BUDGET, QUERY_TAGS.POA],
     errorMessage: "Error al cargar Programado vs Ejecutado",
-    queryFn: () => getOrgUnitExecutionDashboard(filters),
+    queryFn: () => getOrgUnitExecutionDashboard(filters as OrgUnitExecutionDashboardFilters),
   });
 }
 
 export function useOrgUnitExecutionDashboardOptions(
-  filters: OrgUnitExecutionDashboardFilters,
+  filters: OrgUnitExecutionDashboardFilters | null,
+  options: DashboardHookOptions = {},
 ): DashboardHookState<OrgUnitExecutionOptionsResponse> {
-  const optionsFilters = {
+  const optionsFilters = filters ? {
       ...filters,
       level: undefined,
       parent_id: undefined,
       group_id: undefined,
       search: undefined,
       top_n: undefined,
-  };
+  } : null;
+  const enabled = (options.enabled ?? true) && Boolean(optionsFilters?.fiscal_year && optionsFilters.selected_month);
   return useCachedDashboardQuery({
-    enabled: true,
+    enabled,
     key: ["dashboard", "org-unit-execution-options", optionsFilters],
     tags: [QUERY_TAGS.DASHBOARD_OPTIONS, QUERY_TAGS.BUDGET, QUERY_TAGS.CATALOG],
     errorMessage: "Error al cargar filtros del dashboard",
-    queryFn: () => getOrgUnitExecutionDashboardOptions(optionsFilters),
+    queryFn: () => getOrgUnitExecutionDashboardOptions(optionsFilters as OrgUnitExecutionDashboardFilters),
   });
 }

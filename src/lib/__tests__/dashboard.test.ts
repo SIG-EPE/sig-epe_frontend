@@ -4,7 +4,9 @@ import {
   buildBudgetExecutionDashboardPath,
   buildGiofOperationsDashboardPath,
   buildOrgUnitExecutionDashboardPath,
+  buildOrgUnitExecutionExportPath,
   buildOrgUnitExecutionDashboardOptionsPath,
+  downloadOrgUnitExecutionReport,
   getBudgetExecutionDashboard,
   getGiofOperationsDashboard,
   getOrgUnitExecutionDashboard,
@@ -57,6 +59,12 @@ describe("dashboard API clients", () => {
   it("builds org unit execution options params", () => {
     expect(buildOrgUnitExecutionDashboardOptionsPath({ fiscal_year: 2026, org_unit_id: "org-1", component_id: "component-1" })).toBe(
       "/budget/dashboard/org-unit-execution/options?fiscal_year=2026&org_unit_id=org-1&component_id=component-1",
+    );
+  });
+
+  it("builds org unit execution export params without top_n by default", () => {
+    expect(buildOrgUnitExecutionExportPath({ fiscal_year: 2026, selected_month: 7, org_unit_id: "org-1", program_id: "program-1", component_id: "component-1", operative_action_id: "action-1", resource_id: "line-1", funding_source_id: "source-1", level: "resource", parent_id: "action-1", search: "beca", top_n: 10 })).toBe(
+      "/budget/dashboard/org-unit-execution/export.xlsx?fiscal_year=2026&org_unit_id=org-1&program_id=program-1&component_id=component-1&operative_action_id=action-1&resource_id=line-1&funding_source_id=source-1&selected_month=7&level=resource&parent_id=action-1&search=beca",
     );
   });
 
@@ -120,6 +128,24 @@ describe("dashboard API clients", () => {
     await getOrgUnitExecutionDashboard({ fiscal_year: 2026 });
 
     expect(getLastRequestHeaders().get("Authorization")).toBe("Bearer dashboard-token");
+  });
+
+  it("downloads org unit execution export through authenticated client", async () => {
+    vi.mocked(fetch).mockResolvedValue(
+      new Response("xlsx", {
+        status: 200,
+        headers: { "Content-Disposition": "attachment; filename=programado-ejecutado.xlsx" },
+      }),
+    );
+
+    const result = await downloadOrgUnitExecutionReport({ fiscal_year: 2026, selected_month: 7, org_unit_id: "org-1", search: "beca", top_n: 10 });
+
+    expect(fetch).toHaveBeenCalledWith(
+      "http://localhost:3001/budget/dashboard/org-unit-execution/export.xlsx?fiscal_year=2026&org_unit_id=org-1&selected_month=7&search=beca",
+      expect.objectContaining({ credentials: "include", method: "GET" }),
+    );
+    expect(getLastRequestHeaders().get("Authorization")).toBe("Bearer dashboard-token");
+    expect(result.filename).toBe("programado-ejecutado.xlsx");
   });
 
   it("sends auth header to org unit execution options endpoint", async () => {
