@@ -1,6 +1,7 @@
 import { ApiRequestError } from "@/lib/api-client";
 import { formatBusinessDate, formatBusinessDateTime, getBusinessDateString, getDateOnlyUtcTime } from "@/lib/business-timezone";
 import { ROLE_CODE, ROUTES } from "@/lib/constants";
+import { getSafeDocumentUrl } from "@/lib/safe-url";
 import type { Route } from "next";
 import {
   ACCOUNT_TYPE,
@@ -691,6 +692,19 @@ export function isRenditionDueSoon(row: Pick<RenditionInboxRow, "scheduled_rendi
   return row.rendition_status === RENDITION_STATUS.PENDING && days !== null && days >= 0 && days <= 15;
 }
 
+export interface PaymentProofDisplayItem {
+  id: string;
+  label: string;
+  document: RequestDocument | null;
+  documentId: string | null;
+  filename: string;
+  url: string | null;
+  paidAt: string | null;
+  amountPaid: number | null;
+  operationReference: string | null;
+  isPrimary: boolean;
+}
+
 export function getRenditionSummaryCount(card: RenditionSummaryCard, counts: RenditionInboxCounts | null | undefined, rows: RenditionInboxRow[]): number {
   if (card.key === "due-soon") return counts?.due_soon ?? rows.filter((row) => isRenditionDueSoon(row)).length;
   if (!card.status) return 0;
@@ -941,13 +955,75 @@ export function getPaymentQueueStatusLabel(status: RequestStatus): string {
   return REQUEST_STATUS_LABELS[status] ?? "Estado no reconocido";
 }
 
+interface RegisteredPartySource {
+  registered_party_name?: string | null;
+  registered_party_document_type?: string | null;
+  registered_party_document_number?: string | null;
+  supplier_name?: string | null;
+  supplier_ruc?: string | null;
+  beneficiary_name?: string | null;
+  beneficiary_document_type?: string | null;
+  beneficiary_document_number?: string | null;
+}
+
+function normalizeOptionalDisplay(value: string | null | undefined): string | null {
+  const normalized = value?.trim();
+  return normalized ? normalized : null;
+}
+
+function getRegisteredPartyDocumentParts(source: RegisteredPartySource): { type: string | null; number: string | null } {
+  const explicitType = normalizeOptionalDisplay(source.registered_party_document_type);
+  const explicitNumber = normalizeOptionalDisplay(source.registered_party_document_number);
+  if (explicitType || explicitNumber) return { type: explicitType, number: explicitNumber };
+
+  const supplierRuc = normalizeOptionalDisplay(source.supplier_ruc);
+  if (supplierRuc) return { type: BENEFICIARY_DOCUMENT_TYPE.RUC, number: supplierRuc };
+
+  return {
+    type: normalizeOptionalDisplay(source.beneficiary_document_type),
+    number: normalizeOptionalDisplay(source.beneficiary_document_number),
+  };
+}
+
+export function getRegisteredPartyDisplay(source: RegisteredPartySource): string {
+  const explicitName = normalizeOptionalDisplay(source.registered_party_name);
+  if (explicitName) return explicitName;
+
+  const supplierName = normalizeOptionalDisplay(source.supplier_name);
+  if (supplierName) return supplierName;
+
+  return normalizeOptionalDisplay(source.beneficiary_name) ?? "—";
+}
+
+export function getRegisteredPartyDocumentLabel(source: RegisteredPartySource): string {
+  const { type, number } = getRegisteredPartyDocumentParts(source);
+  if (type && number) return `${type} ${number}`;
+  return number ?? "—";
+}
+
+export function getRegisteredByDisplayName(request: PaymentRequest): string;
+export function getRegisteredByDisplayName(request: RenditionInboxRow): string;
+export function getRegisteredByDisplayName(request: PaymentRequest | RenditionInboxRow): string {
+  if ("advance_id" in request) {
+    return normalizeOptionalDisplay(request.registered_by) ?? normalizeOptionalDisplay(request.requester) ?? "—";
+  }
+
+  return getPaymentRequestCreatorDisplayName(request);
+}
+
 export function getPaymentRequestParty(request: PaymentRequest): string {
-  if (request.supplier_name?.trim()) return request.supplier_name;
-  if (request.beneficiary_name?.trim()) return request.beneficiary_name;
+  return getRegisteredPartyDisplay(request);
+}
+
+export function getPaymentRequestCreatorDisplayName(request: PaymentRequest): string {
+  const explicitDisplayName = request.created_by_display_name?.trim() || request.requester_name?.trim();
+  if (explicitDisplayName) return explicitDisplayName;
+
   const requesterName = [request.requester?.firstName, request.requester?.lastName]
     .filter((value): value is string => Boolean(value?.trim()))
     .join(" ");
-  return requesterName || request.requester?.email || "—";
+
+  return requesterName || "—";
 }
 
 const ADVANCE_SETTLEMENT_EDITABLE_STATUSES = [
@@ -1069,7 +1145,7 @@ export function getRenditionNextStepGuidance(
   if (request.request_type !== REQUEST_TYPE.ADVANCE || request.status !== REQUEST_STATUS.PAID) return null;
 
   const requesterCta = getAdvanceSettlementCta(ROLE_CODE.SOLICITANTE_EPE, request, request.requester_id);
-  const isRequester = roleCode === ROLE_CODE.SOLICITANTE_EPE && Boolean(currentUserId) && currentUserId === request.requester_id;
+  const isRequester = Boolean(roleCode) && Boolean(currentUserId) && currentUserId === request.requester_id;
 
   if (isRequester && requesterCta) {
     return {
@@ -1183,6 +1259,60 @@ export function getRequestPaymentProofEntries(payment?: Pick<RequestPayment, "pr
   return payment?.proof_entries ?? payment?.proofs ?? [];
 }
 
+export function getPaymentProofDocumentName(document?: Pick<RequestDocument, "original_filename" | "safe_filename"> | null): string {
+  return document?.original_filename?.trim() || document?.safe_filename?.trim() || "Constancia de pago";
+}
+
+function getPaymentProofDocumentKey(documentId: string | null | undefined, document?: Pick<RequestDocument, "id"> | null): string | null {
+  return document?.id ?? documentId ?? null;
+}
+
+export function getPaymentProofDisplayItems(
+  payment?: Pick<RequestPayment, "id" | "paid_at" | "amount_paid" | "operation_reference" | "proof_document_id" | "proofDocument" | "proof_entries" | "proofs"> | null,
+): PaymentProofDisplayItem[] {
+  if (!payment) return [];
+
+  const items: PaymentProofDisplayItem[] = [];
+  const seen = new Set<string>();
+  const primaryDocumentKey = getPaymentProofDocumentKey(payment.proof_document_id, payment.proofDocument);
+  if (primaryDocumentKey || payment.proof_document_id) {
+    const key = primaryDocumentKey ?? payment.proof_document_id ?? "primary-proof";
+    seen.add(key);
+    items.push({
+      id: key,
+      label: "Constancia de pago",
+      document: payment.proofDocument ?? null,
+      documentId: payment.proof_document_id ?? primaryDocumentKey,
+      filename: getPaymentProofDocumentName(payment.proofDocument),
+      url: getSafeDocumentUrl(payment.proofDocument?.drive_web_url),
+      paidAt: payment.paid_at,
+      amountPaid: normalizeMoneyAmount(payment.amount_paid),
+      operationReference: payment.operation_reference,
+      isPrimary: true,
+    });
+  }
+
+  getRequestPaymentProofEntries(payment).forEach((proof, index) => {
+    const key = getPaymentProofDocumentKey(proof.proof_document_id, proof.proof_document) ?? proof.id;
+    if (seen.has(key)) return;
+    seen.add(key);
+    items.push({
+      id: key,
+      label: items.length === 0 && index === 0 ? "Constancia de pago" : "Constancia de pago adicional",
+      document: proof.proof_document ?? null,
+      documentId: proof.proof_document_id,
+      filename: getPaymentProofDocumentName(proof.proof_document),
+      url: getSafeDocumentUrl(proof.proof_document?.drive_web_url),
+      paidAt: proof.paid_at,
+      amountPaid: normalizeMoneyAmount(proof.amount_paid),
+      operationReference: proof.operation_reference,
+      isPrimary: false,
+    });
+  });
+
+  return items;
+}
+
 export function getPaymentProofEntriesForAllocation(
   payment: Pick<RequestPayment, "proof_entries" | "proofs"> | null | undefined,
   allocationId: string | null | undefined,
@@ -1198,6 +1328,14 @@ export function hasAllocationPaymentProofCoverage(
   allocationId: string | null | undefined,
 ): boolean {
   return getPaymentProofEntriesForAllocation(payment, allocationId).length > 0;
+}
+
+export function hasAllAllocationPaymentProofCoverage(
+  request: Pick<PaymentRequest, "allocations" | "payment">,
+): boolean {
+  const allocations = request.allocations ?? [];
+  if (allocations.length === 0) return false;
+  return allocations.every((allocation) => hasAllocationPaymentProofCoverage(request.payment, allocation.id));
 }
 
 export function getAllocationProofCoverageLabel(

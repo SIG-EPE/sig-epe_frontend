@@ -1,9 +1,9 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { RequestDetailPage } from "@/components/requests/request-detail-page";
-import { REQUEST_CURRENCY, REQUEST_DOCUMENT_CATEGORY, REQUEST_DOCUMENT_SCOPE_TYPE, REQUEST_DOCUMENT_STORAGE_PROVIDER, REQUEST_DOCUMENT_UPLOAD_STATUS, REQUEST_RENDITION_REPORT_STATUS, REQUEST_STATUS, REQUEST_TYPE, REXAN_OUTCOME, type PaymentRequest, type RequestDocument, type RequestRenditionReport } from "@/types/requests";
+import { REQUEST_CURRENCY, REQUEST_DOCUMENT_CATEGORY, REQUEST_DOCUMENT_SCOPE_TYPE, REQUEST_DOCUMENT_STORAGE_PROVIDER, REQUEST_DOCUMENT_UPLOAD_STATUS, REQUEST_RENDITION_REPORT_STATUS, REQUEST_STATUS, REQUEST_TYPE, REXAN_OUTCOME, type PaymentRequest, type RequestDocument, type RequestRenditionReport, type SettlementContextResponse } from "@/types/requests";
 
 const mocks = vi.hoisted(() => ({
   approveRequest: vi.fn(),
@@ -13,9 +13,11 @@ const mocks = vi.hoisted(() => ({
   useRequest: vi.fn(),
   useRequestDocuments: vi.fn(),
   useRequestRenditionReport: vi.fn(),
+  useSettlementContext: vi.fn(),
   requestRefetch: vi.fn(),
   documentsRefetch: vi.fn(),
   reportRefetch: vi.fn(),
+  settlementContextRefetch: vi.fn(),
   toastError: vi.fn(),
   toastSuccess: vi.fn(),
 }));
@@ -39,6 +41,7 @@ vi.mock("@/hooks/use-requests", () => ({
   useRequest: (id?: string) => mocks.useRequest(id),
   useRequestDocuments: (id?: string) => mocks.useRequestDocuments(id),
   useRequestRenditionReport: (id?: string, enabled?: boolean) => mocks.useRequestRenditionReport(id, enabled),
+  useSettlementContext: (id?: string, enabled?: boolean) => mocks.useSettlementContext(id, enabled),
   useApproveRequest: () => ({ approveRequest: mocks.approveRequest, isLoading: false }),
   useObserveRequest: () => ({ observeRequest: mocks.observeRequest, isLoading: false }),
   useRejectRequest: () => ({ rejectRequest: mocks.rejectRequest, isLoading: false }),
@@ -118,6 +121,62 @@ function makeDocument(overrides: Partial<RequestDocument> = {}): RequestDocument
     scope_type: REQUEST_DOCUMENT_SCOPE_TYPE.REQUEST,
     request_allocation_id: null,
     created_at: "2026-05-01T10:00:00.000Z",
+    ...overrides,
+  };
+}
+
+function makeSettlementContext(overrides: Partial<SettlementContextResponse> = {}): SettlementContextResponse {
+  const originalProof = makeDocument({
+    id: "original-proof-1",
+    payment_request_id: "advance-1",
+    document_category: REQUEST_DOCUMENT_CATEGORY.PAYMENT_PROOF,
+    original_filename: "constancia-original.pdf",
+    safe_filename: "constancia-original.pdf",
+    drive_web_url: "https://drive.example/original-proof",
+  });
+
+  return {
+    settlement: {
+      id: "rexan-1",
+      request_code: "REXAN-1",
+      sequential_number: null,
+      request_type: REQUEST_TYPE.ADVANCE_SETTLEMENT,
+      status: REQUEST_STATUS.SUBMITTED,
+      requested_amount: 100,
+      currency: REQUEST_CURRENCY.PEN,
+      concept: "Rendición REXAN",
+      related_request_id: "advance-1",
+    },
+    original_advance: {
+      id: "advance-1",
+      request_code: "SOL-ORIG-1",
+      sequential_number: null,
+      requested_amount: 100,
+      currency: REQUEST_CURRENCY.PEN,
+      concept: "Anticipo inicial",
+      requester_id: "user-1",
+      beneficiary_name: null,
+      budget_planning_line_id: null,
+      scheduled_rendition_at: "2026-06-30",
+      paid_at: "2026-06-01T10:00:00.000Z",
+      disbursed_at: "2026-06-01T10:00:00.000Z",
+      amount_disbursed: 100,
+      allocations: [],
+    },
+    original_advance_documents: [],
+    payment: {
+      id: "original-payment-1",
+      paid_at: "2026-06-01T10:00:00.000Z",
+      amount_paid: 100,
+      proof_document_id: "original-proof-1",
+      proof_pending: false,
+      details_pending: false,
+      operation_reference: "OP-ORIGINAL",
+      proof_document: originalProof,
+    },
+    due_date: null,
+    rexan: null,
+    settlement_documents: [],
     ...overrides,
   };
 }
@@ -213,9 +272,35 @@ async function openApproveDialogAndSetAmount(amount: string) {
 describe("RequestDetailPage REXAN approval", () => {
   beforeEach(() => {
     mocks.approveRequest.mockResolvedValue(makeRequest({ status: REQUEST_STATUS.APPROVED }));
-    mocks.useRequest.mockReturnValue({ request: makeRequest(), isLoading: false, error: null, refetch: mocks.requestRefetch });
+    mocks.useRequest.mockReturnValue({ request: makeRequest(), isLoading: false, error: null, refetch: mocks.requestRefetch, patchRequest: vi.fn() });
     mocks.useRequestDocuments.mockReturnValue({ documents: [], isLoading: false, error: null, refetch: mocks.documentsRefetch });
     mocks.useRequestRenditionReport.mockReturnValue({ report: null, isLoading: false, error: null, refetch: mocks.reportRefetch });
+    mocks.useSettlementContext.mockReturnValue({ context: null, isLoading: false, error: null, refetch: mocks.settlementContextRefetch });
+  });
+
+  it("muestra quién creó un reembolso en Datos principales", () => {
+    mocks.useRequest.mockReturnValue({
+      request: makeRequest({
+        request_type: REQUEST_TYPE.REIMBURSEMENT,
+        concept: "Reembolso SST",
+        beneficiary_name: "Beneficiario cuenta",
+        beneficiary_document_type: "DNI",
+        beneficiary_document_number: "12345678",
+        requester_name: "Ana Paredes",
+      }),
+      isLoading: false,
+      error: null,
+      refetch: mocks.requestRefetch,
+      patchRequest: vi.fn(),
+    });
+
+    render(<RequestDetailPage />);
+
+    expect(screen.getByText("Registrado por")).toBeInTheDocument();
+    expect(screen.getByText("Ana Paredes")).toBeInTheDocument();
+    expect(screen.getAllByText("A nombre de").length).toBeGreaterThan(0);
+    expect(screen.getByText("Beneficiario cuenta")).toBeInTheDocument();
+    expect(screen.getByText("DNI 12345678")).toBeInTheDocument();
   });
 
   it("muestra a GIOF que el solicitante prepara la rendición después del pago", () => {
@@ -242,6 +327,183 @@ describe("RequestDetailPage REXAN approval", () => {
     expect(screen.getByText(/El solicitante prepara y envía la rendición/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Ir a Bandeja de Rendiciones" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Iniciar rendición" })).not.toBeInTheDocument();
+  });
+
+  it("muestra Pago y constancias en una solicitud original pagada con constancia propia", () => {
+    const proofDocument = makeDocument({
+      id: "payment-proof-1",
+      payment_request_id: "advance-1",
+      document_category: REQUEST_DOCUMENT_CATEGORY.PAYMENT_PROOF,
+      original_filename: "constancia-pago.pdf",
+      safe_filename: "constancia-pago.pdf",
+      drive_web_url: "https://drive.example/payment-proof",
+    });
+    mocks.useRequest.mockReturnValue({
+      request: makeRequest({
+        id: "advance-1",
+        request_code: "SOL-ORIG-1",
+        request_type: REQUEST_TYPE.ADVANCE,
+        status: REQUEST_STATUS.PAID,
+        payment: {
+          id: "payment-1",
+          payment_request_id: "advance-1",
+          paid_at: "2026-06-01T10:00:00.000Z",
+          operation_reference: "OP-123",
+          amount_paid: 100,
+          bank_commission: null,
+          notes: null,
+          proof_document_id: "payment-proof-1",
+          proofDocument: proofDocument,
+          registered_by_id: "giof-1",
+          created_at: "2026-06-01T10:00:00.000Z",
+          updated_at: "2026-06-01T10:00:00.000Z",
+          proof_entries: [],
+        },
+      }),
+      isInitialLoading: false,
+      isRefreshing: false,
+      error: null,
+      refetch: mocks.requestRefetch,
+      patchRequest: vi.fn(),
+    });
+
+    render(<RequestDetailPage />);
+
+    const paymentCard = screen.getByTestId("request-payment-proof-card");
+    expect(within(paymentCard).getByText("Pago y constancias")).toBeInTheDocument();
+    expect(within(paymentCard).getByText("Constancia de pago")).toBeInTheDocument();
+    expect(within(paymentCard).getByText("constancia-pago.pdf")).toBeInTheDocument();
+    expect(within(paymentCard).getByRole("link", { name: "Ver constancia" })).toHaveAttribute("href", "https://drive.example/payment-proof");
+    expect(screen.queryByTestId("original-advance-payment-context")).not.toBeInTheDocument();
+  });
+
+  it("muestra estado no clicable cuando la constancia propia no tiene URL segura", () => {
+    mocks.useRequest.mockReturnValue({
+      request: makeRequest({
+        id: "advance-1",
+        request_code: "SOL-ORIG-1",
+        request_type: REQUEST_TYPE.ADVANCE,
+        status: REQUEST_STATUS.PAID,
+        payment: {
+          id: "payment-1",
+          payment_request_id: "advance-1",
+          paid_at: "2026-06-01T10:00:00.000Z",
+          operation_reference: "OP-123",
+          amount_paid: 100,
+          bank_commission: null,
+          notes: null,
+          proof_document_id: "payment-proof-1",
+          proofDocument: makeDocument({ id: "payment-proof-1", document_category: REQUEST_DOCUMENT_CATEGORY.PAYMENT_PROOF, drive_web_url: null }),
+          registered_by_id: "giof-1",
+          created_at: "2026-06-01T10:00:00.000Z",
+          updated_at: "2026-06-01T10:00:00.000Z",
+          proof_entries: [],
+        },
+      }),
+      isInitialLoading: false,
+      isRefreshing: false,
+      error: null,
+      refetch: mocks.requestRefetch,
+      patchRequest: vi.fn(),
+    });
+
+    render(<RequestDetailPage />);
+
+    const paymentCard = screen.getByTestId("request-payment-proof-card");
+    expect(within(paymentCard).getByText("Enlace no disponible")).toBeInTheDocument();
+    expect(within(paymentCard).queryByRole("link", { name: "Ver constancia" })).not.toBeInTheDocument();
+  });
+
+  it("muestra Anticipo original en REXAN sin mezclar la constancia original como pago propio", () => {
+    const ownProof = makeDocument({
+      id: "rexan-proof-1",
+      payment_request_id: "rexan-1",
+      document_category: REQUEST_DOCUMENT_CATEGORY.PAYMENT_PROOF,
+      original_filename: "constancia-rexan.pdf",
+      safe_filename: "constancia-rexan.pdf",
+      drive_web_url: "https://drive.example/rexan-proof",
+    });
+    mocks.useRequest.mockReturnValue({
+      request: makeRequest({
+        status: REQUEST_STATUS.PAID,
+        rexan_outcome: REXAN_OUTCOME.EXCESS,
+        rexan_balance_amount: 25,
+        payment: {
+          id: "rexan-payment-1",
+          payment_request_id: "rexan-1",
+          paid_at: "2026-06-05T10:00:00.000Z",
+          operation_reference: "OP-REXAN",
+          amount_paid: 25,
+          bank_commission: null,
+          notes: null,
+          proof_document_id: "rexan-proof-1",
+          proofDocument: ownProof,
+          registered_by_id: "giof-1",
+          created_at: "2026-06-05T10:00:00.000Z",
+          updated_at: "2026-06-05T10:00:00.000Z",
+          proof_entries: [],
+        },
+      }),
+      isInitialLoading: false,
+      isRefreshing: false,
+      error: null,
+      refetch: mocks.requestRefetch,
+      patchRequest: vi.fn(),
+    });
+    mocks.useSettlementContext.mockReturnValue({ context: makeSettlementContext(), isLoading: false, error: null, refetch: mocks.settlementContextRefetch });
+
+    render(<RequestDetailPage />);
+
+    const originalContext = screen.getByTestId("original-advance-payment-context");
+    expect(within(originalContext).getByText("Anticipo original")).toBeInTheDocument();
+    expect(within(originalContext).getByRole("button", { name: "Ver solicitud original" })).toBeInTheDocument();
+    expect(within(originalContext).getByRole("link", { name: "Ver constancia original" })).toHaveAttribute("href", "https://drive.example/original-proof");
+    const paymentCard = screen.getByTestId("request-payment-proof-card");
+    expect(within(paymentCard).getByText("constancia-rexan.pdf")).toBeInTheDocument();
+    expect(within(paymentCard).queryByText("constancia-original.pdf")).not.toBeInTheDocument();
+  });
+
+  it("mantiene Ver solicitud original y no renderiza enlace roto cuando la constancia original no tiene URL usable", () => {
+    mocks.useRequest.mockReturnValue({
+      request: makeRequest({ status: REQUEST_STATUS.PAID }),
+      isInitialLoading: false,
+      isRefreshing: false,
+      error: null,
+      refetch: mocks.requestRefetch,
+      patchRequest: vi.fn(),
+    });
+    mocks.useSettlementContext.mockReturnValue({
+      context: makeSettlementContext({
+        payment: {
+          id: "original-payment-1",
+          paid_at: "2026-06-01T10:00:00.000Z",
+          amount_paid: 100,
+          proof_document_id: "original-proof-no-url",
+          proof_pending: false,
+          details_pending: false,
+          operation_reference: "OP-ORIGINAL",
+          proof_document: makeDocument({
+            id: "original-proof-no-url",
+            payment_request_id: "advance-1",
+            document_category: REQUEST_DOCUMENT_CATEGORY.PAYMENT_PROOF,
+            original_filename: "constancia-original-sin-url.pdf",
+            safe_filename: "constancia-original-sin-url.pdf",
+            drive_web_url: null,
+          }),
+        },
+      }),
+      isLoading: false,
+      error: null,
+      refetch: mocks.settlementContextRefetch,
+    });
+
+    render(<RequestDetailPage />);
+
+    const originalContext = screen.getByTestId("original-advance-payment-context");
+    expect(within(originalContext).getByRole("button", { name: "Ver solicitud original" })).toBeInTheDocument();
+    expect(within(originalContext).getByText("constancia-original-sin-url.pdf", { exact: false })).toBeInTheDocument();
+    expect(within(originalContext).getByText("Constancia original no disponible")).toBeInTheDocument();
+    expect(within(originalContext).queryByRole("link", { name: "Ver constancia original" })).not.toBeInTheDocument();
   });
 
   it("aprueba REXAN EXACT con validated_spent_amount y sin campos de devolución ni nota legacy", async () => {
@@ -410,6 +672,7 @@ describe("RequestDetailPage REXAN approval", () => {
       isLoading: false,
       error: null,
       refetch: mocks.requestRefetch,
+      patchRequest: vi.fn(),
     });
 
     render(<RequestDetailPage />);

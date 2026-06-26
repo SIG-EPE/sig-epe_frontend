@@ -390,6 +390,40 @@ describe("RequestDocumentsCard", () => {
     expect(await screen.findByText("1 documento adjuntado correctamente.")).toBeInTheDocument();
   });
 
+  it("deja listo el cargador para otra tanda después de adjuntar un bloque completo", async () => {
+    vi.mocked(api.get).mockResolvedValue([]);
+    vi.mocked(api.postForm)
+      .mockResolvedValueOnce(makeDocument({ id: "doc-block-1", original_filename: "bloque-1.pdf" }))
+      .mockResolvedValueOnce(makeDocument({ id: "doc-block-2", original_filename: "bloque-2.pdf" }))
+      .mockResolvedValueOnce(makeDocument({ id: "doc-next", original_filename: "siguiente.pdf" }));
+
+    const user = userEvent.setup();
+    render(<RequestDocumentsCard request={makeRequest({ request_type: REQUEST_TYPE.SUPPLIER_PAYMENT })} />);
+
+    const firstBlock = [
+      new File(["contenido-1"], "bloque-1.pdf", { type: "application/pdf" }),
+      new File(["contenido-2"], "bloque-2.pdf", { type: "application/pdf" }),
+    ];
+    fireEvent.change(screen.getByLabelText(/archivo/i), { target: { files: firstBlock } });
+    await user.click(screen.getByRole("button", { name: /^adjuntar$/i }));
+
+    expect(await screen.findByText("2 documentos adjuntados correctamente.")).toBeInTheDocument();
+    expect(screen.queryByText("Cola de carga")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^adjuntar$/i })).toBeDisabled();
+
+    const nextFile = new File(["contenido-3"], "siguiente.pdf", { type: "application/pdf" });
+    fireEvent.change(screen.getByLabelText(/archivo/i), { target: { files: [nextFile] } });
+
+    expect(await screen.findByText("siguiente.pdf")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^adjuntar$/i })).toBeEnabled();
+    await user.click(screen.getByRole("button", { name: /^adjuntar$/i }));
+
+    await waitFor(() => {
+      expect(api.postForm).toHaveBeenCalledTimes(3);
+    });
+    expect(await screen.findByText("1 documento adjuntado correctamente.")).toBeInTheDocument();
+  });
+
   it("permite retirar un archivo pendiente de la cola local antes de subirlo", async () => {
     vi.mocked(api.get).mockResolvedValue([]);
 
@@ -427,7 +461,8 @@ describe("RequestDocumentsCard", () => {
     expect(event.defaultPrevented).toBe(true);
 
     uploadDeferred.resolve(makeDocument({ id: "doc-2", original_filename: "nuevo.pdf" }));
-    await waitFor(() => expect(screen.getByText("Completado")).toBeInTheDocument());
+    expect(await screen.findByText("1 documento adjuntado correctamente.")).toBeInTheDocument();
+    expect(screen.queryByText("Cola de carga")).not.toBeInTheDocument();
   });
 
   it("sube el PxQ de una línea POA con alcance de asignación", async () => {
@@ -819,6 +854,40 @@ describe("RequestDocumentsCard", () => {
       expect(api.postForm).toHaveBeenCalledTimes(2);
     });
     expect(await screen.findByText("1 documento adjuntado correctamente.")).toBeInTheDocument();
+  });
+
+  it("conserva solo incidencias de una tanda parcial y permite agregar otra sin reenviar exitosos", async () => {
+    vi.mocked(api.get).mockResolvedValue([]);
+    vi.mocked(api.postForm)
+      .mockResolvedValueOnce(makeDocument({ id: "doc-ok", original_filename: "correcto.pdf" }))
+      .mockRejectedValueOnce(makeUploadError(500, "No pudimos adjuntar este archivo"))
+      .mockResolvedValueOnce(makeDocument({ id: "doc-next", original_filename: "nuevo.pdf" }));
+
+    const user = userEvent.setup();
+    render(<RequestDocumentsCard request={makeRequest({ request_type: REQUEST_TYPE.SUPPLIER_PAYMENT })} />);
+
+    const blockFiles = [
+      new File(["contenido-ok"], "correcto.pdf", { type: "application/pdf" }),
+      new File(["contenido-fail"], "fallido.pdf", { type: "application/pdf" }),
+    ];
+    fireEvent.change(screen.getByLabelText(/archivo/i), { target: { files: blockFiles } });
+    await user.click(screen.getByRole("button", { name: /^adjuntar$/i }));
+
+    expect(await screen.findByText("No pudimos adjuntar este archivo")).toBeInTheDocument();
+    expect(screen.queryByText("correcto.pdf")).not.toBeInTheDocument();
+    expect(screen.getByText("fallido.pdf")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^adjuntar$/i })).toBeDisabled();
+
+    const nextFile = new File(["contenido-next"], "nuevo.pdf", { type: "application/pdf" });
+    fireEvent.change(screen.getByLabelText(/archivo/i), { target: { files: [nextFile] } });
+
+    expect(await screen.findByText("nuevo.pdf")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^adjuntar$/i })).toBeEnabled();
+    await user.click(screen.getByRole("button", { name: /^adjuntar$/i }));
+
+    await waitFor(() => {
+      expect(api.postForm).toHaveBeenCalledTimes(3);
+    });
   });
 
   it("muestra datos detectados del comprobante y permite corregirlos", async () => {

@@ -54,7 +54,10 @@ import {
   validateRequestDataForSubmit,
   validateRequestDataForSubmitIssues,
   REQUEST_SUBMIT_FIELD,
+  getPaymentRequestCreatorDisplayName,
   getPaymentRequestParty,
+  getRegisteredPartyDisplay,
+  getRegisteredPartyDocumentLabel,
   getPaymentQueueStatusLabel,
   getReturnProofDocuments,
   getRexanOutcomeLabel,
@@ -368,6 +371,12 @@ describe("requests helpers", () => {
       actionLabel: "Ir a Bandeja de Rendiciones",
       action: "navigate",
       href: "/renditions",
+    });
+    expect(getRenditionNextStepGuidance(ROLE_CODE.GIOF_GESTOR, makeRequest({ status: REQUEST_STATUS.PAID, requester_id: "giof-1" }), "giof-1")).toMatchObject({
+      title: "Siguiente paso: preparar rendición",
+      actionLabel: "Iniciar rendición",
+      action: "start",
+      href: null,
     });
     expect(getRenditionNextStepGuidance(ROLE_CODE.GIOF_GESTOR, makeRequest({ status: REQUEST_STATUS.PAID, advanceSettlements: [draftSettlement] }), "giof-1")).toMatchObject({
       actionLabel: "Ver rendición vinculada",
@@ -1181,10 +1190,24 @@ describe("requests helpers", () => {
   it("obtiene etiqueta y contraparte para cola de pagos", () => {
     expect(getPaymentQueueStatusLabel(REQUEST_STATUS.APPROVED)).toBe("En gestión de pago");
     expect(getPaymentQueueStatusLabel(REQUEST_STATUS.PAID)).toBe("Pagado");
-    expect(getPaymentRequestParty(makeRequest({ supplier_name: "Proveedor SAC" }))).toBe("Proveedor SAC");
-    expect(getPaymentRequestParty(makeRequest({ beneficiary_name: "Beneficiario" }))).toBe("Beneficiario");
+    expect(getPaymentRequestParty(makeRequest({ registered_party_name: "Proveedor SAC" }))).toBe("Proveedor SAC");
+    expect(getRegisteredPartyDisplay(makeRequest({ supplier_name: "Proveedor Base SAC" }))).toBe("Proveedor Base SAC");
+    expect(getRegisteredPartyDisplay(makeRequest({ beneficiary_name: "Beneficiario" }))).toBe("Beneficiario");
+    expect(getRegisteredPartyDocumentLabel(makeRequest({ registered_party_document_type: BENEFICIARY_DOCUMENT_TYPE.RUC, registered_party_document_number: "20123456789" }))).toBe("RUC 20123456789");
+    expect(getRegisteredPartyDocumentLabel(makeRequest({ requester_name: "Ana Paredes" }))).toBe("—");
     expect(getRequestPayableAmount(makeRequest({ request_type: REQUEST_TYPE.ADVANCE_SETTLEMENT, rexan_outcome: REXAN_OUTCOME.EXCESS, rexan_balance_amount: "25.55", requested_amount: 100 }))).toBe(25.55);
     expect(getRequestPayableAmount(makeRequest({ request_type: REQUEST_TYPE.REIMBURSEMENT, requested_amount: 80 }))).toBe(80);
+  });
+
+  it("obtiene el creador de solicitud sin confundirlo con beneficiario o proveedor", () => {
+    expect(getPaymentRequestCreatorDisplayName(makeRequest({
+      request_type: REQUEST_TYPE.REIMBURSEMENT,
+      beneficiary_name: "Beneficiario cuenta",
+      requester_name: "Ana Paredes",
+    }))).toBe("Ana Paredes");
+    expect(getPaymentRequestCreatorDisplayName(makeRequest({
+      requester: { id: "user-1", firstName: "Luis", lastName: "Rojas" },
+    }))).toBe("Luis Rojas");
   });
 
   it("sanitiza documentos de beneficiario según el tipo seleccionado", () => {

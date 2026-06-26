@@ -13,6 +13,9 @@ import {
   getRenditionDueLabel,
   getRenditionStatusLabel,
   getRenditionStatusTone,
+  getRegisteredByDisplayName,
+  getRegisteredPartyDisplay,
+  getRegisteredPartyDocumentLabel,
 } from "@/lib/requests";
 import type { RenditionInboxRow } from "@/types/requests";
 
@@ -35,7 +38,7 @@ export function RenditionsTable({ renditions, isLoading }: RenditionsTableProps)
       <TableHeader>
         <TableRow>
           <TableHead>Código</TableHead>
-          <TableHead>Solicitante</TableHead>
+          <TableHead>A nombre de</TableHead>
           <TableHead className="text-right">Monto</TableHead>
           <TableHead>Fecha de pago</TableHead>
           <TableHead>Fecha límite</TableHead>
@@ -47,6 +50,9 @@ export function RenditionsTable({ renditions, isLoading }: RenditionsTableProps)
       <TableBody>
         {renditions.map((row) => {
           const action = getRenditionAction(row);
+          const registeredParty = getRegisteredPartyDisplay(row);
+          const registeredPartyDocument = getRegisteredPartyDocumentLabel(row);
+          const registeredBy = getRegisteredByDisplayName(row);
           return (
             <TableRow key={row.advance_id} data-testid="rendition-row">
               <TableCell className="font-medium whitespace-nowrap">
@@ -55,7 +61,13 @@ export function RenditionsTable({ renditions, isLoading }: RenditionsTableProps)
                   <span className="text-xs text-muted-foreground">{row.concept}</span>
                 </div>
               </TableCell>
-              <TableCell className="max-w-xs truncate">{row.requester ?? "—"}</TableCell>
+              <TableCell className="max-w-xs">
+                <div className="flex flex-col gap-1">
+                  <span className="truncate font-medium">{registeredParty}</span>
+                  <span className="truncate text-xs text-muted-foreground">{registeredPartyDocument}</span>
+                  <span className="truncate text-xs text-muted-foreground">Registrado por: {registeredBy}</span>
+                </div>
+              </TableCell>
               <TableCell className="text-right font-medium">{formatRequestCurrency(row.amount_paid ?? row.requested_amount)}</TableCell>
               <TableCell className="whitespace-nowrap">{formatRequestDate(row.paid_at)}</TableCell>
               <TableCell className="whitespace-nowrap">{formatRequestDate(row.scheduled_rendition_at)}</TableCell>

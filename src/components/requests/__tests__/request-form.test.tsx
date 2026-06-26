@@ -302,12 +302,14 @@ function makeSettlementContext(overrides: Partial<SettlementContextResponse> = {
       read_only: true,
     }],
     payment: {
+      id: "payment-1",
       paid_at: "2026-06-01T10:00:00.000Z",
       amount_paid: 1000,
       proof_document_id: null,
       proof_pending: false,
       details_pending: false,
       operation_reference: "OP-001",
+      proof_document: null,
     },
     due_date: {
       scheduled_rendition_at: "2026-06-30",

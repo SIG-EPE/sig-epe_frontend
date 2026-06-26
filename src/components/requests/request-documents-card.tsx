@@ -493,6 +493,14 @@ export function RequestDocumentsCard({
     setQueue(uploadQueueRef.current.map((item) => item.id === itemId ? { ...item, ...patch } : item));
   }
 
+  function clearCompletedQueueItems(itemIds: string[]): void {
+    const processedIds = new Set(itemIds);
+    setQueue(uploadQueueRef.current.filter((item) => {
+      if (!processedIds.has(item.id)) return true;
+      return item.status !== REQUEST_DOCUMENT_UPLOAD_QUEUE_STATUS.COMPLETED;
+    }));
+  }
+
   function handleQueueFileChange(fileList: FileList | null): void {
     const selectedFiles = Array.from(fileList ?? []);
     setFile(selectedFiles[0] ?? null);
@@ -603,6 +611,7 @@ export function RequestDocumentsCard({
         }
       }
       await Promise.all([refetch(), refetchReceipts({ background: true })]);
+      clearCompletedQueueItems(itemIds);
       if (failed > 0) {
         setOperationError(`${failed} archivo${failed === 1 ? "" : "s"} no se pudieron adjuntar. Revisa la cola y reintenta los pendientes.`);
         toast.error("Algunos documentos no se pudieron adjuntar.");

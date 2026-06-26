@@ -8,7 +8,9 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { StatusBadge } from "@/components/requests/status-badge";
 import { PaymentAllocationProofCoverage } from "@/components/payments/payment-allocation-proof-coverage";
 import { QueueTableRowsSkeleton } from "@/components/performance/route-skeletons";
-import { REQUEST_TYPE_LABELS, formatRequestCurrency, formatRequestDate, getPaymentId, getPaymentPendingBadges, getPaymentRequestParty, getPlanningLineDisplay, getRequestPayableAmount, hasPaymentDetailsPending, hasPaymentProofPending, isRexanExcessRequest } from "@/lib/requests";
+import { ROUTES } from "@/lib/constants";
+import { getSafeDocumentUrl } from "@/lib/safe-url";
+import { REQUEST_TYPE_LABELS, formatRequestCurrency, formatRequestDate, getPaymentId, getPaymentPendingBadges, getPaymentProofDisplayItems, getPlanningLineDisplay, getRegisteredByDisplayName, getRegisteredPartyDisplay, getRegisteredPartyDocumentLabel, getRequestPayableAmount, hasAllAllocationPaymentProofCoverage, hasPaymentDetailsPending, hasPaymentProofPending, isRexanExcessRequest } from "@/lib/requests";
 import { REQUEST_STATUS, type PaymentRequest } from "@/types/requests";
 
 interface PaymentQueueTableProps {
@@ -41,7 +43,7 @@ export function PaymentQueueTable({ requests, isLoading, onRegisterPayment, sele
           {onToggleRequest && <TableHead className="w-10"><span className="sr-only">Seleccionar</span></TableHead>}
           <TableHead>Código</TableHead>
           <TableHead>Tipo</TableHead>
-          <TableHead>Solicitante / proveedor</TableHead>
+          <TableHead>A nombre de</TableHead>
           <TableHead>Área</TableHead>
           <TableHead className="text-right">Monto</TableHead>
           <TableHead>Aprobación / estado</TableHead>
@@ -69,11 +71,17 @@ export function PaymentQueueTable({ requests, isLoading, onRegisterPayment, sele
           const allocationCount = request.allocation_count ?? request.allocations?.length ?? 0;
           const hasAllocations = allocationCount > 0;
           const isPendingPayment = request.status === REQUEST_STATUS.APPROVED;
-          const canAttachAllocationProof = Boolean(onAttachPaymentProof && request.status === REQUEST_STATUS.PAID && getPaymentId(request) && hasAllocations);
+          const canAttachAllocationProof = Boolean(onAttachPaymentProof && request.status === REQUEST_STATUS.PAID && getPaymentId(request) && hasAllocations && !hasAllAllocationPaymentProofCoverage(request));
+          const paymentProofUrl = request.status === REQUEST_STATUS.PAID
+            ? getPaymentProofDisplayItems(request.payment).find((item) => item.url)?.url ?? getSafeDocumentUrl(request.payment?.proofDocument?.drive_web_url)
+            : null;
           const firstAllocationLine = request.allocations?.[0]?.planning_line ?? request.allocations?.[0]?.budgetPlanningLine;
           const areaSummary = allocationCount > 1
             ? `${allocationCount} líneas POA · ${request.allocations?.[0]?.org_unit?.name ?? getPlanningLineDisplay(firstAllocationLine)}`
             : request.organizationalUnit?.name ?? request.allocations?.[0]?.org_unit?.name ?? getPlanningLineDisplay(firstAllocationLine ?? request.budgetPlanningLine);
+          const registeredParty = getRegisteredPartyDisplay(request);
+          const registeredPartyDocument = getRegisteredPartyDocumentLabel(request);
+          const registeredBy = getRegisteredByDisplayName(request);
 
           return (
           <Fragment key={request.id}>
@@ -94,7 +102,13 @@ export function PaymentQueueTable({ requests, isLoading, onRegisterPayment, sele
             )}
             <TableCell className="font-medium whitespace-nowrap">{request.request_code ?? request.sequential_number ?? "—"}</TableCell>
             <TableCell className="whitespace-nowrap">{REQUEST_TYPE_LABELS[request.request_type]}</TableCell>
-            <TableCell className="max-w-xs truncate">{getPaymentRequestParty(request)}</TableCell>
+            <TableCell className="max-w-xs">
+              <div className="flex flex-col gap-1">
+                <span className="truncate font-medium">{registeredParty}</span>
+                <span className="truncate text-xs text-muted-foreground">{registeredPartyDocument}</span>
+                <span className="truncate text-xs text-muted-foreground">Registrado por: {registeredBy}</span>
+              </div>
+            </TableCell>
             <TableCell className="max-w-xs truncate">{areaSummary}</TableCell>
             <TableCell className="text-right font-medium">
               <div className="flex flex-col gap-1">
@@ -124,6 +138,18 @@ export function PaymentQueueTable({ requests, isLoading, onRegisterPayment, sele
                 )}
                 {canAttachAllocationProof && (
                   <Button size="sm" variant="outline" onClick={() => onAttachPaymentProof?.(request)} data-testid="attach-payment-proof-button">Agregar comprobante POA</Button>
+                )}
+                {request.status === REQUEST_STATUS.PAID && (
+                  <>
+                    <Button size="sm" variant="ghost" asChild>
+                      <a href={`${ROUTES.REQUESTS}/${request.id}`}>Ver solicitud</a>
+                    </Button>
+                    {paymentProofUrl && (
+                      <Button size="sm" variant="ghost" asChild>
+                        <a href={paymentProofUrl} target="_blank" rel="noopener noreferrer">Ver constancia</a>
+                      </Button>
+                    )}
+                  </>
                 )}
               </div>
             </TableCell>

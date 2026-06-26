@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 
@@ -156,18 +156,39 @@ describe("RequestListTable", () => {
     expect(screen.getByText("Modificación")).toBeInTheDocument();
   });
 
-  it("muestra el responsable en la bandeja de revisión", () => {
+  it("muestra Registrado por y A nombre de sin mezclar sujetos", () => {
     render(
       <RequestListTable
-        requests={[makeRequest({ beneficiary_name: "María Responsable" })]}
+        requests={[makeRequest({
+          created_by_display_name: "Steve Registrante",
+          registered_party_name: "María Responsable",
+          registered_party_document_type: "DNI",
+          registered_party_document_number: "12345678",
+        })]}
         isLoading={false}
         roleCode={ROLE_CODE.GIOF_GESTOR}
         showResponsible
       />,
     );
 
-    expect(screen.getByRole("columnheader", { name: "Responsable" })).toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: "Registrado por" })).toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: "A nombre de" })).toBeInTheDocument();
+    expect(screen.getByText("Steve Registrante")).toBeInTheDocument();
     expect(screen.getByText("María Responsable")).toBeInTheDocument();
+    expect(screen.getByText("DNI 12345678")).toBeInTheDocument();
+  });
+
+  it("no usa el registrante como fallback de A nombre de", () => {
+    render(
+      <RequestListTable
+        requests={[makeRequest({ created_by_display_name: "Ana Registrante" })]}
+        isLoading={false}
+        roleCode={ROLE_CODE.GIOF_GESTOR}
+      />,
+    );
+
+    expect(screen.getByText("Ana Registrante")).toBeInTheDocument();
+    expect(screen.getAllByText("—").length).toBeGreaterThan(0);
   });
 
   it("muestra un acceso directo interno a documentos cuando la solicitud tiene documentos", () => {
@@ -236,6 +257,38 @@ describe("RequestListTable", () => {
     expect(screen.getByText(/Concepto: Compra de materiales/)).toBeInTheDocument();
   });
 
+  it("muestra línea POA y concepto completos al hacer hover o foco", async () => {
+    const user = userEvent.setup();
+    const longConcept = "Compra de materiales para el seguimiento de actividades territoriales con descripción completa visible en tooltip";
+
+    render(
+      <RequestListTable
+        requests={[makeRequest({
+          concept: longConcept,
+          allocations: [makeAllocation()],
+          allocation_count: 1,
+        })]}
+        isLoading={false}
+        roleCode={ROLE_CODE.SOLICITANTE_EPE}
+        currentUserId="user-1"
+      />,
+    );
+
+    const trigger = screen.getByTestId("request-poa-tooltip-trigger");
+    expect(trigger).toHaveAttribute("tabindex", "0");
+    expect(trigger).toHaveAccessibleName(/Ver línea POA y concepto completos/i);
+
+    await user.hover(trigger);
+
+    const tooltip = await screen.findByRole("tooltip");
+    expect(within(tooltip).getByText("Líneas POA completas")).toBeInTheDocument();
+    expect(within(tooltip).getByText(/POA-001/)).toBeInTheDocument();
+    expect(within(tooltip).getByText(/Materiales educativos para talleres regionales/)).toBeInTheDocument();
+    expect(within(tooltip).getByText(/60/)).toBeInTheDocument();
+    expect(within(tooltip).getByText("Concepto completo")).toBeInTheDocument();
+    expect(within(tooltip).getByText(longConcept)).toBeInTheDocument();
+  });
+
   it("resume múltiples líneas POA y deja el detalle accesible", async () => {
     const user = userEvent.setup();
     const secondAllocation = makeAllocation({
@@ -266,5 +319,49 @@ describe("RequestListTable", () => {
 
     expect(screen.getByText(/POA-002/)).toBeInTheDocument();
     expect(screen.getByText(/Servicios logísticos para capacitación/)).toBeInTheDocument();
+  });
+
+  it("incluye todas las líneas POA y montos en el tooltip accesible por foco", async () => {
+    const user = userEvent.setup();
+    const secondAllocation = makeAllocation({
+      id: "allocation-2",
+      budget_planning_line_id: "line-2",
+      amount: 40,
+      sort_order: 2,
+      planning_line: {
+        ...makeAllocation().planning_line!,
+        id: "line-2",
+        line_code: "POA-002",
+        resource_description: "Servicios logísticos para capacitación",
+      },
+    });
+
+    render(
+      <RequestListTable
+        requests={[makeRequest({
+          concept: "Ejecución logística completa",
+          allocations: [makeAllocation(), secondAllocation],
+          allocation_count: 2,
+        })]}
+        isLoading={false}
+        roleCode={ROLE_CODE.SOLICITANTE_EPE}
+        currentUserId="user-1"
+      />,
+    );
+
+    const trigger = screen.getByTestId("request-poa-tooltip-trigger");
+    await user.tab();
+
+    expect(trigger).toHaveFocus();
+    expect(trigger).toHaveAccessibleName(/Ver líneas POA y concepto completos/i);
+
+    const tooltip = await screen.findByRole("tooltip");
+    expect(within(tooltip).getByText(/POA-001/)).toBeInTheDocument();
+    expect(within(tooltip).getByText(/Materiales educativos para talleres regionales/)).toBeInTheDocument();
+    expect(within(tooltip).getByText(/POA-002/)).toBeInTheDocument();
+    expect(within(tooltip).getByText(/Servicios logísticos para capacitación/)).toBeInTheDocument();
+    expect(within(tooltip).getByText(/60/)).toBeInTheDocument();
+    expect(within(tooltip).getByText(/40/)).toBeInTheDocument();
+    expect(within(tooltip).getByText("Ejecución logística completa")).toBeInTheDocument();
   });
 });

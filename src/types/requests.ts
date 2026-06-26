@@ -561,12 +561,14 @@ export interface RequestAllocationDocumentChecklist {
 }
 
 export interface SettlementContextPayment {
+  id: string | null;
   paid_at: string | null;
   amount_paid: number | string | null;
   proof_document_id: string | null;
   proof_pending: boolean;
   details_pending: boolean;
   operation_reference: string | null;
+  proof_document?: SettlementContextDocument | null;
 }
 
 export interface SettlementContextDueDate {
@@ -654,6 +656,11 @@ export interface PaymentRequest {
   currency: RequestCurrency;
   concept: string;
   requester_id: string;
+  requester_name?: string | null;
+  created_by_display_name?: string | null;
+  registered_party_name?: string | null;
+  registered_party_document_type?: BeneficiaryDocumentType | null;
+  registered_party_document_number?: string | null;
   requester?: RequesterSummary | null;
   budget_planning_line_id: string | null;
   budgetPlanningLine?: PaymentRequestPlanningLine | null;
@@ -1183,6 +1190,10 @@ export interface RenditionInboxRow {
   advance_id: string;
   request_code: string | null;
   requester: string | null;
+  registered_by?: string | null;
+  registered_party_name?: string | null;
+  registered_party_document_type?: BeneficiaryDocumentType | null;
+  registered_party_document_number?: string | null;
   org_unit: string | null;
   concept: string;
   requested_amount: number;
