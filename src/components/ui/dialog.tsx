@@ -59,9 +59,10 @@ export function Dialog({ children, open: controlledOpen, onOpenChange }: DialogP
 interface DialogContentProps {
   children: ReactNode;
   className?: string;
+  closeDisabled?: boolean;
 }
 
-export function DialogContent({ children, className }: DialogContentProps) {
+export function DialogContent({ children, className, closeDisabled = false }: DialogContentProps) {
   const { open, onOpenChange } = useDialogContext();
   const [mounted, setMounted] = useState(false);
   const titleId = useId();
@@ -106,11 +107,14 @@ export function DialogContent({ children, className }: DialogContentProps) {
           <button
             type="button"
             onClick={() => onOpenChange(false)}
+            disabled={closeDisabled}
             className={cn(
               buttonVariants({ variant: "ghost" }),
               "absolute right-4 top-4 h-8 w-8 shrink-0 p-0",
             )}
             aria-label="Cerrar"
+            aria-disabled={closeDisabled}
+            title={closeDisabled ? "Espera a que termine la carga" : "Cerrar"}
           >
             <X className="h-4 w-4" />
           </button>

@@ -51,6 +51,23 @@ function buildCurrentHref(pathname: string, searchParams: URLSearchParams) {
   return query ? `${pathname}?${query}` : pathname;
 }
 
+function getNavigableAnchor(target: EventTarget | null): HTMLAnchorElement | null {
+  if (!(target instanceof Element)) return null;
+
+  const anchor = target.closest("a[href]");
+  if (!(anchor instanceof HTMLAnchorElement)) return null;
+  if (anchor.target && anchor.target !== "_self") return null;
+  if (anchor.hasAttribute("download")) return null;
+  if (anchor.origin !== window.location.origin) return null;
+
+  const href = anchor.getAttribute("href");
+  if (!href || href.startsWith("#") || href.startsWith("mailto:") || href.startsWith("tel:")) {
+    return null;
+  }
+
+  return anchor;
+}
+
 export function isNavigationHrefCurrent(
   href: string,
   pathname: string,
@@ -108,6 +125,33 @@ export function NavigationFeedbackProvider({ children }: { children: ReactNode }
       window.clearTimeout(maxTimer);
     };
   }, [pendingHref]);
+
+  useEffect(() => {
+    function handleDocumentClick(event: MouseEvent): void {
+      if (
+        event.defaultPrevented ||
+        event.metaKey ||
+        event.ctrlKey ||
+        event.shiftKey ||
+        event.altKey ||
+        event.button !== 0
+      ) {
+        return;
+      }
+
+      const anchor = getNavigableAnchor(event.target);
+      const href = anchor?.getAttribute("href");
+      if (!href) return;
+
+      window.queueMicrotask(() => {
+        if (event.defaultPrevented) return;
+        startNavigation(href);
+      });
+    }
+
+    document.addEventListener("click", handleDocumentClick);
+    return () => document.removeEventListener("click", handleDocumentClick);
+  }, [pathname, searchParams]);
 
   return (
     <NavigationFeedbackContext.Provider

@@ -11,12 +11,14 @@ import { REQUEST_CURRENCY, REQUEST_DOCUMENT_CATEGORY, REQUEST_DOCUMENT_STORAGE_P
 const mocks = vi.hoisted(() => ({
   registerPayment: vi.fn(),
   attachPaymentProof: vi.fn(),
+  registerPaymentLoading: vi.fn(() => false),
+  attachPaymentProofLoading: vi.fn(() => false),
   usePaymentQueue: vi.fn(),
 }));
 
 vi.mock("@/hooks/use-requests", () => ({
-  useRegisterPayment: () => ({ registerPayment: mocks.registerPayment, isLoading: false, error: null }),
-  useAttachPaymentProof: () => ({ attachPaymentProof: mocks.attachPaymentProof, isLoading: false, error: null }),
+  useRegisterPayment: () => ({ registerPayment: mocks.registerPayment, isLoading: mocks.registerPaymentLoading(), error: null }),
+  useAttachPaymentProof: () => ({ attachPaymentProof: mocks.attachPaymentProof, isLoading: mocks.attachPaymentProofLoading(), error: null }),
   useBulkMarkPaid: () => ({ bulkMarkPaid: vi.fn(), isLoading: false, error: null }),
   useCompletePaymentDetails: () => ({ completePaymentDetails: vi.fn(), isLoading: false, error: null }),
   usePaymentQueue: mocks.usePaymentQueue,
@@ -107,6 +109,8 @@ describe("REXAN payment queue and modal", () => {
     vi.clearAllMocks();
     mocks.registerPayment.mockResolvedValue(makeRequest());
     mocks.attachPaymentProof.mockResolvedValue(makeRequest());
+    mocks.registerPaymentLoading.mockReturnValue(false);
+    mocks.attachPaymentProofLoading.mockReturnValue(false);
     mocks.usePaymentQueue.mockReturnValue({ requests: [], total: 0, isLoading: false, error: null, refetch: vi.fn() });
   });
 
@@ -129,6 +133,40 @@ describe("REXAN payment queue and modal", () => {
     expect(within(rows[1]).getByText("SOL-2")).toBeInTheDocument();
     expect(within(rows[1]).getByText(/80\.00/)).toBeInTheDocument();
     expect(within(rows[1]).queryByText("Saldo REXAN")).not.toBeInTheDocument();
+  });
+
+  it("muestra Registrado por y A nombre de con documento en la cola", () => {
+    render(
+      <PaymentQueueTable
+        requests={[makeRequest({
+          created_by_display_name: "Steve Registrante",
+          registered_party_name: "Proveedor SAC",
+          registered_party_document_type: "RUC",
+          registered_party_document_number: "20123456789",
+        })]}
+        isLoading={false}
+        onRegisterPayment={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole("columnheader", { name: "A nombre de" })).toBeInTheDocument();
+    expect(screen.getByText("Proveedor SAC")).toBeInTheDocument();
+    expect(screen.getByText("RUC 20123456789")).toBeInTheDocument();
+    expect(screen.getByText("Registrado por: Steve Registrante")).toBeInTheDocument();
+  });
+
+  it("muestra guion para A nombre de sin usar el registrante como fallback", () => {
+    render(
+      <PaymentQueueTable
+        requests={[makeRequest({ beneficiary_name: null, created_by_display_name: "Ana Registrante" })]}
+        isLoading={false}
+        onRegisterPayment={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText("Registrado por: Ana Registrante")).toBeInTheDocument();
+    expect(screen.getAllByText("—").length).toBeGreaterThan(0);
+    expect(screen.queryByText("Beneficiario")).not.toBeInTheDocument();
   });
 
   it("permite seleccionar pagos pendientes para acción masiva", async () => {
@@ -182,6 +220,134 @@ describe("REXAN payment queue and modal", () => {
     expect(screen.getByText("Falta referencia")).toBeInTheDocument();
     screen.getByRole("button", { name: "Completar datos" }).click();
     expect(onCompletePaymentDetails).toHaveBeenCalledWith(paidRequest);
+  });
+
+  it("expone Ver solicitud y Ver constancia en historial pagado cuando hay URL usable", () => {
+    render(
+      <PaymentQueueTable
+        requests={[makeRequest({
+          id: "paid-1",
+          request_code: "SOL-PAID",
+          status: REQUEST_STATUS.PAID,
+          payment_id: "payment-1",
+          payment: {
+            id: "payment-1",
+            payment_request_id: "paid-1",
+            paid_at: "2026-06-08T20:00:00.000Z",
+            operation_reference: "OP-PAID",
+            amount_paid: 100,
+            bank_commission: null,
+            notes: null,
+            proof_document_id: "proof-doc-1",
+            proofDocument: {
+              id: "proof-doc-1",
+              payment_request_id: "paid-1",
+              document_category: REQUEST_DOCUMENT_CATEGORY.PAYMENT_PROOF,
+              safe_filename: "constancia.pdf",
+              original_filename: "constancia.pdf",
+              mime_type: "application/pdf",
+              size_bytes: 10,
+              storage_provider: REQUEST_DOCUMENT_STORAGE_PROVIDER.DRIVE,
+              upload_status: REQUEST_DOCUMENT_UPLOAD_STATUS.PERMANENT,
+              drive_web_url: "https://drive.example/proof-doc-1",
+              created_at: "2026-06-08T20:00:00.000Z",
+            },
+            registered_by_id: "user-1",
+            created_at: "2026-06-08T20:00:00.000Z",
+            updated_at: "2026-06-08T20:00:00.000Z",
+            proof_entries: [],
+          },
+        })]}
+        isLoading={false}
+        onRegisterPayment={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole("link", { name: "Ver solicitud" })).toHaveAttribute("href", "/requests/paid-1");
+    expect(screen.getByRole("link", { name: "Ver constancia" })).toHaveAttribute("href", "https://drive.example/proof-doc-1");
+  });
+
+  it("mantiene Ver solicitud y oculta Ver constancia si el historial pagado no tiene URL usable", () => {
+    render(
+      <PaymentQueueTable
+        requests={[makeRequest({
+          id: "paid-1",
+          request_code: "SOL-PAID",
+          status: REQUEST_STATUS.PAID,
+          payment_id: "payment-1",
+          payment: {
+            id: "payment-1",
+            payment_request_id: "paid-1",
+            paid_at: "2026-06-08T20:00:00.000Z",
+            operation_reference: "OP-PAID",
+            amount_paid: 100,
+            bank_commission: null,
+            notes: null,
+            proof_document_id: "proof-doc-1",
+            proofDocument: null,
+            registered_by_id: "user-1",
+            created_at: "2026-06-08T20:00:00.000Z",
+            updated_at: "2026-06-08T20:00:00.000Z",
+            proof_entries: [],
+          },
+        })]}
+        isLoading={false}
+        onRegisterPayment={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole("link", { name: "Ver solicitud" })).toHaveAttribute("href", "/requests/paid-1");
+    expect(screen.queryByRole("link", { name: "Ver constancia" })).not.toBeInTheDocument();
+  });
+
+  it("mantiene visibilidad de lectura en historial pagado sin exponer acciones restringidas", () => {
+    render(
+      <PaymentQueueTable
+        requests={[makeRequest({
+          id: "paid-readonly",
+          request_code: "SOL-READONLY",
+          status: REQUEST_STATUS.PAID,
+          payment_id: "payment-readonly",
+          allocation_count: 1,
+          allocations: [makeAllocation({ payment_request_id: "paid-readonly" })],
+          payment: {
+            id: "payment-readonly",
+            payment_request_id: "paid-readonly",
+            paid_at: "2026-06-08T20:00:00.000Z",
+            operation_reference: "OP-READONLY",
+            amount_paid: 100,
+            bank_commission: null,
+            notes: null,
+            proof_document_id: "proof-readonly",
+            proofDocument: {
+              id: "proof-readonly",
+              payment_request_id: "paid-readonly",
+              document_category: REQUEST_DOCUMENT_CATEGORY.PAYMENT_PROOF,
+              safe_filename: "constancia-readonly.pdf",
+              original_filename: "constancia-readonly.pdf",
+              mime_type: "application/pdf",
+              size_bytes: 10,
+              storage_provider: REQUEST_DOCUMENT_STORAGE_PROVIDER.DRIVE,
+              upload_status: REQUEST_DOCUMENT_UPLOAD_STATUS.PERMANENT,
+              drive_web_url: "https://drive.example/proof-readonly",
+              created_at: "2026-06-08T20:00:00.000Z",
+            },
+            registered_by_id: "user-1",
+            created_at: "2026-06-08T20:00:00.000Z",
+            updated_at: "2026-06-08T20:00:00.000Z",
+            proof_entries: [],
+          },
+        })]}
+        isLoading={false}
+        onRegisterPayment={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole("link", { name: "Ver solicitud" })).toHaveAttribute("href", "/requests/paid-readonly");
+    expect(screen.getByRole("link", { name: "Ver constancia" })).toHaveAttribute("href", "https://drive.example/proof-readonly");
+    expect(screen.queryByRole("button", { name: "Registrar pago" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Completar datos" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Agregar comprobante POA" })).not.toBeInTheDocument();
   });
 
   it("bloquea edición visual del monto EXCESS pero lo incluye al registrar pago", async () => {
@@ -312,7 +478,68 @@ describe("REXAN payment queue and modal", () => {
     expect(screen.getByRole("button", { name: "Agregar comprobante POA" })).toBeInTheDocument();
   });
 
-  it("asocia comprobante adicional con ids de asignación seleccionados", async () => {
+  it("no muestra acción de agregar comprobante POA cuando la constancia general ya cubre todas las líneas", () => {
+    const allocations = [
+      makeAllocation(),
+      makeAllocation({ id: "allocation-2", budget_planning_line_id: "line-2", amount: 40, sort_order: 2, planning_line: { ...makeAllocation().planning_line!, id: "line-2", line_code: "POA-002", resource_description: "Servicios logísticos" } }),
+    ];
+    const request = makeRequest({
+      status: REQUEST_STATUS.PAID,
+      payment_id: "payment-1",
+      allocation_count: 2,
+      allocations,
+      payment: {
+        id: "payment-1",
+        payment_request_id: "req-1",
+        paid_at: "2026-06-08T20:00:00.000Z",
+        operation_reference: "OP-GENERAL",
+        amount_paid: 100,
+        bank_commission: null,
+        notes: null,
+        proof_document_id: "proof-doc-1",
+        proofDocument: null,
+        registered_by_id: "user-1",
+        created_at: "2026-06-08T20:00:00.000Z",
+        updated_at: "2026-06-08T20:00:00.000Z",
+        proof_entries: [{
+          id: "proof-entry-1",
+          request_payment_id: "payment-1",
+          proof_document_id: "proof-doc-1",
+          proof_document: {
+            id: "proof-doc-1",
+            payment_request_id: "req-1",
+            document_category: REQUEST_DOCUMENT_CATEGORY.PAYMENT_PROOF,
+            safe_filename: "constancia.pdf",
+            original_filename: "constancia.pdf",
+            mime_type: "application/pdf",
+            size_bytes: 10,
+            storage_provider: REQUEST_DOCUMENT_STORAGE_PROVIDER.LOCAL,
+            upload_status: REQUEST_DOCUMENT_UPLOAD_STATUS.PERMANENT,
+            created_at: "2026-06-08T20:00:00.000Z",
+          },
+          operation_reference: "OP-GENERAL",
+          paid_at: "2026-06-08T20:00:00.000Z",
+          amount_paid: 100,
+          notes: null,
+          allocations: allocations.map((allocation, index) => ({
+            id: `coverage-${index + 1}`,
+            request_payment_proof_id: "proof-entry-1",
+            request_allocation_id: allocation.id!,
+            amount_covered: allocation.amount,
+          })),
+          created_at: "2026-06-08T20:00:00.000Z",
+          updated_at: "2026-06-08T20:00:00.000Z",
+        }],
+      },
+    });
+
+    render(<PaymentQueueTable requests={[request]} isLoading={false} onRegisterPayment={vi.fn()} onAttachPaymentProof={vi.fn()} />);
+
+    expect(screen.getAllByText("Con comprobante asociado")).toHaveLength(2);
+    expect(screen.queryByRole("button", { name: "Agregar comprobante POA" })).not.toBeInTheDocument();
+  });
+
+  it("asocia comprobante POA automáticamente a todas las líneas sin selección manual", async () => {
     const user = userEvent.setup();
     const request = makeRequest({
       status: REQUEST_STATUS.PAID,
@@ -337,7 +564,7 @@ describe("REXAN payment queue and modal", () => {
 
     render(<AttachPaymentProofModal request={request} open onOpenChange={vi.fn()} onSuccess={vi.fn()} />);
 
-    await user.click(screen.getByTestId("attach-proof-allocation-checkbox"));
+    expect(screen.getByText("Líneas POA que quedarán cubiertas automáticamente")).toBeInTheDocument();
     await user.type(screen.getByTestId("attach-payment-reference-input"), "OP-POA-1");
     const file = new File(["proof"], "constancia.pdf", { type: "application/pdf" });
     await user.upload(screen.getByTestId("attach-payment-proof-input"), file);
@@ -346,10 +573,38 @@ describe("REXAN payment queue and modal", () => {
     await waitFor(() => {
       expect(mocks.attachPaymentProof).toHaveBeenCalledWith("payment-1", expect.objectContaining({
         proof: file,
-        request_allocation_ids: ["allocation-1"],
         operation_reference: "OP-POA-1",
       }));
     });
+    expect(mocks.attachPaymentProof.mock.calls[0][1]).not.toHaveProperty("request_allocation_ids");
+  });
+
+  it("mantiene abierto el modal de registro mientras se carga la constancia", async () => {
+    const user = userEvent.setup();
+    const onOpenChange = vi.fn();
+    mocks.registerPaymentLoading.mockReturnValue(true);
+
+    render(<RegisterPaymentModal request={makeRequest()} open onOpenChange={onOpenChange} onSuccess={vi.fn()} />);
+
+    expect(screen.getByText("No cierres esta ventana mientras se carga el archivo")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Cerrar" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Cancelar" })).toBeDisabled();
+
+    await user.keyboard("{Escape}");
+
+    expect(onOpenChange).not.toHaveBeenCalledWith(false);
+  });
+
+  it("mantiene abierto el modal de comprobante POA mientras se carga el archivo", () => {
+    const onOpenChange = vi.fn();
+    mocks.attachPaymentProofLoading.mockReturnValue(true);
+
+    render(<AttachPaymentProofModal request={makeRequest({ status: REQUEST_STATUS.PAID, payment_id: "payment-1", allocations: [makeAllocation()] })} open onOpenChange={onOpenChange} onSuccess={vi.fn()} />);
+
+    expect(screen.getByText("No cierres esta ventana mientras se carga el archivo")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Cerrar" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Cancelar" })).toBeDisabled();
+    expect(onOpenChange).not.toHaveBeenCalled();
   });
 
   it("refresca cola e indicadores de datos pendientes después de asociar constancia", async () => {
@@ -406,7 +661,6 @@ describe("REXAN payment queue and modal", () => {
 
     await user.click(screen.getByTestId("payment-filter-pending-data"));
     await user.click(screen.getByTestId("attach-payment-proof-button"));
-    await user.click(screen.getByTestId("attach-proof-allocation-checkbox"));
     const file = new File(["proof"], "constancia.pdf", { type: "application/pdf" });
     await user.upload(screen.getByTestId("attach-payment-proof-input"), file);
     await user.click(screen.getByRole("button", { name: "Asociar comprobante" }));

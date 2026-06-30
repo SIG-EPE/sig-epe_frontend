@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { api } from "@/lib/api-client";
-import { useCachedResource } from "@/hooks/use-cached-resource";
+import { useCachedResource, type CachedResourceCacheMode } from "@/hooks/use-cached-resource";
 import { cachedQuery, QUERY_CACHE_TTL_MS, stableSerialize } from "@/lib/query-cache";
 import { QUERY_TAGS, invalidateRequestDomain } from "@/lib/query-tags";
 import { useAuthStore } from "@/stores/auth-store";
@@ -65,6 +65,11 @@ export interface RequestResourceState<T> {
   refetch: (options?: RequestResourceRefetchOptions) => Promise<void>;
 }
 
+export interface UseRequestsOptions {
+  keepPreviousData?: boolean;
+  cacheMode?: CachedResourceCacheMode;
+}
+
 function upsertById<T extends { id: string }>(items: T[], item: T): T[] {
   const existingIndex = items.findIndex((candidate) => candidate.id === item.id);
   if (existingIndex === -1) return [...items, item];
@@ -111,6 +116,7 @@ export function getRenditionsPath(filters?: RenditionsInboxFilters): string {
   appendIfPresent(params, "page", filters?.page);
   appendIfPresent(params, "limit", filters?.limit);
   appendIfPresent(params, "status", filters?.status);
+  appendIfPresent(params, "bucket", filters?.bucket);
   appendIfPresent(params, "search", filters?.search);
   appendIfPresent(params, "due_from", filters?.due_from);
   appendIfPresent(params, "due_to", filters?.due_to);
@@ -120,7 +126,7 @@ export function getRenditionsPath(filters?: RenditionsInboxFilters): string {
   return `/requests/renditions${query ? `?${query}` : ""}`;
 }
 
-export function getRenditionCountsPath(filters?: Omit<RenditionsInboxFilters, "status" | "page" | "limit">): string {
+export function getRenditionCountsPath(filters?: Omit<RenditionsInboxFilters, "status" | "bucket" | "page" | "limit">): string {
   const params = new URLSearchParams();
   appendIfPresent(params, "search", filters?.search);
   appendIfPresent(params, "due_from", filters?.due_from);
@@ -143,7 +149,7 @@ export function getRenditionReportPath(requestId: string): string {
   return `/requests/${requestId}/rendition-report`;
 }
 
-export function useRequests(filters?: RequestsListFilters) {
+export function useRequests(filters?: RequestsListFilters, options?: UseRequestsOptions) {
   const pageFilter = filters?.page;
   const limitFilter = filters?.limit;
   const statusFilter = filters?.status;
@@ -164,8 +170,10 @@ export function useRequests(filters?: RequestsListFilters) {
     key: [QUERY_TAGS.REQUESTS, "list", filters ?? {}],
     ttlMs: QUERY_CACHE_TTL_MS.MUTABLE_LIST,
     tags: [QUERY_TAGS.REQUESTS],
+    keepPreviousData: options?.keepPreviousData,
+    cacheMode: options?.cacheMode,
     errorMessage: "Error al cargar solicitudes",
-    queryFn: () => api.get<RequestsListResponse>(getRequestsPath(filters)),
+    queryFn: (signal) => api.get<RequestsListResponse>(getRequestsPath(filters), { signal }),
   });
   const data = resource.data;
 
@@ -216,6 +224,7 @@ export function useRenditionsInbox(filters?: RenditionsInboxFilters) {
   const pageFilter = filters?.page;
   const limitFilter = filters?.limit;
   const statusFilter = filters?.status;
+  const bucketFilter = filters?.bucket;
   const searchFilter = filters?.search;
   const dueFromFilter = filters?.due_from;
   const dueToFilter = filters?.due_to;
@@ -245,7 +254,7 @@ export function useRenditionsInbox(filters?: RenditionsInboxFilters) {
   };
 }
 
-export function useRenditionCounts(filters?: Omit<RenditionsInboxFilters, "status" | "page" | "limit">) {
+export function useRenditionCounts(filters?: Omit<RenditionsInboxFilters, "status" | "bucket" | "page" | "limit">) {
   const resource = useCachedResource<RenditionInboxCounts>({
     key: [QUERY_TAGS.RENDITIONS, "counts", filters ?? {}],
     ttlMs: QUERY_CACHE_TTL_MS.MUTABLE_LIST,
@@ -351,8 +360,6 @@ export async function attachPaymentProof(paymentId: string, input: AttachPayment
   if (input.paid_at?.trim()) formData.append("paid_at", input.paid_at.trim());
   if (input.amount_paid !== undefined) formData.append("amount_paid", String(input.amount_paid));
   if (input.notes?.trim()) formData.append("notes", input.notes.trim());
-  if (input.request_allocation_ids?.length) formData.append("request_allocation_ids", JSON.stringify(input.request_allocation_ids));
-  if (input.allocations?.length) formData.append("allocations", JSON.stringify(input.allocations));
   const result = await api.postForm<PaymentRequest>(`/request-payments/${paymentId}/proofs`, formData);
   invalidateRequestCaches();
   return result;

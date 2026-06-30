@@ -204,8 +204,9 @@ export function useFiscalYears(): UseFiscalYearsReturn {
 
 interface OrganizationalUnit {
   id: string;
-  code: string;
+  code: string | null;
   name: string;
+  short_name?: string | null;
   description?: string;
   is_active: boolean;
   created_at: string;
@@ -483,7 +484,7 @@ function toReadableMessage(value: unknown): string | null {
   return null;
 }
 
-export function getSubmitPlanningLineErrorMessage(error: unknown): string | null {
+export function getPlanningLineMutationErrorMessage(error: unknown): string | null {
   if (error instanceof ApiRequestError) {
     return toReadableMessage(error.body.message) ?? toReadableMessage(error.message);
   }
@@ -507,6 +508,10 @@ export function getSubmitPlanningLineErrorMessage(error: unknown): string | null
   }
 
   return null;
+}
+
+export function getSubmitPlanningLineErrorMessage(error: unknown): string | null {
+  return getPlanningLineMutationErrorMessage(error);
 }
 
 // -------------------------------------------------------

@@ -14,6 +14,7 @@ import {
   ONBOARDING_EMAIL_RECOMMENDATION_MESSAGE,
   shouldShowOnboardingEmailRecommendation,
 } from "@/lib/onboarding-domain";
+import { userEmailSchema } from "@/lib/user-validation";
 import type { LoginResponse } from "@/types/auth";
 
 import { Button } from "@/components/ui/button";
@@ -40,20 +41,22 @@ import { Mail, ShieldCheck, Bell } from "lucide-react";
 // Validation schemas — conditional by authSource
 // -------------------------------------------------------
 
-const onboardingEmailSchema = z
-  .string()
-  .trim()
-  .min(1, "Ingresa tu correo electrónico")
-  .email("Ingresa un correo válido");
+const PASSWORD_MIN_LENGTH = 8;
 
 const epeSchema = z.object({
-  email: onboardingEmailSchema,
+  email: userEmailSchema,
 });
 
 const localSchema = z
   .object({
-    email: onboardingEmailSchema,
-    newPassword: z.string().min(1, "Ingresa tu contraseña"),
+    email: userEmailSchema,
+    newPassword: z
+      .string()
+      .min(1, "Ingresa tu contraseña")
+      .min(
+        PASSWORD_MIN_LENGTH,
+        `La contraseña debe tener al menos ${PASSWORD_MIN_LENGTH} caracteres`,
+      ),
     confirmPassword: z.string().min(1, "Confirma tu contraseña"),
   })
   .refine((data) => data.newPassword === data.confirmPassword, {
@@ -64,6 +67,21 @@ const localSchema = z
 type EpeFormValues = z.infer<typeof epeSchema>;
 type LocalFormValues = z.infer<typeof localSchema>;
 type OnboardingFormValues = EpeFormValues | LocalFormValues;
+
+function getApiErrorMessage(error: ApiRequestError): string {
+  const message = Array.isArray(error.body.message)
+    ? error.body.message[0]
+    : error.body.message;
+
+  if (typeof message === "string" && message.trim().length > 0) {
+    return message.trim();
+  }
+
+  if (error.status === 409) return "Este correo ya está en uso";
+  if (error.status === 400) return "Revisa los datos ingresados e intenta nuevamente.";
+
+  return "No pudimos configurar tu perfil. Intenta nuevamente.";
+}
 
 // -------------------------------------------------------
 // OnboardingForm component
@@ -116,11 +134,7 @@ export function OnboardingForm({
       window.location.href = getRoleHomePath(normalizedUser.role?.code ?? "");
     } catch (error) {
       if (error instanceof ApiRequestError) {
-        if (error.status === 409) {
-          toast.error("Este correo ya está en uso");
-        } else {
-          toast.error("Error al configurar tu perfil. Intenta de nuevo.");
-        }
+        toast.error(getApiErrorMessage(error));
       } else {
         toast.error("Error de conexión. Verifica tu red.");
       }
@@ -232,6 +246,9 @@ export function OnboardingForm({
                           </Button>
                         </div>
                       </FormControl>
+                      <p className="text-xs text-muted-foreground">
+                        Usa al menos {PASSWORD_MIN_LENGTH} caracteres.
+                      </p>
                       <FormMessage />
                     </FormItem>
                   )}

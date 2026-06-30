@@ -22,10 +22,14 @@ import {
   parseRenditionStatusFilter,
 } from "@/lib/requests";
 import { cn } from "@/lib/utils";
-import type { RenditionSortDirection, RenditionSortField, RenditionStatus } from "@/types/requests";
+import { RENDITION_BUCKET, type RenditionBucket, type RenditionSortDirection, type RenditionSortField, type RenditionStatus } from "@/types/requests";
 import { RenditionsTable } from "./renditions-table";
 
 const ALL_RENDITIONS_FILTER = "ALL";
+
+function parseRenditionBucketFilter(value?: string | null): RenditionBucket | undefined {
+  return value === RENDITION_BUCKET.DUE_SOON ? RENDITION_BUCKET.DUE_SOON : undefined;
+}
 
 export function RenditionsInboxPage() {
   const router = useRouter();
@@ -33,6 +37,7 @@ export function RenditionsInboxPage() {
   const [search, setSearch] = useState(searchParams.get("search") ?? "");
   const debouncedSearch = useDebouncedValue(search.trim(), 300);
   const [status, setStatus] = useState<RenditionStatus | undefined>(parseRenditionStatusFilter(searchParams.get("status")));
+  const [bucket, setBucket] = useState<RenditionBucket | undefined>(parseRenditionBucketFilter(searchParams.get("bucket")));
   const [sort, setSort] = useState<RenditionSortField>(parseRenditionSortField(searchParams.get("sort")));
   const [direction, setDirection] = useState<RenditionSortDirection>(parseRenditionSortDirection(searchParams.get("direction")));
   const page = Number(searchParams.get("page") ?? "1") || 1;
@@ -41,6 +46,7 @@ export function RenditionsInboxPage() {
     page,
     limit,
     status,
+    bucket,
     search: debouncedSearch || undefined,
     sort,
     direction,
@@ -61,7 +67,14 @@ export function RenditionsInboxPage() {
 
   function setStatusFilter(value: RenditionStatus | undefined) {
     setStatus(value);
-    replaceQuery({ status: value ?? ALL_RENDITIONS_FILTER, page: 1 });
+    setBucket(undefined);
+    replaceQuery({ status: value ?? ALL_RENDITIONS_FILTER, bucket: undefined, page: 1 });
+  }
+
+  function setBucketFilter(value: RenditionBucket | undefined) {
+    setBucket(value);
+    setStatus(undefined);
+    replaceQuery({ bucket: value, status: ALL_RENDITIONS_FILTER, page: 1 });
   }
 
   function setSortOption(value: RenditionSortField) {
@@ -92,13 +105,19 @@ export function RenditionsInboxPage() {
 
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6" data-testid="renditions-summary-cards">
         {RENDITION_SUMMARY_CARDS.map((card) => {
-          const isActive = card.status ? status === card.status : false;
+          const isActive = card.bucket ? bucket === card.bucket : card.status ? status === card.status && bucket === undefined : false;
           const count = getRenditionSummaryCount(card, inbox.counts, inbox.renditions);
           return (
             <button
               key={card.key}
               type="button"
-              onClick={() => card.status && setStatusFilter(isActive ? undefined : card.status)}
+              onClick={() => {
+                if (card.bucket) {
+                  setBucketFilter(isActive ? undefined : card.bucket);
+                  return;
+                }
+                if (card.status) setStatusFilter(isActive ? undefined : card.status);
+              }}
               className={cn(
                 "rounded-lg border bg-card p-4 text-left shadow-sm transition-all hover:shadow-md",
                 isActive ? "border-primary ring-2 ring-primary" : "border-border",

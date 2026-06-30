@@ -13,6 +13,10 @@ import {
   DialogDescription,
   DialogFooter,
 } from "@/components/ui/dialog";
+import {
+  getPlanningLineMutationErrorMessage,
+  useRejectPlanningLine,
+} from "@/hooks/use-budget";
 
 interface RejectModalProps {
   lineId: string;
@@ -24,7 +28,7 @@ interface RejectModalProps {
 export function RejectModal({ lineId, open, onOpenChange, onSuccess }: RejectModalProps) {
   const [reason, setReason] = useState("");
   const [localError, setLocalError] = useState<string | null>(null);
-  const [isLoading, setIsLoading] = useState(false);
+  const { reject, isLoading } = useRejectPlanningLine(lineId);
   const router = useRouter();
 
   async function handleConfirm() {
@@ -34,34 +38,16 @@ export function RejectModal({ lineId, open, onOpenChange, onSuccess }: RejectMod
       return;
     }
 
-    setIsLoading(true);
     try {
-      const res = await fetch(
-        `${process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3001"}/budget/planning-lines/${lineId}/reject`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          credentials: "include",
-          body: JSON.stringify({ rejection_reason: reason.trim() }),
-        },
-      );
-
-      if (!res.ok) {
-        throw new Error("Error al rechazar la linea");
-      }
-
+      await reject({ rejection_reason: reason.trim() });
       toast.success("Linea rechazada");
       setReason("");
       setLocalError(null);
       onOpenChange(false);
       onSuccess?.();
       router.refresh();
-    } catch {
-      toast.error("Error al rechazar la linea");
-    } finally {
-      setIsLoading(false);
+    } catch (error) {
+      toast.error(getPlanningLineMutationErrorMessage(error) ?? "Error al rechazar la linea");
     }
   }
 

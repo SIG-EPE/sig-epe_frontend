@@ -210,6 +210,11 @@ export interface OrgUnitExecutionOptionsResponse {
   fiscal_year_id: string;
   applied_filters: OrgUnitExecutionAppliedFilters;
   options: OrgUnitExecutionOptions;
+  meta?: {
+    minimum_required: string[];
+    preserves_zero_rows: true;
+    option_counts: Record<keyof OrgUnitExecutionOptions, number>;
+  };
   warnings: OrgUnitExecutionWarning[];
 }
 

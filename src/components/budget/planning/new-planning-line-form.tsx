@@ -27,6 +27,11 @@ import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ROUTES } from "@/lib/constants";
 import { normalizeDecimalInput, parseDecimalInput } from "@/lib/numeric-input";
+import {
+  POA_ORG_UNIT_INVALID_MESSAGE,
+  getOrgUnitPoaPrefix,
+  hasValidOrgUnitPoaPrefix,
+} from "@/lib/poa-prefix";
 import { PLANNING_TYPE, PLANNING_TYPE_LABELS, PLANNING_TYPES, type PlanningType } from "@/lib/planning-types";
 
 // -------------------------------------------------------
@@ -145,6 +150,10 @@ export function NewPlanningLineForm() {
 
   // Costo total calculado
   const totalCost = (parseDecimalInput(form.unit_price) ?? 0) * (parseDecimalInput(form.quantity) ?? 0);
+  const selectedOrgUnit = orgUnits?.find((u) => u.id === form.organizational_unit_id) ?? null;
+  const selectedOrgUnitHasInvalidPoaPrefix = Boolean(
+    selectedOrgUnit && !hasValidOrgUnitPoaPrefix(selectedOrgUnit)
+  );
 
   // Crear componente estratégico inline
   const createStrategicComponent = async (name: string) => {
@@ -179,6 +188,12 @@ export function NewPlanningLineForm() {
 
     if (!activeFiscalYear) {
       toast.error("No hay un año fiscal activo. Contacta al administrador.");
+      return;
+    }
+
+    if (selectedOrgUnitHasInvalidPoaPrefix) {
+      setErrors((prev) => ({ ...prev, organizational_unit_id: POA_ORG_UNIT_INVALID_MESSAGE }));
+      toast.error(POA_ORG_UNIT_INVALID_MESSAGE);
       return;
     }
 
@@ -270,13 +285,18 @@ export function NewPlanningLineForm() {
               value={form.organizational_unit_id || null}
               placeholder="Seleccionar unidad orgánica..."
               displayValue={
-                orgUnits?.find((u) => u.id === form.organizational_unit_id)?.name
+                selectedOrgUnit?.name
               }
               title="Seleccionar Unidad Orgánica"
               items={(orgUnits ?? []).filter((u) => u.is_active)}
               getItemId={(u) => u.id}
               getItemLabel={(u) => u.name}
-              getItemSubLabel={(u) => u.code ?? ""}
+              getItemSubLabel={(u) => {
+                const prefix = getOrgUnitPoaPrefix(u);
+                return hasValidOrgUnitPoaPrefix(u)
+                  ? `Prefijo POA: ${prefix}`
+                  : "No disponible para POA: sigla/código inválido";
+              }}
               searchPlaceholder="Buscar unidad orgánica..."
               onChange={(id) => {
                 setForm((f) => ({ ...f, organizational_unit_id: id ?? "" }));
@@ -288,6 +308,9 @@ export function NewPlanningLineForm() {
           )}
           {errors.organizational_unit_id && (
             <p className="text-xs text-destructive">{errors.organizational_unit_id}</p>
+          )}
+          {selectedOrgUnitHasInvalidPoaPrefix && !errors.organizational_unit_id && (
+            <p className="text-xs text-destructive">{POA_ORG_UNIT_INVALID_MESSAGE}</p>
           )}
         </div>
 

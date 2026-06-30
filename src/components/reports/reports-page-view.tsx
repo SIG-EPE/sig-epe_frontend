@@ -37,6 +37,7 @@ import {
 import { REPORT_DATE_FIELD, REPORT_SORT_DIRECTION, REPORT_SORT_FIELD, type ConceptDetailsFilters, type ReportFilters } from "@/types/reports";
 import { REQUEST_CURRENCY, type RequestCurrency, type RequestStatus, type RequestType } from "@/types/requests";
 import { useAuthStore } from "@/stores/auth-store";
+import { getCatalogOptionLabel, getOrgUnitFilterLabel } from "@/lib/ui-labels";
 
 const SELECT_ALL = "ALL";
 const DEFAULT_DETAILS_LIMIT = 50;
@@ -156,8 +157,7 @@ function updateFilterField<K extends keyof ReportsFilterFormState>(field: K, val
 }
 
 function catalogLabel(item: { code?: string | null; name: string; short_name?: string | null }) {
-  const prefix = item.code ?? item.short_name;
-  return prefix ? `${prefix} - ${item.name}` : item.name;
+  return getCatalogOptionLabel(item, { includeCode: true });
 }
 
 function ReportSkeleton() {
@@ -399,7 +399,7 @@ function AdvancedFiltersPanel(props: AdvancedFiltersPanelProps) {
         <div className="space-y-2"><Label>Tipo de solicitud</Label><Select value={props.draftFilters.requestType} onValueChange={(value) => props.onDraftChange("requestType", value)}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value={SELECT_ALL}>Todos</SelectItem>{REQUEST_TYPE_REPORT_OPTIONS.map((option) => <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>)}</SelectContent></Select></div>
         <div className="space-y-2"><Label>Estado</Label><Select value={props.draftFilters.status} onValueChange={(value) => props.onDraftChange("status", value)}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value={SELECT_ALL}>Todos</SelectItem>{REQUEST_STATUS_REPORT_OPTIONS.map((option) => <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>)}</SelectContent></Select></div>
         <div className="space-y-2"><Label>Moneda</Label><Select value={props.draftFilters.currency} onValueChange={(value) => props.onDraftChange("currency", value)}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value={SELECT_ALL}>Todas</SelectItem><SelectItem value={REQUEST_CURRENCY.PEN}>Soles</SelectItem><SelectItem value={REQUEST_CURRENCY.USD}>Dólares</SelectItem></SelectContent></Select></div>
-        <div className="space-y-2"><Label>Unidad organizacional</Label><Select value={props.draftFilters.orgUnitId} onValueChange={(value) => props.onDraftChange("orgUnitId", value)}><SelectTrigger><SelectValue placeholder="Todas" /></SelectTrigger><SelectContent><SelectItem value={SELECT_ALL}>Todas</SelectItem>{(orgUnits.data ?? []).map((item) => <SelectItem key={item.id} value={item.id}>{catalogLabel(item)}</SelectItem>)}</SelectContent></Select></div>
+        <div className="space-y-2"><Label>Unidad organizacional</Label><Select value={props.draftFilters.orgUnitId} onValueChange={(value) => props.onDraftChange("orgUnitId", value)}><SelectTrigger><SelectValue placeholder="Todas" /></SelectTrigger><SelectContent><SelectItem value={SELECT_ALL}>Todas</SelectItem>{(orgUnits.data ?? []).map((item) => <SelectItem key={item.id} value={item.id}>{getOrgUnitFilterLabel(item)}</SelectItem>)}</SelectContent></Select></div>
         <div className="space-y-2"><Label>Línea POA</Label><Select value={props.draftFilters.planningLineId} onValueChange={(value) => props.onDraftChange("planningLineId", value)}><SelectTrigger><SelectValue placeholder="Todas" /></SelectTrigger><SelectContent><SelectItem value={SELECT_ALL}>Todas</SelectItem>{planningLines.lines.map((line) => <SelectItem key={line.id} value={line.id}>{line.line_code ?? line.resource_description}</SelectItem>)}</SelectContent></Select></div>
         <div className="space-y-2"><Label>Categoría</Label><Select value={props.draftFilters.categoryId} onValueChange={(value) => props.onDraftChange("categoryId", value)}><SelectTrigger><SelectValue placeholder="Todas" /></SelectTrigger><SelectContent><SelectItem value={SELECT_ALL}>Todas</SelectItem>{(categories.data ?? []).map((item) => <SelectItem key={item.id} value={item.id}>{item.name}</SelectItem>)}</SelectContent></Select></div>
         <div className="space-y-2"><Label>Programa</Label><Select value={props.draftFilters.programId} onValueChange={(value) => props.onDraftChange("programId", value)}><SelectTrigger><SelectValue placeholder="Todos" /></SelectTrigger><SelectContent><SelectItem value={SELECT_ALL}>Todos</SelectItem>{(programs.data ?? []).map((item) => <SelectItem key={item.id} value={item.id}>{catalogLabel(item)}</SelectItem>)}</SelectContent></Select></div>

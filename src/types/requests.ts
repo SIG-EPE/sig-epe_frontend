@@ -56,6 +56,12 @@ export const RENDITION_STATUS = {
 
 export type RenditionStatus = (typeof RENDITION_STATUS)[keyof typeof RENDITION_STATUS];
 
+export const RENDITION_BUCKET = {
+  DUE_SOON: "due_soon",
+} as const;
+
+export type RenditionBucket = (typeof RENDITION_BUCKET)[keyof typeof RENDITION_BUCKET];
+
 export const RENDITION_SORT_FIELD = {
   LAST_ACTIVITY: "last_activity",
   DUE_DATE: "due_date",
@@ -555,12 +561,14 @@ export interface RequestAllocationDocumentChecklist {
 }
 
 export interface SettlementContextPayment {
+  id: string | null;
   paid_at: string | null;
   amount_paid: number | string | null;
   proof_document_id: string | null;
   proof_pending: boolean;
   details_pending: boolean;
   operation_reference: string | null;
+  proof_document?: SettlementContextDocument | null;
 }
 
 export interface SettlementContextDueDate {
@@ -648,6 +656,11 @@ export interface PaymentRequest {
   currency: RequestCurrency;
   concept: string;
   requester_id: string;
+  requester_name?: string | null;
+  created_by_display_name?: string | null;
+  registered_party_name?: string | null;
+  registered_party_document_type?: BeneficiaryDocumentType | null;
+  registered_party_document_number?: string | null;
   requester?: RequesterSummary | null;
   budget_planning_line_id: string | null;
   budgetPlanningLine?: PaymentRequestPlanningLine | null;
@@ -717,6 +730,13 @@ export const ADVANCE_SETTLEMENT_CTA_STATE = {
 
 export type AdvanceSettlementCtaState = (typeof ADVANCE_SETTLEMENT_CTA_STATE)[keyof typeof ADVANCE_SETTLEMENT_CTA_STATE];
 
+export const RENDITION_NEXT_STEP_ACTION = {
+  START: "start",
+  NAVIGATE: "navigate",
+} as const;
+
+export type RenditionNextStepAction = (typeof RENDITION_NEXT_STEP_ACTION)[keyof typeof RENDITION_NEXT_STEP_ACTION];
+
 export interface AdvanceSettlementCta {
   state: AdvanceSettlementCtaState;
   label: string;
@@ -724,6 +744,14 @@ export interface AdvanceSettlementCta {
   href: string | null;
   settlement: RelatedRequestSummary | null;
   canStartNew: boolean;
+}
+
+export interface RenditionNextStepGuidance {
+  title: string;
+  description: string;
+  actionLabel: string;
+  action: RenditionNextStepAction;
+  href: string | null;
 }
 
 export interface RequestDocument {
@@ -1162,6 +1190,10 @@ export interface RenditionInboxRow {
   advance_id: string;
   request_code: string | null;
   requester: string | null;
+  registered_by?: string | null;
+  registered_party_name?: string | null;
+  registered_party_document_type?: BeneficiaryDocumentType | null;
+  registered_party_document_number?: string | null;
   org_unit: string | null;
   concept: string;
   requested_amount: number;
@@ -1170,6 +1202,8 @@ export interface RenditionInboxRow {
   scheduled_rendition_at: string | null;
   rendition_status: RenditionStatus;
   days_overdue: number | null;
+  days_until_due: number | null;
+  days_remaining: number | null;
   settlement_request_id: string | null;
   settlement_status: RequestStatus | null;
   settlement_updated_at: string | null;
@@ -1180,7 +1214,9 @@ export interface RenditionInboxRow {
   last_activity_at: string | null;
 }
 
-export interface RenditionInboxCounts extends Record<RenditionStatus, number> {}
+export interface RenditionInboxCounts extends Record<RenditionStatus, number> {
+  due_soon?: number;
+}
 
 export interface RenditionsInboxResponse {
   renditions: RenditionInboxRow[];
@@ -1194,6 +1230,7 @@ export interface RenditionsInboxFilters {
   page?: number;
   limit?: number;
   status?: RenditionStatus;
+  bucket?: RenditionBucket;
   search?: string;
   due_from?: string;
   due_to?: string;

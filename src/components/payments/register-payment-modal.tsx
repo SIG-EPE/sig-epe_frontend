@@ -4,13 +4,16 @@ import { useEffect, useState } from "react";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
+import { Info } from "lucide-react";
 
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { PaymentAllocationProofCoverage } from "@/components/payments/payment-allocation-proof-coverage";
+import { useUploadNavigationGuard } from "@/hooks/use-upload-navigation-guard";
 import { useRegisterPayment } from "@/hooks/use-requests";
 import { getBusinessDateTimeLocalValue, parseBusinessDateTimeLocalToIso } from "@/lib/business-timezone";
 import { PAYMENT_PROOF_ACCEPT, PAYMENT_PROOF_ACCEPTED_FORMATS_LABEL, formatRequestCurrency, getApiErrorMessage, getRequestPayableAmount, isRexanExcessRequest, toMoneyCents, validatePaymentProofFile } from "@/lib/requests";
@@ -54,6 +57,14 @@ export function RegisterPaymentModal({ request, open, onOpenChange, onSuccess }:
   });
   const isRexanExcess = request ? isRexanExcessRequest(request) : false;
   const payableAmount = request ? getRequestPayableAmount(request) : 0;
+  const uploadWarningMessage = "No cierres esta ventana mientras se carga el archivo";
+
+  useUploadNavigationGuard({ active: isLoading, message: "Hay una constancia de pago cargándose. Si sales o actualizas la página, la carga en curso puede cancelarse." });
+
+  function handleOpenChange(nextOpen: boolean): void {
+    if (!nextOpen && isLoading) return;
+    onOpenChange(nextOpen);
+  }
 
   function handleProofChange(file: File | null) {
     setProofFile(file);
@@ -79,7 +90,14 @@ export function RegisterPaymentModal({ request, open, onOpenChange, onSuccess }:
     setProofError(nextProofError);
     setSubmitError(null);
     if (!request || !proofFile || nextProofError) return;
-    if (isRexanExcessRequest(request) && toMoneyCents(values.amount_paid) !== toMoneyCents(getRequestPayableAmount(request))) {
+    const amountPaid = Number(values.amount_paid);
+    const amountPaidCents = toMoneyCents(amountPaid) ?? 0;
+    const payableAmountCents = toMoneyCents(getRequestPayableAmount(request)) ?? 0;
+    if (amountPaidCents > payableAmountCents) {
+      setSubmitError(`El monto pagado no puede exceder el monto aprobado de ${formatRequestCurrency(getRequestPayableAmount(request), request.currency)}.`);
+      return;
+    }
+    if (isRexanExcessRequest(request) && amountPaidCents !== payableAmountCents) {
       setSubmitError("El monto pagado debe coincidir con el saldo aprobado para esta rendición.");
       return;
     }
@@ -87,7 +105,7 @@ export function RegisterPaymentModal({ request, open, onOpenChange, onSuccess }:
     const input: RegisterPaymentInput = {
       paid_at: parseBusinessDateTimeLocalToIso(values.paid_at),
       operation_reference: values.operation_reference.trim(),
-      amount_paid: values.amount_paid,
+      amount_paid: amountPaid,
       bank_commission: values.bank_commission,
       notes: values.notes?.trim() || undefined,
       proof: proofFile,
@@ -111,8 +129,8 @@ export function RegisterPaymentModal({ request, open, onOpenChange, onSuccess }:
   }
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-2xl">
+    <Dialog open={open} onOpenChange={handleOpenChange}>
+      <DialogContent className="max-w-2xl" closeDisabled={isLoading}>
         <DialogHeader>
           <DialogTitle>Registrar pago</DialogTitle>
           <DialogDescription>
@@ -139,7 +157,8 @@ export function RegisterPaymentModal({ request, open, onOpenChange, onSuccess }:
               <FormField control={form.control} name="amount_paid" render={({ field }) => (
                 <FormItem>
                   <FormLabel>Monto pagado</FormLabel>
-                  <FormControl><Input type="number" min="0" step="0.01" {...field} readOnly={isRexanExcess} data-testid="payment-amount-input" /></FormControl>
+                  <FormControl><Input type="number" min="0" max={payableAmount} step="0.01" {...field} readOnly={isRexanExcess} data-testid="payment-amount-input" /></FormControl>
+                  <p className="text-xs text-muted-foreground">Monto máximo permitido: {formatRequestCurrency(payableAmount, request?.currency ?? "PEN")}. No registres pagos por encima del monto aprobado.</p>
                   {isRexanExcess && <p className="text-xs text-muted-foreground">El pago debe coincidir con el saldo aprobado de la rendición.</p>}
                   <FormMessage />
                 </FormItem>
@@ -172,8 +191,14 @@ export function RegisterPaymentModal({ request, open, onOpenChange, onSuccess }:
               {proofError && <p className="text-sm text-destructive">{proofError}</p>}
             </div>
             {submitError && <p className="rounded-md border border-destructive/40 p-3 text-sm text-destructive">{submitError}</p>}
+            {isLoading && (
+              <Alert className="border-amber-500/50 bg-amber-50 text-amber-950 dark:bg-amber-950/20 dark:text-amber-100">
+                <Info className="h-4 w-4" />
+                <AlertDescription className="text-amber-950 dark:text-amber-100">{uploadWarningMessage}</AlertDescription>
+              </Alert>
+            )}
             <DialogFooter>
-              <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={isLoading}>Cancelar</Button>
+              <Button type="button" variant="outline" onClick={() => handleOpenChange(false)} disabled={isLoading}>Cancelar</Button>
               <Button type="submit" disabled={isLoading}>{isLoading ? "Registrando..." : "Registrar pago"}</Button>
             </DialogFooter>
           </form>

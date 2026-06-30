@@ -1,6 +1,6 @@
 "use client";
 
-import type { ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
   ResponsiveContainer,
   Tooltip,
@@ -9,6 +9,8 @@ import {
 
 import { cn } from "@/lib/utils";
 import { formatMoneyStrict, formatNumberStrict } from "@/lib/dashboard-formatters";
+
+const MIN_CHART_WIDTH = 1;
 
 export const CHART_COLORS = {
   primary: "var(--color-chart-1)",
@@ -68,6 +70,46 @@ export function ChartContainer({
   empty = false,
   emptyMessage = "Sin datos para los filtros seleccionados",
 }: ChartContainerProps) {
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const [chartSize, setChartSize] = useState<{ width: number; height: number } | null>(null);
+
+  useEffect(() => {
+    const element = containerRef.current;
+    if (!element || empty) {
+      setChartSize(null);
+      return;
+    }
+
+    const updateSize = () => {
+      const rect = element.getBoundingClientRect();
+      const nextWidth = Math.floor(rect.width);
+      const nextHeight = Math.floor(rect.height);
+
+      setChartSize((currentSize) => {
+        if (nextWidth < MIN_CHART_WIDTH || nextHeight < MIN_CHART_WIDTH) {
+          return currentSize === null ? currentSize : null;
+        }
+
+        if (currentSize?.width === nextWidth && currentSize.height === nextHeight) {
+          return currentSize;
+        }
+
+        return { width: nextWidth, height: nextHeight };
+      });
+    };
+
+    updateSize();
+
+    if (typeof ResizeObserver === "undefined") {
+      window.addEventListener("resize", updateSize);
+      return () => window.removeEventListener("resize", updateSize);
+    }
+
+    const observer = new ResizeObserver(updateSize);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [empty, height]);
+
   if (empty) {
     return (
       <div
@@ -83,10 +125,20 @@ export function ChartContainer({
   }
 
   return (
-    <div className={cn("w-full", className)} style={{ height }}>
-      <ResponsiveContainer width="100%" height="100%">
-        {children}
-      </ResponsiveContainer>
+    <div ref={containerRef} className={cn("w-full", className)} style={{ height, minHeight: height }}>
+      {chartSize ? (
+        <ResponsiveContainer
+          width="100%"
+          height="100%"
+          minWidth={MIN_CHART_WIDTH}
+          minHeight={MIN_CHART_WIDTH}
+          initialDimension={chartSize}
+        >
+          {children}
+        </ResponsiveContainer>
+      ) : (
+        <div className="h-full w-full" aria-hidden="true" />
+      )}
     </div>
   );
 }

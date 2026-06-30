@@ -12,7 +12,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-import { useApproveRequest, useObserveRequest, useRejectRequest, useRequest, useRequestDocuments, useRequestRenditionReport, useStartAdvanceSettlement } from "@/hooks/use-requests";
+import { useApproveRequest, useObserveRequest, useRejectRequest, useRequest, useRequestDocuments, useRequestRenditionReport, useSettlementContext, useStartAdvanceSettlement } from "@/hooks/use-requests";
 import { ROUTES } from "@/lib/constants";
 import {
   canCorrectObservedRequest,
@@ -24,9 +24,14 @@ import {
   formatRequestDate,
   getAdvanceSettlementCta,
   getApiErrorMessage,
+  getPaymentRequestCreatorDisplayName,
+  getPaymentProofDisplayItems,
+  getRegisteredPartyDisplay,
+  getRegisteredPartyDocumentLabel,
   getPaymentRequestRenditionStatus,
   getRequestDocumentDisplayName,
   getRequestDisplayCode,
+  getRenditionNextStepGuidance,
   getPlanningLineDisplay,
   getRenditionStatusLabel,
   getReturnProofDocuments,
@@ -37,11 +42,12 @@ import {
   getRequestObserverName,
   normalizeMoneyAmount,
   REQUEST_TYPE_LABELS,
+  type PaymentProofDisplayItem,
   validateRexanReturnProofSelection,
 } from "@/lib/requests";
 import { getSafeDocumentUrl } from "@/lib/safe-url";
 import { useAuthStore } from "@/stores/auth-store";
-import { ADVANCE_SETTLEMENT_CTA_STATE, REQUEST_DOCUMENT_CATEGORY, REQUEST_DOCUMENT_SCOPE_TYPE, REQUEST_DOCUMENT_UPLOAD_STATUS, REQUEST_RENDITION_REPORT_STATUS, REQUEST_TYPE, REXAN_OUTCOME, type ApproveRequestDto, type RequestDocument, type RequestRenditionAllocationCoverage, type RequestRenditionReport, type RexanOutcome } from "@/types/requests";
+import { RENDITION_NEXT_STEP_ACTION, REQUEST_DOCUMENT_CATEGORY, REQUEST_DOCUMENT_SCOPE_TYPE, REQUEST_DOCUMENT_UPLOAD_STATUS, REQUEST_RENDITION_REPORT_STATUS, REQUEST_TYPE, REXAN_OUTCOME, type ApproveRequestDto, type RequestDocument, type RequestRenditionAllocationCoverage, type RequestRenditionReport, type RexanOutcome } from "@/types/requests";
 import { RequestStatusStepper } from "./request-status-stepper";
 import { RequestDocumentsCard } from "./request-documents-card";
 import { StructuredRenditionReportCard } from "./structured-rendition-report-card";
@@ -147,11 +153,54 @@ function getStructuredReturnChecklistRows(report: RequestRenditionReport | null,
     .filter((row): row is StructuredReturnChecklistRow => row !== null);
 }
 
+function PaymentProofRows({ items, currency }: { items: PaymentProofDisplayItem[]; currency: string }) {
+  if (items.length === 0) {
+    return <p className="text-sm text-muted-foreground">No hay constancias de pago registradas.</p>;
+  }
+
+  return (
+    <div className="space-y-3">
+      {items.map((item) => (
+        <div key={item.id} className="flex flex-col gap-3 rounded-md border p-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="space-y-1">
+            <p className="text-sm font-medium">{item.label}</p>
+            <p className="text-sm text-muted-foreground">{item.filename}</p>
+            <div className="flex flex-wrap gap-3 text-xs text-muted-foreground">
+              {item.paidAt && <span>Pagado: {formatRequestDate(item.paidAt)}</span>}
+              {item.amountPaid !== null && <span>Monto: {formatRequestCurrency(item.amountPaid, currency)}</span>}
+              {item.operationReference && <span>Operación: {item.operationReference}</span>}
+            </div>
+          </div>
+          {item.url ? (
+            <Button variant="outline" size="sm" asChild>
+              <a href={item.url} target="_blank" rel="noopener noreferrer">Ver constancia</a>
+            </Button>
+          ) : (
+            <span className="text-sm text-muted-foreground">Enlace no disponible</span>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function PaymentProofCard({ items, currency }: { items: PaymentProofDisplayItem[]; currency: string }) {
+  return (
+    <Card data-testid="request-payment-proof-card">
+      <CardHeader><CardTitle>Pago y constancias</CardTitle></CardHeader>
+      <CardContent>
+        <PaymentProofRows items={items} currency={currency} />
+      </CardContent>
+    </Card>
+  );
+}
+
 export function RequestDetailPage() {
   const params = useParams<{ id: string }>();
   const router = useRouter();
   const { request, isInitialLoading, isRefreshing, error, refetch, patchRequest } = useRequest(params.id);
   const requestDocuments = useRequestDocuments(params.id);
+  const settlementContextState = useSettlementContext(params.id, request?.request_type === REQUEST_TYPE.ADVANCE_SETTLEMENT);
   const structuredReportState = useRequestRenditionReport(params.id, request?.request_type === REQUEST_TYPE.ADVANCE_SETTLEMENT);
   const user = useAuthStore((state) => state.user);
   const roleCode = user?.role?.code;
@@ -191,7 +240,12 @@ export function RequestDetailPage() {
   const canCorrect = isRequestOwner && canCorrectObservedRequest(roleCode, request.status);
   const canEditDraft = isRequestOwner && canEditDraftRequest(roleCode, request.status);
   const advanceSettlementCta = getAdvanceSettlementCta(roleCode, request, user?.id);
+  const renditionNextStepGuidance = getRenditionNextStepGuidance(roleCode, request, user?.id);
   const driveFolderUrl = getSafeDocumentUrl(request.drive_folder_url);
+  const ownPaymentProofItems = getPaymentProofDisplayItems(request.payment);
+  const createdByDisplayName = getPaymentRequestCreatorDisplayName(request);
+  const registeredPartyDisplay = getRegisteredPartyDisplay(request);
+  const registeredPartyDocument = getRegisteredPartyDocumentLabel(request);
   const renditionStatus = getPaymentRequestRenditionStatus(request);
   const editHref = `${ROUTES.REQUESTS}/${request.id}/edit`;
   const isAdvanceSettlement = request.request_type === REQUEST_TYPE.ADVANCE_SETTLEMENT;
@@ -211,6 +265,9 @@ export function RequestDetailPage() {
   const structuredReturnRows = isStructuredGeneratedDevolucion ? getStructuredReturnChecklistRows(structuredReport, requestDocuments.documents) : [];
   const incompleteStructuredReturnRows = structuredReturnRows.filter((row) => !row.isComplete);
   const storedRexanOutcome = request.rexan_outcome ?? null;
+  const originalAdvanceContext = settlementContextState.context?.original_advance ?? null;
+  const originalAdvanceProofDocument = settlementContextState.context?.payment?.proof_document ?? null;
+  const originalAdvanceProofUrl = getSafeDocumentUrl(originalAdvanceProofDocument?.drive_web_url);
   const shouldShowRexanSummary = isAdvanceSettlement && (
     storedRexanOutcome !== null
     || request.rexan_spent_amount != null
@@ -421,9 +478,9 @@ export function RequestDetailPage() {
         </Card>
       )}
 
-      {advanceSettlementCta && (
+      {renditionNextStepGuidance && (
         <Card>
-          <CardHeader><CardTitle>Rendición de anticipo</CardTitle></CardHeader>
+          <CardHeader><CardTitle>{renditionNextStepGuidance.title}</CardTitle></CardHeader>
           <CardContent className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
             <div className="grid gap-2 text-sm sm:grid-cols-2">
               <div>
@@ -434,18 +491,18 @@ export function RequestDetailPage() {
                 <p className="text-xs text-muted-foreground">Fecha límite de rendición</p>
                 <p className="font-medium">{formatRequestDate(request.scheduled_rendition_at)}</p>
               </div>
-              <p className="text-muted-foreground sm:col-span-2">{advanceSettlementCta.description}</p>
+              <p className="text-muted-foreground sm:col-span-2">{renditionNextStepGuidance.description}</p>
             </div>
-            {advanceSettlementCta.href ? (
+            {renditionNextStepGuidance.action === RENDITION_NEXT_STEP_ACTION.NAVIGATE && renditionNextStepGuidance.href ? (
               <Button
-                variant={advanceSettlementCta.state === ADVANCE_SETTLEMENT_CTA_STATE.COMPLETED ? "outline" : "default"}
-                onClick={() => router.push(advanceSettlementCta.href as Parameters<typeof router.push>[0])}
+                variant={advanceSettlementCta?.canStartNew === false ? "outline" : "default"}
+                onClick={() => router.push(renditionNextStepGuidance.href as Parameters<typeof router.push>[0])}
               >
-                {advanceSettlementCta.label}
+                {renditionNextStepGuidance.actionLabel}
               </Button>
             ) : (
               <Button onClick={() => void handleStartSettlement()} disabled={startingSettlement}>
-                {startingSettlement ? "Iniciando..." : advanceSettlementCta.label}
+                {startingSettlement ? "Iniciando..." : renditionNextStepGuidance.actionLabel}
               </Button>
             )}
           </CardContent>
@@ -480,6 +537,40 @@ export function RequestDetailPage() {
         </Card>
       )}
 
+      {ownPaymentProofItems.length > 0 && (
+        <PaymentProofCard items={ownPaymentProofItems} currency={request.currency} />
+      )}
+
+      {isAdvanceSettlement && originalAdvanceContext && (
+        <Card data-testid="original-advance-payment-context">
+          <CardHeader><CardTitle>Anticipo original</CardTitle></CardHeader>
+          <CardContent className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+            <div className="space-y-2 text-sm">
+              <div>
+                <p className="font-medium">{originalAdvanceContext.request_code ?? originalAdvanceContext.sequential_number ?? "Solicitud original"}</p>
+                <p className="text-muted-foreground">
+                  {formatRequestCurrency(normalizeMoneyAmount(originalAdvanceContext.amount_disbursed ?? originalAdvanceContext.requested_amount) ?? 0, originalAdvanceContext.currency)} · {originalAdvanceContext.concept ?? "Anticipo original"}
+                </p>
+              </div>
+              {originalAdvanceProofDocument && (
+                <p className="text-muted-foreground">Constancia de pago original: {originalAdvanceProofDocument.original_filename || originalAdvanceProofDocument.safe_filename || "Constancia de pago"}</p>
+              )}
+              {!originalAdvanceProofDocument && <p className="text-muted-foreground">Constancia original no disponible.</p>}
+            </div>
+            <div className="flex flex-col gap-2 sm:items-end">
+              <Button variant="outline" onClick={() => router.push(`${ROUTES.REQUESTS}/${originalAdvanceContext.id}` as Parameters<typeof router.push>[0])}>Ver solicitud original</Button>
+              {originalAdvanceProofUrl ? (
+                <Button variant="outline" asChild>
+                  <a href={originalAdvanceProofUrl} target="_blank" rel="noopener noreferrer">Ver constancia original</a>
+                </Button>
+              ) : (
+                <span className="text-sm text-muted-foreground">Constancia original no disponible</span>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
       {shouldShowRexanSummary && (
         <Card>
           <CardHeader><CardTitle>Resultado de rendición</CardTitle></CardHeader>
@@ -506,6 +597,7 @@ export function RequestDetailPage() {
           <div><p className="text-xs text-muted-foreground">Monto</p><p className="font-medium">{formatRequestCurrency(Number(request.requested_amount), request.currency)}</p></div>
           <div><p className="text-xs text-muted-foreground">Mes</p><p className="font-medium">{getRequestMonthLabel(request.budget_month)}</p></div>
           <div><p className="text-xs text-muted-foreground">Fecha de creación</p><p className="font-medium">{formatRequestDate(request.created_at)}</p></div>
+          <div><p className="text-xs text-muted-foreground">Registrado por</p><p className="font-medium">{createdByDisplayName}</p></div>
           <div className="md:col-span-2"><p className="text-xs text-muted-foreground">Línea POA</p><p className="font-medium">{getPlanningLineDisplay(request.budgetPlanningLine)}</p></div>
           <div className="md:col-span-2"><p className="text-xs text-muted-foreground">Concepto</p><p className="font-medium">{request.concept}</p></div>
         </CardContent>
@@ -539,14 +631,13 @@ export function RequestDetailPage() {
       )}
 
       <Card>
-        <CardHeader><CardTitle>Beneficiario y proveedor</CardTitle></CardHeader>
+        <CardHeader><CardTitle>A nombre de</CardTitle></CardHeader>
         <CardContent className="grid gap-4 md:grid-cols-2">
-          <div><p className="text-xs text-muted-foreground">Beneficiario</p><p className="font-medium">{request.beneficiary_name ?? "—"}</p></div>
+          <div><p className="text-xs text-muted-foreground">A nombre de</p><p className="font-medium">{registeredPartyDisplay}</p></div>
+          <div><p className="text-xs text-muted-foreground">Documento</p><p className="font-medium">{registeredPartyDocument}</p></div>
           <div><p className="text-xs text-muted-foreground">Banco</p><p className="font-medium">{request.bank_name ?? "—"}</p></div>
           <div><p className="text-xs text-muted-foreground">Cuenta</p><p className="font-medium">{request.bank_account ?? "—"}</p></div>
           <div><p className="text-xs text-muted-foreground">CCI</p><p className="font-medium">{request.bank_cci ?? "—"}</p></div>
-          <div><p className="text-xs text-muted-foreground">Proveedor</p><p className="font-medium">{request.supplier_name ?? "—"}</p></div>
-          <div><p className="text-xs text-muted-foreground">RUC proveedor</p><p className="font-medium">{request.supplier_ruc ?? "—"}</p></div>
         </CardContent>
       </Card>
 

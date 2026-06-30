@@ -8,7 +8,6 @@
 import { useEffect } from "react";
 import dynamic from "next/dynamic";
 import { AlertTriangle, RefreshCw } from "lucide-react";
-import { toast } from "sonner";
 import { useBudgetBalanceStore } from "@/stores/budget-balance-store";
 import { useBalance, useFiscalYears } from "@/hooks/use-budget";
 import { BalanceFilters } from "./balance-filters";
@@ -91,7 +90,7 @@ export function BalanceDashboard() {
   const { data: balanceData, isInitialLoading, isRefreshing, error, refetch } = useBalance(fiscalYearId ?? "", filters);
   const { data: fiscalYears, isLoading: fiscalYearsLoading } = useFiscalYears();
 
-  // Al montar: si no hay ano fiscal seleccionado, buscar el ACTIVE
+  // Al montar: si no hay año fiscal seleccionado, buscar el ACTIVE
   useEffect(() => {
     if (!fiscalYearId && fiscalYears && fiscalYears.length > 0) {
       const activeYear = fiscalYears.find((fy) => fy.status === "ACTIVE");
@@ -104,12 +103,7 @@ export function BalanceDashboard() {
     }
   }, [fiscalYearId, fiscalYears, setFiscalYearId]);
 
-  // Mostrar error en toast si hay warning del backend
-  if (balanceData?.warning && !error) {
-    toast.warning(balanceData.warning);
-  }
-
-  // Estado de carga inicial (sin fiscalYearId ancora)
+  // Estado de carga inicial (sin fiscalYearId todavía)
   if (!fiscalYearId) {
     return (
       <div className="space-y-6">
@@ -139,7 +133,7 @@ export function BalanceDashboard() {
     );
   }
 
-  // Sin datos (no deberia ocurrir si tenemos fiscalYearId)
+  // Sin datos (no debería ocurrir si tenemos fiscalYearId)
   if (!balanceData) {
     return (
       <div className="space-y-6">

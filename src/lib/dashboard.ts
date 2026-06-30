@@ -1,4 +1,4 @@
-import { api } from "@/lib/api-client";
+import { api, type ApiDownloadResult } from "@/lib/api-client";
 import type {
   BudgetDashboardExecution,
   BudgetDashboardExecutionFilters,
@@ -56,9 +56,30 @@ export function buildOrgUnitExecutionDashboardPath(filters: OrgUnitExecutionDash
   appendParam(params, "group_id", filters.group_id);
   appendParam(params, "search", filters.search);
   appendParam(params, "top_n", filters.top_n);
-
   const queryString = params.toString();
   return `/budget/dashboard/org-unit-execution${queryString ? `?${queryString}` : ""}`;
+}
+
+export function buildOrgUnitExecutionExportPath(filters: OrgUnitExecutionDashboardFilters = {}): string {
+  const params = new URLSearchParams();
+  appendParam(params, "fiscal_year_id", filters.fiscal_year_id);
+  appendParam(params, "fiscal_year", filters.fiscal_year);
+  appendParam(params, "org_unit_id", filters.org_unit_id);
+  appendParam(params, "program_id", filters.program_id);
+  appendParam(params, "component_id", filters.component_id);
+  appendParam(params, "operative_action_id", filters.operative_action_id);
+  appendParam(params, "resource_id", filters.resource_id);
+  appendParam(params, "funding_source_id", filters.funding_source_id);
+  appendParam(params, "selected_month", filters.selected_month);
+  appendParam(params, "month_from", filters.month_from);
+  appendParam(params, "month_to", filters.month_to);
+  appendParam(params, "level", filters.level);
+  appendParam(params, "parent_id", filters.parent_id);
+  appendParam(params, "group_id", filters.group_id);
+  appendParam(params, "search", filters.search);
+
+  const queryString = params.toString();
+  return `/budget/dashboard/org-unit-execution/export.xlsx${queryString ? `?${queryString}` : ""}`;
 }
 
 export function buildOrgUnitExecutionDashboardOptionsPath(filters: OrgUnitExecutionDashboardFilters = {}): string {
@@ -82,6 +103,23 @@ export function getOrgUnitExecutionDashboard(
   filters?: OrgUnitExecutionDashboardFilters,
 ): Promise<OrgUnitExecutionDashboard> {
   return api.get<OrgUnitExecutionDashboard>(buildOrgUnitExecutionDashboardPath(filters));
+}
+
+export function downloadOrgUnitExecutionReport(
+  filters?: OrgUnitExecutionDashboardFilters,
+): Promise<ApiDownloadResult> {
+  return api.download(buildOrgUnitExecutionExportPath(filters));
+}
+
+export function saveDownloadedDashboardReport(download: ApiDownloadResult, fallbackFilename: string): void {
+  const href = URL.createObjectURL(download.blob);
+  const link = document.createElement("a");
+  link.href = href;
+  link.download = download.filename ?? fallbackFilename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(href);
 }
 
 export function getOrgUnitExecutionDashboardOptions(

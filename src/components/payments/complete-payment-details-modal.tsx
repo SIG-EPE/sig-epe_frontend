@@ -4,13 +4,16 @@ import { useEffect, useState } from "react";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
+import { Info } from "lucide-react";
 
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { PaymentAllocationProofCoverage } from "@/components/payments/payment-allocation-proof-coverage";
+import { useUploadNavigationGuard } from "@/hooks/use-upload-navigation-guard";
 import { useCompletePaymentDetails } from "@/hooks/use-requests";
 import { PAYMENT_PROOF_ACCEPT, PAYMENT_PROOF_ACCEPTED_FORMATS_LABEL, formatRequestCurrency, getApiErrorMessage, getPaymentId, getRequestDisplayCode, getRequestPayableAmount, validatePaymentProofFile } from "@/lib/requests";
 import type { PaymentRequest } from "@/types/requests";
@@ -43,6 +46,14 @@ export function CompletePaymentDetailsModal({ request, open, onOpenChange, onSuc
       notes: "",
     },
   });
+  const uploadWarningMessage = "No cierres esta ventana mientras se carga el archivo";
+
+  useUploadNavigationGuard({ active: isLoading, message: "Hay una constancia de pago cargándose. Si sales o actualizas la página, la carga en curso puede cancelarse." });
+
+  function handleOpenChange(nextOpen: boolean): void {
+    if (!nextOpen && isLoading) return;
+    onOpenChange(nextOpen);
+  }
 
   useEffect(() => {
     if (!open) return;
@@ -85,12 +96,12 @@ export function CompletePaymentDetailsModal({ request, open, onOpenChange, onSuc
   const payableAmount = request ? getRequestPayableAmount(request) : 0;
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-2xl">
+    <Dialog open={open} onOpenChange={handleOpenChange}>
+      <DialogContent className="max-w-2xl" closeDisabled={isLoading}>
         <DialogHeader>
           <DialogTitle>Completar datos de pago</DialogTitle>
           <DialogDescription>
-            {request ? `Solicitud ${getRequestDisplayCode(request)} por ${formatRequestCurrency(payableAmount, request.currency)}. El monto y la fecha de pago no se modifican en esta acción.` : "Completa la constancia o referencia pendiente."}
+            {request ? `Solicitud ${getRequestDisplayCode(request)} por ${formatRequestCurrency(payableAmount, request.currency)}. Esta acción no cambia el monto ni la fecha de pago; solo completa referencia, comisión, notas o constancia pendiente.` : "Completa la constancia o referencia pendiente."}
           </DialogDescription>
         </DialogHeader>
         <Form {...form}>
@@ -142,8 +153,14 @@ export function CompletePaymentDetailsModal({ request, open, onOpenChange, onSuc
               {proofError && <p className="text-sm text-destructive">{proofError}</p>}
             </div>
             {submitError && <p className="rounded-md border border-destructive/40 p-3 text-sm text-destructive">{submitError}</p>}
+            {isLoading && (
+              <Alert className="border-amber-500/50 bg-amber-50 text-amber-950 dark:bg-amber-950/20 dark:text-amber-100">
+                <Info className="h-4 w-4" />
+                <AlertDescription className="text-amber-950 dark:text-amber-100">{uploadWarningMessage}</AlertDescription>
+              </Alert>
+            )}
             <DialogFooter>
-              <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={isLoading}>Cancelar</Button>
+              <Button type="button" variant="outline" onClick={() => handleOpenChange(false)} disabled={isLoading}>Cancelar</Button>
               <Button type="submit" disabled={isLoading || !request}>{isLoading ? "Guardando..." : "Completar datos"}</Button>
             </DialogFooter>
           </form>

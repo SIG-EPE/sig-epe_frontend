@@ -1,6 +1,7 @@
 import { ApiRequestError } from "@/lib/api-client";
 import { formatBusinessDate, formatBusinessDateTime, getBusinessDateString, getDateOnlyUtcTime } from "@/lib/business-timezone";
 import { ROLE_CODE, ROUTES } from "@/lib/constants";
+import { getSafeDocumentUrl } from "@/lib/safe-url";
 import type { Route } from "next";
 import {
   ACCOUNT_TYPE,
@@ -14,12 +15,15 @@ import {
   REQUEST_DOCUMENT_UPLOAD_STATUS,
   REQUEST_DOCUMENT_UPLOAD_QUEUE_ERROR_KIND,
   REQUEST_DOCUMENT_UPLOAD_QUEUE_STATUS,
+  RENDITION_NEXT_STEP_ACTION,
   REQUEST_TYPE,
   REXAN_OUTCOME,
   ADVANCE_SETTLEMENT_CTA_STATE,
+  RENDITION_BUCKET,
   RENDITION_STATUS,
   RENDITION_SORT_DIRECTION,
   RENDITION_SORT_FIELD,
+  type RenditionBucket,
   type AdvanceSettlementCta,
   type PaymentRequest,
   type RenditionInboxCounts,
@@ -48,6 +52,7 @@ import {
   type RequestStatus,
   type RequestType,
   type RexanOutcome,
+  type RenditionNextStepGuidance,
 } from "@/types/requests";
 
 export const ACTIVE_REVIEW_STATUSES = [
@@ -206,11 +211,12 @@ export interface RenditionSummaryCard {
   label: string;
   description: string;
   status?: RenditionStatus;
+  bucket?: RenditionBucket;
 }
 
 export const RENDITION_SUMMARY_CARDS: RenditionSummaryCard[] = [
   { key: "pending", label: "Pendientes de rendición", description: "Anticipos pagados aún sin rendición.", status: RENDITION_STATUS.PENDING },
-  { key: "due-soon", label: "Próximas a vencer", description: "Pendientes con fecha límite cercana.", status: RENDITION_STATUS.PENDING },
+  { key: "due-soon", label: "Próximas a vencer", description: "Vencen en los próximos 15 días.", bucket: RENDITION_BUCKET.DUE_SOON },
   { key: "overdue", label: "Vencidas", description: "Anticipos que superaron la fecha límite.", status: RENDITION_STATUS.OVERDUE },
   { key: "in-review", label: "En revisión", description: "Rendiciones enviadas para validación.", status: RENDITION_STATUS.IN_REVIEW },
   { key: "observed", label: "Observadas", description: "Rendiciones devueltas con comentarios.", status: RENDITION_STATUS.OBSERVED },
@@ -662,7 +668,9 @@ function getDateOnlyTime(value?: string | null): number | null {
   return getDateOnlyUtcTime(value);
 }
 
-export function getRenditionDaysRemaining(row: Pick<RenditionInboxRow, "scheduled_rendition_at" | "days_overdue" | "rendition_status">, today = new Date()): number | null {
+export function getRenditionDaysRemaining(row: Pick<RenditionInboxRow, "scheduled_rendition_at" | "days_overdue" | "days_until_due" | "days_remaining" | "rendition_status">, today = new Date()): number | null {
+  if (typeof row.days_remaining === "number") return row.days_remaining;
+  if (typeof row.days_until_due === "number") return row.days_until_due;
   if (typeof row.days_overdue === "number") return -Math.abs(row.days_overdue);
   if (!row.scheduled_rendition_at || row.rendition_status !== RENDITION_STATUS.PENDING) return null;
   const dueTime = getDateOnlyTime(row.scheduled_rendition_at);
@@ -671,7 +679,7 @@ export function getRenditionDaysRemaining(row: Pick<RenditionInboxRow, "schedule
   return Math.ceil((dueTime - todayTime) / (24 * 60 * 60 * 1000));
 }
 
-export function getRenditionDueLabel(row: Pick<RenditionInboxRow, "scheduled_rendition_at" | "days_overdue" | "rendition_status">, today = new Date()): string {
+export function getRenditionDueLabel(row: Pick<RenditionInboxRow, "scheduled_rendition_at" | "days_overdue" | "days_until_due" | "days_remaining" | "rendition_status">, today = new Date()): string {
   const days = getRenditionDaysRemaining(row, today);
   if (days === null) return "Sin fecha límite";
   if (days < 0) return `${Math.abs(days)} día${Math.abs(days) === 1 ? "" : "s"} vencida`;
@@ -679,13 +687,26 @@ export function getRenditionDueLabel(row: Pick<RenditionInboxRow, "scheduled_ren
   return `${days} día${days === 1 ? "" : "s"} restante${days === 1 ? "" : "s"}`;
 }
 
-export function isRenditionDueSoon(row: Pick<RenditionInboxRow, "scheduled_rendition_at" | "days_overdue" | "rendition_status">, today = new Date()): boolean {
+export function isRenditionDueSoon(row: Pick<RenditionInboxRow, "scheduled_rendition_at" | "days_overdue" | "days_until_due" | "days_remaining" | "rendition_status">, today = new Date()): boolean {
   const days = getRenditionDaysRemaining(row, today);
-  return row.rendition_status === RENDITION_STATUS.PENDING && days !== null && days >= 0 && days <= 7;
+  return row.rendition_status === RENDITION_STATUS.PENDING && days !== null && days >= 0 && days <= 15;
+}
+
+export interface PaymentProofDisplayItem {
+  id: string;
+  label: string;
+  document: RequestDocument | null;
+  documentId: string | null;
+  filename: string;
+  url: string | null;
+  paidAt: string | null;
+  amountPaid: number | null;
+  operationReference: string | null;
+  isPrimary: boolean;
 }
 
 export function getRenditionSummaryCount(card: RenditionSummaryCard, counts: RenditionInboxCounts | null | undefined, rows: RenditionInboxRow[]): number {
-  if (card.key === "due-soon") return rows.filter((row) => isRenditionDueSoon(row)).length;
+  if (card.key === "due-soon") return counts?.due_soon ?? rows.filter((row) => isRenditionDueSoon(row)).length;
   if (!card.status) return 0;
   return counts?.[card.status] ?? rows.filter((row) => row.rendition_status === card.status).length;
 }
@@ -934,13 +955,75 @@ export function getPaymentQueueStatusLabel(status: RequestStatus): string {
   return REQUEST_STATUS_LABELS[status] ?? "Estado no reconocido";
 }
 
+interface RegisteredPartySource {
+  registered_party_name?: string | null;
+  registered_party_document_type?: string | null;
+  registered_party_document_number?: string | null;
+  supplier_name?: string | null;
+  supplier_ruc?: string | null;
+  beneficiary_name?: string | null;
+  beneficiary_document_type?: string | null;
+  beneficiary_document_number?: string | null;
+}
+
+function normalizeOptionalDisplay(value: string | null | undefined): string | null {
+  const normalized = value?.trim();
+  return normalized ? normalized : null;
+}
+
+function getRegisteredPartyDocumentParts(source: RegisteredPartySource): { type: string | null; number: string | null } {
+  const explicitType = normalizeOptionalDisplay(source.registered_party_document_type);
+  const explicitNumber = normalizeOptionalDisplay(source.registered_party_document_number);
+  if (explicitType || explicitNumber) return { type: explicitType, number: explicitNumber };
+
+  const supplierRuc = normalizeOptionalDisplay(source.supplier_ruc);
+  if (supplierRuc) return { type: BENEFICIARY_DOCUMENT_TYPE.RUC, number: supplierRuc };
+
+  return {
+    type: normalizeOptionalDisplay(source.beneficiary_document_type),
+    number: normalizeOptionalDisplay(source.beneficiary_document_number),
+  };
+}
+
+export function getRegisteredPartyDisplay(source: RegisteredPartySource): string {
+  const explicitName = normalizeOptionalDisplay(source.registered_party_name);
+  if (explicitName) return explicitName;
+
+  const supplierName = normalizeOptionalDisplay(source.supplier_name);
+  if (supplierName) return supplierName;
+
+  return normalizeOptionalDisplay(source.beneficiary_name) ?? "—";
+}
+
+export function getRegisteredPartyDocumentLabel(source: RegisteredPartySource): string {
+  const { type, number } = getRegisteredPartyDocumentParts(source);
+  if (type && number) return `${type} ${number}`;
+  return number ?? "—";
+}
+
+export function getRegisteredByDisplayName(request: PaymentRequest): string;
+export function getRegisteredByDisplayName(request: RenditionInboxRow): string;
+export function getRegisteredByDisplayName(request: PaymentRequest | RenditionInboxRow): string {
+  if ("advance_id" in request) {
+    return normalizeOptionalDisplay(request.registered_by) ?? normalizeOptionalDisplay(request.requester) ?? "—";
+  }
+
+  return getPaymentRequestCreatorDisplayName(request);
+}
+
 export function getPaymentRequestParty(request: PaymentRequest): string {
-  if (request.supplier_name?.trim()) return request.supplier_name;
-  if (request.beneficiary_name?.trim()) return request.beneficiary_name;
+  return getRegisteredPartyDisplay(request);
+}
+
+export function getPaymentRequestCreatorDisplayName(request: PaymentRequest): string {
+  const explicitDisplayName = request.created_by_display_name?.trim() || request.requester_name?.trim();
+  if (explicitDisplayName) return explicitDisplayName;
+
   const requesterName = [request.requester?.firstName, request.requester?.lastName]
     .filter((value): value is string => Boolean(value?.trim()))
     .join(" ");
-  return requesterName || request.requester?.email || "—";
+
+  return requesterName || "—";
 }
 
 const ADVANCE_SETTLEMENT_EDITABLE_STATUSES = [
@@ -1054,6 +1137,40 @@ export function getAdvanceSettlementCta(
   };
 }
 
+export function getRenditionNextStepGuidance(
+  roleCode: string | null | undefined,
+  request: Pick<PaymentRequest, "request_type" | "status" | "requester_id" | "advanceSettlements">,
+  currentUserId?: string | null,
+): RenditionNextStepGuidance | null {
+  if (request.request_type !== REQUEST_TYPE.ADVANCE || request.status !== REQUEST_STATUS.PAID) return null;
+
+  const requesterCta = getAdvanceSettlementCta(ROLE_CODE.SOLICITANTE_EPE, request, request.requester_id);
+  const isRequester = Boolean(roleCode) && Boolean(currentUserId) && currentUserId === request.requester_id;
+
+  if (isRequester && requesterCta) {
+    return {
+      title: "Siguiente paso: preparar rendición",
+      description: `Debes preparar la rendición de este anticipo desde Bandeja de Rendiciones o con la acción ${requesterCta.label}. GIOF la revisará cuando la envíes.`,
+      actionLabel: requesterCta.label,
+      action: requesterCta.href ? RENDITION_NEXT_STEP_ACTION.NAVIGATE : RENDITION_NEXT_STEP_ACTION.START,
+      href: requesterCta.href,
+    };
+  }
+
+  if (roleCode === ROLE_CODE.GIOF_GESTOR || roleCode === ROLE_CODE.ADMIN_SISTEMA) {
+    const activeSettlement = getActiveAdvanceSettlement(request);
+    return {
+      title: "Siguiente paso: espera de rendición del solicitante",
+      description: "El solicitante prepara y envía la rendición. GIOF revisa cuando la rendición aparezca enviada en la Bandeja de Rendiciones.",
+      actionLabel: activeSettlement ? "Ver rendición vinculada" : "Ir a Bandeja de Rendiciones",
+      action: RENDITION_NEXT_STEP_ACTION.NAVIGATE,
+      href: activeSettlement ? `${ROUTES.REQUESTS}/${activeSettlement.id}` : ROUTES.RENDITIONS,
+    };
+  }
+
+  return null;
+}
+
 export function getPaymentRequestRenditionStatus(request: Pick<PaymentRequest, "request_type" | "status" | "scheduled_rendition_at" | "advanceSettlements">): RenditionStatus | null {
   if (request.request_type !== REQUEST_TYPE.ADVANCE || request.status !== REQUEST_STATUS.PAID) return null;
 
@@ -1142,6 +1259,60 @@ export function getRequestPaymentProofEntries(payment?: Pick<RequestPayment, "pr
   return payment?.proof_entries ?? payment?.proofs ?? [];
 }
 
+export function getPaymentProofDocumentName(document?: Pick<RequestDocument, "original_filename" | "safe_filename"> | null): string {
+  return document?.original_filename?.trim() || document?.safe_filename?.trim() || "Constancia de pago";
+}
+
+function getPaymentProofDocumentKey(documentId: string | null | undefined, document?: Pick<RequestDocument, "id"> | null): string | null {
+  return document?.id ?? documentId ?? null;
+}
+
+export function getPaymentProofDisplayItems(
+  payment?: Pick<RequestPayment, "id" | "paid_at" | "amount_paid" | "operation_reference" | "proof_document_id" | "proofDocument" | "proof_entries" | "proofs"> | null,
+): PaymentProofDisplayItem[] {
+  if (!payment) return [];
+
+  const items: PaymentProofDisplayItem[] = [];
+  const seen = new Set<string>();
+  const primaryDocumentKey = getPaymentProofDocumentKey(payment.proof_document_id, payment.proofDocument);
+  if (primaryDocumentKey || payment.proof_document_id) {
+    const key = primaryDocumentKey ?? payment.proof_document_id ?? "primary-proof";
+    seen.add(key);
+    items.push({
+      id: key,
+      label: "Constancia de pago",
+      document: payment.proofDocument ?? null,
+      documentId: payment.proof_document_id ?? primaryDocumentKey,
+      filename: getPaymentProofDocumentName(payment.proofDocument),
+      url: getSafeDocumentUrl(payment.proofDocument?.drive_web_url),
+      paidAt: payment.paid_at,
+      amountPaid: normalizeMoneyAmount(payment.amount_paid),
+      operationReference: payment.operation_reference,
+      isPrimary: true,
+    });
+  }
+
+  getRequestPaymentProofEntries(payment).forEach((proof, index) => {
+    const key = getPaymentProofDocumentKey(proof.proof_document_id, proof.proof_document) ?? proof.id;
+    if (seen.has(key)) return;
+    seen.add(key);
+    items.push({
+      id: key,
+      label: items.length === 0 && index === 0 ? "Constancia de pago" : "Constancia de pago adicional",
+      document: proof.proof_document ?? null,
+      documentId: proof.proof_document_id,
+      filename: getPaymentProofDocumentName(proof.proof_document),
+      url: getSafeDocumentUrl(proof.proof_document?.drive_web_url),
+      paidAt: proof.paid_at,
+      amountPaid: normalizeMoneyAmount(proof.amount_paid),
+      operationReference: proof.operation_reference,
+      isPrimary: false,
+    });
+  });
+
+  return items;
+}
+
 export function getPaymentProofEntriesForAllocation(
   payment: Pick<RequestPayment, "proof_entries" | "proofs"> | null | undefined,
   allocationId: string | null | undefined,
@@ -1157,6 +1328,14 @@ export function hasAllocationPaymentProofCoverage(
   allocationId: string | null | undefined,
 ): boolean {
   return getPaymentProofEntriesForAllocation(payment, allocationId).length > 0;
+}
+
+export function hasAllAllocationPaymentProofCoverage(
+  request: Pick<PaymentRequest, "allocations" | "payment">,
+): boolean {
+  const allocations = request.allocations ?? [];
+  if (allocations.length === 0) return false;
+  return allocations.every((allocation) => hasAllocationPaymentProofCoverage(request.payment, allocation.id));
 }
 
 export function getAllocationProofCoverageLabel(
