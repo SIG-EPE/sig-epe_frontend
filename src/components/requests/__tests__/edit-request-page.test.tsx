@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { EditRequestPage } from "@/components/requests/edit-request-page";
@@ -9,23 +9,26 @@ const mocks = vi.hoisted(() => ({
   settlementContext: null as SettlementContextResponse | null,
   settlementContextError: null as Error | null,
   push: vi.fn(),
+  replace: vi.fn(),
   refetchRequest: vi.fn(),
   refetchSettlementContext: vi.fn(),
 }));
 
 vi.mock("next/navigation", () => ({
   useParams: () => ({ id: "request-1" }),
-  useRouter: () => ({ push: mocks.push }),
+  useRouter: () => ({ push: mocks.push, replace: mocks.replace }),
   useSearchParams: () => new URLSearchParams(),
 }));
 
 vi.mock("@/hooks/use-requests", () => ({
-  useRequest: () => ({ request: mocks.request, isLoading: false, error: null, refetch: mocks.refetchRequest }),
+  useRequest: () => ({ request: mocks.request, isInitialLoading: false, isRefreshing: false, error: null, refetch: mocks.refetchRequest }),
   useSettlementContext: () => ({ context: mocks.settlementContext, isLoading: false, error: mocks.settlementContextError, refetch: mocks.refetchSettlementContext }),
 }));
 
 vi.mock("@/components/requests/request-form", () => ({
-  RequestForm: () => <div data-testid="request-form" />,
+  RequestForm: (props: { onRequestStateConflict?: () => Promise<void> }) => (
+    <button data-testid="request-form" onClick={() => void props.onRequestStateConflict?.()}>Simular conflicto</button>
+  ),
 }));
 
 function makeRequest(overrides: Partial<PaymentRequest> = {}): PaymentRequest {
@@ -112,6 +115,7 @@ beforeEach(() => {
   mocks.settlementContext = null;
   mocks.settlementContextError = null;
   mocks.push.mockReset();
+  mocks.replace.mockReset();
   mocks.refetchRequest.mockReset();
   mocks.refetchSettlementContext.mockReset();
 });
@@ -135,5 +139,29 @@ describe("EditRequestPage", () => {
 
     expect(screen.getByRole("heading", { name: "Editar borrador" })).toBeInTheDocument();
     expect(screen.queryByText("Preparar rendición de anticipo")).not.toBeInTheDocument();
+  });
+
+  it("espera el refetch autoritativo y reemplaza el editor por el detalle", async () => {
+    mocks.request = makeRequest({ request_type: REQUEST_TYPE.ADVANCE });
+    let finishRefetch: (() => void) | undefined;
+    mocks.refetchRequest.mockReturnValue(new Promise<void>((resolve) => { finishRefetch = resolve; }));
+
+    render(<EditRequestPage />);
+    fireEvent.click(screen.getByTestId("request-form"));
+    expect(mocks.refetchRequest).toHaveBeenCalledWith({ background: true });
+    expect(mocks.replace).not.toHaveBeenCalled();
+
+    await act(async () => finishRefetch?.());
+    expect(mocks.replace).toHaveBeenCalledWith("/requests/request-1");
+  });
+
+  it("sale al detalle aunque el refetch falle", async () => {
+    mocks.request = makeRequest({ request_type: REQUEST_TYPE.ADVANCE });
+    mocks.refetchRequest.mockRejectedValue(new Error("refresh failed"));
+
+    render(<EditRequestPage />);
+    fireEvent.click(screen.getByTestId("request-form"));
+
+    await waitFor(() => expect(mocks.replace).toHaveBeenCalledWith("/requests/request-1"));
   });
 });

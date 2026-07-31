@@ -7,6 +7,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { BeneficiaryFields } from "@/components/requests/beneficiary-fields";
 import { Form } from "@/components/ui/form";
+import { ApiRequestError } from "@/lib/api-client";
 import { getRequestSaveSuccessToast, getRequestSubmitFailureToast, getRequestSubmitSavingToast, getRequestSubmitSuccessToast, getScheduledRenditionMinDate, normalizeRequestAmountInput, REQUEST_BUDGET_CEILING_BLOCK_MESSAGE, RequestForm, requestFormSchema, toCreateRequestDto, toUpdateRequestDto, type RequestFormValues } from "@/components/requests/request-form";
 import { BANK_OPTIONS, REQUEST_EDIT_STEP } from "@/lib/requests";
 import { ACCOUNT_TYPE, BANK_CODE, BENEFICIARY_DOCUMENT_TYPE, REQUEST_CURRENCY, REQUEST_DOCUMENT_CATEGORY, REQUEST_DOCUMENT_SCOPE_TYPE, REQUEST_STATUS, REQUEST_TYPE, type BeneficiaryDocumentType, type PaymentRequest, type RequestAllocation, type RequestBudgetPreview, type RequestDocument, type SettlementContextResponse } from "@/types/requests";
@@ -25,6 +26,7 @@ const mocks = vi.hoisted(() => ({
   useRequestPlanningLines: vi.fn(),
   hydrateItems: [] as import("@/types/requests").RequestPlanningLineLookupItem[],
   unavailableIds: [] as string[],
+  requestStateConflict: vi.fn(),
 }));
 
 vi.mock("next/navigation", () => ({
@@ -347,7 +349,19 @@ beforeEach(() => {
   mocks.useRequestPlanningLines.mockReturnValue({ lines: [], total: 0, isLoading: false, isInitialLoading: false, isRefreshing: false, error: null, refetch: vi.fn() });
   mocks.hydrateItems = [];
   mocks.unavailableIds = [];
+  mocks.requestStateConflict.mockReset();
 });
+
+function makeRequestStateConflict(): ApiRequestError {
+  return new ApiRequestError(409, {
+    statusCode: 409,
+    code: "REQUEST_STATE_CONFLICT",
+    message: "La solicitud cambió de estado",
+    error: "Conflict",
+    timestamp: "2026-07-26T00:00:00.000Z",
+    path: "/requests/request-1",
+  });
+}
 
 function BeneficiaryFieldsErrorHarness() {
   const form = useForm<RequestFormValues>({
@@ -993,6 +1007,51 @@ describe("RequestForm payload helpers", () => {
     expect(mocks.toastSuccess).toHaveBeenCalledWith("Corrección guardada. Enviando corrección...");
     expect(mocks.toastSuccess).toHaveBeenCalledWith("Corrección enviada a revisión");
     expect(mocks.push).toHaveBeenCalledWith("/requests/request-1");
+  });
+
+  it("recupera una edición en conflicto al guardar sin reintentar", async () => {
+    const user = userEvent.setup();
+    mocks.updateRequest.mockRejectedValue(makeRequestStateConflict());
+
+    render(
+      <RequestForm
+        activeStep={REQUEST_EDIT_STEP.DATA}
+        initialRequest={makePaymentRequest({ request_type: REQUEST_TYPE.ADVANCE })}
+        mode="edit"
+        onRequestStateConflict={mocks.requestStateConflict}
+      />,
+    );
+    await user.click(screen.getByTestId("request-save-draft-button"));
+
+    await waitFor(() => expect(mocks.requestStateConflict).toHaveBeenCalledTimes(1));
+    expect(mocks.updateRequest).toHaveBeenCalledTimes(1);
+    expect(mocks.submitRequest).not.toHaveBeenCalled();
+  });
+
+  it("recupera un conflicto al enviar sin reenviar", async () => {
+    const user = userEvent.setup();
+    mocks.requestDocuments = [makeDocument({
+      document_category: REQUEST_DOCUMENT_CATEGORY.PXQ,
+      original_filename: "POA.xlsx",
+      safe_filename: "poa.xlsx",
+      mime_type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    })];
+    const draft = makePaymentRequest({ request_type: REQUEST_TYPE.ADVANCE });
+    mocks.updateRequest.mockResolvedValue(draft);
+    mocks.submitRequest.mockRejectedValue(makeRequestStateConflict());
+
+    render(
+      <RequestForm
+        activeStep={REQUEST_EDIT_STEP.REVIEW}
+        initialRequest={draft}
+        mode="edit"
+        onRequestStateConflict={mocks.requestStateConflict}
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: "Enviar a revisión" }));
+
+    await waitFor(() => expect(mocks.requestStateConflict).toHaveBeenCalledTimes(1));
+    expect(mocks.submitRequest).toHaveBeenCalledTimes(1);
   });
 
   it("muestra stepper y contexto original diferenciados para REXAN", () => {

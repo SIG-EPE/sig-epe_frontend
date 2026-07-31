@@ -74,6 +74,7 @@ import {
   sanitizeBudgetMessage,
   sanitizeDigits,
   isBudgetPreviewBlocking,
+  isRequestStateConflict,
   parseRequestListSort,
   parseRequestReviewQueue,
   parseRequestStatusFilter,
@@ -84,6 +85,24 @@ import {
 } from "@/lib/requests";
 import { ROLE_CODE } from "@/lib/constants";
 import { ACCOUNT_TYPE, BANK_CODE, BENEFICIARY_DOCUMENT_TYPE, RENDITION_SORT_DIRECTION, RENDITION_SORT_FIELD, RENDITION_STATUS, REQUEST_CURRENCY, REQUEST_DOCUMENT_CATEGORY, REQUEST_DOCUMENT_STORAGE_PROVIDER, REQUEST_DOCUMENT_UPLOAD_STATUS, REQUEST_STATUS, REQUEST_TYPE, REXAN_OUTCOME, type PaymentRequest, type RenditionInboxCounts, type RenditionInboxRow, type RequestBudgetPreview, type RequestDocument, type RequestStatusHistoryItem } from "@/types/requests";
+
+const REQUEST_STATE_CONFLICT_BODY = {
+  statusCode: 409,
+  code: "REQUEST_STATE_CONFLICT",
+  message: "Conflict",
+  error: "Conflict",
+  timestamp: "2026-07-26T00:00:00.000Z",
+  path: "/requests/request-1",
+};
+
+describe("isRequestStateConflict", () => {
+  it("detecta solo ApiRequestError 409 con el código estable", () => {
+    expect(isRequestStateConflict(new ApiRequestError(409, REQUEST_STATE_CONFLICT_BODY))).toBe(true);
+    expect(isRequestStateConflict(new ApiRequestError(400, REQUEST_STATE_CONFLICT_BODY))).toBe(false);
+    expect(isRequestStateConflict(new ApiRequestError(409, { ...REQUEST_STATE_CONFLICT_BODY, code: "OTHER" }))).toBe(false);
+    expect(isRequestStateConflict(new Error("Conflict"))).toBe(false);
+  });
+});
 
 function makeHistoryItem(overrides: Partial<RequestStatusHistoryItem>): RequestStatusHistoryItem {
   return {

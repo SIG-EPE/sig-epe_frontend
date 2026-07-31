@@ -89,6 +89,14 @@ export const REQUEST_EDIT_STEP = {
   REVIEW: "review",
 } as const;
 
+export const REQUEST_STATE_CONFLICT_CODE = "REQUEST_STATE_CONFLICT";
+
+export function isRequestStateConflict(error: unknown): error is ApiRequestError {
+  return error instanceof ApiRequestError
+    && error.status === 409
+    && error.body.code === REQUEST_STATE_CONFLICT_CODE;
+}
+
 export type RequestEditStep = (typeof REQUEST_EDIT_STEP)[keyof typeof REQUEST_EDIT_STEP];
 
 export interface RequestEditStepperItem {

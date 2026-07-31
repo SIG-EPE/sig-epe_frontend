@@ -37,6 +37,7 @@ import {
   isBcpBank,
   isKnownBankCode,
   isOtherBank,
+  isRequestStateConflict,
   validateRequestDataForSubmit,
   validateRequestDataForSubmitIssues,
   type RequestSubmitDataWithAllocations,
@@ -441,6 +442,7 @@ interface RequestFormProps {
   settlementContextLoading?: boolean;
   onRetrySettlementContext?: () => Promise<void> | void;
   onRequestChanged?: () => Promise<void> | void;
+  onRequestStateConflict?: () => Promise<void> | void;
 }
 
 export function RequestForm({
@@ -452,6 +454,7 @@ export function RequestForm({
   settlementContextLoading = false,
   onRetrySettlementContext,
   onRequestChanged,
+  onRequestStateConflict,
 }: RequestFormProps) {
   const router = useRouter();
   const user = useAuthStore((state) => state.user);
@@ -768,6 +771,9 @@ export function RequestForm({
       navigateToStep(REQUEST_EDIT_STEP.DOCUMENTS, saved.id);
     } catch (error) {
       toast.error(getNewAdvancePendingSettlementBlockMessage(requestTypeForBlocking, error) ?? getApiErrorMessage(error));
+      if (isRequestStateConflict(error)) {
+        await onRequestStateConflict?.();
+      }
     } finally {
       setPendingAction(null);
     }
@@ -834,6 +840,9 @@ export function RequestForm({
       toast.success(getRequestSubmitSavingToast(saved.status));
     } catch (error) {
       toast.error(getNewAdvancePendingSettlementBlockMessage(requestTypeForBlocking, error) ?? getApiErrorMessage(error));
+      if (isRequestStateConflict(error)) {
+        await onRequestStateConflict?.();
+      }
       setPendingAction(null);
       return;
     }
@@ -849,6 +858,9 @@ export function RequestForm({
       const message = pendingSettlementMessage ?? getApiErrorMessage(error);
       setSubmitErrors(missingMessages.length > 0 ? missingMessages : [message]);
       toast.error(getRequestSubmitFailureToast(message, saved.status));
+      if (isRequestStateConflict(error)) {
+        await onRequestStateConflict?.();
+      }
       setPendingAction(null);
     }
   }

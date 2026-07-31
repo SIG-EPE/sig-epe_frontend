@@ -109,6 +109,14 @@ export function EditRequestPage() {
         onRequestChanged={async () => {
           await Promise.all([refetch({ background: true }), settlementContext.refetch({ background: true })]);
         }}
+        onRequestStateConflict={async () => {
+          try {
+            await refetch({ background: true });
+          } catch {
+            // El detalle vuelve a consultar su estado; no conservar el editor obsoleto.
+          }
+          router.replace(`${ROUTES.REQUESTS}/${request.id}`);
+        }}
       />
     </div>
   );
