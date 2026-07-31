@@ -764,6 +764,8 @@ describe("RequestDocumentsCard", () => {
     expect(groups[0]).toHaveTextContent("Completo");
     expect(groups[0]).toHaveTextContent("Adjunto");
     expect(groups[1]).toHaveTextContent("Pendiente");
+    expect(screen.getByText("No se requieren documentos generales adicionales para este anticipo. El Excel PxQ se valida en cada línea POA.")).toBeInTheDocument();
+    expect(screen.queryByText("No hay documentos obligatorios generales configurados para este tipo de solicitud.")).not.toBeInTheDocument();
   });
 
   it("mantiene la constancia de pago como documento general aunque se envíe alcance", async () => {

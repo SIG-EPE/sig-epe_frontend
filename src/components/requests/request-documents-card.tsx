@@ -1030,7 +1030,11 @@ export function RequestDocumentsCard({
           </div>
           <div className="mt-3 space-y-3">
             {checklist.items.length === 0 ? (
-              <p className="text-sm text-muted-foreground">No hay documentos obligatorios generales configurados para este tipo de solicitud.</p>
+              <p className="text-sm text-muted-foreground">
+                {request.request_type === REQUEST_TYPE.ADVANCE && hasAllocationGroups
+                  ? "No se requieren documentos generales adicionales para este anticipo. El Excel PxQ se valida en cada línea POA."
+                  : "No hay documentos obligatorios generales configurados para este tipo de solicitud."}
+              </p>
             ) : checklist.items.map((item) => (
               <div key={item.key} className="flex flex-col gap-3 rounded-md border p-3 sm:flex-row sm:items-center sm:justify-between">
                 <div className="flex gap-3">
