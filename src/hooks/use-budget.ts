@@ -782,50 +782,6 @@ export function useMonthlyDistribution(lineId: string): UseMonthlyDistributionRe
 }
 
 // -------------------------------------------------------
-// useExecutedAmount — obtener ejecutado por mes
-// GET /budget/planning-lines/:id/monthly/:month/executed
-// -------------------------------------------------------
-
-interface UseExecutedAmountReturn {
-  data: { planned_amount: number; executed_amount: number } | null;
-  isLoading: boolean;
-  error: Error | null;
-}
-
-export function useExecutedAmount(lineId: string, month: number) {
-  const [data, setData] = useState<{ planned_amount: number; executed_amount: number } | null>(null);
-  const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState<Error | null>(null);
-
-  useEffect(() => {
-    if (!lineId || !month) return;
-    let cancelled = false;
-    setIsLoading(true);
-    setError(null);
-
-    api
-      .get<{ planned_amount: number; executed_amount: number }>(`/budget/planning-lines/${lineId}/monthly/${month}/executed`)
-      .then((result) => {
-        if (!cancelled) setData(result);
-      })
-      .catch((e) => {
-        if (!cancelled) {
-          setError(e instanceof Error ? e : new Error("Error al obtener ejecutado"));
-        }
-      })
-      .finally(() => {
-        if (!cancelled) setIsLoading(false);
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [lineId, month]);
-
-  return { data, isLoading, error };
-}
-
-// -------------------------------------------------------
 // Partner Allocations — tipos
 // -------------------------------------------------------
 
