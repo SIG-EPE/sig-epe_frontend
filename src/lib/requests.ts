@@ -1383,18 +1383,19 @@ export function getPaymentEmailStatusLabel(status?: string | null): string {
 
 export function getPaymentRexanStatusLabel(status?: string | null): string {
   if (!status) return "REXAN no informado";
+  if (status === "PENDING") return "REXAN en proceso";
+  if (status === "PROCESSING") return "REXAN procesando";
+  if (status === "RETRYING") return "REXAN reintentando";
   if (status === "CREATED") return "REXAN activada";
   if (status === "REUSED") return "REXAN reutilizada";
   if (status === "SKIPPED") return "REXAN no aplica";
-  if (status === "FAILED") return "REXAN con incidencia";
+  if (status === "FAILED") return "REXAN requiere atención";
   return status;
 }
 
 export function getBulkPaymentRexanHref(rexan?: BulkPaymentRexanResult | null): string | null {
   if (!rexan) return null;
-  if (rexan.href?.trim()) return rexan.href;
-  if (rexan.link?.trim()) return rexan.link;
-  const requestId = rexan.settlement_request_id ?? rexan.settlement_id ?? rexan.request_id ?? rexan.id;
+  const requestId = rexan.settlement_request_id;
   return requestId ? `${ROUTES.REQUESTS}/${requestId}` : null;
 }
 

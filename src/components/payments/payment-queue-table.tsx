@@ -10,7 +10,7 @@ import { PaymentAllocationProofCoverage } from "@/components/payments/payment-al
 import { QueueTableRowsSkeleton } from "@/components/performance/route-skeletons";
 import { ROUTES } from "@/lib/constants";
 import { getSafeDocumentUrl } from "@/lib/safe-url";
-import { REQUEST_TYPE_LABELS, formatRequestCurrency, formatRequestDate, getPaymentId, getPaymentPendingBadges, getPaymentProofDisplayItems, getPlanningLineDisplay, getRegisteredByDisplayName, getRegisteredPartyDisplay, getRegisteredPartyDocumentLabel, getRequestPayableAmount, hasAllAllocationPaymentProofCoverage, hasPaymentDetailsPending, hasPaymentProofPending, isRexanExcessRequest } from "@/lib/requests";
+import { REQUEST_TYPE_LABELS, formatRequestCurrency, formatRequestDate, getPaymentId, getPaymentPendingBadges, getPaymentProofDisplayItems, getPaymentRexanStatusLabel, getPlanningLineDisplay, getRegisteredByDisplayName, getRegisteredPartyDisplay, getRegisteredPartyDocumentLabel, getRequestPayableAmount, hasAllAllocationPaymentProofCoverage, hasPaymentDetailsPending, hasPaymentProofPending, isRexanExcessRequest } from "@/lib/requests";
 import { REQUEST_STATUS, type PaymentRequest } from "@/types/requests";
 
 interface PaymentQueueTableProps {
@@ -22,9 +22,10 @@ interface PaymentQueueTableProps {
   onToggleAll?: (checked: boolean) => void;
   onCompletePaymentDetails?: (request: PaymentRequest) => void;
   onAttachPaymentProof?: (request: PaymentRequest) => void;
+  onRetryRexanActivation?: (request: PaymentRequest) => void;
 }
 
-export function PaymentQueueTable({ requests, isLoading, onRegisterPayment, selectedRequestIds = [], onToggleRequest, onToggleAll, onCompletePaymentDetails, onAttachPaymentProof }: PaymentQueueTableProps) {
+export function PaymentQueueTable({ requests, isLoading, onRegisterPayment, selectedRequestIds = [], onToggleRequest, onToggleAll, onCompletePaymentDetails, onAttachPaymentProof, onRetryRexanActivation }: PaymentQueueTableProps) {
   if (isLoading) {
     return <QueueTableRowsSkeleton rows={5} columns={7} />;
   }
@@ -120,6 +121,11 @@ export function PaymentQueueTable({ requests, isLoading, onRegisterPayment, sele
               <div className="flex flex-col gap-1">
                 <span className="text-sm">{formatRequestDate(request.approved_at ?? request.payment?.created_at ?? request.paid_at)}</span>
                 <StatusBadge status={request.status} context={request} />
+                {request.rexan_activation && (
+                  <Badge variant={request.rexan_activation.status === "FAILED" ? "destructive" : "secondary"}>
+                    {getPaymentRexanStatusLabel(request.rexan_activation.status)}
+                  </Badge>
+                )}
                 {getPaymentPendingBadges(request).length > 0 && (
                   <div className="flex flex-wrap gap-1">
                     {getPaymentPendingBadges(request).map((label) => <Badge key={label} variant="outline">{label}</Badge>)}
@@ -138,6 +144,11 @@ export function PaymentQueueTable({ requests, isLoading, onRegisterPayment, sele
                 )}
                 {canAttachAllocationProof && (
                   <Button size="sm" variant="outline" onClick={() => onAttachPaymentProof?.(request)} data-testid="attach-payment-proof-button">Agregar comprobante POA</Button>
+                )}
+                {request.rexan_activation?.status === "FAILED" && onRetryRexanActivation && (
+                  <Button size="sm" variant="outline" onClick={() => onRetryRexanActivation(request)} data-testid="retry-rexan-button">
+                    Reintentar REXAN
+                  </Button>
                 )}
                 {request.status === REQUEST_STATUS.PAID && (
                   <>

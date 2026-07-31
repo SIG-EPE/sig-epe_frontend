@@ -9,6 +9,7 @@ import { REQUEST_CURRENCY, REQUEST_STATUS, REQUEST_TYPE, type PaymentRequest } f
 const mocks = vi.hoisted(() => ({
   bulkMarkPaid: vi.fn(),
   completePaymentDetails: vi.fn(),
+  retryRexanActivation: vi.fn(),
   push: vi.fn(),
 }));
 
@@ -19,6 +20,7 @@ vi.mock("next/navigation", () => ({
 vi.mock("@/hooks/use-requests", () => ({
   useBulkMarkPaid: () => ({ bulkMarkPaid: mocks.bulkMarkPaid, isLoading: false, error: null }),
   useCompletePaymentDetails: () => ({ completePaymentDetails: mocks.completePaymentDetails, isLoading: false, error: null }),
+  useRetryRexanActivation: () => ({ retryRexanActivation: mocks.retryRexanActivation, isLoading: false, error: null }),
 }));
 
 function makeRequest(overrides: Partial<PaymentRequest> = {}): PaymentRequest {
@@ -80,7 +82,7 @@ describe("bulk payment modals", () => {
       failed_count: 1,
       total_amount: 100,
       results: [
-        { request_id: "req-1", status: "success", payment_id: "payment-1", proof_pending: true, details_pending: true, email_status: "queued", rexan: { status: "CREATED", settlement_request_id: "rexan-1" } },
+        { request_id: "req-1", status: "success", payment_id: "payment-1", proof_pending: true, details_pending: true, email_status: "queued", rexan_activation: { job_id: "job-1", status: "PENDING" } },
         { request_id: "req-2", status: "failed", error: "Solicitud no elegible" },
       ],
     });
@@ -113,8 +115,8 @@ describe("bulk payment modals", () => {
     expect(within(summary).getByText("Falta constancia")).toBeInTheDocument();
     expect(within(summary).getByText("Falta referencia")).toBeInTheDocument();
     expect(within(summary).getByText("Correo en cola")).toBeInTheDocument();
-    expect(within(summary).getByText("REXAN activada")).toBeInTheDocument();
-    expect(mocks.push).toHaveBeenCalledWith("/requests/rexan-1");
+    expect(within(summary).getByText("REXAN en proceso")).toBeInTheDocument();
+    expect(mocks.push).not.toHaveBeenCalled();
   });
 
   it("completa datos por multipart sin exponer monto ni fecha", async () => {

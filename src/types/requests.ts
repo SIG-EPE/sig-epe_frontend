@@ -758,6 +758,7 @@ export interface PaymentRequest {
   statusHistory?: RequestStatusHistoryItem[];
   observations?: RequestObservation[];
   payment?: RequestPayment | null;
+  rexan_activation?: RexanActivation | null;
   payment_id?: string | null;
   payment_batch_id?: string | null;
   payment_batch_reference?: string | null;
@@ -1163,6 +1164,9 @@ export const PAYMENT_EMAIL_STATUS = {
 export type PaymentEmailStatus = (typeof PAYMENT_EMAIL_STATUS)[keyof typeof PAYMENT_EMAIL_STATUS] | string;
 
 export const PAYMENT_REXAN_STATUS = {
+  PENDING: "PENDING",
+  PROCESSING: "PROCESSING",
+  RETRYING: "RETRYING",
   CREATED: "CREATED",
   REUSED: "REUSED",
   SKIPPED: "SKIPPED",
@@ -1179,16 +1183,20 @@ export interface BulkMarkPaidInput {
 }
 
 export interface BulkPaymentRexanResult {
-  status?: PaymentRexanStatus | null;
-  settlement_id?: string | null;
+  job_id?: string | null;
+  status: PaymentRexanStatus;
   settlement_request_id?: string | null;
-  request_id?: string | null;
-  id?: string | null;
-  request_code?: string | null;
-  sequential_number?: string | null;
-  link?: string | null;
-  href?: string | null;
-  error?: string | null;
+  attempt_count?: number | null;
+  next_attempt_at?: string | null;
+  error_code?: string | null;
+}
+
+export type RexanActivation = BulkPaymentRexanResult;
+
+export interface RegisterPaymentResponse {
+  request: PaymentRequest;
+  payment_id: string;
+  rexan_activation: RexanActivation;
 }
 
 export interface BulkPaymentItemResult {
@@ -1200,7 +1208,7 @@ export interface BulkPaymentItemResult {
   proof_pending?: boolean;
   details_pending?: boolean;
   email_status?: PaymentEmailStatus | null;
-  rexan?: BulkPaymentRexanResult | null;
+  rexan_activation?: RexanActivation | null;
   error?: string | null;
 }
 
@@ -1211,6 +1219,7 @@ export interface BulkMarkPaidResponse {
   failed_count: number;
   total_amount: number | string;
   results: BulkPaymentItemResult[];
+  rexan_metrics: Record<string, number>;
 }
 
 export interface CompletePaymentDetailsInput {

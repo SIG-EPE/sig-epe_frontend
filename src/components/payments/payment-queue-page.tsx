@@ -7,10 +7,11 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { useDebouncedValue } from "@/hooks/use-debounced-value";
-import { usePaymentQueue } from "@/hooks/use-requests";
-import { PAYMENT_QUEUE_STATUS, formatRequestCurrency, getApiErrorMessage, getRequestPayableAmount } from "@/lib/requests";
+import { usePaymentQueue, useRetryRexanActivation } from "@/hooks/use-requests";
+import { PAYMENT_QUEUE_STATUS, formatRequestCurrency, getApiErrorMessage, getPaymentRexanStatusLabel, getRequestPayableAmount } from "@/lib/requests";
 import { cn } from "@/lib/utils";
-import { REQUEST_STATUS, type PaymentRequest } from "@/types/requests";
+import { REQUEST_STATUS, type PaymentRequest, type RegisterPaymentResponse } from "@/types/requests";
+import { useAuthStore } from "@/stores/auth-store";
 import { PaymentQueueTable } from "./payment-queue-table";
 import { RegisterPaymentModal } from "./register-payment-modal";
 import { BulkMarkPaidModal } from "./bulk-mark-paid-modal";
@@ -26,6 +27,9 @@ const PAYMENT_QUEUE_TAB = {
 type PaymentQueueTab = (typeof PAYMENT_QUEUE_TAB)[keyof typeof PAYMENT_QUEUE_TAB];
 
 export function PaymentQueuePage() {
+  const roleCode = useAuthStore((state) => state.user?.role?.code);
+  const canRetryRexan = roleCode === "GIOF_GESTOR" || roleCode === "ADMIN_SISTEMA";
+  const { retryRexanActivation, isLoading: isRetryingRexan } = useRetryRexanActivation();
   const [status, setStatus] = useState<PaymentQueueTab>(PAYMENT_QUEUE_STATUS.PENDING);
   const [search, setSearch] = useState("");
   const debouncedSearch = useDebouncedValue(search.trim(), 300);
@@ -61,9 +65,9 @@ export function PaymentQueuePage() {
     setIsModalOpen(true);
   }
 
-  async function refreshAfterPayment() {
+  async function refreshAfterPayment(result: RegisterPaymentResponse) {
     await Promise.all([activeQueue.refetch(), pendingQueue.refetch(), paidQueue.refetch(), pendingDataProofQueue.refetch(), pendingDataDetailsQueue.refetch()]);
-    toast.success("Pago registrado correctamente.");
+    toast.success(`Pago registrado. ${getPaymentRexanStatusLabel(result.rexan_activation.status)}.`);
   }
 
   async function refreshAfterBulkPayment() {
@@ -106,6 +110,13 @@ export function PaymentQueuePage() {
   function openAttachPaymentProof(request: PaymentRequest) {
     setProofAssociationRequest(request);
     setIsAttachProofModalOpen(true);
+  }
+
+  async function retryRexan(request: PaymentRequest) {
+    if (!canRetryRexan || isRetryingRexan) return;
+    await retryRexanActivation(request.id);
+    await Promise.all([activeQueue.refetch(), paidQueue.refetch()]);
+    toast.success("REXAN programada para reintento.");
   }
 
   return (
@@ -178,6 +189,7 @@ export function PaymentQueuePage() {
               onToggleAll={status === REQUEST_STATUS.APPROVED ? toggleAllVisible : undefined}
               onCompletePaymentDetails={openCompletePaymentDetails}
               onAttachPaymentProof={openAttachPaymentProof}
+              onRetryRexanActivation={canRetryRexan ? retryRexan : undefined}
             />
           )}
         </CardContent>

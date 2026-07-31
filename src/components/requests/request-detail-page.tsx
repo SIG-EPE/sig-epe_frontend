@@ -12,7 +12,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-import { useApproveRequest, useObserveRequest, useRejectRequest, useRequest, useRequestDocuments, useRequestRenditionReport, useSettlementContext, useStartAdvanceSettlement } from "@/hooks/use-requests";
+import { useApproveRequest, useObserveRequest, useRejectRequest, useRequest, useRequestDocuments, useRequestRenditionReport, useRetryRexanActivation, useSettlementContext, useStartAdvanceSettlement } from "@/hooks/use-requests";
 import { ROUTES } from "@/lib/constants";
 import {
   canCorrectObservedRequest,
@@ -26,6 +26,7 @@ import {
   getApiErrorMessage,
   getPaymentRequestCreatorDisplayName,
   getPaymentProofDisplayItems,
+  getPaymentRexanStatusLabel,
   getRegisteredPartyDisplay,
   getRegisteredPartyDocumentLabel,
   getPaymentRequestRenditionStatus,
@@ -217,6 +218,7 @@ export function RequestDetailPage() {
   const { approveRequest, isLoading: approving } = useApproveRequest();
   const { rejectRequest, isLoading: rejecting } = useRejectRequest();
   const { startAdvanceSettlement, isLoading: startingSettlement } = useStartAdvanceSettlement();
+  const { retryRexanActivation, isLoading: retryingRexan } = useRetryRexanActivation();
 
   const RETURN_PROOF_OBSERVATION_FIELD = "Constancia de devolución";
 
@@ -241,6 +243,7 @@ export function RequestDetailPage() {
   const canEditDraft = isRequestOwner && canEditDraftRequest(roleCode, request.status);
   const advanceSettlementCta = getAdvanceSettlementCta(roleCode, request, user?.id);
   const renditionNextStepGuidance = getRenditionNextStepGuidance(roleCode, request, user?.id);
+  const canRetryRexan = roleCode === "GIOF_GESTOR" || roleCode === "ADMIN_SISTEMA";
   const driveFolderUrl = getSafeDocumentUrl(request.drive_folder_url);
   const ownPaymentProofItems = getPaymentProofDisplayItems(request.payment);
   const createdByDisplayName = getPaymentRequestCreatorDisplayName(request);
@@ -505,6 +508,41 @@ export function RequestDetailPage() {
                 {startingSettlement ? "Iniciando..." : renditionNextStepGuidance.actionLabel}
               </Button>
             )}
+          </CardContent>
+        </Card>
+      )}
+
+      {request.rexan_activation && (
+        <Card data-testid="rexan-activation-state-card">
+          <CardHeader><CardTitle>Activación REXAN</CardTitle></CardHeader>
+          <CardContent className="grid gap-3 text-sm sm:grid-cols-4">
+            <div><p className="text-xs text-muted-foreground">Estado</p><Badge variant={request.rexan_activation.status === "FAILED" ? "destructive" : "secondary"}>{getPaymentRexanStatusLabel(request.rexan_activation.status)}</Badge></div>
+            <div><p className="text-xs text-muted-foreground">Intentos</p><p className="font-medium">{request.rexan_activation.attempt_count ?? 0}</p></div>
+            <div><p className="text-xs text-muted-foreground">Próximo intento</p><p className="font-medium">{formatRequestDate(request.rexan_activation.next_attempt_at)}</p></div>
+            <div>
+              <p className="text-xs text-muted-foreground">Rendición</p>
+              {request.rexan_activation.settlement_request_id ? (
+                <Button size="sm" variant="outline" asChild><a href={`${ROUTES.REQUESTS}/${request.rexan_activation.settlement_request_id}`}>Abrir REXAN</a></Button>
+              ) : <p className="font-medium text-muted-foreground">Aún no disponible</p>}
+              {request.rexan_activation.status === "FAILED" && canRetryRexan && (
+                <Button
+                  className="mt-2"
+                  size="sm"
+                  variant="outline"
+                  disabled={retryingRexan}
+                  data-testid="retry-rexan-button"
+                  onClick={async () => {
+                    try {
+                      await retryRexanActivation(request.id);
+                      await refetch({ background: true });
+                      toast.success("Activación REXAN reprogramada.");
+                    } catch (retryError) {
+                      toast.error(getApiErrorMessage(retryError));
+                    }
+                  }}
+                >{retryingRexan ? "Reintentando..." : "Reintentar REXAN"}</Button>
+              )}
+            </div>
           </CardContent>
         </Card>
       )}

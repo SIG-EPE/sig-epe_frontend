@@ -55,6 +55,9 @@ export default defineConfig({
     giofPassword: process.env.CYPRESS_giofPassword,
     requesterDni: process.env.CYPRESS_requesterDni,
     requesterPassword: process.env.CYPRESS_requesterPassword,
+    rexanReusedRequestId: process.env.CYPRESS_rexanReusedRequestId,
+    rexanHistoricalRequestId: process.env.CYPRESS_rexanHistoricalRequestId,
+    rexanFailedRequestId: process.env.CYPRESS_rexanFailedRequestId,
   },
   e2e: {
     baseUrl: "http://localhost:3000",

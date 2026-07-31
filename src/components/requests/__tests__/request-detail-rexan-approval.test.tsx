@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   observeRequest: vi.fn(),
   rejectRequest: vi.fn(),
   startAdvanceSettlement: vi.fn(),
+  retryRexanActivation: vi.fn(),
   useRequest: vi.fn(),
   useRequestDocuments: vi.fn(),
   useRequestRenditionReport: vi.fn(),
@@ -46,6 +47,7 @@ vi.mock("@/hooks/use-requests", () => ({
   useObserveRequest: () => ({ observeRequest: mocks.observeRequest, isLoading: false }),
   useRejectRequest: () => ({ rejectRequest: mocks.rejectRequest, isLoading: false }),
   useStartAdvanceSettlement: () => ({ startAdvanceSettlement: mocks.startAdvanceSettlement, isLoading: false }),
+  useRetryRexanActivation: () => ({ retryRexanActivation: mocks.retryRexanActivation, isLoading: false }),
 }));
 
 vi.mock("@/components/requests/request-status-stepper", () => ({
@@ -327,6 +329,33 @@ describe("RequestDetailPage REXAN approval", () => {
     expect(screen.getByText(/El solicitante prepara y envía la rendición/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Ir a Bandeja de Rendiciones" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Iniciar rendición" })).not.toBeInTheDocument();
+  });
+
+  it("muestra el estado durable de activación REXAN tras recargar el detalle", () => {
+    mocks.useRequest.mockReturnValue({
+      request: makeRequest({
+        id: "advance-1",
+        request_type: REQUEST_TYPE.ADVANCE,
+        status: REQUEST_STATUS.PAID,
+        rexan_activation: {
+          job_id: "job-1",
+          status: "RETRYING",
+          attempt_count: 2,
+          next_attempt_at: "2026-07-26T18:00:00.000Z",
+        },
+      }),
+      isInitialLoading: false,
+      isRefreshing: false,
+      error: null,
+      refetch: mocks.requestRefetch,
+      patchRequest: vi.fn(),
+    });
+
+    render(<RequestDetailPage />);
+
+    const card = screen.getByTestId("rexan-activation-state-card");
+    expect(within(card).getByText("REXAN reintentando")).toBeInTheDocument();
+    expect(within(card).getByText("2")).toBeInTheDocument();
   });
 
   it("muestra Pago y constancias en una solicitud original pagada con constancia propia", () => {

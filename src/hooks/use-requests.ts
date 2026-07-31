@@ -21,6 +21,8 @@ import type {
   PaymentRequest,
   PaymentQueueFilters,
   RegisterPaymentInput,
+  RegisterPaymentResponse,
+  RexanActivation,
   RenditionsInboxFilters,
   RenditionsInboxResponse,
   RenditionInboxCounts,
@@ -276,7 +278,7 @@ export function useRegisterPayment() {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<Error | null>(null);
 
-  const registerPayment = async (requestId: string, input: RegisterPaymentInput): Promise<PaymentRequest> => {
+  const registerPayment = async (requestId: string, input: RegisterPaymentInput): Promise<RegisterPaymentResponse> => {
     setIsLoading(true);
     setError(null);
     try {
@@ -291,7 +293,7 @@ export function useRegisterPayment() {
         formData.append("notes", input.notes.trim());
       }
       formData.append("proof", input.proof);
-      const result = await api.postForm<PaymentRequest>(`/requests/${requestId}/register-payment`, formData);
+      const result = await api.postForm<RegisterPaymentResponse>(`/requests/${requestId}/register-payment`, formData);
       invalidateRequestCaches();
       return result;
     } catch (e) {
@@ -304,6 +306,27 @@ export function useRegisterPayment() {
   };
 
   return { registerPayment, isLoading, error };
+}
+
+export function useRetryRexanActivation() {
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<Error | null>(null);
+  const retryRexanActivation = async (requestId: string): Promise<RexanActivation> => {
+    setIsLoading(true);
+    setError(null);
+    try {
+      const result = await api.post<RexanActivation>(`/requests/${requestId}/rexan-activation/retry`, {});
+      invalidateRequestCaches();
+      return result;
+    } catch (e) {
+      const nextError = e instanceof Error ? e : new Error("No se pudo reintentar la activación REXAN");
+      setError(nextError);
+      throw e;
+    } finally {
+      setIsLoading(false);
+    }
+  };
+  return { retryRexanActivation, isLoading, error };
 }
 
 export function useBulkMarkPaid() {
@@ -418,6 +441,7 @@ export function useStartAdvanceSettlement() {
 export function useRequest(id?: string) {
   const [request, setRequest] = useState<PaymentRequest | null>(null);
   const hasLoadedRequestRef = useRef(false);
+  const rexanPollCountRef = useRef(0);
   const [isInitialLoading, setIsInitialLoading] = useState(Boolean(id));
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [error, setError] = useState<Error | null>(null);
@@ -446,6 +470,20 @@ export function useRequest(id?: string) {
     if (authIsLoading || !accessToken) return;
     void refetch();
   }, [accessToken, authIsLoading, refetch]);
+
+  useEffect(() => {
+    const status = request?.rexan_activation?.status;
+    const shouldPoll = status === "PENDING" || status === "PROCESSING" || status === "RETRYING";
+    if (!shouldPoll || rexanPollCountRef.current >= 10) {
+      if (!shouldPoll) rexanPollCountRef.current = 0;
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      rexanPollCountRef.current += 1;
+      void refetch({ background: true });
+    }, 1_500);
+    return () => window.clearTimeout(timer);
+  }, [refetch, request?.rexan_activation?.attempt_count, request?.rexan_activation?.status]);
 
   const patchRequest = (nextRequest: PaymentRequest): void => {
     hasLoadedRequestRef.current = true;

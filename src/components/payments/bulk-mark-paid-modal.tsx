@@ -3,7 +3,6 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import type { Route } from "next";
-import { useRouter } from "next/navigation";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
@@ -14,7 +13,8 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
-import { useBulkMarkPaid } from "@/hooks/use-requests";
+import { useBulkMarkPaid, useRetryRexanActivation } from "@/hooks/use-requests";
+import { useAuthStore } from "@/stores/auth-store";
 import { getBusinessDateTimeLocalValue, parseBusinessDateTimeLocalToIso } from "@/lib/business-timezone";
 import { formatRequestCurrency, getApiErrorMessage, getBulkPaymentResultLabel, getBulkPaymentRexanHref, getPaymentEmailStatusLabel, getPaymentRexanStatusLabel, getRequestDisplayCode, getRequestPayableAmount } from "@/lib/requests";
 import type { BulkMarkPaidResponse, PaymentRequest } from "@/types/requests";
@@ -39,8 +39,10 @@ function getDefaultPaidAtValue(): string {
 }
 
 export function BulkMarkPaidModal({ requests, open, onOpenChange, onSuccess }: BulkMarkPaidModalProps) {
-  const router = useRouter();
   const { bulkMarkPaid, isLoading } = useBulkMarkPaid();
+  const { retryRexanActivation, isLoading: isRetrying } = useRetryRexanActivation();
+  const roleCode = useAuthStore((state) => state.user?.role?.code);
+  const canRetryRexan = roleCode === "GIOF_GESTOR" || roleCode === "ADMIN_SISTEMA";
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [result, setResult] = useState<BulkMarkPaidResponse | null>(null);
   const totalAmount = requests.reduce((total, request) => total + getRequestPayableAmount(request), 0);
@@ -74,13 +76,20 @@ export function BulkMarkPaidModal({ requests, open, onOpenChange, onSuccess }: B
       setResult(response);
       await onSuccess();
 
-      const activatedRexanHrefs = response.results
-        .filter((item) => item.status.toLowerCase() === "success" && (item.rexan?.status === "CREATED" || item.rexan?.status === "REUSED"))
-        .map((item) => getBulkPaymentRexanHref(item.rexan))
-        .filter((href): href is string => Boolean(href));
-      if (activatedRexanHrefs.length === 1) {
-        router.push(activatedRexanHrefs[0] as Route);
-      }
+    } catch (error) {
+      setSubmitError(getApiErrorMessage(error));
+    }
+  }
+
+  async function retryFailedRexan(requestId: string) {
+    try {
+      const activation = await retryRexanActivation(requestId);
+      setResult((current) => current ? {
+        ...current,
+        results: current.results.map((item) => item.request_id === requestId
+          ? { ...item, rexan_activation: activation }
+          : item),
+      } : current);
     } catch (error) {
       setSubmitError(getApiErrorMessage(error));
     }
@@ -146,7 +155,7 @@ export function BulkMarkPaidModal({ requests, open, onOpenChange, onSuccess }: B
                 </div>
                 <div className="space-y-2">
                   {result.results.map((item) => {
-                    const rexanHref = getBulkPaymentRexanHref(item.rexan);
+                    const rexanHref = getBulkPaymentRexanHref(item.rexan_activation);
                     return (
                       <div key={item.request_id} className="rounded-md border p-2 text-sm" data-testid="bulk-payment-result-row">
                         <div className="flex flex-wrap items-center justify-between gap-2">
@@ -157,7 +166,12 @@ export function BulkMarkPaidModal({ requests, open, onOpenChange, onSuccess }: B
                           {item.proof_pending && <Badge variant="outline">Falta constancia</Badge>}
                           {item.details_pending && <Badge variant="outline">Falta referencia</Badge>}
                           {item.email_status && <Badge variant="secondary">{getPaymentEmailStatusLabel(item.email_status)}</Badge>}
-                          {item.rexan?.status && <Badge variant={item.rexan.status === "FAILED" ? "destructive" : "secondary"}>{getPaymentRexanStatusLabel(item.rexan.status)}</Badge>}
+                          {item.rexan_activation?.status && <Badge variant={item.rexan_activation.status === "FAILED" ? "destructive" : "secondary"}>{getPaymentRexanStatusLabel(item.rexan_activation.status)}</Badge>}
+                          {item.rexan_activation?.status === "FAILED" && canRetryRexan && (
+                            <Button type="button" variant="outline" size="sm" disabled={isRetrying} onClick={() => retryFailedRexan(item.request_id)}>
+                              {isRetrying ? "Reintentando..." : "Reintentar REXAN"}
+                            </Button>
+                          )}
                           {rexanHref && <Button type="button" variant="link" size="sm" className="h-auto p-0" asChild><Link href={rexanHref as Route}>Ver REXAN</Link></Button>}
                         </div>
                       </div>

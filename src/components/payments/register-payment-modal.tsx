@@ -17,7 +17,7 @@ import { useUploadNavigationGuard } from "@/hooks/use-upload-navigation-guard";
 import { useRegisterPayment } from "@/hooks/use-requests";
 import { getBusinessDateTimeLocalValue, parseBusinessDateTimeLocalToIso } from "@/lib/business-timezone";
 import { PAYMENT_PROOF_ACCEPT, PAYMENT_PROOF_ACCEPTED_FORMATS_LABEL, formatRequestCurrency, getApiErrorMessage, getRequestPayableAmount, isRexanExcessRequest, toMoneyCents, validatePaymentProofFile } from "@/lib/requests";
-import type { PaymentRequest, RegisterPaymentInput } from "@/types/requests";
+import type { PaymentRequest, RegisterPaymentInput, RegisterPaymentResponse } from "@/types/requests";
 
 const registerPaymentSchema = z.object({
   paid_at: z.string().min(1, "Indica la fecha y hora de pago."),
@@ -33,7 +33,7 @@ interface RegisterPaymentModalProps {
   request: PaymentRequest | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onSuccess: () => Promise<void> | void;
+  onSuccess: (result: RegisterPaymentResponse) => Promise<void> | void;
 }
 
 function getDefaultPaidAtValue(): string {
@@ -112,8 +112,8 @@ export function RegisterPaymentModal({ request, open, onOpenChange, onSuccess }:
     };
 
     try {
-      await registerPayment(request.id, input);
-      await onSuccess();
+      const result = await registerPayment(request.id, input);
+      await onSuccess(result);
       form.reset({
         paid_at: getDefaultPaidAtValue(),
         operation_reference: "",

@@ -14,14 +14,23 @@ const mocks = vi.hoisted(() => ({
   registerPaymentLoading: vi.fn(() => false),
   attachPaymentProofLoading: vi.fn(() => false),
   usePaymentQueue: vi.fn(),
+  retryRexanActivation: vi.fn(),
+  roleCode: vi.fn(() => "GIOF_GESTOR"),
 }));
 
 vi.mock("@/hooks/use-requests", () => ({
   useRegisterPayment: () => ({ registerPayment: mocks.registerPayment, isLoading: mocks.registerPaymentLoading(), error: null }),
   useAttachPaymentProof: () => ({ attachPaymentProof: mocks.attachPaymentProof, isLoading: mocks.attachPaymentProofLoading(), error: null }),
   useBulkMarkPaid: () => ({ bulkMarkPaid: vi.fn(), isLoading: false, error: null }),
+  useRetryRexanActivation: () => ({ retryRexanActivation: mocks.retryRexanActivation, isLoading: false, error: null }),
   useCompletePaymentDetails: () => ({ completePaymentDetails: vi.fn(), isLoading: false, error: null }),
   usePaymentQueue: mocks.usePaymentQueue,
+}));
+
+vi.mock("@/stores/auth-store", () => ({
+  useAuthStore: (selector: (state: { user: { role: { code: string } } | null }) => unknown) => selector({
+    user: mocks.roleCode() ? { role: { code: mocks.roleCode() } } : null,
+  }),
 }));
 
 vi.mock("next/navigation", () => ({
@@ -112,6 +121,7 @@ describe("REXAN payment queue and modal", () => {
     mocks.registerPaymentLoading.mockReturnValue(false);
     mocks.attachPaymentProofLoading.mockReturnValue(false);
     mocks.usePaymentQueue.mockReturnValue({ requests: [], total: 0, isLoading: false, error: null, refetch: vi.fn() });
+    mocks.roleCode.mockReturnValue("GIOF_GESTOR");
   });
 
   it("muestra el saldo REXAN para EXCESS y el monto normal para otros pagos", () => {
@@ -348,6 +358,38 @@ describe("REXAN payment queue and modal", () => {
     expect(screen.queryByRole("button", { name: "Registrar pago" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Completar datos" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Agregar comprobante POA" })).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ["PENDING", "REXAN en proceso"],
+    ["RETRYING", "REXAN reintentando"],
+    ["FAILED", "REXAN requiere atención"],
+    ["CREATED", "REXAN activada"],
+  ] as const)("muestra estado durable %s después de refrescar", (status, label) => {
+    render(
+      <PaymentQueueTable
+        requests={[makeRequest({ status: REQUEST_STATUS.PAID, rexan_activation: { job_id: "job-1", status } })]}
+        isLoading={false}
+        onRegisterPayment={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText(label)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Registrar pago" })).not.toBeInTheDocument();
+  });
+
+  it("expone retry de REXAN solo cuando el contenedor autoriza la acción", async () => {
+    const user = userEvent.setup();
+    const request = makeRequest({ status: REQUEST_STATUS.PAID, rexan_activation: { job_id: "job-1", status: "FAILED" } });
+    const retry = vi.fn();
+    const { rerender } = render(
+      <PaymentQueueTable requests={[request]} isLoading={false} onRegisterPayment={vi.fn()} />,
+    );
+    expect(screen.queryByRole("button", { name: "Reintentar REXAN" })).not.toBeInTheDocument();
+
+    rerender(<PaymentQueueTable requests={[request]} isLoading={false} onRegisterPayment={vi.fn()} onRetryRexanActivation={retry} />);
+    await user.click(screen.getByRole("button", { name: "Reintentar REXAN" }));
+    expect(retry).toHaveBeenCalledWith(request);
   });
 
   it("bloquea edición visual del monto EXCESS pero lo incluye al registrar pago", async () => {
