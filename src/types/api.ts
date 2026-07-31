@@ -11,6 +11,7 @@ export interface ApiResponse<T> {
 /** Standard error shape from backend */
 export interface ApiError {
   statusCode: number;
+  code?: string;
   message: string | string[];
   error: string;
   timestamp: string;

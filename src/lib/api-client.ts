@@ -33,6 +33,7 @@ export class ApiRequestError extends Error {
   constructor(
     public status: number,
     public body: ApiError,
+    public headers: Headers = new Headers(),
   ) {
     super(typeof body.message === "string" ? body.message : body.message[0]);
     this.name = "ApiRequestError";
@@ -49,7 +50,7 @@ async function apiFetch<T>(
   const { accessToken } = useAuthStore.getState();
 
   const headers = new Headers(options.headers);
-  if (!headers.has("Content-Type") && !(options.body instanceof FormData)) {
+  if (!headers.has("Content-Type") && typeof options.body === "string") {
     headers.set("Content-Type", "application/json");
   }
   if (
@@ -88,7 +89,7 @@ async function apiFetch<T>(
           timestamp: new Date().toISOString(),
           path,
         }))) as ApiError;
-        throw new ApiRequestError(retryRes.status, errorBody);
+        throw new ApiRequestError(retryRes.status, errorBody, retryRes.headers);
       }
 
       const retryJson = (await retryRes.json()) as ApiResponse<T>;
@@ -118,7 +119,7 @@ async function apiFetch<T>(
       timestamp: new Date().toISOString(),
       path,
     }))) as ApiError;
-    throw new ApiRequestError(res.status, errorBody);
+    throw new ApiRequestError(res.status, errorBody, res.headers);
   }
 
   // 204 No Content
@@ -197,7 +198,7 @@ async function apiDownload(
       timestamp: new Date().toISOString(),
       path,
     }))) as ApiError;
-    throw new ApiRequestError(res.status, errorBody);
+    throw new ApiRequestError(res.status, errorBody, res.headers);
   }
 
   return {
