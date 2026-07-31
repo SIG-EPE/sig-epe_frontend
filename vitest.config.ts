@@ -7,6 +7,7 @@ export default defineConfig({
   test: {
     environment: "jsdom",
     globals: true,
+    maxWorkers: 2,
     setupFiles: ["./src/test-utils/setup.ts"],
     exclude: ["**/node_modules/**", "**/cypress/**"],
   },
