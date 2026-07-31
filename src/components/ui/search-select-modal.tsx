@@ -35,6 +35,16 @@ interface SearchSelectModalProps<T> {
   // Callback
   onChange: (id: string | null) => void;
   onClear?: boolean;
+  remoteSearch?: boolean;
+  isLoading?: boolean;
+  isRefreshing?: boolean;
+  error?: Error | null;
+  hasMore?: boolean;
+  emptyMessage?: string;
+  onOpenChange?: (open: boolean) => void;
+  onQueryChange?: (query: string) => void;
+  onRetry?: () => void;
+  onLoadMore?: () => void;
 
   // Inline create
   onCreateNew?: (name: string) => Promise<{ id: string; name: string }>;
@@ -64,6 +74,16 @@ export function SearchSelectModal<T>({
   onChange,
   onClear,
   onCreateNew,
+  remoteSearch = false,
+  isLoading = false,
+  isRefreshing = false,
+  error = null,
+  hasMore = false,
+  emptyMessage,
+  onOpenChange,
+  onQueryChange,
+  onRetry,
+  onLoadMore,
 }: SearchSelectModalProps<T>) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -72,7 +92,7 @@ export function SearchSelectModal<T>({
   const [isCreating, setIsCreating] = useState(false);
 
   const filtered = (() => {
-    if (!query.trim()) return items;
+    if (remoteSearch || !query.trim()) return items;
     const q = normalize(query);
     return items.filter((item) => {
       const labelMatch = normalize(getItemLabel(item)).includes(q);
@@ -83,19 +103,20 @@ export function SearchSelectModal<T>({
     });
   })();
 
-  const handleSelect = (id: string | null) => {
-    onChange(id);
-    setOpen(false);
-    setQuery("");
-  };
-
   const handleOpenChange = (next: boolean) => {
     if (!next) {
       setQuery("");
+      onQueryChange?.("");
       setShowInlineCreate(false);
       setInlineValue("");
     }
     setOpen(next);
+    onOpenChange?.(next);
+  };
+
+  const handleSelect = (id: string | null) => {
+    onChange(id);
+    handleOpenChange(false);
   };
 
   const handleInlineCreate = async () => {
@@ -104,10 +125,7 @@ export function SearchSelectModal<T>({
     try {
       const created = await onCreateNew(inlineValue.trim());
       onChange(created.id);
-      setOpen(false);
-      setQuery("");
-      setShowInlineCreate(false);
-      setInlineValue("");
+      handleOpenChange(false);
     } finally {
       setIsCreating(false);
     }
@@ -120,7 +138,7 @@ export function SearchSelectModal<T>({
         type="button"
         data-testid={testId}
         disabled={disabled}
-        onClick={() => !disabled && setOpen(true)}
+        onClick={() => !disabled && handleOpenChange(true)}
         className={[
           "flex h-9 w-full items-center justify-between rounded-md border bg-transparent px-3 py-1 text-base shadow-sm transition-colors",
           "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
@@ -145,10 +163,26 @@ export function SearchSelectModal<T>({
           <Input
             autoFocus
             value={query}
-            onChange={(e) => setQuery(e.target.value)}
+            onChange={(e) => {
+              setQuery(e.target.value);
+              onQueryChange?.(e.target.value);
+            }}
             placeholder={searchPlaceholder}
             className="mt-1"
+            aria-label={searchPlaceholder}
           />
+
+          {(isLoading || isRefreshing) && (
+            <p className="text-xs text-muted-foreground" role="status" aria-live="polite">
+              {isLoading ? "Cargando opciones..." : "Actualizando opciones..."}
+            </p>
+          )}
+          {error && (
+            <div className="flex items-center justify-between gap-2 rounded-md border border-destructive/40 p-2 text-sm text-destructive" role="alert">
+              <span>{error.message}</span>
+              {onRetry && <Button type="button" variant="outline" size="sm" onClick={onRetry}>Reintentar</Button>}
+            </div>
+          )}
 
           {/* Lista */}
           <div className="mt-2 max-h-72 overflow-y-auto rounded-md border">
@@ -164,9 +198,9 @@ export function SearchSelectModal<T>({
               </button>
             )}
 
-            {filtered.length === 0 ? (
+            {!isLoading && filtered.length === 0 ? (
               <p className="px-3 py-4 text-sm text-muted-foreground text-center">
-                Sin resultados para &ldquo;{query}&rdquo;
+                {emptyMessage ?? (query ? `Sin resultados para “${query}”` : "No hay opciones disponibles")}
               </p>
             ) : (
               filtered.map((item) => {
@@ -201,6 +235,13 @@ export function SearchSelectModal<T>({
                   </button>
                 );
               })
+            )}
+            {hasMore && onLoadMore && (
+              <div className="border-t p-2">
+                <Button type="button" variant="ghost" className="w-full" onClick={onLoadMore} disabled={isLoading}>
+                  Cargar más
+                </Button>
+              </div>
             )}
           </div>
 

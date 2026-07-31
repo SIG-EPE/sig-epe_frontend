@@ -8,7 +8,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { PLANNING_TYPES } from "@/lib/planning-types";
 import { getPlanningLineDisplay } from "@/lib/requests";
 import { cn } from "@/lib/utils";
-import type { RequestPlanningLineLookupItem } from "@/types/requests";
+import { useRequestPlanningLineFacets, useRequestPlanningLineSearch } from "@/hooks/use-requests";
+import { REQUEST_PLANNING_LINE_SCOPE, type RequestPlanningLineLookupItem } from "@/types/requests";
 import type { RequestFormValues } from "./request-form";
 
 const POA_SELECTOR_MODE = {
@@ -26,6 +27,7 @@ interface SelectOption {
 }
 
 interface HierarchySelection {
+  orgUnitId: string | null;
   planningType: string | null;
   programId: string | null;
   componentId: string | null;
@@ -43,7 +45,7 @@ interface PlanningLineSelectorProps {
   control: Control<RequestFormValues>;
   name?: "budget_planning_line_id" | `allocations.${number}.budget_planning_line_id`;
   selectedLine?: RequestPlanningLineLookupItem | null;
-  lines: RequestPlanningLineLookupItem[];
+  lines?: RequestPlanningLineLookupItem[];
   isLoading?: boolean;
   isRefreshing?: boolean;
   error?: Error | null;
@@ -96,30 +98,14 @@ function fromSelectValue(value: string): string | null {
   return value === ALL_OPTION_VALUE ? null : value;
 }
 
-function lineMatchesHierarchy(line: RequestPlanningLineLookupItem, selection: HierarchySelection): boolean {
-  if (selection.planningType && line.planning_type !== selection.planningType) return false;
-  if (selection.programId && line.program?.id !== selection.programId) return false;
-  if (selection.componentId && line.action?.component?.id !== selection.componentId) return false;
-  if (selection.actionId && line.action?.id !== selection.actionId) return false;
-  if (selection.categoryId && line.category?.id !== selection.categoryId) return false;
-  if (selection.territoryId && line.territory?.id !== selection.territoryId) return false;
-  return true;
-}
-
-function getFilteredLines(lines: RequestPlanningLineLookupItem[], selection: Partial<HierarchySelection>): RequestPlanningLineLookupItem[] {
-  return lines.filter((line) => lineMatchesHierarchy(line, {
-    planningType: selection.planningType ?? null,
-    programId: selection.programId ?? null,
-    componentId: selection.componentId ?? null,
-    actionId: selection.actionId ?? null,
-    categoryId: selection.categoryId ?? null,
-    territoryId: selection.territoryId ?? null,
-  }));
-}
-
-export function PlanningLineSelector({ control, name = "budget_planning_line_id", selectedLine, lines, isLoading = false, isRefreshing = false, error = null, onSelectedLineChange }: PlanningLineSelectorProps) {
+export function PlanningLineSelector({ control, name = "budget_planning_line_id", selectedLine, lines: seedLines = [], isLoading: legacyLoading = false, isRefreshing: legacyRefreshing = false, error: legacyError = null, onSelectedLineChange }: PlanningLineSelectorProps) {
   const [mode, setMode] = useState<PoaSelectorMode>(POA_SELECTOR_MODE.DIRECT);
+  const [directOpen, setDirectOpen] = useState(false);
+  const [directOrgUnitOpen, setDirectOrgUnitOpen] = useState(false);
+  const [directOrgUnitId, setDirectOrgUnitId] = useState<string | null>(null);
+  const [directSearch, setDirectSearch] = useState("");
   const [hierarchy, setHierarchy] = useState<HierarchySelection>({
+    orgUnitId: null,
     planningType: null,
     programId: null,
     componentId: null,
@@ -131,6 +117,7 @@ export function PlanningLineSelector({ control, name = "budget_planning_line_id"
   useEffect(() => {
     if (!selectedLine) return;
     setHierarchy({
+      orgUnitId: selectedLine.org_unit?.id ?? null,
       planningType: selectedLine.planning_type ?? null,
       programId: selectedLine.program?.id ?? null,
       componentId: selectedLine.action?.component?.id ?? null,
@@ -140,31 +127,60 @@ export function PlanningLineSelector({ control, name = "budget_planning_line_id"
     });
   }, [selectedLine]);
 
-  const canSelectProgram = Boolean(hierarchy.planningType);
+  const trimmedDirectSearch = directSearch.trim();
+  const directHasIntent = directOpen && (trimmedDirectSearch.length === 0 || trimmedDirectSearch.length >= 2);
+  const canShowLineResults = Boolean(hierarchy.categoryId);
+  const hierarchyFilters = {
+    scope: REQUEST_PLANNING_LINE_SCOPE.HIERARCHY,
+    org_unit_id: hierarchy.orgUnitId ?? undefined,
+    planning_type: hierarchy.planningType ?? undefined,
+    program_id: hierarchy.programId ?? undefined,
+    component_id: hierarchy.componentId ?? undefined,
+    operative_action_id: hierarchy.actionId ?? undefined,
+    category_id: hierarchy.categoryId ?? undefined,
+    territory_id: hierarchy.territoryId ?? undefined,
+  };
+  const searchResults = useRequestPlanningLineSearch(
+    mode === POA_SELECTOR_MODE.DIRECT
+      ? {
+          scope: REQUEST_PLANNING_LINE_SCOPE.DIRECT,
+          org_unit_id: directOrgUnitId ?? undefined,
+          search: trimmedDirectSearch || undefined,
+          limit: 25,
+        }
+      : { ...hierarchyFilters, limit: 25 },
+    mode === POA_SELECTOR_MODE.DIRECT ? directHasIntent : canShowLineResults,
+  );
+  const facets = useRequestPlanningLineFacets(
+    mode === POA_SELECTOR_MODE.HIERARCHY
+      ? hierarchyFilters
+      : { scope: REQUEST_PLANNING_LINE_SCOPE.DIRECT },
+    mode === POA_SELECTOR_MODE.HIERARCHY || directOrgUnitOpen,
+  );
+  const lines = (() => {
+    const byId = new Map(seedLines.map((line) => [line.id, line]));
+    searchResults.items.forEach((line) => byId.set(line.id, line));
+    if (selectedLine) byId.set(selectedLine.id, selectedLine);
+    return [...byId.values()];
+  })();
+
+  const canSelectPlanningType = Boolean(hierarchy.orgUnitId);
+  const canSelectProgram = canSelectPlanningType && Boolean(hierarchy.planningType);
   const canSelectComponent = canSelectProgram && Boolean(hierarchy.programId);
   const canSelectAction = canSelectComponent && Boolean(hierarchy.componentId);
   const canSelectCategory = canSelectAction && Boolean(hierarchy.actionId);
   const canSelectTerritory = canSelectCategory && Boolean(hierarchy.categoryId);
-  const canShowLineResults = canSelectTerritory;
-  const hierarchyLines = canShowLineResults ? getFilteredLines(lines, hierarchy) : [];
-  const planningTypeOptions = uniqueOptions(lines
-    .filter((line) => Boolean(line.planning_type))
-    .map((line) => ({ value: line.planning_type as string, label: line.planning_type as string })));
-  const programOptions = uniqueOptions(getFilteredLines(lines, { planningType: hierarchy.planningType })
-    .filter((line) => Boolean(line.program?.id))
-    .map((line) => ({ value: line.program?.id as string, label: line.program?.code ? `${line.program.code} · ${line.program.name}` : line.program?.name as string })));
-  const componentOptions = uniqueOptions(getFilteredLines(lines, { planningType: hierarchy.planningType, programId: hierarchy.programId })
-    .filter((line) => Boolean(line.action?.component?.id))
-    .map((line) => ({ value: line.action?.component?.id as string, label: line.action?.component?.name as string })));
-  const actionOptions = uniqueOptions(getFilteredLines(lines, { planningType: hierarchy.planningType, programId: hierarchy.programId, componentId: hierarchy.componentId })
-    .filter((line) => Boolean(line.action?.id))
-    .map((line) => ({ value: line.action?.id as string, label: line.action?.name as string })));
-  const categoryOptions = uniqueOptions(getFilteredLines(lines, { planningType: hierarchy.planningType, programId: hierarchy.programId, componentId: hierarchy.componentId, actionId: hierarchy.actionId })
-    .filter((line) => Boolean(line.category?.id))
-    .map((line) => ({ value: line.category?.id as string, label: line.category?.name as string })));
-  const territoryOptions = uniqueOptions(getFilteredLines(lines, { planningType: hierarchy.planningType, programId: hierarchy.programId, componentId: hierarchy.componentId, actionId: hierarchy.actionId, categoryId: hierarchy.categoryId })
-    .filter((line) => Boolean(line.territory?.id))
-    .map((line) => ({ value: line.territory?.id as string, label: line.territory?.name as string })));
+  const hierarchyLines = canShowLineResults ? searchResults.items : [];
+  const orgUnitOptions = uniqueOptions((facets.data?.org_units ?? []).map((option) => ({ value: option.id, label: option.code ? `${option.code} · ${option.name}` : option.name })));
+  const planningTypeOptions = uniqueOptions((facets.data?.planning_types ?? PLANNING_TYPES).map((value) => ({ value, label: value })));
+  const programOptions = uniqueOptions((facets.data?.programs ?? []).map((option) => ({ value: option.id, label: option.code ? `${option.code} · ${option.name}` : option.name })));
+  const componentOptions = uniqueOptions((facets.data?.components ?? []).map((option) => ({ value: option.id, label: option.name })));
+  const actionOptions = uniqueOptions((facets.data?.operative_actions ?? []).map((option) => ({ value: option.id, label: option.name })));
+  const categoryOptions = uniqueOptions((facets.data?.categories ?? []).map((option) => ({ value: option.id, label: option.name })));
+  const territoryOptions = uniqueOptions((facets.data?.territories ?? []).map((option) => ({ value: option.id, label: option.name })));
+  const isLoading = legacyLoading || searchResults.isLoading;
+  const isRefreshing = legacyRefreshing || searchResults.isRefreshing;
+  const error = legacyError ?? searchResults.error;
 
   function clearSelectedLine(onChange: (value: string) => void): void {
     onChange("");
@@ -222,7 +238,22 @@ export function PlanningLineSelector({ control, name = "budget_planning_line_id"
               </div>
 
               {mode === POA_SELECTOR_MODE.DIRECT ? (
-                <>
+                <div className="space-y-3">
+                  <SearchSelectModal
+                    value={directOrgUnitId}
+                    placeholder="Todas las unidades organizacionales"
+                    displayValue={orgUnitOptions.find((option) => option.value === directOrgUnitId)?.label}
+                    title="Filtrar por unidad organizacional"
+                    items={orgUnitOptions}
+                    getItemId={(option) => option.value}
+                    getItemLabel={(option) => option.label}
+                    testId="request-planning-line-org-unit-trigger"
+                    onChange={setDirectOrgUnitId}
+                    onClear
+                    isLoading={facets.isLoading}
+                    error={facets.error}
+                    onOpenChange={setDirectOrgUnitOpen}
+                  />
                   <SearchSelectModal
                     value={field.value || null}
                     placeholder={isLoading ? "Cargando líneas..." : "Seleccionar línea POA"}
@@ -240,13 +271,24 @@ export function PlanningLineSelector({ control, name = "budget_planning_line_id"
                     }}
                     disabled={isLoading}
                     hasError={Boolean(error)}
+                    remoteSearch
+                    isLoading={isLoading}
+                    isRefreshing={isRefreshing}
+                    error={error}
+                    hasMore={searchResults.hasMore}
+                    emptyMessage={trimmedDirectSearch.length === 1 ? "Escribe al menos 2 caracteres para buscar." : undefined}
+                    onOpenChange={setDirectOpen}
+                    onQueryChange={setDirectSearch}
+                    onRetry={searchResults.retry}
+                    onLoadMore={searchResults.loadMore}
                   />
                   {isRefreshing && <p className="text-xs text-muted-foreground">Actualizando líneas POA en segundo plano...</p>}
-                </>
+                </div>
               ) : (
                 <div className="space-y-3 rounded-md border bg-muted/20 p-3">
                   <div className="grid gap-3 md:grid-cols-2">
-                    <HierarchySelect label="Tipo de planificación" value={hierarchy.planningType} options={planningTypeOptions} placeholder="Selecciona el tipo" onValueChange={(value) => handleHierarchyChange({ planningType: value, programId: null, componentId: null, actionId: null, categoryId: null, territoryId: null }, field.onChange)} />
+                    <HierarchySelect label="Unidad organizacional" value={hierarchy.orgUnitId} options={orgUnitOptions} placeholder="Selecciona la unidad" onValueChange={(value) => handleHierarchyChange({ orgUnitId: value, planningType: null, programId: null, componentId: null, actionId: null, categoryId: null, territoryId: null }, field.onChange)} />
+                    <HierarchySelect label="Tipo de planificación" value={hierarchy.planningType} options={planningTypeOptions} placeholder="Selecciona el tipo" disabled={!canSelectPlanningType} onValueChange={(value) => handleHierarchyChange({ planningType: value, programId: null, componentId: null, actionId: null, categoryId: null, territoryId: null }, field.onChange)} />
                     <HierarchySelect label="Programa / proyecto / gestión" value={hierarchy.programId} options={programOptions} placeholder="Selecciona programa/proyecto/gestión" disabled={!canSelectProgram} onValueChange={(value) => handleHierarchyChange({ programId: value, componentId: null, actionId: null, categoryId: null, territoryId: null }, field.onChange)} />
                     <HierarchySelect label="Componente" value={hierarchy.componentId} options={componentOptions} placeholder="Selecciona componente" disabled={!canSelectComponent} onValueChange={(value) => handleHierarchyChange({ componentId: value, actionId: null, categoryId: null, territoryId: null }, field.onChange)} />
                     <HierarchySelect label="Acción operativa" value={hierarchy.actionId} options={actionOptions} placeholder="Selecciona acción operativa" disabled={!canSelectAction} onValueChange={(value) => handleHierarchyChange({ actionId: value, categoryId: null, territoryId: null }, field.onChange)} />
@@ -254,11 +296,14 @@ export function PlanningLineSelector({ control, name = "budget_planning_line_id"
                     <HierarchySelect label="Región / territorio (opcional)" value={hierarchy.territoryId} options={territoryOptions} placeholder="Todos los territorios" disabled={!canSelectTerritory || territoryOptions.length === 0} onValueChange={(value) => handleHierarchyChange({ territoryId: value }, field.onChange)} />
                   </div>
 
+                  {facets.isLoading && <p className="text-xs text-muted-foreground" role="status">Cargando filtros de jerarquía...</p>}
+                  {facets.error && <p className="text-xs text-destructive" role="alert">{facets.error.message}</p>}
+
                   <div className="max-h-72 overflow-y-auto rounded-md border">
                     {!canShowLineResults ? (
                       <p className="px-3 py-4 text-center text-sm text-muted-foreground">Completa la jerarquía hasta categoría/recurso para ver las líneas POA disponibles.</p>
                     ) : hierarchyLines.length === 0 ? (
-                      <p className="px-3 py-4 text-center text-sm text-muted-foreground">No hay líneas aprobadas para la jerarquía seleccionada.</p>
+                      <p className="px-3 py-4 text-center text-sm text-muted-foreground">{searchResults.isLoading ? "Cargando líneas POA..." : "No hay líneas aprobadas para la jerarquía seleccionada."}</p>
                     ) : (
                       hierarchyLines.map((line) => {
                         const isSelected = field.value === line.id;
@@ -281,6 +326,11 @@ export function PlanningLineSelector({ control, name = "budget_planning_line_id"
                           </button>
                         );
                       })
+                    )}
+                    {searchResults.hasMore && (
+                      <Button type="button" variant="ghost" className="w-full border-t" onClick={searchResults.loadMore} disabled={searchResults.isLoading}>
+                        Cargar más
+                      </Button>
                     )}
                   </div>
                 </div>

@@ -1,7 +1,7 @@
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useForm } from "react-hook-form";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { PlanningLineSelector } from "@/components/requests/planning-line-selector";
 import { Form } from "@/components/ui/form";
@@ -10,6 +10,13 @@ import type { RequestPlanningLineLookupItem } from "@/types/requests";
 
 const mocks = vi.hoisted(() => ({
   lines: [] as RequestPlanningLineLookupItem[],
+  searchHook: vi.fn(),
+  facetsHook: vi.fn(),
+}));
+
+vi.mock("@/hooks/use-requests", () => ({
+  useRequestPlanningLineSearch: (filters: unknown, enabled: boolean) => mocks.searchHook(filters, enabled),
+  useRequestPlanningLineFacets: (filters: unknown, enabled: boolean) => mocks.facetsHook(filters, enabled),
 }));
 
 function makeLine(overrides: Partial<RequestPlanningLineLookupItem> = {}): RequestPlanningLineLookupItem {
@@ -67,6 +74,33 @@ function PlanningLineSelectorHarness({ selectedLine }: { selectedLine: RequestPl
 }
 
 describe("PlanningLineSelector", () => {
+  beforeEach(() => {
+    mocks.lines = [];
+    mocks.searchHook.mockReset().mockImplementation(() => ({
+      items: mocks.lines,
+      total: mocks.lines.length,
+      hasMore: false,
+      isLoading: false,
+      isRefreshing: false,
+      error: null,
+      loadMore: vi.fn(),
+      retry: vi.fn(),
+    }));
+    mocks.facetsHook.mockReset().mockReturnValue({
+      data: {
+        org_units: [{ id: "unit-1", code: "UO-01", name: "Unidad de Operaciones" }],
+        planning_types: ["PROJECT"],
+        programs: [{ id: "program-1", code: "PRG-01", name: "Programa Estratégico" }],
+        components: [{ id: "component-1", name: "Fortalecimiento comunitario" }],
+        operative_actions: [{ id: "action-1", name: "Ejecutar acompañamiento" }],
+        categories: [{ id: "category-1", code: "CAT-10", name: "Servicios técnicos" }],
+        territories: [{ id: "territory-1", name: "Región Norte" }],
+      },
+      isLoading: false,
+      error: null,
+    });
+  });
+
   it("muestra solo unidad, componente, acción y categoría/recurso en el resumen seleccionado", () => {
     const line = makeLine();
     mocks.lines = [line];
@@ -115,5 +149,89 @@ describe("PlanningLineSelector", () => {
       expect(option).not.toHaveTextContent("Costo total");
       expect(option).not.toHaveTextContent("Saldo por ejecutar");
     });
+  });
+
+  it("propaga la apertura del modal para iniciar la carga directa", async () => {
+    const user = userEvent.setup();
+    render(<PlanningLineSelectorHarness selectedLine={null} />);
+
+    expect(mocks.searchHook.mock.calls.some(([, enabled]) => enabled === true)).toBe(false);
+    await user.click(screen.getByTestId("request-planning-line-trigger"));
+
+    await waitFor(() => {
+      expect(mocks.searchHook.mock.calls.some(([filters, enabled]) => (
+        enabled === true
+        && (filters as { scope?: string }).scope === "direct"
+        && (filters as { org_unit_id?: string }).org_unit_id === undefined
+      ))).toBe(true);
+    });
+  });
+
+  it("envía la unidad seleccionada como jerarquía de descendientes y conserva directo multiunidad por defecto", async () => {
+    const user = userEvent.setup();
+    const line = makeLine();
+    mocks.lines = [line];
+    render(<PlanningLineSelectorHarness selectedLine={line} />);
+
+    expect(mocks.searchHook.mock.calls.some(([filters]) => (
+      (filters as { scope?: string }).scope === "direct"
+      && (filters as { org_unit_id?: string }).org_unit_id === undefined
+    ))).toBe(true);
+
+    await user.click(screen.getByRole("tab", { name: "Jerarquía" }));
+
+    await waitFor(() => {
+      expect(mocks.searchHook.mock.calls.some(([filters, enabled]) => (
+        enabled === true
+        && (filters as { scope?: string }).scope === "hierarchy"
+        && (filters as { org_unit_id?: string }).org_unit_id === "unit-1"
+      ))).toBe(true);
+    });
+    expect(screen.getByText("Unidad organizacional")).toBeInTheDocument();
+  });
+
+  it("permite filtrar la búsqueda directa por una unidad exacta", async () => {
+    const user = userEvent.setup();
+    render(<PlanningLineSelectorHarness selectedLine={null} />);
+
+    await user.click(screen.getByTestId("request-planning-line-org-unit-trigger"));
+    const dialog = await screen.findByRole("dialog", { name: "Filtrar por unidad organizacional" });
+    await user.click(within(dialog).getByTestId("request-planning-line-org-unit-trigger-option"));
+    await user.click(screen.getByTestId("request-planning-line-trigger"));
+
+    await waitFor(() => {
+      expect(mocks.searchHook.mock.calls.some(([filters, enabled]) => (
+        enabled === true
+        && (filters as { scope?: string }).scope === "direct"
+        && (filters as { org_unit_id?: string }).org_unit_id === "unit-1"
+      ))).toBe(true);
+    });
+  });
+
+  it("conserva la selección y ofrece retry localizado cuando falla cargar más", async () => {
+    const user = userEvent.setup();
+    const selectedLine = makeLine();
+    const retry = vi.fn();
+    mocks.lines = [selectedLine];
+    mocks.searchHook.mockReturnValue({
+      items: [selectedLine],
+      total: 2,
+      hasMore: true,
+      isLoading: false,
+      isRefreshing: false,
+      error: new Error("No se pudo cargar la siguiente página"),
+      loadMore: vi.fn(),
+      retry,
+    });
+
+    render(<PlanningLineSelectorHarness selectedLine={selectedLine} />);
+
+    expect(screen.getAllByText("POA-001 — Implementación territorial")).not.toHaveLength(0);
+    await user.click(screen.getByTestId("request-planning-line-trigger"));
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByText("POA-001 — Implementación territorial")).toBeInTheDocument();
+    await user.click(within(dialog).getByRole("button", { name: "Reintentar" }));
+    expect(retry).toHaveBeenCalledTimes(1);
+    expect(screen.getAllByText("POA-001 — Implementación territorial")).not.toHaveLength(0);
   });
 });

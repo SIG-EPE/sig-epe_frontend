@@ -27,6 +27,12 @@ import type {
   RequestBudgetPreview,
   RequestAllocationsBudgetPreview,
   RequestPlanningLineLookupResponse,
+  RequestPlanningLineFacetsResponse,
+  RequestPlanningLineHydrateResponse,
+  RequestPlanningLineLookupItem,
+  RequestPlanningLineScope,
+  RequestPlanningLineSearchItem,
+  RequestPlanningLineSearchResponse,
   RequestDocument,
   RequestReceiptReview,
   RequestRenditionReport,
@@ -810,6 +816,7 @@ export interface RequestPlanningLineLookupFilters {
   operative_action_id?: string;
   category_id?: string;
   territory_id?: string;
+  scope?: RequestPlanningLineScope;
 }
 
 function appendPlanningLineLookupParam(params: URLSearchParams, key: keyof RequestPlanningLineLookupFilters, value?: string): void {
@@ -828,6 +835,7 @@ export function buildRequestPlanningLinesPath(filters: RequestPlanningLineLookup
   appendPlanningLineLookupParam(params, "operative_action_id", filters.operative_action_id);
   appendPlanningLineLookupParam(params, "category_id", filters.category_id);
   appendPlanningLineLookupParam(params, "territory_id", filters.territory_id);
+  appendPlanningLineLookupParam(params, "scope", filters.scope);
   const query = params.toString();
   return `/requests/lookups/planning-lines${query ? `?${query}` : ""}`;
 }
@@ -900,6 +908,219 @@ export function useRequestPlanningLines(filters?: RequestPlanningLineLookupFilte
   });
 
   return { lines, total: data?.total ?? 0, isLoading: isInitialLoading, isInitialLoading, isRefreshing, error, refetch };
+}
+
+export interface RequestPlanningLineSearchFilters extends RequestPlanningLineLookupFilters {
+  page?: number;
+  limit?: number;
+}
+
+function mapLightPlanningLine(item: RequestPlanningLineSearchItem): RequestPlanningLineLookupItem {
+  return {
+    id: item.id,
+    line_code: item.line_code,
+    resource_description: item.resource_description,
+    planning_type: item.planning_type,
+    type_resource: null,
+    unit_price: null,
+    quantity: null,
+    total_cost: 0,
+    status: "APPROVED",
+    fiscal_year: item.fiscal_year ? { ...item.fiscal_year, status: "ACTIVE" } : null,
+    org_unit: item.org_unit,
+    program: item.program,
+    action: item.operative_action
+      ? { ...item.operative_action, component: item.component }
+      : null,
+    category: item.category,
+    territory: item.territory,
+    monthly_summary: [],
+  };
+}
+
+function buildLightPlanningLinesPath(
+  endpoint: "search" | "facets",
+  filters: RequestPlanningLineSearchFilters,
+): string {
+  const params = new URLSearchParams();
+  for (const [key, rawValue] of Object.entries(filters)) {
+    if (rawValue === undefined || rawValue === null || rawValue === "") continue;
+    params.set(key, String(rawValue).trim());
+  }
+  return `/requests/lookups/planning-lines/${endpoint}?${params.toString()}`;
+}
+
+export function useRequestPlanningLineSearch(
+  filters: RequestPlanningLineSearchFilters,
+  enabled: boolean,
+) {
+  const [debouncedSearch, setDebouncedSearch] = useState("");
+  const [page, setPage] = useState(1);
+  const [items, setItems] = useState<RequestPlanningLineLookupItem[]>([]);
+  const [total, setTotal] = useState(0);
+  const [hasMore, setHasMore] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [error, setError] = useState<Error | null>(null);
+  const [retryNonce, setRetryNonce] = useState(0);
+  const requestToken = useRef(0);
+  const normalizedSearch = filters.search?.trim().toLowerCase() ?? "";
+  const filterKey = stableSerialize({ ...filters, search: undefined, page: undefined });
+
+  useEffect(() => {
+    if (normalizedSearch.length === 1) {
+      setDebouncedSearch(normalizedSearch);
+      setItems([]);
+      setTotal(0);
+      setHasMore(false);
+      return;
+    }
+    const timeoutId = window.setTimeout(() => setDebouncedSearch(normalizedSearch), 300);
+    return () => window.clearTimeout(timeoutId);
+  }, [normalizedSearch]);
+
+  useEffect(() => {
+    setPage(1);
+    setItems([]);
+    setTotal(0);
+    setHasMore(false);
+  }, [debouncedSearch, filterKey]);
+
+  useEffect(() => {
+    if (!enabled || debouncedSearch.length === 1) return;
+    const controller = new AbortController();
+    const token = ++requestToken.current;
+    const hasPrevious = items.length > 0 && page === 1;
+    setIsLoading(!hasPrevious);
+    setIsRefreshing(hasPrevious);
+    setError(null);
+    const requestFilters = {
+      ...filters,
+      search: debouncedSearch || undefined,
+      page,
+      limit: Math.min(filters.limit ?? 25, 50),
+    };
+
+    void cachedQuery<RequestPlanningLineSearchResponse>({
+      key: ["requests", "planning-lines", "search", requestFilters],
+      ttlMs: QUERY_CACHE_TTL_MS.POA_LOOKUP,
+      tags: ["requests", "poa", "budget"],
+      force: retryNonce > 0,
+      signal: controller.signal,
+      queryFn: (signal) => api.get<RequestPlanningLineSearchResponse>(buildLightPlanningLinesPath("search", requestFilters), { signal }),
+    }).then((result) => {
+      if (token !== requestToken.current) return;
+      const nextItems = result.items.map(mapLightPlanningLine);
+      setItems((current) => {
+        if (page === 1) return nextItems;
+        const byId = new Map(current.map((item) => [item.id, item]));
+        nextItems.forEach((item) => byId.set(item.id, item));
+        return [...byId.values()];
+      });
+      setTotal(result.total);
+      setHasMore(result.has_more);
+    }).catch((reason: unknown) => {
+      if (controller.signal.aborted || token !== requestToken.current) return;
+      setError(reason instanceof Error ? reason : new Error("Error al buscar líneas POA"));
+    }).finally(() => {
+      if (token !== requestToken.current) return;
+      setIsLoading(false);
+      setIsRefreshing(false);
+    });
+
+    return () => controller.abort();
+  }, [enabled, debouncedSearch, filterKey, page, retryNonce]);
+
+  return {
+    items,
+    total,
+    hasMore,
+    isLoading,
+    isRefreshing,
+    error,
+    loadMore: () => hasMore && !isLoading && setPage((current) => current + 1),
+    retry: () => setRetryNonce((current) => current + 1),
+  };
+}
+
+export function useRequestPlanningLineFacets(
+  filters: RequestPlanningLineLookupFilters,
+  enabled: boolean,
+) {
+  const [data, setData] = useState<RequestPlanningLineFacetsResponse | null>(null);
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<Error | null>(null);
+  const key = stableSerialize(filters);
+
+  useEffect(() => {
+    if (!enabled) return;
+    const controller = new AbortController();
+    setIsLoading(true);
+    setError(null);
+    void cachedQuery<RequestPlanningLineFacetsResponse>({
+      key: ["requests", "planning-lines", "facets", filters],
+      ttlMs: QUERY_CACHE_TTL_MS.POA_LOOKUP,
+      tags: ["requests", "poa", "budget"],
+      signal: controller.signal,
+      queryFn: (signal) => api.get<RequestPlanningLineFacetsResponse>(buildLightPlanningLinesPath("facets", filters), { signal }),
+    }).then(setData).catch((reason: unknown) => {
+      if (!controller.signal.aborted) setError(reason instanceof Error ? reason : new Error("Error al cargar filtros POA"));
+    }).finally(() => {
+      if (!controller.signal.aborted) setIsLoading(false);
+    });
+    return () => controller.abort();
+  }, [enabled, key]);
+
+  return { data, isLoading, error };
+}
+
+export function useHydrateRequestPlanningLines(ids: string[]) {
+  const [items, setItems] = useState<RequestPlanningLineLookupItem[]>([]);
+  const [unavailableIds, setUnavailableIds] = useState<string[]>([]);
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<Error | null>(null);
+  const [retryNonce, setRetryNonce] = useState(0);
+  const idsKey = ids.join("|");
+
+  useEffect(() => {
+    if (ids.length === 0) {
+      setItems([]);
+      setUnavailableIds([]);
+      setError(null);
+      return;
+    }
+    const controller = new AbortController();
+    setIsLoading(true);
+    setError(null);
+    void cachedQuery<RequestPlanningLineHydrateResponse>({
+      key: ["requests", "planning-lines", "hydrate", ids],
+      ttlMs: QUERY_CACHE_TTL_MS.POA_LOOKUP,
+      tags: ["requests", "poa", "budget"],
+      force: retryNonce > 0,
+      signal: controller.signal,
+      queryFn: (signal) => api.post<RequestPlanningLineHydrateResponse>(
+        "/requests/lookups/planning-lines/hydrate",
+        { ids },
+        { signal },
+      ),
+    }).then((result) => {
+      setItems(result.items.map(mapLightPlanningLine));
+      setUnavailableIds(result.unavailable_ids);
+    }).catch((reason: unknown) => {
+      if (!controller.signal.aborted) setError(reason instanceof Error ? reason : new Error("Error al recuperar líneas POA seleccionadas"));
+    }).finally(() => {
+      if (!controller.signal.aborted) setIsLoading(false);
+    });
+    return () => controller.abort();
+  }, [idsKey, retryNonce]);
+
+  return {
+    items,
+    unavailableIds,
+    isLoading,
+    error,
+    retry: () => setRetryNonce((current) => current + 1),
+  };
 }
 
 export function useBudgetPreview(input: BudgetPreviewInput) {

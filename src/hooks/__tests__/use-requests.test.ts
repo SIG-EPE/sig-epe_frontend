@@ -1,9 +1,10 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { getPaymentQueuePath, getRenditionCountsPath, getRenditionsPath, getRequestsPath, getSettlementContextPath, getStartAdvanceSettlementPath, useBulkMarkPaid, useCompletePaymentDetails, useRequest, useRequestDocuments, useRequestReceiptReviews, useRequestRenditionReport, useRequestRenditionReportActions, useSettlementContext, useStartAdvanceSettlement } from "@/hooks/use-requests";
+import { getPaymentQueuePath, getRenditionCountsPath, getRenditionsPath, getRequestsPath, getSettlementContextPath, getStartAdvanceSettlementPath, invalidateRequestCaches, useBulkMarkPaid, useCompletePaymentDetails, useHydrateRequestPlanningLines, useRequest, useRequestDocuments, useRequestPlanningLineFacets, useRequestPlanningLineSearch, useRequestReceiptReviews, useRequestRenditionReport, useRequestRenditionReportActions, useSettlementContext, useStartAdvanceSettlement } from "@/hooks/use-requests";
 import { api } from "@/lib/api-client";
-import { RENDITION_BUCKET, RENDITION_SORT_DIRECTION, RENDITION_SORT_FIELD, RENDITION_STATUS, REQUEST_CURRENCY, REQUEST_STATUS, REQUEST_TYPE, type PaymentRequest } from "@/types/requests";
+import { clearQueryCache } from "@/lib/query-cache";
+import { RENDITION_BUCKET, RENDITION_SORT_DIRECTION, RENDITION_SORT_FIELD, RENDITION_STATUS, REQUEST_CURRENCY, REQUEST_STATUS, REQUEST_TYPE, type PaymentRequest, type RequestPlanningLineFacetsResponse, type RequestPlanningLineHydrateResponse, type RequestPlanningLineSearchResponse } from "@/types/requests";
 
 vi.mock("@/lib/api-client", () => ({
   api: {
@@ -28,6 +29,165 @@ function deferred<T>() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  clearQueryCache();
+  vi.useRealTimers();
+});
+
+function makePlanningLineSearchResponse(id: string): RequestPlanningLineSearchResponse {
+  return {
+    items: [{
+      id,
+      line_code: `POA-${id}`,
+      resource_description: id,
+      planning_type: "PROGRAMA",
+      fiscal_year: { id: "fy-1", year: 2026 },
+      org_unit: { id: "org-1", name: "Operaciones", code: "OPS" },
+      program: null,
+      component: null,
+      operative_action: null,
+      category: null,
+      territory: null,
+    }],
+    total: 1,
+    page: 1,
+    limit: 25,
+    has_more: false,
+  };
+}
+
+describe("planning line lazy search", () => {
+  it("does not fetch without intent or with one character", async () => {
+    vi.useFakeTimers();
+    const { rerender } = renderHook(
+      ({ search, enabled }) => useRequestPlanningLineSearch({ search }, enabled),
+      { initialProps: { search: "", enabled: false } },
+    );
+
+    rerender({ search: "p", enabled: false });
+    await act(async () => vi.advanceTimersByTime(350));
+
+    expect(api.get).not.toHaveBeenCalled();
+  });
+
+  it("debounces 300 ms and discards an obsolete response", async () => {
+    vi.useFakeTimers();
+    const oldRequest = deferred<RequestPlanningLineSearchResponse>();
+    const currentRequest = deferred<RequestPlanningLineSearchResponse>();
+    vi.mocked(api.get)
+      .mockReturnValueOnce(oldRequest.promise)
+      .mockReturnValueOnce(currentRequest.promise);
+    const { result, rerender } = renderHook(
+      ({ search, enabled }) => useRequestPlanningLineSearch({ search }, enabled),
+      { initialProps: { search: "old-term-4267", enabled: false } },
+    );
+
+    await act(async () => vi.advanceTimersByTime(300));
+    rerender({ search: "old-term-4267", enabled: true });
+    expect(api.get).toHaveBeenCalledTimes(1);
+    rerender({ search: "new-term-4267", enabled: true });
+    await act(async () => vi.advanceTimersByTime(300));
+    expect(api.get).toHaveBeenCalledTimes(2);
+
+    await act(async () => {
+      currentRequest.resolve(makePlanningLineSearchResponse("current"));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(result.current.items[0]?.id).toBe("current");
+    await act(async () => {
+      oldRequest.resolve(makePlanningLineSearchResponse("obsolete"));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(result.current.items[0]?.id).toBe("current");
+    expect(vi.mocked(api.get).mock.calls[0]?.[1]).toEqual(expect.objectContaining({ signal: expect.any(AbortSignal) }));
+  });
+
+  it("preserves prior results when load-more fails and retries only that page without duplicates", async () => {
+    const firstPage = makePlanningLineSearchResponse("line-1");
+    firstPage.total = 2;
+    firstPage.has_more = true;
+    const secondPage = makePlanningLineSearchResponse("line-1");
+    secondPage.items.push(makePlanningLineSearchResponse("line-2").items[0]);
+    secondPage.total = 2;
+    secondPage.page = 2;
+
+    vi.mocked(api.get)
+      .mockResolvedValueOnce(firstPage)
+      .mockRejectedValueOnce(new Error("No se pudo cargar la siguiente página"))
+      .mockResolvedValueOnce(secondPage);
+
+    const { result } = renderHook(() => useRequestPlanningLineSearch({ search: "page-failure-4277" }, true));
+    await waitFor(() => expect(result.current.items.map((item) => item.id)).toEqual(["line-1"]));
+
+    act(() => result.current.loadMore());
+    await waitFor(() => expect(result.current.error?.message).toBe("No se pudo cargar la siguiente página"));
+    expect(result.current.items.map((item) => item.id)).toEqual(["line-1"]);
+
+    act(() => result.current.retry());
+    await waitFor(() => expect(result.current.items.map((item) => item.id)).toEqual(["line-1", "line-2"]));
+    expect(result.current.error).toBeNull();
+    expect(api.get).toHaveBeenCalledTimes(3);
+    expect(vi.mocked(api.get).mock.calls.map(([path]) => path)).toEqual([
+      expect.stringContaining("page=1"),
+      expect.stringContaining("page=2"),
+      expect.stringContaining("page=2"),
+    ]);
+  });
+
+  it("caches facets by ancestor filters and invalidates them with the POA domain", async () => {
+    const first: RequestPlanningLineFacetsResponse = {
+      org_units: [{ id: "org-parent", code: "P", name: "Parent" }],
+      planning_types: ["PROGRAMA"],
+      programs: [],
+      components: [],
+      operative_actions: [],
+      categories: [],
+      territories: [],
+    };
+    const second = { ...first, planning_types: ["PROYECTO"] };
+    vi.mocked(api.get).mockResolvedValueOnce(first).mockResolvedValueOnce(second);
+
+    const filters = { org_unit_id: "org-parent", scope: "hierarchy" as const };
+    const firstRender = renderHook(() => useRequestPlanningLineFacets(filters, true));
+    await waitFor(() => expect(firstRender.result.current.data?.planning_types).toEqual(["PROGRAMA"]));
+    firstRender.unmount();
+
+    const cachedRender = renderHook(() => useRequestPlanningLineFacets(filters, true));
+    await waitFor(() => expect(cachedRender.result.current.data?.planning_types).toEqual(["PROGRAMA"]));
+    expect(api.get).toHaveBeenCalledTimes(1);
+    cachedRender.unmount();
+
+    invalidateRequestCaches();
+    const refreshedRender = renderHook(() => useRequestPlanningLineFacets(filters, true));
+    await waitFor(() => expect(refreshedRender.result.current.data?.planning_types).toEqual(["PROYECTO"]));
+    expect(api.get).toHaveBeenCalledTimes(2);
+  });
+
+  it("hydrates selected out-of-page lines, reports unavailable ids, and preserves selection across retry", async () => {
+    const hydrated: RequestPlanningLineHydrateResponse = {
+      items: makePlanningLineSearchResponse("selected-out-of-page").items,
+      unavailable_ids: ["unavailable-id"],
+    };
+    vi.mocked(api.post)
+      .mockResolvedValueOnce(hydrated)
+      .mockRejectedValueOnce(new Error("temporary hydrate failure"))
+      .mockResolvedValueOnce(hydrated);
+    const { result } = renderHook(() => useHydrateRequestPlanningLines(["selected-out-of-page", "unavailable-id"]));
+
+    await waitFor(() => expect(result.current.items[0]?.id).toBe("selected-out-of-page"));
+    expect(result.current.unavailableIds).toEqual(["unavailable-id"]);
+
+    act(() => result.current.retry());
+    await waitFor(() => expect(result.current.error?.message).toBe("temporary hydrate failure"));
+    expect(result.current.items[0]?.id).toBe("selected-out-of-page");
+
+    act(() => result.current.retry());
+    await waitFor(() => expect(result.current.error).toBeNull());
+    expect(result.current.items[0]?.id).toBe("selected-out-of-page");
+    expect(api.post).toHaveBeenCalledTimes(3);
+  });
 });
 
 vi.mock("@/stores/auth-store", () => ({

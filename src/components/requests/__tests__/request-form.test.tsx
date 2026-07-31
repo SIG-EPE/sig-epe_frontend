@@ -23,6 +23,8 @@ const mocks = vi.hoisted(() => ({
   updateRequest: vi.fn(),
   budgetPreview: null as RequestBudgetPreview | null,
   useRequestPlanningLines: vi.fn(),
+  hydrateItems: [] as import("@/types/requests").RequestPlanningLineLookupItem[],
+  unavailableIds: [] as string[],
 }));
 
 vi.mock("next/navigation", () => ({
@@ -44,6 +46,7 @@ vi.mock("@/hooks/use-requests", () => ({
   useBudgetPreview: () => ({ canPreview: Boolean(mocks.budgetPreview), data: mocks.budgetPreview, error: null, isLoading: false, refetch: vi.fn() }),
   useCreateRequest: () => ({ createRequest: mocks.createRequest, isLoading: false }),
   useRequestPlanningLines: mocks.useRequestPlanningLines,
+  useHydrateRequestPlanningLines: () => ({ items: mocks.hydrateItems, unavailableIds: mocks.unavailableIds, isLoading: false, error: null, retry: vi.fn() }),
   useRequestDocuments: () => ({ documents: mocks.requestDocuments, error: null, isLoading: false, refetch: mocks.refetchDocuments }),
   useRequestReceiptReviews: () => ({ receipts: [], error: null, isLoading: false, isRefreshing: false, refetch: vi.fn(), upsertReceipt: vi.fn() }),
   useSubmitRequest: () => ({ submitRequest: mocks.submitRequest, isLoading: false }),
@@ -342,6 +345,8 @@ beforeEach(() => {
   mocks.updateRequest.mockReset();
   mocks.budgetPreview = null;
   mocks.useRequestPlanningLines.mockReturnValue({ lines: [], total: 0, isLoading: false, isInitialLoading: false, isRefreshing: false, error: null, refetch: vi.fn() });
+  mocks.hydrateItems = [];
+  mocks.unavailableIds = [];
 });
 
 function BeneficiaryFieldsErrorHarness() {
@@ -487,9 +492,8 @@ describe("RequestForm payload helpers", () => {
     expect(screen.getAllByTestId("request-allocation-block")).toHaveLength(1);
   });
 
-  it("comparte una sola búsqueda POA precargada entre todos los selectores de asignación", async () => {
+  it("no precarga el catálogo POA al montar ni al agregar bloques", async () => {
     const user = userEvent.setup();
-    mocks.useRequestPlanningLines.mockReturnValue({ lines: [{ id: "line-1" }], total: 1, isLoading: false, isInitialLoading: false, isRefreshing: false, error: null, refetch: vi.fn() });
 
     render(<RequestForm activeStep={REQUEST_EDIT_STEP.DATA} initialRequest={makePaymentRequest({ request_type: REQUEST_TYPE.ADVANCE })} mode="edit" />);
 
@@ -497,7 +501,8 @@ describe("RequestForm payload helpers", () => {
     await user.click(screen.getByTestId("request-add-allocation-button"));
 
     expect(screen.getAllByTestId("request-allocation-block")).toHaveLength(3);
-    expect(screen.getAllByTestId("planning-line-selector").map((selector) => selector.getAttribute("data-lines-count"))).toEqual(["1", "1", "1"]);
+    expect(mocks.useRequestPlanningLines).not.toHaveBeenCalled();
+    expect(screen.getAllByTestId("planning-line-selector").map((selector) => selector.getAttribute("data-lines-count"))).toEqual(["0", "0", "0"]);
   });
 
   it("limita el concepto a 120 caracteres y muestra contador visible", () => {

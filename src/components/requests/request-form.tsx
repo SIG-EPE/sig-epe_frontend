@@ -13,7 +13,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
-import { useBudgetPreview, useCreateRequest, useRequestDocuments, useRequestPlanningLines, useRequestReceiptReviews, useSubmitRequest, useUpdateRequest } from "@/hooks/use-requests";
+import { useBudgetPreview, useCreateRequest, useHydrateRequestPlanningLines, useRequestDocuments, useRequestReceiptReviews, useSubmitRequest, useUpdateRequest } from "@/hooks/use-requests";
 import { getBusinessDateString } from "@/lib/business-timezone";
 import { ROUTES } from "@/lib/constants";
 import {
@@ -397,13 +397,13 @@ function getInitialAllocationValues(initialRequest?: PaymentRequest): RequestFor
   }];
 }
 
-function getInitialSelectedLines(initialRequest?: PaymentRequest): RequestPlanningLineLookupItem[] {
+function getInitialSelectedLines(initialRequest?: PaymentRequest): Array<RequestPlanningLineLookupItem | null> {
   const allocations = initialRequest?.allocations ?? [];
   if (allocations.length > 0) {
-    return allocations.reduce<RequestPlanningLineLookupItem[]>((lines, allocation) => {
+    return allocations.map((allocation) => {
       const line = allocation.planning_line ?? allocation.budgetPlanningLine ?? null;
-      if (!line) return lines;
-      lines.push({
+      if (!line) return null;
+      return {
         id: line.id,
         line_code: line.line_code,
         resource_description: line.resource_description,
@@ -422,9 +422,8 @@ function getInitialSelectedLines(initialRequest?: PaymentRequest): RequestPlanni
         monthly_summary: line.monthly_summary ?? [],
         funding_sources: line.funding_sources,
         financiers: allocation.financiers ?? allocation.funding_sources ?? line.financiers ?? line.funding_sources,
-      });
-      return lines;
-    }, []);
+      };
+    });
   }
   const legacyLine = mapRequestPlanningLineToLookup(initialRequest?.budgetPlanningLine);
   return legacyLine ? [legacyLine] : [];
@@ -503,6 +502,9 @@ export function RequestForm({
   const selectedAllocationLineIds = allocations.map((allocation) => allocation.budget_planning_line_id).filter((lineId) => lineId.trim().length > 0);
   const duplicateAllocationLineIds = selectedAllocationLineIds.filter((lineId, index) => selectedAllocationLineIds.indexOf(lineId) !== index);
   const hasDuplicateAllocations = duplicateAllocationLineIds.length > 0;
+  const hydratedPlanningLines = useHydrateRequestPlanningLines(
+    mode === "edit" ? [...new Set(selectedAllocationLineIds)] : [],
+  );
 
   const preview = useBudgetPreview({
     requestId: draftId ?? initialRequest?.id,
@@ -512,7 +514,6 @@ export function RequestForm({
       amount: Number(allocation.amount || 0),
     })),
   });
-  const planningLinesLookup = useRequestPlanningLines();
   const { createRequest, isLoading: creating } = useCreateRequest();
   const { updateRequest, isLoading: updating } = useUpdateRequest();
   const { submitRequest, isLoading: submitting } = useSubmitRequest();
@@ -553,6 +554,14 @@ export function RequestForm({
     setDraftId(initialRequest.id);
     setCurrentRequest(initialRequest);
   }, [initialRequest]);
+
+  useEffect(() => {
+    if (hydratedPlanningLines.items.length === 0) return;
+    const byId = new Map(hydratedPlanningLines.items.map((line) => [line.id, line]));
+    setSelectedLines((current) => allocations.map((allocation, index) =>
+      current[index] ?? byId.get(allocation.budget_planning_line_id) ?? null,
+    ));
+  }, [hydratedPlanningLines.items, selectedAllocationLineIds.join("|")]);
 
   useEffect(() => {
     setIsNavigatingStep(false);
@@ -932,10 +941,22 @@ export function RequestForm({
             <h2 className="text-base font-semibold">2. Líneas POA y montos</h2>
             <p className="text-sm text-muted-foreground">Agrega una o más líneas POA. El total se calcula automáticamente.</p>
           </div>
-          <Button type="button" variant="outline" onClick={addAllocationBlock} disabled={isBusy || planningLinesLookup.isInitialLoading} data-testid="request-add-allocation-button">Agregar línea POA</Button>
+          <Button type="button" variant="outline" onClick={addAllocationBlock} disabled={isBusy} data-testid="request-add-allocation-button">Agregar línea POA</Button>
         </div>
-        {planningLinesLookup.isRefreshing && <p className="text-xs text-muted-foreground">Actualizando líneas POA en segundo plano...</p>}
-        {planningLinesLookup.error && <p className="text-xs text-destructive">{planningLinesLookup.error.message}</p>}
+        {hydratedPlanningLines.isLoading && <p className="text-xs text-muted-foreground" role="status">Recuperando líneas POA seleccionadas...</p>}
+        {hydratedPlanningLines.error && (
+          <div className="flex items-center gap-2 text-xs text-destructive" role="alert">
+            <span>{hydratedPlanningLines.error.message}</span>
+            <Button type="button" variant="outline" size="sm" onClick={hydratedPlanningLines.retry}>Reintentar</Button>
+          </div>
+        )}
+        {hydratedPlanningLines.unavailableIds.length > 0 && (
+          <Alert variant="destructive">
+            <AlertDescription>
+              Una o más líneas POA seleccionadas ya no están disponibles. Corrige esos bloques antes de guardar.
+            </AlertDescription>
+          </Alert>
+        )}
 
         {hasMixedFiscalYears && (
           <Alert variant="destructive">
@@ -960,10 +981,6 @@ export function RequestForm({
                   control={form.control}
                   name={`allocations.${index}.budget_planning_line_id`}
                   selectedLine={selectedLines[index] ?? null}
-                  lines={planningLinesLookup.lines}
-                  isLoading={planningLinesLookup.isInitialLoading}
-                  isRefreshing={planningLinesLookup.isRefreshing}
-                  error={planningLinesLookup.error}
                   onSelectedLineChange={(line) => setAllocationLine(index, line)}
                 />
                 <FormField control={form.control} name={`allocations.${index}.amount`} render={({ field: amountField }) => (

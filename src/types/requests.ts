@@ -344,6 +344,57 @@ export interface RequestPlanningLineLookupResponse {
   total: number;
 }
 
+export const REQUEST_PLANNING_LINE_SCOPE = {
+  DIRECT: "direct",
+  HIERARCHY: "hierarchy",
+} as const;
+
+export type RequestPlanningLineScope =
+  (typeof REQUEST_PLANNING_LINE_SCOPE)[keyof typeof REQUEST_PLANNING_LINE_SCOPE];
+
+export interface RequestPlanningLineLookupOption {
+  id: string;
+  name: string;
+  code?: string | null;
+}
+
+export interface RequestPlanningLineSearchItem {
+  id: string;
+  line_code: string;
+  resource_description: string;
+  planning_type: string;
+  fiscal_year: Pick<RequestFiscalYearSummary, "id" | "year"> | null;
+  org_unit: RequestPlanningLineLookupOption | null;
+  program: RequestPlanningLineLookupOption | null;
+  component: RequestPlanningLineLookupOption | null;
+  operative_action: RequestPlanningLineLookupOption | null;
+  category: RequestPlanningLineLookupOption | null;
+  territory: RequestPlanningLineLookupOption | null;
+}
+
+export interface RequestPlanningLineSearchResponse {
+  items: RequestPlanningLineSearchItem[];
+  total: number;
+  page: number;
+  limit: number;
+  has_more: boolean;
+}
+
+export interface RequestPlanningLineHydrateResponse {
+  items: RequestPlanningLineSearchItem[];
+  unavailable_ids: string[];
+}
+
+export interface RequestPlanningLineFacetsResponse {
+  org_units: RequestPlanningLineLookupOption[];
+  planning_types: string[];
+  programs: RequestPlanningLineLookupOption[];
+  components: RequestPlanningLineLookupOption[];
+  operative_actions: RequestPlanningLineLookupOption[];
+  categories: RequestPlanningLineLookupOption[];
+  territories: RequestPlanningLineLookupOption[];
+}
+
 export interface RequestBudgetPreview {
   planning_line: RequestPlanningLineLookupItem;
   month: number | null;
