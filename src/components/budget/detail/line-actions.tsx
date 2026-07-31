@@ -15,6 +15,7 @@ import { RejectModal } from "@/components/budget/planning/reject-modal";
 import {
   getPlanningLineMutationErrorMessage,
   getSubmitPlanningLineErrorMessage,
+  recoverFromPlanningLineStateConflict,
   useApprovePlanningLine,
   useSubmitPlanningLine,
 } from "@/hooks/use-budget";
@@ -39,7 +40,9 @@ export function LineActions({ line, isGiof, onRefetch }: LineActionsProps) {
       toast.success("Linea enviada");
       onRefetch();
     } catch (error) {
-      toast.error(getSubmitPlanningLineErrorMessage(error) ?? "Error al enviar la linea");
+      const conflictMessage = recoverFromPlanningLineStateConflict(error);
+      toast.error(conflictMessage ?? getSubmitPlanningLineErrorMessage(error) ?? "Error al enviar la linea");
+      if (conflictMessage) onRefetch();
     }
   }
 
@@ -50,8 +53,10 @@ export function LineActions({ line, isGiof, onRefetch }: LineActionsProps) {
       setApproveConfirmOpen(false);
       onRefetch();
     } catch (error) {
-      toast.error(getPlanningLineMutationErrorMessage(error) ?? "Error al aprobar la linea");
+      const conflictMessage = recoverFromPlanningLineStateConflict(error);
+      toast.error(conflictMessage ?? getPlanningLineMutationErrorMessage(error) ?? "Error al aprobar la linea");
       setApproveConfirmOpen(false);
+      if (conflictMessage) onRefetch();
     }
   }
 

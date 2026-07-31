@@ -27,6 +27,11 @@ import type {
 
 const PLANNING_LINE_STAT_KEYS = ["DRAFT", "SUBMITTED", "APPROVED", "REJECTED"] as const;
 
+export const PLANNING_LINE_STATE_CONFLICT_CODE =
+  "PLANNING_LINE_STATE_CONFLICT";
+export const PLANNING_LINE_STATE_CONFLICT_MESSAGE =
+  "La línea POA cambió de estado y la operación ya no puede completarse. Actualiza para ver su estado actual.";
+
 const EMPTY_PLANNING_LINE_STATS: PlanningLineStats = {
   DRAFT: { count: 0, total: 0 },
   SUBMITTED: { count: 0, total: 0 },
@@ -142,6 +147,26 @@ function invalidateBudgetMutationCaches(): void {
   invalidateQueryTag("budget");
   invalidateQueryTag("dashboard");
   invalidateQueryTag("poa");
+}
+
+export function isPlanningLineStateConflict(error: unknown): error is ApiRequestError {
+  return (
+    error instanceof ApiRequestError &&
+    error.status === 409 &&
+    error.body.code === PLANNING_LINE_STATE_CONFLICT_CODE
+  );
+}
+
+export function recoverFromPlanningLineStateConflict(
+  error: unknown,
+): string | null {
+  if (!isPlanningLineStateConflict(error)) {
+    return null;
+  }
+
+  invalidateQueryTag("poa");
+  invalidateQueryTag("budget");
+  return toReadableMessage(error.body.message) ?? PLANNING_LINE_STATE_CONFLICT_MESSAGE;
 }
 
 function invalidateBudgetCatalogMutationCaches(): void {

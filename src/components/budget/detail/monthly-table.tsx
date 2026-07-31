@@ -18,7 +18,11 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { formatBusinessDate } from "@/lib/business-timezone";
 import { ROUTES } from "@/lib/constants";
-import { useUpsertMonthly, useManualExecutions } from "@/hooks/use-budget";
+import {
+  recoverFromPlanningLineStateConflict,
+  useUpsertMonthly,
+  useManualExecutions,
+} from "@/hooks/use-budget";
 import { useAuthStore } from "@/stores/auth-store";
 import { MONTHLY_EXECUTION_DETAIL_SOURCE, type MonthlyEntry, type MonthlyExecutionDetail } from "@/types/budget";
 import { ManualExecutionModal } from "./manual-execution-modal";
@@ -34,6 +38,7 @@ interface MonthlyTableProps {
   entries?: MonthlyEntry[];
   editable?: boolean;
   lineStatus?: string;
+  onConflictRefetch?: () => void;
 }
 
 function formatCurrency(amount: number): string {
@@ -72,6 +77,7 @@ export function MonthlyTable({
   entries = [],
   editable = false,
   lineStatus,
+  onConflictRefetch,
 }: MonthlyTableProps) {
   // Estado local para los 12 valores de planned_amount
   const [plannedAmounts, setPlannedAmounts] = useState<Record<number, number>>(() => {
@@ -133,7 +139,17 @@ export function MonthlyTable({
       });
       toast.success("Programación mensual guardada correctamente");
     } catch (err) {
-      const message = err instanceof Error ? err.message : "Error al guardar programación";
+      const conflictMessage = recoverFromPlanningLineStateConflict(err);
+      if (conflictMessage) {
+        const authoritativeAmounts: Record<number, number> = {};
+        for (let month = 1; month <= 12; month++) {
+          const entry = entries.find((item) => item.month === month);
+          authoritativeAmounts[month] = Number(entry?.planned_amount ?? 0);
+        }
+        setPlannedAmounts(authoritativeAmounts);
+        onConflictRefetch?.();
+      }
+      const message = conflictMessage ?? (err instanceof Error ? err.message : "Error al guardar programación");
       toast.error(message);
     }
   };

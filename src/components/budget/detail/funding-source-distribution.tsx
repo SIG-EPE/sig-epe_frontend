@@ -25,6 +25,7 @@ import {
   useAddLineFundingSource,
   useRemoveLineFundingSource,
   type LineFundingSource,
+  recoverFromPlanningLineStateConflict,
 } from "@/hooks/use-budget";
 import { useCatalogFundingSources } from "@/hooks/use-catalogs";
 import { cn } from "@/lib/utils";
@@ -36,6 +37,7 @@ interface FundingSourceDistributionProps {
   totalCost: number;
   fiscalYearId: string;
   status: "DRAFT" | "SUBMITTED" | "APPROVED" | "REJECTED";
+  onConflictRefetch?: () => void;
 }
 
 // ─── Componente principal ─────────────────────────────────
@@ -43,6 +45,7 @@ interface FundingSourceDistributionProps {
 export function FundingSourceDistribution({
   lineId,
   status,
+  onConflictRefetch,
 }: FundingSourceDistributionProps) {
   const [isDialogOpen, setIsDialogOpen] = useState(false);
 
@@ -109,8 +112,15 @@ export function FundingSourceDistribution({
       try {
         await add(lineId, id);
       } catch (err) {
-        const msg = err instanceof Error ? err.message : `Error al agregar fuente ${id}`;
+        const conflictMessage = recoverFromPlanningLineStateConflict(err);
+        const msg = conflictMessage ?? (err instanceof Error ? err.message : `Error al agregar fuente ${id}`);
         toast.error(msg);
+        if (conflictMessage) {
+          setIsDialogOpen(false);
+          setSelectedIds(new Set());
+          void refetchFundingSources();
+          onConflictRefetch?.();
+        }
         anyError = true;
         break;
       }
@@ -121,8 +131,15 @@ export function FundingSourceDistribution({
         try {
           await remove(lineId, id);
         } catch (err) {
-          const msg = err instanceof Error ? err.message : `Error al eliminar fuente ${id}`;
+          const conflictMessage = recoverFromPlanningLineStateConflict(err);
+          const msg = conflictMessage ?? (err instanceof Error ? err.message : `Error al eliminar fuente ${id}`);
           toast.error(msg);
+          if (conflictMessage) {
+            setIsDialogOpen(false);
+            setSelectedIds(new Set());
+            void refetchFundingSources();
+            onConflictRefetch?.();
+          }
           anyError = true;
           break;
         }

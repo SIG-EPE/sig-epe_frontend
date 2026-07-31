@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { LineActions } from "@/components/budget/detail/line-actions";
 import type { PlanningLine } from "@/hooks/use-budget";
 import { PLANNING_TYPE } from "@/lib/planning-types";
+import { ApiRequestError } from "@/lib/api-client";
 
 const mocks = vi.hoisted(() => ({
   approve: vi.fn(),
@@ -73,6 +74,31 @@ describe("LineActions", () => {
 
     await waitFor(() => {
       expect(mocks.toastError).toHaveBeenCalledWith("No puedes aprobar tu propia línea");
+    });
+  });
+
+  it("cierra la confirmación y refresca el detalle cuando pierde una carrera", async () => {
+    const user = userEvent.setup();
+    const onRefetch = vi.fn();
+    mocks.approve.mockRejectedValue(
+      new ApiRequestError(409, {
+        statusCode: 409,
+        code: "PLANNING_LINE_STATE_CONFLICT",
+        message: "La línea ya cambió de estado.",
+        error: "Conflict",
+        timestamp: "2026-07-26T00:00:00.000Z",
+        path: "/budget/planning-lines/line-1/approve",
+      }),
+    );
+
+    render(<LineActions line={makePlanningLine()} isGiof onRefetch={onRefetch} />);
+    await user.click(screen.getByRole("button", { name: "Aprobar" }));
+    await user.click(within(screen.getByRole("dialog", { name: "Confirmar aprobacion" })).getByRole("button", { name: "Aprobar" }));
+
+    await waitFor(() => {
+      expect(mocks.toastError).toHaveBeenCalledWith("La línea ya cambió de estado.");
+      expect(onRefetch).toHaveBeenCalledTimes(1);
+      expect(screen.queryByRole("dialog", { name: "Confirmar aprobacion" })).not.toBeInTheDocument();
     });
   });
 });

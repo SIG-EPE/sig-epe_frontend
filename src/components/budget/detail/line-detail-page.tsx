@@ -187,6 +187,7 @@ export function LineDetailPage() {
           entries={line.monthlyDistribution ?? line.monthly_distribution}
           editable={isGiof && line.status === "DRAFT"}
           lineStatus={line.status}
+          onConflictRefetch={refetch}
         />
       </div>
 
@@ -197,6 +198,7 @@ export function LineDetailPage() {
           totalCost={line.total_cost}
           fiscalYearId={line.fiscal_year_id}
           status={line.status}
+          onConflictRefetch={refetch}
         />
       </div>
 

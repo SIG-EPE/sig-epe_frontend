@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { RejectModal } from "@/components/budget/planning/reject-modal";
+import { ApiRequestError } from "@/lib/api-client";
 
 const mocks = vi.hoisted(() => ({
   reject: vi.fn(),
@@ -22,10 +23,13 @@ vi.mock("sonner", () => ({
   },
 }));
 
-vi.mock("@/hooks/use-budget", () => ({
-  getPlanningLineMutationErrorMessage: (error: unknown) => (error instanceof Error ? error.message : null),
-  useRejectPlanningLine: () => ({ reject: mocks.reject, isLoading: false }),
-}));
+vi.mock("@/hooks/use-budget", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/hooks/use-budget")>();
+  return {
+    ...actual,
+    useRejectPlanningLine: () => ({ reject: mocks.reject, isLoading: false }),
+  };
+});
 
 describe("RejectModal", () => {
   beforeEach(() => {
@@ -67,6 +71,33 @@ describe("RejectModal", () => {
 
     await waitFor(() => {
       expect(mocks.toastError).toHaveBeenCalledWith("No tienes permisos para rechazar esta línea");
+    });
+  });
+
+  it("descarta el motivo, cierra y refresca cuando el rechazo pierde una carrera", async () => {
+    const user = userEvent.setup();
+    const onOpenChange = vi.fn();
+    const onSuccess = vi.fn();
+    mocks.reject.mockRejectedValue(
+      new ApiRequestError(409, {
+        statusCode: 409,
+        code: "PLANNING_LINE_STATE_CONFLICT",
+        message: "La línea ya fue aprobada.",
+        error: "Conflict",
+        timestamp: "2026-07-26T00:00:00.000Z",
+        path: "/budget/planning-lines/line-1/reject",
+      }),
+    );
+
+    render(<RejectModal lineId="line-1" open onOpenChange={onOpenChange} onSuccess={onSuccess} />);
+    await user.type(screen.getByPlaceholderText(/Motivo del rechazo/), "Motivo suficientemente largo");
+    await user.click(screen.getByRole("button", { name: "Rechazar" }));
+
+    await waitFor(() => {
+      expect(mocks.toastError).toHaveBeenCalledWith("La línea ya fue aprobada.");
+      expect(onOpenChange).toHaveBeenCalledWith(false);
+      expect(onSuccess).toHaveBeenCalledTimes(1);
+      expect(mocks.refresh).toHaveBeenCalledTimes(1);
     });
   });
 });

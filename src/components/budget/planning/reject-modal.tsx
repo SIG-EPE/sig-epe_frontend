@@ -15,6 +15,7 @@ import {
 } from "@/components/ui/dialog";
 import {
   getPlanningLineMutationErrorMessage,
+  recoverFromPlanningLineStateConflict,
   useRejectPlanningLine,
 } from "@/hooks/use-budget";
 
@@ -47,7 +48,13 @@ export function RejectModal({ lineId, open, onOpenChange, onSuccess }: RejectMod
       onSuccess?.();
       router.refresh();
     } catch (error) {
-      toast.error(getPlanningLineMutationErrorMessage(error) ?? "Error al rechazar la linea");
+      const conflictMessage = recoverFromPlanningLineStateConflict(error);
+      toast.error(conflictMessage ?? getPlanningLineMutationErrorMessage(error) ?? "Error al rechazar la linea");
+      if (conflictMessage) {
+        handleOpenChange(false);
+        onSuccess?.();
+        router.refresh();
+      }
     }
   }
 

@@ -26,6 +26,10 @@ import type { PlanningLine } from "@/types/budget";
 import { api } from "@/lib/api-client";
 import { MoreHorizontal } from "lucide-react";
 import { useState } from "react";
+import {
+  getPlanningLineMutationErrorMessage,
+  recoverFromPlanningLineStateConflict,
+} from "@/hooks/use-budget";
 
 interface PlanningLinesTableProps {
   lines: PlanningLine[];
@@ -51,7 +55,7 @@ function formatDate(dateStr: string): string {
 export function PlanningLinesTable({ lines, isLoading, onRefetch }: PlanningLinesTableProps) {
   const router = useRouter();
   const { user } = useAuthStore();
-  const isGiof = user?.role?.code === "GIOF";
+  const isGiof = user?.role?.code === "GIOF" || user?.role?.code === "GIOF_GESTOR";
   const userId = user?.id;
 
   const [rejectModalOpen, setRejectModalOpen] = useState(false);
@@ -103,8 +107,10 @@ export function PlanningLinesTable({ lines, isLoading, onRefetch }: PlanningLine
       await api.post(`/budget/planning-lines/${line.id}/submit`);
       toast.success("Linea enviada");
       onRefetch();
-    } catch {
-      toast.error("Error al enviar la linea");
+    } catch (error) {
+      const conflictMessage = recoverFromPlanningLineStateConflict(error);
+      toast.error(conflictMessage ?? getPlanningLineMutationErrorMessage(error) ?? "Error al enviar la linea");
+      if (conflictMessage) onRefetch();
     } finally {
       setLoadingLineId(null);
     }
@@ -116,8 +122,10 @@ export function PlanningLinesTable({ lines, isLoading, onRefetch }: PlanningLine
       await api.post(`/budget/planning-lines/${line.id}/approve`);
       toast.success("Linea aprobada");
       onRefetch();
-    } catch {
-      toast.error("Error al aprobar la linea");
+    } catch (error) {
+      const conflictMessage = recoverFromPlanningLineStateConflict(error);
+      toast.error(conflictMessage ?? getPlanningLineMutationErrorMessage(error) ?? "Error al aprobar la linea");
+      if (conflictMessage) onRefetch();
     } finally {
       setLoadingLineId(null);
     }
