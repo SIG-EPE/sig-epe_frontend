@@ -71,8 +71,8 @@ export interface PlanningLine {
   territory_id?: string | null;
   importance?: string | null;
   frequency?: string | null;
-  unit_price: number;
-  quantity: number;
+  unit_price: number | null;
+  quantity: number | null;
   total_cost: number;
   status: "DRAFT" | "SUBMITTED" | "APPROVED" | "REJECTED";
   rejection_reason?: string | null;

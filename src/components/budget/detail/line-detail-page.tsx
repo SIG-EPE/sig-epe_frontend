@@ -24,6 +24,10 @@ function formatCurrency(amount: number): string {
   }).format(amount);
 }
 
+function formatFinancialBasis(value: number | null): string {
+  return value === null ? "Sin dato" : formatCurrency(value);
+}
+
 function isPlanningType(value: string | null | undefined): value is PlanningType {
   return PLANNING_TYPES.includes(value as PlanningType);
 }
@@ -160,7 +164,7 @@ export function LineDetailPage() {
         <h2 className="text-lg font-medium">Costo</h2>
         <div className="flex items-baseline gap-2">
           <span className="text-muted-foreground">
-            {formatCurrency(line.unit_price)} x {line.quantity}
+            {formatFinancialBasis(line.unit_price)} x {line.quantity ?? "Sin dato"}
           </span>
           <span className="text-xl font-semibold">
             = {formatCurrency(line.total_cost)}
