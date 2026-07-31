@@ -100,6 +100,26 @@ export function useAssignRole() {
 }
 
 // -------------------------------------------------------
+// useSetGiofMembership
+// -------------------------------------------------------
+
+export function useSetGiofMembership() {
+  const [isLoading, setIsLoading] = useState(false);
+
+  const setGiofMembership = async (userId: string, enabled: boolean): Promise<void> => {
+    setIsLoading(true);
+    try {
+      await api.patch(`/users/${userId}/giof-membership`, { enabled });
+    } finally {
+      invalidateUserDomain();
+      setIsLoading(false);
+    }
+  };
+
+  return { setGiofMembership, isLoading };
+}
+
+// -------------------------------------------------------
 // useDeactivateUser
 // -------------------------------------------------------
 

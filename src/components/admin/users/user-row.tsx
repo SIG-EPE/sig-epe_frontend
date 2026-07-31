@@ -1,12 +1,15 @@
 "use client";
 
+import { useState } from "react";
 import { toast } from "sonner";
 
 import {
   useAssignRole,
   type UserDto,
 } from "@/hooks/use-users";
+import { ROLE_CODE } from "@/lib/constants";
 import { useAuthStore } from "@/stores/auth-store";
+import { GiofMembershipModal } from "@/components/admin/users/giof-membership-modal";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -59,6 +62,7 @@ interface UserRowProps {
 export function UserRow({ user, onRefetch, onEdit, onDeactivate, onReactivate }: UserRowProps) {
   const { assignRole } = useAssignRole();
   const currentUser = useAuthStore((state) => state.user);
+  const [giofMembershipEnabled, setGiofMembershipEnabled] = useState<boolean | null>(null);
 
   const currentRole = user.roles[0];
   const myRoleCode = currentUser?.role?.code ?? "";
@@ -66,6 +70,16 @@ export function UserRow({ user, onRefetch, onEdit, onDeactivate, onReactivate }:
   // Determinar si el usuario actual puede gestionar al usuario de esta fila
   const targetRoleCode = currentRole?.code ?? "";
   const canManageThis = myRoleCode ? canManage(myRoleCode, targetRoleCode) : false;
+  const isOtherUser = Boolean(currentUser?.id && currentUser.id !== user.id);
+  const canGrantGiof =
+    myRoleCode === ROLE_CODE.GIOF_GESTOR &&
+    isOtherUser &&
+    user.isActive &&
+    targetRoleCode === ROLE_CODE.SOLICITANTE_EPE;
+  const canRevokeGiof =
+    myRoleCode === ROLE_CODE.GIOF_GESTOR &&
+    isOtherUser &&
+    targetRoleCode === ROLE_CODE.GIOF_GESTOR;
 
   const createdDate = new Date(user.createdAt).toLocaleDateString("es-AR", {
     day: "2-digit",
@@ -162,6 +176,18 @@ export function UserRow({ user, onRefetch, onEdit, onDeactivate, onReactivate }:
                 </DropdownMenuItem>
               )}
 
+              {(canGrantGiof || canRevokeGiof) && (
+                <>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem
+                    onClick={() => setGiofMembershipEnabled(canGrantGiof)}
+                  >
+                    <Shield className="mr-2 h-4 w-4" />
+                    {canGrantGiof ? "Conceder rol GIOF" : "Retirar rol GIOF"}
+                  </DropdownMenuItem>
+                </>
+              )}
+
               <DropdownMenuSeparator />
 
               {/* Desactivar / Reactivar — solo si puede gestionar */}
@@ -200,6 +226,14 @@ export function UserRow({ user, onRefetch, onEdit, onDeactivate, onReactivate }:
           </DropdownMenu>
         </div>
       </TableCell>
+      {giofMembershipEnabled !== null && (
+        <GiofMembershipModal
+          user={user}
+          enabled={giofMembershipEnabled}
+          onClose={() => setGiofMembershipEnabled(null)}
+          onSuccess={onRefetch}
+        />
+      )}
     </TableRow>
   );
 }
