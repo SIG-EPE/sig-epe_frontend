@@ -12,7 +12,10 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { useRequestDocumentUploadQueue, type RequestDocumentUploadQueueController } from "@/hooks/use-request-document-upload-queue";
 import { useConfirmRequestReceiptReview, useDeleteRequestDocument, useRequestDocuments, useRequestReceiptReviews, useUpdateRequestReceiptReview, useUploadRequestDocument } from "@/hooks/use-requests";
+import { useUploadNavigationGuard } from "@/hooks/use-upload-navigation-guard";
+import { REQUEST_DOCUMENT_UPLOAD_BATCH_STATE, REQUEST_DOCUMENT_UPLOAD_FILE_STATE } from "@/lib/request-document-upload-queue";
 import { getSafeDocumentUrl } from "@/lib/safe-url";
 import {
   canManageRequestDocuments,
@@ -31,18 +34,14 @@ import {
   formatRequestCurrency,
   REQUEST_DOCUMENT_CATEGORY_OPTIONS,
   REQUEST_DOCUMENT_UPLOAD_SUCCESS_MESSAGE,
-  REQUEST_DOCUMENT_UPLOAD_QUEUE_DELAY_MS,
   validateRequestDocumentFile,
-  validateRequestDocumentBatch,
-  isRetryableRequestDocumentUploadError,
 } from "@/lib/requests";
 import { useAuthStore } from "@/stores/auth-store";
 import {
   REQUEST_CURRENCY,
   REQUEST_DOCUMENT_CATEGORY,
   REQUEST_DOCUMENT_SCOPE_TYPE,
-  REQUEST_DOCUMENT_UPLOAD_QUEUE_ERROR_KIND,
-  REQUEST_DOCUMENT_UPLOAD_QUEUE_STATUS,
+  REQUEST_DOCUMENT_UPLOAD_STATUS,
   REQUEST_RECEIPT_DUPLICATE_STATUS,
   REQUEST_RECEIPT_OCR_STATUS,
   REQUEST_STATUS,
@@ -52,11 +51,11 @@ import {
   type RequestAllocationRequiredDocumentItem,
   type RequestDocument,
   type RequestDocumentCategory,
-  type RequestDocumentUploadQueueItem,
   type RequiredDocumentChecklistItem,
   type RequestReceiptReview,
   type UpdateRequestReceiptReviewInput,
 } from "@/types/requests";
+import { SettlementUploadFileRow } from "./settlement-preparation/settlement-upload-file-row";
 
 interface RequestDocumentsCardProps {
   request: PaymentRequest;
@@ -71,6 +70,8 @@ interface RequestDocumentsCardProps {
   receiptsResource?: ReturnType<typeof useRequestReceiptReviews>;
   onDocumentsChanged?: () => Promise<void> | void;
   hideOptionalUploader?: boolean;
+  uploadQueue?: RequestDocumentUploadQueueController;
+  hideUploadQueueMonitor?: boolean;
 }
 
 interface ReceiptReviewFormState {
@@ -90,11 +91,19 @@ interface ChecklistAttachButtonProps {
   onAttach: (category: RequestDocumentCategory, file: File) => void;
 }
 
-const DOCUMENT_UPLOAD_ACTION = {
-  GENERIC: "generic",
+type DocumentUploadAction = string;
+
+const UPLOAD_CONTEXT_CHANGE_KIND = {
+  CATEGORY: "category",
+  ALLOCATION: "allocation",
 } as const;
 
-type DocumentUploadAction = string;
+type UploadContextChangeKind = (typeof UPLOAD_CONTEXT_CHANGE_KIND)[keyof typeof UPLOAD_CONTEXT_CHANGE_KIND];
+
+interface PendingUploadContextChange {
+  kind: UploadContextChangeKind;
+  value: string;
+}
 
 interface UploadScopeOptions {
   scope_type?: typeof REQUEST_DOCUMENT_SCOPE_TYPE.ALLOCATION;
@@ -292,29 +301,6 @@ function canConfirmReceiptReview(receiptReview: RequestReceiptReview): boolean {
   );
 }
 
-function getQueueStatusLabel(item: RequestDocumentUploadQueueItem): string {
-  if (item.status === REQUEST_DOCUMENT_UPLOAD_QUEUE_STATUS.PENDING) return "Pendiente de adjuntar";
-  if (item.status === REQUEST_DOCUMENT_UPLOAD_QUEUE_STATUS.UPLOADING) return "Subiendo y procesando";
-  if (item.status === REQUEST_DOCUMENT_UPLOAD_QUEUE_STATUS.COMPLETED) return "Completado";
-  if (item.status === REQUEST_DOCUMENT_UPLOAD_QUEUE_STATUS.FAILED) return item.retryable ? "Falló · reintentar" : "No cargado";
-  return "Retirado";
-}
-
-function getQueueStatusDescription(item: RequestDocumentUploadQueueItem): string {
-  if (item.status === REQUEST_DOCUMENT_UPLOAD_QUEUE_STATUS.PENDING) return "Listo en la cola. Presiona Adjuntar para iniciar la carga.";
-  if (item.status === REQUEST_DOCUMENT_UPLOAD_QUEUE_STATUS.UPLOADING) return "No cierres ni cambies de página hasta que termine la carga.";
-  if (item.status === REQUEST_DOCUMENT_UPLOAD_QUEUE_STATUS.COMPLETED) return "Documento adjuntado; estamos actualizando la lista.";
-  if (item.status === REQUEST_DOCUMENT_UPLOAD_QUEUE_STATUS.FAILED) return item.error_message ?? "No pudimos adjuntar este archivo.";
-  return "Archivo retirado de la cola local.";
-}
-
-function getQueueStatusVariant(item: RequestDocumentUploadQueueItem): "default" | "secondary" | "destructive" | "outline" {
-  if (item.status === REQUEST_DOCUMENT_UPLOAD_QUEUE_STATUS.COMPLETED) return "default";
-  if (item.status === REQUEST_DOCUMENT_UPLOAD_QUEUE_STATUS.FAILED) return "destructive";
-  if (item.status === REQUEST_DOCUMENT_UPLOAD_QUEUE_STATUS.REMOVED) return "outline";
-  return "secondary";
-}
-
 function toDateInputValue(value?: string | null): string {
   return value?.match(/^\d{4}-\d{2}-\d{2}/)?.[0] ?? "";
 }
@@ -365,6 +351,8 @@ export function RequestDocumentsCard({
   receiptsResource,
   onDocumentsChanged,
   hideOptionalUploader = false,
+  uploadQueue: injectedUploadQueue,
+  hideUploadQueueMonitor = false,
 }: RequestDocumentsCardProps) {
   const user = useAuthStore((state) => state.user);
   const roleCode = user?.role?.code;
@@ -389,9 +377,6 @@ export function RequestDocumentsCard({
   const { confirmReceiptReview, isLoading: confirmingReceipt } = useConfirmRequestReceiptReview();
   const [category, setCategory] = useState<RequestDocumentCategory | "">(REQUEST_DOCUMENT_CATEGORY.REQUEST_SUPPORT);
   const [file, setFile] = useState<File | null>(null);
-  const [uploadQueue, setUploadQueue] = useState<RequestDocumentUploadQueueItem[]>([]);
-  const uploadQueueRef = useRef<RequestDocumentUploadQueueItem[]>([]);
-  const [isQueueRunning, setIsQueueRunning] = useState(false);
   const [validationError, setValidationError] = useState<string | null>(null);
   const [operationError, setOperationError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
@@ -401,8 +386,18 @@ export function RequestDocumentsCard({
   const [receiptForm, setReceiptForm] = useState<ReceiptReviewFormState | null>(null);
   const [activeUploadAction, setActiveUploadAction] = useState<DocumentUploadAction | null>(null);
   const [uploadAllocationId, setUploadAllocationId] = useState("");
+  const [pendingUploadContextChange, setPendingUploadContextChange] = useState<PendingUploadContextChange | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const operationErrorRef = useRef<HTMLDivElement>(null);
+  const internalUploadQueue = useRequestDocumentUploadQueue({
+    requestId: request.id,
+    documents,
+    receipts,
+    upsertDocument: effectiveDocumentsResource.upsertDocument,
+    refreshDocuments: refetch,
+    refreshReceipts: () => refetchReceipts({ background: true }),
+  });
+  const uploadQueue = injectedUploadQueue ?? internalUploadQueue;
   const allocationGroups = request.allocations ?? [];
   const displayAllocationGroups = allocationGroups.length > 0 ? allocationGroups : guidanceAllocations;
   const isAdvanceSettlement = request.request_type === REQUEST_TYPE.ADVANCE_SETTLEMENT;
@@ -435,15 +430,23 @@ export function RequestDocumentsCard({
   const optionalCategoryOptions = getGenericDocumentCategoryOptions(checklist.items, genericExcludedCategories).filter((option) => !hasAllocationGroups || option.value !== REQUEST_DOCUMENT_CATEGORY.PXQ);
   const hasOptionalCategoryOptions = optionalCategoryOptions.length > 0;
   const acceptedFormatsLabel = category ? getRequestDocumentAcceptedFormatsLabel(category) : "selecciona una categoría";
-  const uploadActionsDisabled = uploading || activeUploadAction !== null;
+  const uploadActionsDisabled = uploading || activeUploadAction !== null || uploadQueue.isRunning;
   const uploadRequiresAllocationSelection = requiresReceiptAllocation && !uploadAllocationId;
-  const queuedActiveItems = uploadQueue.filter((item) => item.status !== REQUEST_DOCUMENT_UPLOAD_QUEUE_STATUS.REMOVED);
-  const queuedPendingItems = uploadQueue.filter((item) => item.status === REQUEST_DOCUMENT_UPLOAD_QUEUE_STATUS.PENDING);
-  const queuedCompletedCount = uploadQueue.filter((item) => item.status === REQUEST_DOCUMENT_UPLOAD_QUEUE_STATUS.COMPLETED).length;
-  const queuedFailedCount = uploadQueue.filter((item) => item.status === REQUEST_DOCUMENT_UPLOAD_QUEUE_STATUS.FAILED).length;
-  const uploadButtonDisabled = uploadActionsDisabled || isQueueRunning || Boolean(validationError) || queuedPendingItems.length === 0 || uploadRequiresAllocationSelection;
+  const queuedPendingItems = uploadQueue.items.filter((item) => item.state === REQUEST_DOCUMENT_UPLOAD_FILE_STATE.QUEUED);
+  const uploadButtonDisabled = uploadActionsDisabled || Boolean(validationError) || queuedPendingItems.length === 0 || uploadRequiresAllocationSelection;
   const selectedUploadAllocation = allocationGroups.find((allocation) => allocation.id === uploadAllocationId) ?? null;
-  const hasUploadInProgress = isQueueRunning || activeUploadAction !== null;
+  const hasUploadInProgress = uploadQueue.isRunning || activeUploadAction !== null;
+  const queueSuccessMessage = uploadQueue.state.batchState === REQUEST_DOCUMENT_UPLOAD_BATCH_STATE.SETTLED
+    && uploadQueue.summary.saved > 0
+    && uploadQueue.summary.errors === 0
+    && uploadQueue.summary.persistentWarnings === 0
+    ? `${uploadQueue.summary.saved} documento${uploadQueue.summary.saved === 1 ? " adjuntado" : "s adjuntados"} correctamente.`
+    : null;
+
+  useUploadNavigationGuard({
+    active: !injectedUploadQueue && (uploadQueue.isNavigationBlocked || activeUploadAction !== null),
+    message: "Hay documentos pendientes o en curso. Si sales, el archivo activo puede terminar en el servidor aunque esta ventana deje de mostrarlo.",
+  });
 
   useEffect(() => {
     if (optionalCategoryOptions.some((option) => option.value === category)) return;
@@ -458,71 +461,52 @@ export function RequestDocumentsCard({
     operationErrorRef.current?.focus({ preventScroll: true });
   }, [operationError]);
 
-  useEffect(() => {
-    if (!hasUploadInProgress) return;
-
-    const warningMessage = "Hay documentos cargándose. Si sales o actualizas la página, la carga en curso puede cancelarse.";
-    function handleBeforeUnload(event: BeforeUnloadEvent): void {
-      event.preventDefault();
-      event.returnValue = warningMessage;
-    }
-    function handleDocumentClick(event: MouseEvent): void {
-      const target = event.target instanceof Element ? event.target.closest("a[href]") : null;
-      if (!target) return;
-      const confirmed = window.confirm(`${warningMessage}\n\n¿Deseas salir de todos modos?`);
-      if (!confirmed) {
-        event.preventDefault();
-        event.stopPropagation();
-      }
-    }
-
-    window.addEventListener("beforeunload", handleBeforeUnload);
-    document.addEventListener("click", handleDocumentClick, true);
-    return () => {
-      window.removeEventListener("beforeunload", handleBeforeUnload);
-      document.removeEventListener("click", handleDocumentClick, true);
-    };
-  }, [hasUploadInProgress]);
-
-  function setQueue(nextQueue: RequestDocumentUploadQueueItem[]): void {
-    uploadQueueRef.current = nextQueue;
-    setUploadQueue(nextQueue);
-  }
-
-  function updateQueueItem(itemId: string, patch: Partial<RequestDocumentUploadQueueItem>): void {
-    setQueue(uploadQueueRef.current.map((item) => item.id === itemId ? { ...item, ...patch } : item));
-  }
-
-  function clearCompletedQueueItems(itemIds: string[]): void {
-    const processedIds = new Set(itemIds);
-    setQueue(uploadQueueRef.current.filter((item) => {
-      if (!processedIds.has(item.id)) return true;
-      return item.status !== REQUEST_DOCUMENT_UPLOAD_QUEUE_STATUS.COMPLETED;
-    }));
-  }
-
   function handleQueueFileChange(fileList: FileList | null): void {
     const selectedFiles = Array.from(fileList ?? []);
     setFile(selectedFiles[0] ?? null);
     setSuccessMessage(null);
     if (selectedFiles.length === 0) return;
-    const activeCount = uploadQueueRef.current.filter((item) => item.status !== REQUEST_DOCUMENT_UPLOAD_QUEUE_STATUS.REMOVED).length;
-    const result = validateRequestDocumentBatch(selectedFiles, {
+    if (!category) {
+      setValidationError("Selecciona una categoría para adjuntar documentos.");
+      return;
+    }
+    if (requiresReceiptAllocation && !uploadAllocationId) {
+      setFile(null);
+      setValidationError("Selecciona la línea POA a la que corresponde el comprobante.");
+      return;
+    }
+    uploadQueue.enqueue(selectedFiles, {
       category,
       requiresAllocation: requiresReceiptAllocation,
       requestAllocationId: uploadAllocationId,
-      existingQueueCount: activeCount,
     });
-    setQueue([...uploadQueueRef.current, ...result.accepted, ...result.rejected]);
     setValidationError(null);
   }
 
+  function applyUploadContextChange(change: PendingUploadContextChange): void {
+    uploadQueue.reset();
+    if (change.kind === UPLOAD_CONTEXT_CHANGE_KIND.CATEGORY) {
+      const nextCategory = change.value as RequestDocumentCategory;
+      setCategory(nextCategory);
+      if (nextCategory !== REQUEST_DOCUMENT_CATEGORY.RECEIPT) setUploadAllocationId("");
+      setValidationError(validateRequestDocumentFile(file, nextCategory));
+    } else {
+      setUploadAllocationId(change.value);
+      setValidationError(null);
+    }
+    setPendingUploadContextChange(null);
+  }
+
+  function requestUploadContextChange(change: PendingUploadContextChange): void {
+    if (uploadQueue.isNavigationBlocked) {
+      setPendingUploadContextChange(change);
+      return;
+    }
+    applyUploadContextChange(change);
+  }
+
   function handleCategoryChange(value: string): void {
-    const nextCategory = value as RequestDocumentCategory;
-    setCategory(nextCategory);
-    if (nextCategory !== REQUEST_DOCUMENT_CATEGORY.RECEIPT) setUploadAllocationId("");
-    setQueue([]);
-    setValidationError(validateRequestDocumentFile(file, nextCategory));
+    requestUploadContextChange({ kind: UPLOAD_CONTEXT_CHANGE_KIND.CATEGORY, value });
   }
 
   async function uploadSelectedFile(selectedFile: File, selectedCategory: RequestDocumentCategory, action: DocumentUploadAction, scope?: UploadScopeOptions): Promise<void> {
@@ -538,8 +522,14 @@ export function RequestDocumentsCard({
       setOperationError(null);
       const uploaded = await uploadDocument(request.id, { file: selectedFile, document_category: selectedCategory, ...scope });
       effectiveDocumentsResource.upsertDocument?.(uploaded);
-      toast.success(REQUEST_DOCUMENT_UPLOAD_SUCCESS_MESSAGE);
-      setSuccessMessage(REQUEST_DOCUMENT_UPLOAD_SUCCESS_MESSAGE);
+      if (uploaded.upload_status === REQUEST_DOCUMENT_UPLOAD_STATUS.FAILED) {
+        const warning = "El documento quedó guardado localmente, pero tuvo una incidencia al enviarse a Google Drive.";
+        setOperationError(warning);
+        toast.error(warning);
+      } else {
+        toast.success(REQUEST_DOCUMENT_UPLOAD_SUCCESS_MESSAGE);
+        setSuccessMessage(REQUEST_DOCUMENT_UPLOAD_SUCCESS_MESSAGE);
+      }
       setFile(null);
       setValidationError(null);
       await Promise.all([refetch(), refetchReceipts()]);
@@ -553,7 +543,7 @@ export function RequestDocumentsCard({
     }
   }
 
-  async function handleUpload(): Promise<void> {
+  function handleUpload(): void {
     if (!category) {
       setValidationError("Selecciona una categoría para adjuntar el documento.");
       return;
@@ -569,75 +559,10 @@ export function RequestDocumentsCard({
       return;
     }
 
-    await processUploadQueue(queuedPendingItems.map((item) => item.id));
-  }
-
-  async function processUploadQueue(itemIds: string[]): Promise<void> {
-    if (isQueueRunning) return;
-    setIsQueueRunning(true);
-    setActiveUploadAction(DOCUMENT_UPLOAD_ACTION.GENERIC);
     setOperationError(null);
-    let completed = 0;
-    let failed = 0;
-
-    try {
-      for (const [index, itemId] of itemIds.entries()) {
-        const item = uploadQueueRef.current.find((candidate) => candidate.id === itemId);
-        if (!item || item.status === REQUEST_DOCUMENT_UPLOAD_QUEUE_STATUS.REMOVED) continue;
-        updateQueueItem(itemId, { status: REQUEST_DOCUMENT_UPLOAD_QUEUE_STATUS.UPLOADING, error_message: undefined });
-        try {
-          const uploaded = await uploadDocument(request.id, {
-            file: item.file,
-            document_category: item.document_category,
-            scope_type: item.scope_type,
-            request_allocation_id: item.request_allocation_id,
-          });
-          effectiveDocumentsResource.upsertDocument?.(uploaded);
-          completed += 1;
-          updateQueueItem(itemId, { status: REQUEST_DOCUMENT_UPLOAD_QUEUE_STATUS.COMPLETED, retryable: false });
-        } catch (uploadError) {
-          failed += 1;
-          const message = getApiErrorMessage(uploadError);
-          const retryable = isRetryableRequestDocumentUploadError(uploadError);
-          updateQueueItem(itemId, {
-            status: REQUEST_DOCUMENT_UPLOAD_QUEUE_STATUS.FAILED,
-            error_kind: retryable ? REQUEST_DOCUMENT_UPLOAD_QUEUE_ERROR_KIND.TRANSIENT : REQUEST_DOCUMENT_UPLOAD_QUEUE_ERROR_KIND.BACKEND,
-            error_message: message,
-            retryable,
-          });
-        }
-        if (index < itemIds.length - 1) {
-          await new Promise((resolve) => setTimeout(resolve, REQUEST_DOCUMENT_UPLOAD_QUEUE_DELAY_MS));
-        }
-      }
-      await Promise.all([refetch(), refetchReceipts({ background: true })]);
-      clearCompletedQueueItems(itemIds);
-      if (failed > 0) {
-        setOperationError(`${failed} archivo${failed === 1 ? "" : "s"} no se pudieron adjuntar. Revisa la cola y reintenta los pendientes.`);
-        toast.error("Algunos documentos no se pudieron adjuntar.");
-      } else if (completed > 0) {
-        setSuccessMessage(`${completed} documento${completed === 1 ? " adjuntado" : "s adjuntados"} correctamente.`);
-        toast.success(`${completed} documento${completed === 1 ? " adjuntado" : "s adjuntados"} correctamente.`);
-      }
-      setFile(null);
-      setValidationError(null);
-    } finally {
-      setIsQueueRunning(false);
-      setActiveUploadAction(null);
-    }
-  }
-
-  function removeQueueItem(itemId: string): void {
-    const item = uploadQueueRef.current.find((candidate) => candidate.id === itemId);
-    if (!item || item.status === REQUEST_DOCUMENT_UPLOAD_QUEUE_STATUS.UPLOADING) return;
-    updateQueueItem(itemId, { status: REQUEST_DOCUMENT_UPLOAD_QUEUE_STATUS.REMOVED });
-  }
-
-  function retryQueueItem(itemId: string): void {
-    const item = uploadQueueRef.current.find((candidate) => candidate.id === itemId);
-    if (!item || !item.retryable || isQueueRunning) return;
-    updateQueueItem(itemId, { status: REQUEST_DOCUMENT_UPLOAD_QUEUE_STATUS.PENDING, error_message: undefined });
-    void processUploadQueue([itemId]);
+    uploadQueue.start();
+    setFile(null);
+    setValidationError(null);
   }
 
   function handleChecklistAttach(nextCategory: RequestDocumentCategory, nextFile: File): void {
@@ -1123,7 +1048,7 @@ export function RequestDocumentsCard({
               {requiresReceiptAllocation && (
                 <div className="min-w-0 space-y-2">
                   <label className="text-sm font-medium" htmlFor="receipt-allocation">Línea POA</label>
-                  <Select value={uploadAllocationId} onValueChange={(value) => { setUploadAllocationId(value); setQueue([]); setValidationError(null); }}>
+                  <Select value={uploadAllocationId} onValueChange={(value) => requestUploadContextChange({ kind: UPLOAD_CONTEXT_CHANGE_KIND.ALLOCATION, value })}>
                     <SelectTrigger id="receipt-allocation" className="max-w-full" disabled={uploadActionsDisabled}><SelectValue placeholder="Selecciona línea POA" /></SelectTrigger>
                     <SelectContent className="max-w-[min(92vw,28rem)]">
                       {allocationGroups.map((allocation, index) => allocation.id ? (
@@ -1138,7 +1063,7 @@ export function RequestDocumentsCard({
               )}
               <Button type="button" className="md:self-end" onClick={() => void handleUpload()} disabled={uploadButtonDisabled}>
                 <Upload className="size-4" />
-                {isQueueRunning ? "Adjuntando..." : "Adjuntar"}
+                {uploadQueue.isRunning ? "Adjuntando..." : "Adjuntar"}
               </Button>
             </div>
             ) : (
@@ -1152,45 +1077,39 @@ export function RequestDocumentsCard({
                 </p>
               </div>
             )}
-            {queuedActiveItems.length > 0 && (
+            {!hideUploadQueueMonitor && uploadQueue.items.length > 0 && (
               <div className="mt-3 space-y-3 rounded-md border p-3">
                 <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
                   <p className="text-sm font-medium">Cola de carga</p>
                   <p className="text-xs text-muted-foreground">
-                    {queuedCompletedCount} completado{queuedCompletedCount === 1 ? "" : "s"} · {queuedFailedCount} con incidencia · {queuedPendingItems.length} pendiente{queuedPendingItems.length === 1 ? "" : "s"}
+                    {uploadQueue.summary.saved} guardado{uploadQueue.summary.saved === 1 ? "" : "s"} · {uploadQueue.summary.errors + uploadQueue.summary.persistentWarnings} con incidencia · {uploadQueue.summary.queued} en cola
                   </p>
                 </div>
-                {queuedPendingItems.length > 0 && !isQueueRunning ? <p className="text-xs text-muted-foreground">Los archivos pendientes todavía no se envían. Presiona Adjuntar para iniciar la carga o Retirar para quitarlos de esta cola.</p> : null}
+                {uploadQueue.state.omittedCount > 0 ? (
+                  <p className="text-sm text-destructive">
+                    {uploadQueue.state.omittedCount} archivo{uploadQueue.state.omittedCount === 1 ? " fue omitido" : "s fueron omitidos"}. Solo se conservan 20 archivos por tanda.
+                  </p>
+                ) : null}
+                {queuedPendingItems.length > 0 && !uploadQueue.isRunning ? <p className="text-xs text-muted-foreground">Los archivos en cola todavía no se envían. Presiona Adjuntar para iniciar la carga o Retirar para quitarlos.</p> : null}
                 {hasUploadInProgress && (
                   <Alert className="border-amber-500/50 bg-amber-50 text-amber-950 dark:bg-amber-950/20 dark:text-amber-100">
                     <Info className="h-4 w-4" />
                     <AlertDescription className="text-amber-950 dark:text-amber-100">
-                      Estamos adjuntando documentos. No actualices ni cambies de página hasta que finalice; si sales, la carga en curso puede cancelarse.
+                      Estamos adjuntando documentos. Si sales, el archivo activo puede terminar en el servidor aunque esta ventana deje de mostrarlo.
                     </AlertDescription>
                   </Alert>
                 )}
-                <div className="space-y-2">
-                  {queuedActiveItems.map((item) => (
-                    <div key={item.id} className="flex flex-col gap-2 rounded-md bg-muted p-3 sm:flex-row sm:items-center sm:justify-between">
-                      <div className="min-w-0 space-y-1">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <p className="truncate text-sm font-medium">{item.file.name}</p>
-                          <Badge variant={getQueueStatusVariant(item)}>{getQueueStatusLabel(item)}</Badge>
-                        </div>
-                        <p className="text-xs text-muted-foreground">{formatRequestDocumentSize(item.file.size)} · {getRequestDocumentCategoryLabel(item.document_category)}</p>
-                        <p className={item.status === REQUEST_DOCUMENT_UPLOAD_QUEUE_STATUS.FAILED ? "text-xs text-destructive" : "text-xs text-muted-foreground"}>{getQueueStatusDescription(item)}</p>
-                      </div>
-                      <div className="flex shrink-0 gap-2">
-                        {item.status === REQUEST_DOCUMENT_UPLOAD_QUEUE_STATUS.FAILED && item.retryable && (
-                          <Button type="button" variant="outline" size="sm" disabled={isQueueRunning} onClick={() => retryQueueItem(item.id)}>Reintentar</Button>
-                        )}
-                        {(item.status === REQUEST_DOCUMENT_UPLOAD_QUEUE_STATUS.PENDING || item.status === REQUEST_DOCUMENT_UPLOAD_QUEUE_STATUS.FAILED) && (
-                          <Button type="button" variant="outline" size="sm" onClick={() => removeQueueItem(item.id)}>Retirar</Button>
-                        )}
-                      </div>
-                    </div>
+                <ul className="space-y-2">
+                  {uploadQueue.items.map((item) => (
+                    <SettlementUploadFileRow
+                      key={item.id}
+                      item={item}
+                      disabled={uploadQueue.isRunning}
+                      onRetry={uploadQueue.retry}
+                      onRemove={uploadQueue.remove}
+                    />
                   ))}
-                </div>
+                </ul>
               </div>
             )}
             {validationError && <p className="mt-2 text-sm text-destructive">{validationError}</p>}
@@ -1202,9 +1121,9 @@ export function RequestDocumentsCard({
           </p>
         ))}
 
-        {successMessage && (
+        {(successMessage || queueSuccessMessage) && (
           <Alert>
-            <AlertDescription>{successMessage}</AlertDescription>
+            <AlertDescription>{successMessage ?? queueSuccessMessage}</AlertDescription>
           </Alert>
         )}
 
@@ -1242,6 +1161,20 @@ export function RequestDocumentsCard({
             {renderDocumentRows(requestLevelGeneralDocuments)}
           </section>
         )}
+        <Dialog open={Boolean(pendingUploadContextChange)} onOpenChange={(open) => !open && setPendingUploadContextChange(null)}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>¿Cambiar la selección de carga?</DialogTitle>
+              <DialogDescription>
+                Cambiar la categoría o línea POA retirará los archivos en cola y las incidencias locales de esta tanda. No cancela un archivo que el servidor ya haya empezado a procesar.
+              </DialogDescription>
+            </DialogHeader>
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={() => setPendingUploadContextChange(null)}>Conservar cola</Button>
+              <Button type="button" variant="destructive" onClick={() => pendingUploadContextChange && applyUploadContextChange(pendingUploadContextChange)}>Cambiar y retirar cola</Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
         <Dialog open={Boolean(receiptToReview)} onOpenChange={(open) => !open && closeReceiptReview()}>
           <DialogContent>
             <DialogHeader>

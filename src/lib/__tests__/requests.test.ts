@@ -39,6 +39,7 @@ import {
   getRequestDocumentPermissionMessage,
   getRequestDocumentStorageProviderLabel,
   getRequestDocumentUploadStatusLabel,
+  isRetryableRequestDocumentUploadError,
   getRequestPayableAmount,
   getRequestEditStep,
   getRequestEditStepperItems,
@@ -551,6 +552,31 @@ describe("requests helpers", () => {
     expect(getRequestDocumentAccept(REQUEST_DOCUMENT_CATEGORY.PXQ)).not.toContain("application/pdf");
     expect(getRequestDocumentAccept(REQUEST_DOCUMENT_CATEGORY.SETTLEMENT_REPORT)).toContain(".xlsx");
     expect(getRequestDocumentAccept(REQUEST_DOCUMENT_CATEGORY.RETURN_PROOF)).toContain("application/pdf");
+  });
+
+  it("usa la clasificación retryable explícita del backend para fallos de Drive", () => {
+    const permanentDriveFailure = new ApiRequestError(400, {
+      statusCode: 400,
+      code: "DRIVE_STORAGE_FAILED",
+      message: "No se pudo guardar el documento",
+      error: "Bad Request",
+      timestamp: "2026-07-31T10:00:00.000Z",
+      path: "/requests/request-1/documents",
+      retryable: false,
+    });
+    const transientDriveFailure = new ApiRequestError(503, {
+      statusCode: 503,
+      code: "DRIVE_STORAGE_FAILED",
+      message: "No se pudo guardar el documento",
+      error: "Service Unavailable",
+      timestamp: "2026-07-31T10:00:00.000Z",
+      path: "/requests/request-1/documents",
+      retryable: true,
+      retry_after_ms: 1_500,
+    });
+
+    expect(isRetryableRequestDocumentUploadError(permanentDriveFailure)).toBe(false);
+    expect(isRetryableRequestDocumentUploadError(transientDriveFailure)).toBe(true);
   });
 
   it("deriva resultado REXAN y valida constancia solo para devolución", () => {

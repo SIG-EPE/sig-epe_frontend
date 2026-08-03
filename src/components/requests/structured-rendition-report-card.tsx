@@ -16,6 +16,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { useRequestDocuments, useRequestReceiptReviews, useRequestRenditionReport, useRequestRenditionReportActions, useUploadRequestDocument } from "@/hooks/use-requests";
 import { formatRequestCurrency, formatRequestDate, getApiErrorMessage, getPlanningLineDisplay, getRequestDocumentDisplayName } from "@/lib/requests";
 import { cn } from "@/lib/utils";
+import { SettlementBudgetClassification } from "./settlement-preparation/settlement-budget-classification";
 import {
   REQUEST_CURRENCY,
   REQUEST_DOCUMENT_CATEGORY,
@@ -43,6 +44,7 @@ interface StructuredRenditionReportCardProps {
   guidanceAllocations?: RequestAllocation[];
   refreshSignal?: number;
   readOnly?: boolean;
+  hideBudgetClassification?: boolean;
   reportResource?: ReturnType<typeof useRequestRenditionReport>;
   documentsResource?: ReturnType<typeof useRequestDocuments>;
   receiptsResource?: ReturnType<typeof useRequestReceiptReviews>;
@@ -447,37 +449,6 @@ function getLineReturnMeaningMessage(expectedReturn: number, excessAmount: numbe
   return null;
 }
 
-function cleanText(value?: string | null): string | null {
-  const trimmed = value?.trim();
-  return trimmed && trimmed.length > 0 ? trimmed : null;
-}
-
-function joinMetadataParts(parts: Array<string | null | undefined>, separator = " / "): string | null {
-  const visibleParts = parts.map(cleanText).filter((part): part is string => Boolean(part));
-  return visibleParts.length > 0 ? visibleParts.join(separator) : null;
-}
-
-function formatBudgetMonth(month?: number | null): string | null {
-  if (!month || month < 1 || month > 12) return null;
-  return new Intl.DateTimeFormat("es-PE", { month: "long" }).format(new Date(2026, month - 1, 1));
-}
-
-function getCoverageClassificationItems(coverage: RequestRenditionReport["allocation_coverage"][number]): Array<{ label: string; value: string }> {
-  const lineLabel = joinMetadataParts([coverage.line_code, coverage.line_name ?? coverage.resource_description], " · ");
-  const periodLabel = joinMetadataParts([formatBudgetMonth(coverage.budget_month), coverage.fiscal_year ? String(coverage.fiscal_year) : null]);
-  const items = [
-    { label: "Clasificación / categoría", value: joinMetadataParts([coverage.classification_label, coverage.budget_category_label]) },
-    { label: "Área / unidad", value: joinMetadataParts([coverage.area_label, coverage.org_unit_label]) },
-    { label: "Centro de costos", value: cleanText(coverage.cost_center_label) },
-    { label: "Línea / recurso", value: lineLabel },
-    { label: "Programa / acción", value: joinMetadataParts([coverage.program_label, coverage.operative_action_label]) },
-    { label: "Importancia / frecuencia", value: joinMetadataParts([coverage.importance_label, coverage.frequency_label]) },
-    { label: "Periodo", value: periodLabel },
-  ];
-
-  return items.filter((item): item is { label: string; value: string } => Boolean(item.value));
-}
-
 function hasLineBalanceAmount(coverage: RequestRenditionReport["allocation_coverage"][number]): boolean {
   return Number(coverage.expected_return_amount ?? 0) > 0
     || Number(coverage.returned_amount ?? 0) > 0
@@ -521,7 +492,7 @@ function isActiveReturnProofDocument(document: RequestDocument): boolean {
     && document.upload_status !== REQUEST_DOCUMENT_UPLOAD_STATUS.FAILED;
 }
 
-export function StructuredRenditionReportCard({ request, guidanceAllocations = [], refreshSignal = 0, readOnly = false, reportResource, documentsResource, receiptsResource, onChanged, onReadinessChange, onLockChange }: StructuredRenditionReportCardProps) {
+export function StructuredRenditionReportCard({ request, guidanceAllocations = [], refreshSignal = 0, readOnly = false, hideBudgetClassification = false, reportResource, documentsResource, receiptsResource, onChanged, onReadinessChange, onLockChange }: StructuredRenditionReportCardProps) {
   const internalReportState = useRequestRenditionReport(request.id);
   const internalDocumentsState = useRequestDocuments(request.id);
   const internalReceiptState = useRequestReceiptReviews(request.id);
@@ -1190,7 +1161,7 @@ export function StructuredRenditionReportCard({ request, guidanceAllocations = [
   }
 
   return (
-    <Card data-testid="structured-rendition-report-card">
+    <Card id="structured-rendition-report-card" data-testid="structured-rendition-report-card" tabIndex={-1}>
       <CardHeader>
         <CardTitle>Informe de rendición</CardTitle>
         <CardDescription>Revisa comprobantes, completa filas y genera el informe final desde la información validada.</CardDescription>
@@ -1381,33 +1352,8 @@ export function StructuredRenditionReportCard({ request, guidanceAllocations = [
           </section>
         ) : null}
 
-        {report?.allocation_coverage.some((coverage) => getCoverageClassificationItems(coverage).length > 0) ? (
-          <section className="space-y-3 rounded-md border p-4">
-            <div>
-              <h3 className="text-sm font-semibold">Clasificación presupuestal</h3>
-              <p className="text-xs text-muted-foreground">Datos que se incluirán en el informe generado, sin mostrar identificadores internos.</p>
-            </div>
-            <div className="grid gap-3 md:grid-cols-2">
-              {report.allocation_coverage.map((coverage, index) => {
-                const metadataItems = getCoverageClassificationItems(coverage);
-                if (metadataItems.length === 0) return null;
-                const allocationLabel = allocationLabelsById.get(coverage.request_allocation_id) ?? coverage.request_allocation_label ?? `Línea POA ${index + 1}`;
-                return (
-                  <div key={coverage.request_allocation_id} className="rounded-md border bg-muted/30 p-3 text-sm">
-                    <p className="font-medium">{allocationLabel}</p>
-                    <dl className="mt-3 grid gap-2">
-                      {metadataItems.map((item) => (
-                        <div key={item.label} className="grid gap-1 sm:grid-cols-[9rem_minmax(0,1fr)]">
-                          <dt className="text-xs text-muted-foreground">{item.label}</dt>
-                          <dd className="font-medium">{item.value}</dd>
-                        </div>
-                      ))}
-                    </dl>
-                  </div>
-                );
-              })}
-            </div>
-          </section>
+        {!hideBudgetClassification ? (
+          <SettlementBudgetClassification report={report} allocationLabels={Object.fromEntries(allocationLabelsById)} />
         ) : null}
 
         <section ref={blockerSummaryRef} tabIndex={-1} className="space-y-3 rounded-md border p-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2" data-testid="rendition-readiness-checklist">

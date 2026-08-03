@@ -390,6 +390,28 @@ describe("RequestDocumentsCard", () => {
     expect(await screen.findByText("1 documento adjuntado correctamente.")).toBeInTheDocument();
   });
 
+  it("no anuncia éxito pleno cuando el backend responde upload_status FAILED", async () => {
+    vi.mocked(api.get).mockResolvedValue([]);
+    vi.mocked(api.postForm).mockResolvedValue(makeDocument({
+      id: "doc-local",
+      original_filename: "local.pdf",
+      storage_provider: "LOCAL",
+      upload_status: "FAILED",
+    }));
+
+    const user = userEvent.setup();
+    render(<RequestDocumentsCard request={makeRequest({ request_type: REQUEST_TYPE.SUPPLIER_PAYMENT })} />);
+
+    fireEvent.change(screen.getByLabelText(/archivo/i), {
+      target: { files: [new File(["contenido"], "local.pdf", { type: "application/pdf" })] },
+    });
+    await user.click(screen.getByRole("button", { name: /^adjuntar$/i }));
+
+    expect(await screen.findByText(/quedó guardado localmente.*incidencia.*Google Drive/i)).toBeInTheDocument();
+    expect(screen.getByText("Guardado")).toBeInTheDocument();
+    expect(screen.queryByText("1 documento adjuntado correctamente.")).not.toBeInTheDocument();
+  });
+
   it("deja listo el cargador para otra tanda después de adjuntar un bloque completo", async () => {
     vi.mocked(api.get).mockResolvedValue([]);
     vi.mocked(api.postForm)
@@ -408,7 +430,7 @@ describe("RequestDocumentsCard", () => {
     await user.click(screen.getByRole("button", { name: /^adjuntar$/i }));
 
     expect(await screen.findByText("2 documentos adjuntados correctamente.")).toBeInTheDocument();
-    expect(screen.queryByText("Cola de carga")).not.toBeInTheDocument();
+    expect(screen.getByText("Cola de carga")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /^adjuntar$/i })).toBeDisabled();
 
     const nextFile = new File(["contenido-3"], "siguiente.pdf", { type: "application/pdf" });
@@ -433,12 +455,37 @@ describe("RequestDocumentsCard", () => {
     const file = new File(["contenido"], "one.png", { type: "image/png" });
     fireEvent.change(screen.getByLabelText(/archivo/i), { target: { files: [file] } });
 
-    expect(await screen.findByText("Pendiente de adjuntar")).toBeInTheDocument();
+    expect(await screen.findByText("En cola")).toBeInTheDocument();
     expect(screen.getAllByText(/Presiona Adjuntar para iniciar la carga/i).length).toBeGreaterThan(0);
     await user.click(screen.getByRole("button", { name: /retirar/i }));
 
-    expect(screen.queryByText("Pendiente de adjuntar")).not.toBeInTheDocument();
+    expect(screen.queryByText("En cola")).not.toBeInTheDocument();
     expect(api.postForm).not.toHaveBeenCalled();
+  });
+
+  it("confirma antes de descartar la cola local al cambiar categoría", async () => {
+    vi.mocked(api.get).mockResolvedValue([]);
+    const user = userEvent.setup();
+    render(<RequestDocumentsCard request={makeRequest({ request_type: REQUEST_TYPE.SUPPLIER_PAYMENT })} />);
+
+    fireEvent.change(screen.getByLabelText(/archivo/i), {
+      target: { files: [new File(["contenido"], "pendiente.pdf", { type: "application/pdf" })] },
+    });
+    expect(await screen.findByText("pendiente.pdf")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("combobox", { name: /categoría/i }));
+    await user.click(await screen.findByRole("option", { name: "Contrato" }));
+
+    expect(screen.getByRole("dialog", { name: "¿Cambiar la selección de carga?" })).toBeInTheDocument();
+    expect(screen.getByText("pendiente.pdf")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Conservar cola" }));
+    expect(screen.queryByRole("dialog", { name: "¿Cambiar la selección de carga?" })).not.toBeInTheDocument();
+    expect(screen.getByText("pendiente.pdf")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("combobox", { name: /categoría/i }));
+    await user.click(await screen.findByRole("option", { name: "Contrato" }));
+    await user.click(screen.getByRole("button", { name: "Cambiar y retirar cola" }));
+    expect(screen.queryByText("pendiente.pdf")).not.toBeInTheDocument();
   });
 
   it("advierte al refrescar o cerrar la página mientras una carga está en curso", async () => {
@@ -453,8 +500,8 @@ describe("RequestDocumentsCard", () => {
     fireEvent.change(screen.getByLabelText(/archivo/i), { target: { files: [file] } });
     await user.click(screen.getByRole("button", { name: /^adjuntar$/i }));
 
-    expect(await screen.findByText("Subiendo y procesando")).toBeInTheDocument();
-    expect(screen.getByText(/No actualices ni cambies de página/i)).toBeInTheDocument();
+    expect(await screen.findByText("Subiendo")).toBeInTheDocument();
+    expect(screen.getByText(/puede terminar en el servidor/i)).toBeInTheDocument();
 
     const event = new Event("beforeunload", { cancelable: true });
     window.dispatchEvent(event);
@@ -462,7 +509,7 @@ describe("RequestDocumentsCard", () => {
 
     uploadDeferred.resolve(makeDocument({ id: "doc-2", original_filename: "nuevo.pdf" }));
     expect(await screen.findByText("1 documento adjuntado correctamente.")).toBeInTheDocument();
-    expect(screen.queryByText("Cola de carga")).not.toBeInTheDocument();
+    expect(screen.getByText("Cola de carga")).toBeInTheDocument();
   });
 
   it("sube el PxQ de una línea POA con alcance de asignación", async () => {
@@ -812,7 +859,7 @@ describe("RequestDocumentsCard", () => {
     expect(screen.getByRole("button", { name: /^adjuntar$/i })).toBeInTheDocument();
   });
 
-  it("crea una cola de hasta 20 archivos y rechaza excedentes por archivo", async () => {
+  it("crea una cola de hasta 20 archivos y descarta excedentes sin retener su File", async () => {
     vi.mocked(api.get).mockResolvedValue([]);
 
     render(<RequestDocumentsCard request={makeRequest({ request_type: REQUEST_TYPE.SUPPLIER_PAYMENT })} />);
@@ -821,10 +868,10 @@ describe("RequestDocumentsCard", () => {
     fireEvent.change(screen.getByLabelText(/archivo/i), { target: { files } });
 
     expect(await screen.findByText("Cola de carga")).toBeInTheDocument();
-    expect(screen.getByText(/0 completados · 1 con incidencia · 20 pendientes/i)).toBeInTheDocument();
+    expect(screen.getByText(/0 guardados · 0 con incidencia · 20 en cola/i)).toBeInTheDocument();
     expect(screen.getByText("archivo-1.pdf")).toBeInTheDocument();
-    expect(screen.getByText("archivo-21.pdf")).toBeInTheDocument();
-    expect(screen.getByText("Solo puedes cargar hasta 20 archivos por tanda.")).toBeInTheDocument();
+    expect(screen.queryByText("archivo-21.pdf")).not.toBeInTheDocument();
+    expect(screen.getByText("1 archivo fue omitido. Solo se conservan 20 archivos por tanda.")).toBeInTheDocument();
     expect(api.postForm).not.toHaveBeenCalled();
   });
 
@@ -876,7 +923,7 @@ describe("RequestDocumentsCard", () => {
     await user.click(screen.getByRole("button", { name: /^adjuntar$/i }));
 
     expect(await screen.findByText("No pudimos adjuntar este archivo")).toBeInTheDocument();
-    expect(screen.queryByText("correcto.pdf")).not.toBeInTheDocument();
+    expect(screen.getByText("correcto.pdf")).toBeInTheDocument();
     expect(screen.getByText("fallido.pdf")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /^adjuntar$/i })).toBeDisabled();
 
@@ -884,6 +931,7 @@ describe("RequestDocumentsCard", () => {
     fireEvent.change(screen.getByLabelText(/archivo/i), { target: { files: [nextFile] } });
 
     expect(await screen.findByText("nuevo.pdf")).toBeInTheDocument();
+    expect(screen.queryByText("correcto.pdf")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: /^adjuntar$/i })).toBeEnabled();
     await user.click(screen.getByRole("button", { name: /^adjuntar$/i }));
 

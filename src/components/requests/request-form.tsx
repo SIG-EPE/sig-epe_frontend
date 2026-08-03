@@ -10,12 +10,19 @@ import { z } from "zod";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
-import { useBudgetPreview, useCreateRequest, useHydrateRequestPlanningLines, useRequestDocuments, useRequestReceiptReviews, useSubmitRequest, useUpdateRequest } from "@/hooks/use-requests";
+import { useRequestDocumentUploadQueue } from "@/hooks/use-request-document-upload-queue";
+import { useUploadNavigationGuard } from "@/hooks/use-upload-navigation-guard";
+import { useBudgetPreview, useCreateRequest, useHydrateRequestPlanningLines, useRequestDocuments, useRequestReceiptReviews, useRequestRenditionReport, useSubmitRequest, useUpdateRequest } from "@/hooks/use-requests";
 import { getBusinessDateString } from "@/lib/business-timezone";
 import { ROUTES } from "@/lib/constants";
+import {
+  SETTLEMENT_PREPARATION_EXPERIENCE,
+  getSettlementPreparationExperience,
+} from "@/lib/feature-flags";
 import {
   REQUEST_EDIT_STEP,
   getApiErrorMessage,
@@ -44,6 +51,11 @@ import {
   type RequestEditStep,
   type RequestSubmitValidationIssue,
 } from "@/lib/requests";
+import {
+  SETTLEMENT_PREPARATION_STEP,
+  buildSettlementPreparationVm,
+  type SettlementPreparationStep,
+} from "@/lib/settlement-preparation-vm";
 import { useAuthStore } from "@/stores/auth-store";
 import {
   ACCOUNT_TYPE,
@@ -69,10 +81,25 @@ import { PlanningLineSelector } from "./planning-line-selector";
 import { RequestTypeSelector } from "./request-type-selector";
 import { RequestDocumentsCard } from "./request-documents-card";
 import { SettlementContextCard } from "./settlement-context-card";
+import { SettlementPreparationFlow } from "./settlement-preparation/settlement-preparation-flow";
+import { hasBudgetClassification, SettlementBudgetClassification } from "./settlement-preparation/settlement-budget-classification";
+import { SettlementUploadProgressPanel } from "./settlement-preparation/settlement-upload-progress-panel";
 import { StructuredRenditionReportCard } from "./structured-rendition-report-card";
 import { SupplierFields } from "./supplier-fields";
 
 const STRUCTURED_REPORT_PENDING_MESSAGE = "Informe pendiente de generación: genera el Excel validado antes de enviar a revisión.";
+
+function toSettlementPreparationStep(step: RequestEditStep): SettlementPreparationStep {
+  if (step === REQUEST_EDIT_STEP.DOCUMENTS) return SETTLEMENT_PREPARATION_STEP.REGISTER_RECEIPTS;
+  if (step === REQUEST_EDIT_STEP.REVIEW) return SETTLEMENT_PREPARATION_STEP.GENERATE_AND_SUBMIT;
+  return SETTLEMENT_PREPARATION_STEP.REVIEW_ADVANCE;
+}
+
+function toRequestEditStep(step: SettlementPreparationStep): RequestEditStep {
+  if (step === SETTLEMENT_PREPARATION_STEP.REGISTER_RECEIPTS) return REQUEST_EDIT_STEP.DOCUMENTS;
+  if (step === SETTLEMENT_PREPARATION_STEP.GENERATE_AND_SUBMIT) return REQUEST_EDIT_STEP.REVIEW;
+  return REQUEST_EDIT_STEP.DATA;
+}
 
 export const requestFormSchema = z.object({
   request_type: z.enum([
@@ -522,6 +549,20 @@ export function RequestForm({
   const { submitRequest, isLoading: submitting } = useSubmitRequest();
   const reviewDocuments = useRequestDocuments(draftId ?? undefined);
   const reviewReceipts = useRequestReceiptReviews(draftId ?? undefined);
+  const renditionReport = useRequestRenditionReport(draftId ?? undefined, isAdvanceSettlement && mode === "edit");
+  const documentUploadQueue = useRequestDocumentUploadQueue({
+    requestId: draftId ?? undefined,
+    documents: reviewDocuments.documents,
+    receipts: reviewReceipts.receipts,
+    upsertDocument: reviewDocuments.upsertDocument,
+    refreshDocuments: () => reviewDocuments.refetch({ background: true }),
+    refreshReceipts: () => reviewReceipts.refetch({ background: true }),
+  });
+  const uploadNavigationGuard = useUploadNavigationGuard({
+    active: documentUploadQueue.isNavigationBlocked,
+    managed: true,
+    message: "Hay archivos pendientes o en curso. Si sales, el archivo activo puede terminar en el servidor aunque esta ventana deje de mostrarlo. Al volver actualizaremos la lista.",
+  });
 
   const isSaving = creating || updating || pendingAction === "save" || pendingAction === "submit";
   const isSubmitting = submitting || pendingAction === "submit";
@@ -551,6 +592,30 @@ export function RequestForm({
   const settlementGuidanceAllocations = isAdvanceSettlement && (currentRequest?.allocations?.length ?? 0) === 0
     ? settlementContext?.original_advance.allocations ?? []
     : [];
+  const settlementPreparationExperience = getSettlementPreparationExperience({
+    mode,
+    requestType: effectiveRequestType,
+    status: currentRequest?.status ?? initialRequest?.status ?? null,
+  });
+  const settlementPreparationVm = currentRequest && isAdvanceSettlement
+    ? buildSettlementPreparationVm({
+        request: currentRequest,
+        activeStep: toSettlementPreparationStep(activeStep),
+        documents: reviewDocuments.documents,
+        receipts: reviewReceipts.receipts,
+        report: renditionReport.report,
+        resourcesReady: !reviewDocuments.isLoading
+          && !reviewReceipts.isLoading
+          && !renditionReport.isLoading
+          && !reviewDocuments.error
+          && !reviewReceipts.error
+          && !renditionReport.error,
+        requestDataComplete: hasCompleteRequestData,
+        documentChecklistComplete: checklist.isComplete,
+        extrasHasBlocker: Boolean(renditionReport.error),
+        guidanceAllocations: settlementGuidanceAllocations,
+      })
+    : null;
 
   useEffect(() => {
     if (!initialRequest) return;
@@ -627,10 +692,38 @@ export function RequestForm({
     setSubmitErrors((messages) => messages.filter((message) => !isBeneficiaryDocumentSubmitMessage(message)));
   }
 
-  function navigateToStep(step: RequestEditStep, requestId = draftId): void {
+  function navigateToStep(step: RequestEditStep, requestId = draftId, targetId?: string): void {
     if (!requestId) return;
     setIsNavigatingStep(true);
-    router.push(`${ROUTES.REQUESTS}/${requestId}/edit?step=${step}` as Parameters<typeof router.push>[0]);
+    const hash = targetId ? `#${targetId}` : "";
+    router.push(`${ROUTES.REQUESTS}/${requestId}/edit?step=${step}${hash}` as Parameters<typeof router.push>[0]);
+  }
+
+  function navigateAway(href: Parameters<typeof router.push>[0]): void {
+    uploadNavigationGuard.requestNavigation(() => router.push(href));
+  }
+
+  function handleSettlementPendingNavigation(item: NonNullable<typeof settlementPreparationVm>["pendingItems"][number]): void {
+    const targetStep = toRequestEditStep(item.targetStep);
+    const lineTask = item.allocationId
+      ? settlementPreparationVm?.lineTasks.find((task) => task.id === item.allocationId)
+      : null;
+    const targetId = lineTask?.state === "needs-confirmation" || lineTask?.state === "needs-report-row"
+      ? "structured-rendition-report-card"
+      : item.allocationId
+        ? `settlement-task-${item.allocationId}`
+        : targetStep === REQUEST_EDIT_STEP.DATA
+          ? "request-form"
+          : "documents";
+
+    if (targetStep !== activeStep) {
+      navigateToStep(targetStep, draftId, targetId);
+      return;
+    }
+
+    const target = document.getElementById(targetId);
+    target?.scrollIntoView?.({ behavior: "smooth", block: "center" });
+    target?.focus({ preventScroll: true });
   }
 
   function focusStructuredReportActions(): void {
@@ -662,7 +755,9 @@ export function RequestForm({
         return false;
       }
 
-      if (isAdvanceSettlement && !structuredReportReady) {
+      if (isAdvanceSettlement
+        && !structuredReportReady
+        && settlementPreparationExperience !== SETTLEMENT_PREPARATION_EXPERIENCE.V2_FOUNDATION) {
         setDocumentStepErrors(structuredReportMessages.length > 0 ? structuredReportMessages : [STRUCTURED_REPORT_PENDING_MESSAGE]);
         toast.error(structuredReportMessages[0] ?? STRUCTURED_REPORT_PENDING_MESSAGE);
         navigateToStep(REQUEST_EDIT_STEP.DOCUMENTS);
@@ -702,7 +797,9 @@ export function RequestForm({
       return;
     }
 
-    if (isAdvanceSettlement && !structuredReportReady) {
+    if (isAdvanceSettlement
+      && !structuredReportReady
+      && settlementPreparationExperience !== SETTLEMENT_PREPARATION_EXPERIENCE.V2_FOUNDATION) {
       setDocumentStepErrors(structuredReportMessages.length > 0 ? structuredReportMessages : [STRUCTURED_REPORT_PENDING_MESSAGE]);
       toast.error(structuredReportMessages[0] ?? STRUCTURED_REPORT_PENDING_MESSAGE);
       focusStructuredReportActions();
@@ -781,6 +878,10 @@ export function RequestForm({
 
   async function handleSubmitDraft(values: RequestFormValues): Promise<void> {
     if (isBusy) return;
+    if (documentUploadQueue.isNavigationBlocked) {
+      toast.error("Finaliza, pausa o retira los archivos pendientes antes de enviar la rendición.");
+      return;
+    }
     const requestTypeForBlocking = effectiveRequestType;
     setPendingAction("submit");
     setSubmitErrors([]);
@@ -1053,7 +1154,7 @@ export function RequestForm({
           </Card>
 
           <div className="flex flex-col-reverse gap-3 border-t pt-4 sm:flex-row sm:justify-end">
-            <Button type="button" variant="outline" onClick={() => router.push(ROUTES.REQUESTS)} disabled={isBusy}>Cancelar</Button>
+            <Button type="button" variant="outline" onClick={() => navigateAway(ROUTES.REQUESTS)} disabled={isBusy}>Cancelar</Button>
             <Button type="button" onClick={form.handleSubmit(handleSaveDraft)} disabled={isBusy} data-testid="request-save-draft-button">
               {isSaving ? "Validando..." : "Continuar a documentos"}
             </Button>
@@ -1124,7 +1225,7 @@ export function RequestForm({
         </Card>
 
         <div className="flex flex-col-reverse gap-3 border-t pt-4 sm:flex-row sm:justify-end">
-          <Button type="button" variant="outline" onClick={() => router.push(ROUTES.REQUESTS)} disabled={isBusy}>Cancelar</Button>
+          <Button type="button" variant="outline" onClick={() => navigateAway(ROUTES.REQUESTS)} disabled={isBusy}>Cancelar</Button>
           <Button type="button" onClick={form.handleSubmit(handleSaveDraft)} disabled={isBusy} data-testid="request-save-draft-button">
             {isSaving ? "Guardando..." : mode === "edit" ? "Guardar cambios y continuar" : "Guardar borrador y continuar"}
           </Button>
@@ -1133,12 +1234,36 @@ export function RequestForm({
     );
   }
 
-  function renderDocumentsStep(): ReactNode {
+  function renderStructuredReport(): ReactNode {
+    if (!currentRequest || currentRequest.request_type !== REQUEST_TYPE.ADVANCE_SETTLEMENT) return null;
+
+    return (
+      <StructuredRenditionReportCard
+        request={currentRequest}
+        guidanceAllocations={settlementGuidanceAllocations}
+        hideBudgetClassification={settlementPreparationExperience === SETTLEMENT_PREPARATION_EXPERIENCE.V2_FOUNDATION}
+        refreshSignal={structuredReportRefreshSignal}
+        reportResource={renditionReport}
+        documentsResource={reviewDocuments}
+        receiptsResource={reviewReceipts}
+        onChanged={async () => {
+          await reviewDocuments.refetch({ background: true });
+        }}
+        onReadinessChange={(ready, messages) => {
+          setStructuredReportReady(ready);
+          setStructuredReportMessages(messages);
+        }}
+        onLockChange={setStructuredReportLocked}
+      />
+    );
+  }
+
+  function renderDocumentsStep(includeSettlementContext = true, includeStructuredReport = true): ReactNode {
     if (!currentRequest) return null;
 
     return (
       <>
-        {renderSettlementContextState()}
+        {includeSettlementContext && renderSettlementContextState()}
         <RequestDocumentsCard
           request={currentRequest}
           guidanceAllocations={settlementGuidanceAllocations}
@@ -1149,24 +1274,10 @@ export function RequestForm({
           documentsResource={reviewDocuments}
           receiptsResource={reviewReceipts}
           onDocumentsChanged={refreshDocumentsAndStructuredReport}
+          uploadQueue={documentUploadQueue}
+          hideUploadQueueMonitor={settlementPreparationExperience === SETTLEMENT_PREPARATION_EXPERIENCE.V2_FOUNDATION}
         />
-        {currentRequest.request_type === REQUEST_TYPE.ADVANCE_SETTLEMENT && (
-          <StructuredRenditionReportCard
-            request={currentRequest}
-            guidanceAllocations={settlementGuidanceAllocations}
-            refreshSignal={structuredReportRefreshSignal}
-            documentsResource={reviewDocuments}
-            receiptsResource={reviewReceipts}
-            onChanged={async () => {
-              await reviewDocuments.refetch({ background: true });
-            }}
-            onReadinessChange={(ready, messages) => {
-              setStructuredReportReady(ready);
-              setStructuredReportMessages(messages);
-            }}
-            onLockChange={setStructuredReportLocked}
-          />
-        )}
+        {includeStructuredReport && renderStructuredReport()}
         {documentStepErrors.length > 0 && (
           <Alert variant="destructive">
             <AlertDescription>
@@ -1326,7 +1437,7 @@ export function RequestForm({
     return mode === "edit" ? "Enviar actualización" : "Enviar solicitud";
   }
 
-  function renderReviewStep(): ReactNode {
+  function renderReviewStep(includePreparationResources = true, includeSettlementContext = true): ReactNode {
     if (!currentRequest) return null;
 
     return (
@@ -1353,39 +1464,46 @@ export function RequestForm({
             </AlertDescription>
           </Alert>
         )}
-        {renderSettlementContextState()}
+        {includeSettlementContext && renderSettlementContextState()}
         {renderReviewSummary()}
-        <RequestDocumentsCard
-          request={currentRequest}
-          guidanceAllocations={settlementGuidanceAllocations}
-          backendMissingMessages={submitErrors}
-          readOnly
-          hideOptionalUploader
-          structuredReportLocked={structuredReportLocked}
-          documents={reviewDocuments.documents}
-          documentsLoading={reviewDocuments.isLoading}
-          documentsError={reviewDocuments.error}
-          documentsResource={reviewDocuments}
-          receiptsResource={reviewReceipts}
-          onDocumentsChanged={refreshDocumentsAndStructuredReport}
-        />
-        {currentRequest.request_type === REQUEST_TYPE.ADVANCE_SETTLEMENT && (
-          <StructuredRenditionReportCard
-            request={currentRequest}
-            readOnly
-            guidanceAllocations={settlementGuidanceAllocations}
-            refreshSignal={structuredReportRefreshSignal}
-            documentsResource={reviewDocuments}
-            receiptsResource={reviewReceipts}
-            onChanged={async () => {
-              await reviewDocuments.refetch({ background: true });
-            }}
-            onReadinessChange={(ready, messages) => {
-              setStructuredReportReady(ready);
-              setStructuredReportMessages(messages);
-            }}
-            onLockChange={setStructuredReportLocked}
-          />
+        {includePreparationResources && (
+          <>
+            <RequestDocumentsCard
+              request={currentRequest}
+              guidanceAllocations={settlementGuidanceAllocations}
+              backendMissingMessages={submitErrors}
+              readOnly
+              hideOptionalUploader
+              structuredReportLocked={structuredReportLocked}
+              documents={reviewDocuments.documents}
+              documentsLoading={reviewDocuments.isLoading}
+              documentsError={reviewDocuments.error}
+              documentsResource={reviewDocuments}
+              receiptsResource={reviewReceipts}
+              onDocumentsChanged={refreshDocumentsAndStructuredReport}
+              uploadQueue={documentUploadQueue}
+              hideUploadQueueMonitor
+            />
+            {currentRequest.request_type === REQUEST_TYPE.ADVANCE_SETTLEMENT && (
+              <StructuredRenditionReportCard
+                request={currentRequest}
+                readOnly
+                guidanceAllocations={settlementGuidanceAllocations}
+                refreshSignal={structuredReportRefreshSignal}
+                reportResource={renditionReport}
+                documentsResource={reviewDocuments}
+                receiptsResource={reviewReceipts}
+                onChanged={async () => {
+                  await reviewDocuments.refetch({ background: true });
+                }}
+                onReadinessChange={(ready, messages) => {
+                  setStructuredReportReady(ready);
+                  setStructuredReportMessages(messages);
+                }}
+                onLockChange={setStructuredReportLocked}
+              />
+            )}
+          </>
         )}
         <div className="flex flex-col-reverse gap-3 border-t pt-4 sm:flex-row sm:justify-between">
           <Button type="button" variant="outline" onClick={() => navigateToStep(REQUEST_EDIT_STEP.DOCUMENTS)} disabled={isBusy}>Volver a documentos</Button>
@@ -1397,13 +1515,73 @@ export function RequestForm({
     );
   }
 
-  return (
-    <Form {...form}>
-      <form className="space-y-6">
+  function renderLegacyStepContent(): ReactNode {
+    return (
+      <>
         {renderStepper()}
         {(mode === "create" || activeStep === REQUEST_EDIT_STEP.DATA) && renderDataStep()}
         {mode === "edit" && activeStep === REQUEST_EDIT_STEP.DOCUMENTS && renderDocumentsStep()}
         {mode === "edit" && activeStep === REQUEST_EDIT_STEP.REVIEW && renderReviewStep()}
+      </>
+    );
+  }
+
+  function renderStepContent(): ReactNode {
+    if (settlementPreparationExperience === SETTLEMENT_PREPARATION_EXPERIENCE.V2_FOUNDATION && settlementPreparationVm) {
+      return (
+        <SettlementPreparationFlow
+          vm={settlementPreparationVm}
+          disabled={isBusy}
+          onStepChange={(step) => handleStepperNavigation(toRequestEditStep(step))}
+          onGoToTask={handleSettlementPendingNavigation}
+          extrasReference={settlementContext?.payment?.operation_reference ?? null}
+          extrasOptionalContent={hasBudgetClassification(renditionReport.report) || renditionReport.error ? (
+            <SettlementBudgetClassification
+              report={renditionReport.report}
+              allocationLabels={Object.fromEntries(settlementPreparationVm.lineTasks.map((task) => [task.id, task.label]))}
+              loadError={renditionReport.error}
+            />
+          ) : undefined}
+          uploadProgress={<SettlementUploadProgressPanel queue={documentUploadQueue} />}
+          reviewAdvance={renderDataStep()}
+          registerReceipts={renderDocumentsStep(false, false)}
+          generateAndSubmit={(
+            <div className="space-y-6">
+              {renderStructuredReport()}
+              {renderReviewStep(false, false)}
+            </div>
+          )}
+        />
+      );
+    }
+
+    return renderLegacyStepContent();
+  }
+
+  return (
+    <Form {...form}>
+      <form
+        id="request-form"
+        tabIndex={-1}
+        aria-label="Formulario de solicitud"
+        className="space-y-6"
+        data-settlement-preparation-experience={settlementPreparationExperience}
+      >
+        {renderStepContent()}
+        <Dialog open={uploadNavigationGuard.isConfirmationOpen} onOpenChange={(open) => !open && uploadNavigationGuard.cancelNavigation()}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>¿Salir mientras hay archivos pendientes?</DialogTitle>
+              <DialogDescription>
+                El archivo activo puede terminar en el servidor aunque esta ventana deje de mostrarlo. Los archivos en cola no se iniciarán después de salir y, al volver, actualizaremos la lista autoritativa.
+              </DialogDescription>
+            </DialogHeader>
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={uploadNavigationGuard.cancelNavigation}>Seguir aquí</Button>
+              <Button type="button" variant="destructive" onClick={uploadNavigationGuard.confirmNavigation}>Salir de todos modos</Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       </form>
     </Form>
   );

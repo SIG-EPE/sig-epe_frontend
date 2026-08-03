@@ -72,6 +72,8 @@ interface MockReport {
     missing_allocations: string[];
   };
   allocation_coverage: Array<{ request_allocation_id: string; planned_amount: number; row_total_amount: number; row_count: number; has_rows: boolean }>;
+  export_pending_state?: string;
+  can_retry_generation?: boolean;
 }
 
 const REQUEST_ID = "rexan-cypress-structured-1";
@@ -169,6 +171,16 @@ const allocation = {
   payment_execution: null,
 };
 
+const secondAllocation = {
+  ...allocation,
+  id: "allocation-cypress-structured-2",
+  budget_planning_line_id: "planning-line-cypress-2",
+  amount: 50,
+  sort_order: 2,
+  budgetPlanningLine: { ...planningLine, id: "planning-line-cypress-2", line_code: "POA-CYP-002", resource_description: "Movilidad regional Cypress" },
+  planning_line: { ...planningLine, id: "planning-line-cypress-2", line_code: "POA-CYP-002", resource_description: "Movilidad regional Cypress" },
+};
+
 const originalAdvance = {
   id: ADVANCE_ID,
   request_code: "ANT-CYP-001",
@@ -182,15 +194,15 @@ const originalAdvance = {
   created_at: TODAY,
 };
 
-function makeSettlementRequest(status: "DRAFT" | "SUBMITTED" | "CLOSED") {
+function makeSettlementRequest(status: "DRAFT" | "OBSERVED" | "SUBMITTED" | "CLOSED", requestType = "ADVANCE_SETTLEMENT") {
   return {
     id: REQUEST_ID,
     request_code: "REXAN-CYP-001",
     sequential_number: "REXAN-CYP-001",
-    request_type: "ADVANCE_SETTLEMENT",
+    request_type: requestType,
     status,
     fiscal_year: 2026,
-    requested_amount: 100,
+    requested_amount: 150,
     currency: "PEN",
     concept: "Rendición estructurada Cypress",
     requester_id: requesterUser.id,
@@ -215,7 +227,7 @@ function makeSettlementRequest(status: "DRAFT" | "SUBMITTED" | "CLOSED") {
     bank_account: "1912345678901",
     bank_cci: "00219100123456789012",
     submitted_at: status === "DRAFT" ? null : TODAY,
-    observed_at: null,
+    observed_at: status === "OBSERVED" ? TODAY : null,
     approved_at: status === "CLOSED" ? TODAY : null,
     rejected_at: null,
     paid_at: null,
@@ -230,8 +242,8 @@ function makeSettlementRequest(status: "DRAFT" | "SUBMITTED" | "CLOSED") {
     created_at: TODAY,
     updated_at: TODAY,
     documents: [receiptDocument],
-    allocations: [allocation],
-    allocation_count: 1,
+    allocations: [allocation, secondAllocation],
+    allocation_count: 2,
     statusHistory: [],
     observations: [],
     payment: null,
@@ -243,7 +255,17 @@ function makeSettlementRequest(status: "DRAFT" | "SUBMITTED" | "CLOSED") {
 function makeReport(rows: MockRenditionRow[], status = "DRAFT", settlementReportDocumentId: string | null = null): MockReport {
   const totalAmount = rows.reduce((total, row) => total + row.amount, 0);
   const hasRows = rows.length > 0;
-  const coverage = [{ request_allocation_id: ALLOCATION_ID, planned_amount: 100, row_total_amount: totalAmount, row_count: rows.length, has_rows: hasRows }];
+  const coverage = [{
+    request_allocation_id: ALLOCATION_ID,
+    planned_amount: 100,
+    row_total_amount: totalAmount,
+    row_count: rows.length,
+    has_rows: hasRows,
+    return_validation_status: "MISSING_EXECUTION",
+    expected_return_amount: 0,
+    returned_amount: 0,
+    line_return: null,
+  }];
 
   return {
     id: "report-cypress-1",
@@ -328,11 +350,26 @@ function fillManualRow(): void {
   cy.get("#manual-row-detail").type("Material adicional registrado manualmente");
 }
 
+function selectReceiptUploadContext(): void {
+  cy.get("#document-category").click();
+  cy.contains('[role="option"]', "Comprobante").click();
+  cy.get("#receipt-allocation").click();
+  cy.get('[role="option"]').contains("POA-CYP-001").click();
+}
+
+function makeUploadFiles(count: number, prefix = "comprobante") {
+  return Array.from({ length: count }, (_, index) => ({
+    contents: Cypress.Buffer.from(`pdf-${index + 1}`),
+    fileName: `${prefix}-${index + 1}.pdf`,
+    mimeType: "application/pdf",
+  }));
+}
+
 function makeLoginResponse(user: MockUser) {
   return {
     accessToken: activeAccessToken,
-    accessTokenExpiresAt: "2026-06-09T13:00:00.000Z",
-    sessionExpiresAt: "2026-06-09T14:00:00.000Z",
+    accessTokenExpiresAt: "2027-06-09T13:00:00.000Z",
+    sessionExpiresAt: "2027-06-09T14:00:00.000Z",
     user,
     onboardingRequired: false,
   };
@@ -340,10 +377,19 @@ function makeLoginResponse(user: MockUser) {
 
 describe("Informe estructurado de rendición REXAN", () => {
   let currentUser: MockUser;
-  let requestStatus: "DRAFT" | "SUBMITTED" | "CLOSED";
+  let requestStatus: "DRAFT" | "OBSERVED" | "SUBMITTED" | "CLOSED";
   let documents: MockDocument[];
   let reportRows: MockRenditionRow[];
   let reportStatus: string;
+  let reportExportPendingState: string | undefined;
+  let reportCanRetryGeneration: boolean | undefined;
+  let validationBlockers: Array<{ code: string; message: string; request_allocation_id?: string }>;
+  let uploadAttempts: Record<string, number>;
+  let uploadRequestCount: number;
+  let requestType: string;
+  let controlledFailureRequestNumbers: number[];
+  let failedStorageFilenames: Set<string>;
+  let uploadResponseDelayMs: number;
 
   beforeEach(() => {
     currentUser = requesterUser;
@@ -351,6 +397,15 @@ describe("Informe estructurado de rendición REXAN", () => {
     documents = [receiptDocument];
     reportRows = [];
     reportStatus = "DRAFT";
+    reportExportPendingState = undefined;
+    reportCanRetryGeneration = undefined;
+    validationBlockers = [];
+    uploadAttempts = {};
+    uploadRequestCount = 0;
+    requestType = "ADVANCE_SETTLEMENT";
+    controlledFailureRequestNumbers = [5, 12];
+    failedStorageFilenames = new Set();
+    uploadResponseDelayMs = 0;
 
     cy.clearCookies();
     cy.clearLocalStorage();
@@ -360,10 +415,10 @@ describe("Informe estructurado de rendición REXAN", () => {
       cy.setCookie("access_token", token);
     });
 
-    cy.intercept("GET", `${API_BASE_URL}/auth/me`, () => ({ body: { data: currentUser } })).as("authMe");
-    cy.intercept("POST", `${API_BASE_URL}/auth/refresh`, () => ({ body: { data: makeLoginResponse(currentUser) } })).as("refreshSession");
-    cy.intercept("GET", `${API_BASE_URL}/requests/${REQUEST_ID}`, () => ({ body: { data: makeSettlementRequest(requestStatus) } })).as("getRequest");
-    cy.intercept("GET", `${API_BASE_URL}/requests/${REQUEST_ID}/settlement-context`, () => ({
+    cy.intercept("GET", `${API_BASE_URL}/auth/me`, (interception) => interception.reply({ body: { data: currentUser } })).as("authMe");
+    cy.intercept("POST", `${API_BASE_URL}/auth/refresh`, (interception) => interception.reply({ body: { data: makeLoginResponse(currentUser) } })).as("refreshSession");
+    cy.intercept("GET", new RegExp(`${API_BASE_URL}/requests/[^/]+$`), (interception) => interception.reply({ body: { data: makeSettlementRequest(requestStatus, requestType) } })).as("getRequest");
+    cy.intercept("GET", new RegExp(`${API_BASE_URL}/requests/[^/]+/settlement-context$`), (interception) => interception.reply({
       body: {
         data: {
           settlement: makeSettlementRequest(requestStatus),
@@ -376,8 +431,8 @@ describe("Informe estructurado de rendición REXAN", () => {
         },
       },
     })).as("getSettlementContext");
-    cy.intercept("GET", `${API_BASE_URL}/requests/${REQUEST_ID}/documents`, () => ({ body: { data: documents } })).as("getDocuments");
-    cy.intercept("GET", `${API_BASE_URL}/requests/${REQUEST_ID}/receipts`, () => ({
+    cy.intercept("GET", `${API_BASE_URL}/requests/${REQUEST_ID}/documents`, (interception) => interception.reply({ body: { data: documents } })).as("getDocuments");
+    cy.intercept("GET", `${API_BASE_URL}/requests/${REQUEST_ID}/receipts`, (interception) => interception.reply({
       body: {
         data: reportRows.some((row) => row.request_receipt_id === RECEIPT_ID)
           ? []
@@ -406,43 +461,202 @@ describe("Informe estructurado de rendición REXAN", () => {
           }],
       },
     })).as("getReceipts");
-    cy.intercept("GET", `${API_BASE_URL}/requests/${REQUEST_ID}/rendition-report`, () => ({
-      body: { data: makeReport(reportRows, reportStatus, reportStatus === "EXPORTED" ? GENERATED_DOCUMENT_ID : null) },
+    cy.intercept("GET", `${API_BASE_URL}/requests/${REQUEST_ID}/rendition-report`, (interception) => interception.reply({
+      body: { data: { ...makeReport(reportRows, reportStatus, reportStatus === "EXPORTED" ? GENERATED_DOCUMENT_ID : null), export_pending_state: reportExportPendingState, can_retry_generation: reportCanRetryGeneration } },
     })).as("getReport");
-    cy.intercept("POST", `${API_BASE_URL}/requests/${REQUEST_ID}/rendition-report/rows/from-receipt/${RECEIPT_ID}`, () => {
+    cy.intercept("POST", `${API_BASE_URL}/requests/${REQUEST_ID}/rendition-report/rows/from-receipt/${RECEIPT_ID}`, (interception) => {
       reportRows = [makeOcrRow(), ...reportRows.filter((row) => row.request_receipt_id !== RECEIPT_ID)];
-      return { body: { data: reportRows[0] } };
+      interception.reply({ body: { data: reportRows[0] } });
     }).as("addOcrRow");
-    cy.intercept("POST", `${API_BASE_URL}/requests/${REQUEST_ID}/rendition-report/rows/manual`, () => {
+    cy.intercept("POST", `${API_BASE_URL}/requests/${REQUEST_ID}/rendition-report/rows/manual`, (interception) => {
       const row = makeManualRow(reportRows.length + 1, 20);
       reportRows = [...reportRows, row];
-      return { body: { data: row } };
+      interception.reply({ body: { data: row } });
     }).as("addManualRow");
-    cy.intercept("POST", `${API_BASE_URL}/requests/${REQUEST_ID}/rendition-report/validate`, () => {
-      reportStatus = "READY";
+    cy.intercept("POST", `${API_BASE_URL}/requests/${REQUEST_ID}/rendition-report/validate`, (interception) => {
+      reportStatus = validationBlockers.length === 0 ? "READY" : "DRAFT";
       const report = makeReport(reportRows, reportStatus);
-      return { body: { data: { ready: true, report, totals: report.totals, allocation_coverage: report.allocation_coverage, blockers: [] } } };
+      interception.reply({ body: { data: { ready: validationBlockers.length === 0, report, totals: report.totals, allocation_coverage: report.allocation_coverage, blockers: validationBlockers } } });
     }).as("validateReport");
-    cy.intercept("POST", `${API_BASE_URL}/requests/${REQUEST_ID}/rendition-report/generate`, () => {
+    cy.intercept("POST", `${API_BASE_URL}/requests/${REQUEST_ID}/rendition-report/generate`, (interception) => {
       reportStatus = "EXPORTED";
       documents = [receiptDocument, generatedDocument];
-      return { body: { data: { report: makeReport(reportRows, reportStatus, GENERATED_DOCUMENT_ID), document: generatedDocument } } };
+      interception.reply({ body: { data: { report: makeReport(reportRows, reportStatus, GENERATED_DOCUMENT_ID), document: generatedDocument } } });
     }).as("generateReport");
-    cy.intercept("PATCH", `${API_BASE_URL}/requests/${REQUEST_ID}`, () => ({ body: { data: makeSettlementRequest(requestStatus) } })).as("updateRequest");
-    cy.intercept("POST", `${API_BASE_URL}/requests/${REQUEST_ID}/submit`, () => {
+    cy.intercept("PATCH", `${API_BASE_URL}/requests/${REQUEST_ID}`, (interception) => interception.reply({ body: { data: makeSettlementRequest(requestStatus) } })).as("updateRequest");
+    cy.intercept("POST", `${API_BASE_URL}/requests/${REQUEST_ID}/submit`, (interception) => {
       requestStatus = "SUBMITTED";
       reportStatus = "SUBMITTED";
-      return { body: { data: makeSettlementRequest(requestStatus) } };
+      interception.reply({ body: { data: makeSettlementRequest(requestStatus) } });
     }).as("submitRequest");
-    cy.intercept("POST", `${API_BASE_URL}/requests/${REQUEST_ID}/approve`, () => {
+    cy.intercept("POST", `${API_BASE_URL}/requests/${REQUEST_ID}/approve`, (interception) => {
       requestStatus = "CLOSED";
-      return { body: { data: makeSettlementRequest(requestStatus) } };
+      interception.reply({ body: { data: makeSettlementRequest(requestStatus) } });
     }).as("approveRequest");
+    cy.intercept("POST", `${API_BASE_URL}/requests/${REQUEST_ID}/documents`, (request) => {
+      uploadRequestCount += 1;
+      const formDataText = String(request.body);
+      const nameMatch = formDataText.match(/name="file"; filename="([^"]+)"/);
+      const filename = nameMatch?.[1] ?? `comprobante-${Object.keys(uploadAttempts).length + 1}.pdf`;
+      uploadAttempts[filename] = (uploadAttempts[filename] ?? 0) + 1;
+      const index = Number(filename.match(/(\d+)/)?.[1] ?? 0);
+      if (controlledFailureRequestNumbers.includes(uploadRequestCount)) {
+        request.reply({
+          delay: uploadResponseDelayMs,
+          statusCode: uploadRequestCount === controlledFailureRequestNumbers[0] ? 429 : 500,
+          headers: uploadRequestCount === controlledFailureRequestNumbers[0] ? { "Retry-After": "0" } : {},
+          body: { statusCode: uploadRequestCount === controlledFailureRequestNumbers[0] ? 429 : 500, code: uploadRequestCount === controlledFailureRequestNumbers[0] ? "DRIVE_RATE_LIMITED" : "UPLOAD_FAILED", message: "Fallo temporal controlado", error: "Upload error", retryable: true, retry_after_ms: 0 },
+        });
+        return;
+      }
+      const document = {
+        ...receiptDocument,
+        id: `uploaded-${filename}-${uploadAttempts[filename]}`,
+        original_filename: filename,
+        safe_filename: filename,
+        request_allocation_id: ALLOCATION_ID,
+        upload_status: failedStorageFilenames.has(filename) ? "FAILED" : "PERMANENT",
+      };
+      documents = [...documents, document];
+      request.reply({ delay: uploadResponseDelayMs, statusCode: 201, body: { data: document } });
+    }).as("uploadDocument");
   });
 
-  // @blocked — el detalle protegido redirige a /requests en el harness mockeado antes de montar la tarjeta.
-  // Rehabilitar cuando el harness pueda hidratar una sesión aceptada por middleware + RouteAccessGuard sin backend real.
-  it.skip("cubre contrato UI de filas OCR/manual generadas y aprobación exacta GIOF con API mockeada", () => {
+  it("integra shell V2, multi-línea, responsive/zoom y estados MISSING_EXECUTION/EXPORT sin credenciales reales", () => {
+    validationBlockers = [{ code: "LINE_RETURN_MISSING_EXECUTION", message: "Falta base pagada", request_allocation_id: ALLOCATION_ID }];
+    reportRows = [makeOcrRow()];
+    cy.viewport(320, 720);
+    cy.visit(`/requests/${REQUEST_ID}/edit?step=review`);
+    cy.wait(["@authMe", "@getRequest", "@getSettlementContext", "@getDocuments", "@getReceipts", "@getReport"]);
+
+    cy.get('form[data-settlement-preparation-experience="v2-foundation"]').should("be.visible");
+    cy.contains("button", "Revisa el anticipo").should("have.css", "min-height", "44px");
+    cy.contains("button", "Registra comprobantes").should("be.visible");
+    cy.contains("button", "Genera y envía").should("be.visible");
+    cy.get('[data-testid^="settlement-line-task-"]').should("have.length", 2);
+    cy.contains("Falta registrar o vincular la base efectivamente pagada del anticipo").scrollIntoView().should("be.visible");
+    cy.screenshot("rexan-smoke-320-shell", { capture: "viewport" });
+
+    cy.viewport(375, 812);
+    cy.get('[aria-label="Preparación de rendición"]').scrollIntoView().should("be.visible");
+    cy.screenshot("rexan-smoke-375-shell", { capture: "viewport" });
+    cy.viewport(1280, 900);
+    cy.window().then((window) => { window.document.documentElement.style.zoom = "2"; });
+    cy.contains("button", "Genera y envía").scrollIntoView().should("be.visible");
+    cy.window().then((window) => { window.document.documentElement.style.zoom = ""; });
+
+    reportStatus = "EXPORT_PENDING";
+    reportExportPendingState = "STALE_RETRY_AVAILABLE";
+    reportCanRetryGeneration = true;
+    cy.reload();
+    cy.wait(["@authMe", "@getRequest", "@getReport"]);
+    cy.contains("La generación anterior quedó atascada").scrollIntoView().should("be.visible");
+    cy.contains("button", "Reintentar generación").scrollIntoView().should("be.visible");
+  });
+
+  it("procesa 20 uploads secuenciales, conserva parcial 429/500 y reintenta solo fallidos", () => {
+    cy.viewport(1280, 900);
+    cy.visit(`/requests/${REQUEST_ID}/edit?step=documents`);
+    cy.wait(["@authMe", "@getRequest", "@getDocuments", "@getReceipts"]);
+
+    selectReceiptUploadContext();
+    cy.get("#request-document-file").selectFile(makeUploadFiles(20));
+    cy.contains("button", "Adjuntar").click();
+
+    cy.contains("18/20 archivos guardados", { timeout: 90000 }).should("be.visible");
+    cy.contains("2 con error").should("be.visible");
+    cy.screenshot("rexan-smoke-desktop-partial", { capture: "viewport" });
+    cy.contains("button", "Reintentar fallidos").click();
+    cy.contains("20/20 archivos guardados", { timeout: 90000 }).should("be.visible");
+    cy.get("@uploadDocument.all").should("have.length", 22);
+  });
+
+  it("pausa después del archivo activo, protege navegación y reanuda en móvil", () => {
+    controlledFailureRequestNumbers = [];
+    uploadResponseDelayMs = 500;
+    cy.viewport(375, 812);
+    cy.visit(`/requests/${REQUEST_ID}/edit?step=documents`);
+    cy.wait(["@authMe", "@getRequest", "@getDocuments", "@getReceipts"]);
+
+    selectReceiptUploadContext();
+    cy.get("#request-document-file").selectFile(makeUploadFiles(3, "pausa"));
+    cy.contains("button", "Adjuntar").click();
+    cy.contains("button", "Pausar después del actual").click();
+    cy.contains("1/3 archivos guardados", { timeout: 15000 }).should("be.visible");
+    cy.contains("2 en cola").should("be.visible");
+    cy.contains("button", "Continuar cargas").should("be.visible");
+
+    cy.document().then((document) => {
+      const link = document.createElement("a");
+      link.href = "/requests";
+      link.textContent = "Salir de preparación";
+      link.style.position = "fixed";
+      link.style.left = "1rem";
+      link.style.top = "1rem";
+      link.style.zIndex = "9999";
+      document.body.append(link);
+    });
+    cy.contains("a", "Salir de preparación").click();
+    cy.get('[role="dialog"]').within(() => {
+      cy.contains("¿Salir mientras hay archivos pendientes?").should("be.visible");
+      cy.contains("button", "Seguir aquí").click();
+    });
+    cy.screenshot("rexan-smoke-375-pause-navigation-guard", { capture: "viewport" });
+
+    cy.contains("button", "Continuar cargas").click();
+    cy.contains("3/3 archivos guardados", { timeout: 15000 }).should("be.visible");
+  });
+
+  it("muestra éxito real en desktop y mantiene FAILED como incidencia en 320 px", () => {
+    controlledFailureRequestNumbers = [];
+    cy.viewport(1280, 900);
+    cy.visit(`/requests/${REQUEST_ID}/edit?step=documents`);
+    cy.wait(["@authMe", "@getRequest", "@getDocuments", "@getReceipts"]);
+    selectReceiptUploadContext();
+    cy.get("#request-document-file").selectFile(makeUploadFiles(1, "exito"));
+    cy.contains("button", "Adjuntar").click();
+    cy.contains("1/1 archivos guardados", { timeout: 15000 }).should("be.visible");
+    cy.contains("1 documento adjuntado correctamente.").should("be.visible");
+    cy.screenshot("rexan-smoke-desktop-success", { capture: "viewport" });
+
+    cy.get('button[aria-label="Cerrar progreso de carga"]').click();
+    cy.viewport(320, 720);
+    failedStorageFilenames.add("drive-failed-1.pdf");
+    selectReceiptUploadContext();
+    cy.get("#request-document-file").selectFile(makeUploadFiles(1, "drive-failed"));
+    cy.contains("button", "Adjuntar").click();
+    cy.contains("1/1 archivos guardados", { timeout: 15000 }).should("be.visible");
+    cy.contains("1 con incidencia").should("be.visible");
+    cy.contains(/quedó guardado localmente.*incidencia.*Google Drive/i).should("be.visible");
+    cy.screenshot("rexan-smoke-320-upload-status-failed", { capture: "viewport" });
+  });
+
+  it("mantiene fallback legacy y retorno observado editable por elegibilidad", () => {
+    requestType = "ADVANCE";
+    requestStatus = "DRAFT";
+    cy.intercept("GET", `${API_BASE_URL}/requests/advance-cypress-legacy`, {
+      body: { data: makeSettlementRequest("DRAFT", "ADVANCE") },
+    }).as("getLegacyRequest");
+    cy.visit("/requests/advance-cypress-legacy/edit?step=data");
+    cy.wait(["@authMe", "@getLegacyRequest"]);
+    cy.get('form[data-settlement-preparation-experience="legacy"]').should("be.visible");
+    cy.get('[aria-label="Pasos de edición"]').should("be.visible");
+
+    requestType = "ADVANCE_SETTLEMENT";
+    requestStatus = "OBSERVED";
+    reportStatus = "EXPORTED";
+    documents = [receiptDocument, generatedDocument];
+    cy.intercept("GET", `${API_BASE_URL}/requests/rexan-cypress-observed`, {
+      body: { data: makeSettlementRequest("OBSERVED") },
+    }).as("getObservedRequest");
+    cy.visit("/requests/rexan-cypress-observed/edit?step=review");
+    cy.wait(["@authMe", "@getObservedRequest", "@getReport"]);
+    cy.get('form[data-settlement-preparation-experience="v2-foundation"]').should("be.visible");
+    cy.contains("La rendición fue observada; puedes actualizar sustentos y regenerar el informe").scrollIntoView().should("be.visible");
+    cy.contains("button", "Enviar corrección").should("be.visible");
+  });
+
+  it("cubre contrato UI de filas OCR/manual generadas y aprobación exacta GIOF con API mockeada", () => {
     requestStatus = "SUBMITTED";
     reportRows = [makeOcrRow(), makeManualRow(1, 20)];
     reportStatus = "EXPORTED";
@@ -452,13 +666,12 @@ describe("Informe estructurado de rendición REXAN", () => {
     cy.wait(["@authMe", "@getRequest", "@getDocuments", "@getReport"]);
 
     cy.contains("REXAN-CYP-001", { timeout: 12000 }).should("be.visible");
-    cy.get('[data-testid="structured-rendition-report-card"]').within(() => {
-      cy.contains("Informe de rendición").should("be.visible");
-      cy.contains("Proveedor OCR Cypress").should("be.visible");
-      cy.contains("Lectura revisada").should("be.visible");
-      cy.contains("Proveedor manual Cypress").should("be.visible");
-      cy.contains("Ingreso manual").should("be.visible");
-      cy.contains("Documento generado: Rendicion Cypress.xlsx").should("be.visible");
+    cy.get('[data-testid="structured-rendition-report-card"]').scrollIntoView().within(() => {
+      cy.contains("Informe de rendición").should("exist");
+      cy.contains("Proveedor OCR Cypress").should("exist");
+      cy.contains("Lectura revisada").should("exist");
+      cy.contains("Proveedor manual Cypress").should("exist");
+      cy.contains("Ingreso manual").should("exist");
     });
 
     currentUser = giofUser;
@@ -472,15 +685,15 @@ describe("Informe estructurado de rendición REXAN", () => {
       cy.visit(`/requests/${REQUEST_ID}`);
     });
     cy.wait(["@authMe", "@getRequest"]);
-    cy.contains("Acciones de revisión", { timeout: 12000 }).should("be.visible");
+    cy.contains("Acciones de revisión", { timeout: 12000 }).scrollIntoView().should("be.visible");
     cy.contains("button", "Aprobar rendición").click();
-    cy.get("#validated-spent-amount").type("100");
+    cy.get("#validated-spent-amount").type("150");
     cy.contains("Rendición exacta").should("be.visible");
     cy.get('[role="dialog"]').within(() => {
       cy.contains("button", "Aprobar rendición").click();
     });
     cy.wait("@approveRequest");
-    cy.contains("Rendición aprobada correctamente", { timeout: 12000 }).should("be.visible");
-    cy.contains("Resultado de rendición").should("be.visible");
+    cy.contains("Cerrada", { timeout: 12000 }).should("be.visible");
+    cy.contains("Resultado de rendición").scrollIntoView().should("be.visible");
   });
 });

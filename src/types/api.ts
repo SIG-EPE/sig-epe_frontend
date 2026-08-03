@@ -16,6 +16,8 @@ export interface ApiError {
   error: string;
   timestamp: string;
   path: string;
+  retryable?: boolean;
+  retry_after_ms?: number;
 }
 
 /** Paginated list metadata */

@@ -942,6 +942,9 @@ export function getRequestDocumentUploadErrorCode(error: unknown): string | null
 }
 
 export function isRetryableRequestDocumentUploadError(error: unknown): boolean {
+  if (error instanceof ApiRequestError && typeof error.body.retryable === "boolean") {
+    return error.body.retryable;
+  }
   const code = getRequestDocumentUploadErrorCode(error);
   if (code === "DRIVE_RATE_LIMITED" || code === "DRIVE_STORAGE_FAILED") return true;
   return error instanceof ApiRequestError ? error.status === 429 || error.status >= 500 : false;

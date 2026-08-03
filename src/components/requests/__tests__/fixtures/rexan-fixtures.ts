@@ -1,0 +1,133 @@
+import {
+  REQUEST_CURRENCY,
+  REQUEST_DOCUMENT_CATEGORY,
+  REQUEST_STATUS,
+  REQUEST_TYPE,
+  type RequestAllocation,
+  type RequestDocument,
+  type SettlementContextResponse,
+} from "@/types/requests";
+
+function makeOriginalAdvanceDocument(overrides: Partial<RequestDocument> = {}): RequestDocument {
+  return {
+    id: "original-doc-1",
+    payment_request_id: "advance-1",
+    document_category: REQUEST_DOCUMENT_CATEGORY.PXQ,
+    safe_filename: "poa-original.xlsx",
+    original_filename: "POA original.xlsx",
+    mime_type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    size_bytes: 2048,
+    sha256_hash: "hash",
+    storage_provider: "DRIVE",
+    upload_status: "PERMANENT",
+    uploaded_by_id: "user-1",
+    created_at: "2026-05-27T00:00:00.000Z",
+    ...overrides,
+  };
+}
+
+export function makeSettlementAllocation(overrides: Partial<RequestAllocation> = {}): RequestAllocation {
+  return {
+    id: "alloc-1",
+    payment_request_id: "advance-1",
+    budget_planning_line_id: "line-1",
+    amount: 500,
+    currency: REQUEST_CURRENCY.PEN,
+    budget_month: 1,
+    fiscal_year: 2026,
+    org_unit_id: "ou-1",
+    sort_order: 1,
+    budgetPlanningLine: null,
+    planning_line: {
+      id: "line-1",
+      line_code: "POA-001",
+      resource_description: "Taller regional",
+      planning_type: "POA",
+      type_resource: "Bienes",
+      unit_price: 100,
+      quantity: 5,
+      total_cost: 500,
+      status: "APPROVED",
+      fiscal_year: { id: "fy-2026", year: 2026, status: "OPEN" },
+      org_unit: { id: "ou-1", code: "UO-01", name: "Unidad de Operaciones" },
+      category: null,
+      program: null,
+      action: null,
+      territory: null,
+      monthly_summary: [],
+    },
+    org_unit: { id: "ou-1", code: "UO-01", name: "Unidad de Operaciones" },
+    documents: [],
+    payment_execution: null,
+    ...overrides,
+  };
+}
+
+export function makeSettlementContext(overrides: Partial<SettlementContextResponse> = {}): SettlementContextResponse {
+  return {
+    settlement: {
+      id: "request-1",
+      request_code: "REXAN-1",
+      sequential_number: "1",
+      request_type: REQUEST_TYPE.ADVANCE_SETTLEMENT,
+      status: REQUEST_STATUS.DRAFT,
+      requested_amount: 250.5,
+      currency: REQUEST_CURRENCY.PEN,
+      concept: "Rendición del anticipo pagado",
+      related_request_id: "advance-1",
+    },
+    original_advance: {
+      id: "advance-1",
+      request_code: "ANT-2026-001",
+      sequential_number: "10",
+      requested_amount: 1000,
+      currency: REQUEST_CURRENCY.PEN,
+      concept: "Anticipo para taller regional",
+      requester_id: "user-1",
+      beneficiary_name: "Ana Solicitante",
+      budget_planning_line_id: "line-1",
+      scheduled_rendition_at: "2026-06-30",
+      paid_at: "2026-06-01T10:00:00.000Z",
+      disbursed_at: null,
+      amount_disbursed: 1000,
+      budgetPlanningLine: {
+        id: "line-1",
+        line_code: "POA-001",
+        resource_description: "Taller regional",
+        fiscalYear: { id: "fy-2026", year: 2026, status: "OPEN" },
+        organizationalUnit: { id: "ou-1", code: "UO-01", name: "Unidad de Operaciones" },
+      },
+      organizationalUnit: null,
+    },
+    original_advance_documents: [{
+      ...makeOriginalAdvanceDocument(),
+      read_only: true,
+    }],
+    payment: {
+      id: "payment-1",
+      paid_at: "2026-06-01T10:00:00.000Z",
+      amount_paid: 1000,
+      proof_document_id: null,
+      proof_pending: false,
+      details_pending: false,
+      operation_reference: "OP-001",
+      proof_document: null,
+    },
+    due_date: {
+      scheduled_rendition_at: "2026-06-30",
+      due_date: "2026-06-30",
+      days_until_due: 10,
+      is_overdue: false,
+    },
+    rexan: {
+      outcome: null,
+      spent_amount: null,
+      balance_amount: null,
+      balance_locked_at: null,
+      return_proof_document_id: null,
+      classified_by_id: null,
+    },
+    settlement_documents: [],
+    ...overrides,
+  };
+}
