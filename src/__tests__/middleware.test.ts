@@ -99,6 +99,28 @@ describe("middleware session hint continuity", () => {
     expect(response.headers.get("location")).toBe("http://localhost:3000/login");
   });
 
+  it("protects /help when access and session hint are absent", async () => {
+    const response = await middleware(requestFor("/help"));
+
+    expect(response.headers.get("location")).toBe("http://localhost:3000/login");
+  });
+
+  it.each([
+    "SOLICITANTE_EPE",
+    "GIOF_GESTOR",
+    "AUDITOR_DIRECCION",
+    "ADMIN_SISTEMA",
+  ])("allows %s to open /help directly", async (role) => {
+    mockJwtVerify.mockResolvedValue({
+      payload: { sub: "user-1", role, scope: "full", iat: 1, exp: 2 },
+    });
+
+    const response = await middleware(requestFor("/help", { access_token: "token" }));
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("location")).toBeNull();
+  });
+
   it("preserves EPE SSO handoff URLs without redirecting an existing session", async () => {
     const response = await middleware(
       requestFor("/login?token=handoff-token", { access_token: "existing-token" }),

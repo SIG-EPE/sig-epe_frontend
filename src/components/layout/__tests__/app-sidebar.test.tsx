@@ -329,6 +329,34 @@ describe("AppSidebar", () => {
     expect(screen.getByText("Mis Solicitudes")).toBeInTheDocument();
   });
 
+  it.each([
+    ["SOLICITANTE_EPE", solicitanteUser],
+    ["GIOF_GESTOR", giofUser],
+    ["AUDITOR_DIRECCION", auditorUser],
+    ["ADMIN_SISTEMA", adminUser],
+  ])("muestra Centro de ayuda para %s", (_role, currentUser) => {
+    mockUseAuthStore.mockImplementation(
+      (selector: (state: { user: AuthUser }) => unknown) => selector({ user: currentUser }),
+    );
+
+    renderSidebar();
+
+    expect(screen.getByRole("link", { name: /centro de ayuda/i })).toHaveAttribute("href", "/help");
+  });
+
+  it("marca Centro de ayuda como activo en /help", () => {
+    mockPathname = "/help";
+    mockUseAuthStore.mockImplementation(
+      (selector: (state: { user: AuthUser }) => unknown) => selector({ user: solicitanteUser }),
+    );
+
+    renderSidebar();
+
+    const helpLink = screen.getByRole("link", { name: /centro de ayuda/i });
+    expect(helpLink).toHaveAttribute("aria-current", "page");
+    expect(helpLink.closest("li")).toHaveAttribute("data-active", "true");
+  });
+
   it("✅ Botón chevron llama toggleSidebar al hacer click", async () => {
     mockUseAuthStore.mockImplementation(
       (selector: (state: { user: AuthUser }) => unknown) =>

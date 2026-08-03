@@ -31,6 +31,7 @@ export const ROUTE_ACCESS_RULES = [
   { path: ROUTES.DASHBOARD_GIOF, allowedRoles: DASHBOARD_ROLES, match: "prefix" },
   { path: ROUTES.DASHBOARD, allowedRoles: ALL_AUTHENTICATED_ROLES, match: "exact" },
   { path: ROUTES.PROFILE, allowedRoles: ALL_AUTHENTICATED_ROLES, match: "prefix" },
+  { path: ROUTES.HELP, allowedRoles: ALL_AUTHENTICATED_ROLES, match: "exact" },
   { path: ROUTES.MANAGEMENT, allowedRoles: ALL_AUTHENTICATED_ROLES, match: "prefix" },
   { path: ROUTES.ADMIN_CONFIG, allowedRoles: ADMIN_ONLY_ROLES, match: "prefix" },
   { path: ROUTES.ADMIN_AUDIT_LOGS, allowedRoles: ADMIN_ONLY_ROLES, match: "prefix" },

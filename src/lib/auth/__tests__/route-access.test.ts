@@ -64,6 +64,14 @@ describe("route access matrix", () => {
     expect(canAccessRoute("/management", ROLE_CODE.ADMIN_SISTEMA).isAllowed).toBe(true);
   });
 
+  it("allows the help center to every authenticated role and no missing role", () => {
+    expect(canAccessRoute("/help", ROLE_CODE.SOLICITANTE_EPE).isAllowed).toBe(true);
+    expect(canAccessRoute("/help", ROLE_CODE.GIOF_GESTOR).isAllowed).toBe(true);
+    expect(canAccessRoute("/help", ROLE_CODE.AUDITOR_DIRECCION).isAllowed).toBe(true);
+    expect(canAccessRoute("/help", ROLE_CODE.ADMIN_SISTEMA).isAllowed).toBe(true);
+    expect(canAccessRoute("/help", null).isAllowed).toBe(false);
+  });
+
   it("keeps report and accountability pages limited to review/admin roles", () => {
     expect(canAccessRoute("/reports", ROLE_CODE.GIOF_GESTOR).isAllowed).toBe(true);
     expect(canAccessRoute("/reports", ROLE_CODE.AUDITOR_DIRECCION).isAllowed).toBe(true);

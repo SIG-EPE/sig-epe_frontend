@@ -26,6 +26,7 @@ export const ROUTES = {
   ADMIN_CONFIG: "/admin/config",
   ADMIN_AUDIT_LOGS: "/admin/audit-logs",
   PROFILE: "/profile",
+  HELP: "/help",
 } as const;
 
 export type AppRoute = (typeof ROUTES)[keyof typeof ROUTES];
@@ -60,6 +61,7 @@ export interface MenuItem {
 export const ROLE_MENU_MAP: Record<RoleCode, MenuItem[]> = {
   SOLICITANTE_EPE: [
     { label: "Mis Solicitudes", href: `${ROUTES.REQUESTS}?scope=mine`, icon: "FileText" },
+    { label: "Centro de ayuda", href: ROUTES.HELP, icon: "CircleHelp" },
   ],
   GIOF_GESTOR: [
     { label: "Mis Solicitudes", href: `${ROUTES.REQUESTS}?scope=mine`, icon: "FileText" },
@@ -75,6 +77,7 @@ export const ROLE_MENU_MAP: Record<RoleCode, MenuItem[]> = {
     { label: "Reportes", href: ROUTES.REPORTS, icon: "BarChart3" },
     { label: "Catálogos", href: ROUTES.CATALOGS, icon: "BookOpen" },
     { label: "Usuarios", href: ROUTES.ADMIN_USERS, icon: "Users" },
+    { label: "Centro de ayuda", href: ROUTES.HELP, icon: "CircleHelp" },
   ],
   AUDITOR_DIRECCION: [
     { label: "Mis Solicitudes", href: `${ROUTES.REQUESTS}?scope=mine`, icon: "FileText" },
@@ -82,6 +85,7 @@ export const ROLE_MENU_MAP: Record<RoleCode, MenuItem[]> = {
     { label: "Programado vs Ejecutado", href: ROUTES.BUDGET_ORG_UNIT_EXECUTION, icon: "BarChart3" },
     { label: "Dashboard GIOF", href: ROUTES.DASHBOARD_GIOF, icon: "LayoutDashboard" },
     { label: "Reportes", href: ROUTES.REPORTS, icon: "BarChart3" },
+    { label: "Centro de ayuda", href: ROUTES.HELP, icon: "CircleHelp" },
   ],
   ADMIN_SISTEMA: [
     { label: "Mis Solicitudes", href: `${ROUTES.REQUESTS}?scope=mine`, icon: "FileText" },
@@ -93,6 +97,7 @@ export const ROLE_MENU_MAP: Record<RoleCode, MenuItem[]> = {
     { label: "Reportes", href: ROUTES.REPORTS, icon: "BarChart3" },
     { label: "Usuarios", href: ROUTES.ADMIN_USERS, icon: "Users" },
     { label: "Log de auditoría", href: ROUTES.ADMIN_AUDIT_LOGS, icon: "ClipboardList" },
+    { label: "Centro de ayuda", href: ROUTES.HELP, icon: "CircleHelp" },
   ],
 };
 

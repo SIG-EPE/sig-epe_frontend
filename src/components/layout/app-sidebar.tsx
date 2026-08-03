@@ -20,6 +20,7 @@ import {
   CalendarDays,
   ListChecks,
   Handshake,
+  CircleHelp,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
@@ -65,6 +66,7 @@ const ICON_MAP: Record<string, LucideIcon> = {
   CalendarDays,
   ListChecks,
   Handshake,
+  CircleHelp,
 };
 
 const SIDEBAR_EXACT_ACTIVE_ROUTES = new Set<string>([
