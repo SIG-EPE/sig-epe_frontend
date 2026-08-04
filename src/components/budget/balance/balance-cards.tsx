@@ -6,6 +6,7 @@
 // -------------------------------------------------------
 
 import { BarChart3, CreditCard, DollarSign, Wallet } from "lucide-react";
+import type { ComponentType } from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 import type { BalanceData } from "@/types/budget";
@@ -19,7 +20,7 @@ const PEN_FORMAT = new Intl.NumberFormat("es-PE", {
   currency: "PEN",
 });
 
-function formatCurrency(value: number | undefined | null): string {
+function formatCurrency(value: number | string | undefined | null): string {
   const num = Number(value);
   if (isNaN(num)) return "S/ 0.00";
   return PEN_FORMAT.format(num);
@@ -32,19 +33,19 @@ function formatCurrency(value: number | undefined | null): string {
 
 interface MetricConfig {
   label: string;
-  valueKey: keyof Pick<BalanceData, "total_planned" | "total_committed" | "total_executed" | "available">;
-  Icon: React.ComponentType<{ className?: string }>;
+  valueKey: keyof Pick<BalanceData, "monthly_programmed_decimal" | "total_committed" | "total_executed" | "available">;
+  Icon: ComponentType<{ className?: string }>;
   isNegativeWarning?: boolean;
 }
 
 const METRICS: MetricConfig[] = [
   {
-    label: "Planificado",
-    valueKey: "total_planned",
+    label: "Programado mensual",
+    valueKey: "monthly_programmed_decimal",
     Icon: BarChart3,
   },
   {
-    label: "Comprometido",
+    label: "Costo generado",
     valueKey: "total_committed",
     Icon: CreditCard,
   },
@@ -77,7 +78,9 @@ export function BalanceCards({ data }: BalanceCardsProps) {
   return (
     <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
       {METRICS.map(({ label, valueKey, Icon, isNegativeWarning }) => {
-        const raw = data[valueKey];
+        const raw = valueKey === "monthly_programmed_decimal"
+          ? data.monthly_programmed_decimal ?? data.total_planned
+          : data[valueKey];
         const value = Number(raw);
         const isNegative = isNegativeWarning && !isNaN(value) && value < 0;
 

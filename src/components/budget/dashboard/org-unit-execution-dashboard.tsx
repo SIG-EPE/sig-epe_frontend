@@ -307,7 +307,7 @@ export function OrgUnitExecutionDashboard() {
             <button className="rounded-md border px-4 py-2 text-sm" type="button" onClick={resetFilters}>Limpiar filtros</button>
             <button className="inline-flex items-center gap-2 rounded-md border px-4 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-50" type="button" onClick={() => void exportExcel()} disabled={!canExport || isExporting}>
               {isExporting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
-              {isExporting ? "Exportando..." : "Descargar Excel"}
+              {isExporting ? "Exportando..." : "Descargar Excel (fuente + actual)"}
             </button>
           </div>
         </CardContent>

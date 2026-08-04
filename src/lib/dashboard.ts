@@ -9,6 +9,8 @@ import type {
   OrgUnitExecutionOptionsResponse,
 } from "@/types/dashboard";
 
+export const POA_EXPORT_CONTENT_LABEL = "fuente exacta + datos actuales" as const;
+
 function appendParam(params: URLSearchParams, key: string, value: string | number | undefined) {
   if (value !== undefined && value !== "") {
     params.set(key, String(value));

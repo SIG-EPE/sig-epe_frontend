@@ -10,6 +10,10 @@ import { refreshSession } from "@/lib/auth/refresh-session";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3001";
 
+const XLSX_MEDIA_TYPE =
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+const XLSX_SIGNATURE = [0x50, 0x4b, 0x03, 0x04] as const;
+
 const AUTH_HEADER_EXCLUDED_PATHS = [
   "/auth/login",
   "/auth/logout",
@@ -201,8 +205,34 @@ async function apiDownload(
     throw new ApiRequestError(res.status, errorBody, res.headers);
   }
 
+  const mediaType = res.headers
+    .get("Content-Type")
+    ?.split(";", 1)[0]
+    .trim()
+    .toLowerCase();
+  const blob = await res.blob();
+  const signature = new Uint8Array(await blob.slice(0, XLSX_SIGNATURE.length).arrayBuffer());
+  const hasValidSignature =
+    signature.length === XLSX_SIGNATURE.length &&
+    XLSX_SIGNATURE.every((byte, index) => signature[index] === byte);
+
+  if (mediaType !== XLSX_MEDIA_TYPE || !hasValidSignature) {
+    throw new ApiRequestError(
+      200,
+      {
+        statusCode: 200,
+        code: "INVALID_DOWNLOAD_RESPONSE",
+        message: "Invalid XLSX download response",
+        error: "Invalid Download Response",
+        timestamp: new Date().toISOString(),
+        path,
+      },
+      res.headers,
+    );
+  }
+
   return {
-    blob: await res.blob(),
+    blob,
     filename: getFilenameFromContentDisposition(res.headers.get("Content-Disposition")),
   };
 }

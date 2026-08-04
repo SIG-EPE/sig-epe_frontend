@@ -1,4 +1,6 @@
 // -------------------------------------------------------
+
+import type { PoaExecutionProvenance } from "./budget";
 // Dashboard DTO contracts — SIG-EPE
 // Mirrors backend dashboard responses. Keep null explicit.
 // -------------------------------------------------------
@@ -25,6 +27,9 @@ export interface BudgetDashboardTotals {
   allocated: number;
   committed: number;
   executed: number;
+  monthly_programmed_decimal?: string;
+  generated_cost_decimal?: string;
+  executed_decimal?: string;
   rendered: number | null;
   available: number;
   execution_rate: number | null;
@@ -34,6 +39,9 @@ export interface BudgetDashboardMonthlySeriesItem {
   month: number;
   planned: number | null;
   executed: number;
+  monthly_programmed_decimal?: string | null;
+  executed_decimal?: string;
+  execution_provenance?: PoaExecutionProvenance;
   rendered: number | null;
   observed_count?: number;
   blank_count?: number;
@@ -161,7 +169,10 @@ export interface OrgUnitExecutionKpis {
 
 export interface OrgUnitExecutionTotals {
   programmed: number | null;
+  monthly_programmed_decimal?: string | null;
+  generated_cost_decimal?: string;
   executed: number;
+  executed_decimal?: string;
   variance: number | null;
   execution_rate: number | null;
   currency: string | null;
@@ -207,6 +218,9 @@ export interface OrgUnitExecutionMonthly {
   month: number;
   programmed: number | null;
   executed: number;
+  monthly_programmed_decimal?: string | null;
+  executed_decimal?: string;
+  execution_provenance?: PoaExecutionProvenance;
   observed_count?: number;
   blank_count?: number;
   explicit_zero_count?: number;

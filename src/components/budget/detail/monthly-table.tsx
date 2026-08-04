@@ -156,7 +156,7 @@ export function MonthlyTable({
           <TableRow>
             <TableHead className="w-8"></TableHead>
             <TableHead>Mes</TableHead>
-            <TableHead className="text-right">Programado</TableHead>
+            <TableHead className="text-right">Programado mensual</TableHead>
             <TableHead className="text-right">Ejecutado</TableHead>
             <TableHead className="text-right">Saldo</TableHead>
           </TableRow>
@@ -238,6 +238,19 @@ export function MonthlyTable({
                     <TableCell colSpan={4} className="py-3">
                       <div className="flex flex-col gap-2 pl-2">
                         {/* Desglose de ejecuciones */}
+                        {entry?.execution_provenance && (
+                          <div className="rounded-md border bg-background/60 p-3 text-xs">
+                            <p className="mb-2 font-medium text-foreground">Ejecución reconciliada</p>
+                            <div className="grid gap-1 sm:grid-cols-2 lg:grid-cols-3">
+                              <span>Importado: {formatCurrency(Number(entry.execution_provenance.imported))}</span>
+                              <span>Manual: {formatCurrency(Number(entry.execution_provenance.manual))}</span>
+                              <span>Rendición: {formatCurrency(Number(entry.execution_provenance.system_rendition))}</span>
+                              <span>Asignación pagada: {formatCurrency(Number(entry.execution_provenance.system_paid_allocation))}</span>
+                              <span>Pago legado: {formatCurrency(Number(entry.execution_provenance.system_paid_legacy))}</span>
+                              <span className="font-medium text-foreground">Total: {formatCurrency(Number(entry.execution_provenance.total))}</span>
+                            </div>
+                          </div>
+                        )}
                         {executionDetails.length > 0 && (
                           <div className="text-sm text-muted-foreground">
                             <p className="mb-1 font-medium">Detalle de ejecuciones:</p>

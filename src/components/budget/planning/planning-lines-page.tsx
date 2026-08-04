@@ -148,7 +148,7 @@ export function PlanningLinesPage() {
       link.click();
       link.remove();
       URL.revokeObjectURL(href);
-      toast.success("Exportación Excel generada");
+      toast.success("Excel generado con fuente exacta y datos actuales");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "No se pudo exportar el Excel");
     } finally {
@@ -170,7 +170,7 @@ export function PlanningLinesPage() {
           {canExport && (
             <Button variant="outline" onClick={handleExportExcel} disabled={isExporting}>
               <Download className="h-4 w-4" />
-              {isExporting ? "Exportando..." : "Exportar Excel"}
+              {isExporting ? "Exportando..." : "Exportar Excel (fuente + actual)"}
             </Button>
           )}
           <Button onClick={() => router.push(ROUTES.BUDGET_PLANNING_NEW)}>
