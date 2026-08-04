@@ -4,6 +4,50 @@
 
 import type { PlanningType } from "@/lib/planning-types";
 
+export const TERRITORY_SELECTION_TARGET_KIND = {
+  TERRITORY: "TERRITORY",
+  AGGREGATE: "AGGREGATE",
+} as const;
+
+export const TERRITORY_SELECTION_AXIS = {
+  REGION: "REGION",
+  PROVINCIA: "PROVINCIA",
+  DISTRITO: "DISTRITO",
+} as const;
+
+export type TerritorySelectionAxis =
+  (typeof TERRITORY_SELECTION_AXIS)[keyof typeof TERRITORY_SELECTION_AXIS];
+
+export interface PlanningLineTerritoryAxisInput {
+  axis: TerritorySelectionAxis;
+  territory_id?: string;
+  aggregate_option_id?: string;
+}
+
+export interface PlanningLineTerritorySelectionInput {
+  axes: PlanningLineTerritoryAxisInput[];
+}
+
+export interface TerritoryAggregateOptionRelation {
+  id: string;
+  code: string;
+  axis: TerritorySelectionAxis;
+  name: string;
+  is_active?: boolean;
+}
+
+export interface PlanningLineTerritoryAxisSelection {
+  axis: TerritorySelectionAxis;
+  territory_id: string | null;
+  aggregate_option_id: string | null;
+  territory: PlanningLineNamedRelation | null;
+  aggregate_option: TerritoryAggregateOptionRelation | null;
+}
+
+export interface PlanningLineTerritorySelection {
+  axes: PlanningLineTerritoryAxisSelection[];
+}
+
 export interface PlanningLineFiscalYearRelation {
   id: string;
   year: number;
@@ -26,6 +70,18 @@ export interface PlanningLineOperativeActionRelation {
   id: string;
   name: string;
   component?: PlanningLineComponentRelation | null;
+}
+
+export interface PlanningLineResourceRelation {
+  id: string;
+  name: string;
+  fullCode: string;
+}
+
+export interface PlanningLinePoaHierarchy {
+  component: PlanningLineResourceRelation;
+  action: PlanningLineResourceRelation;
+  resource: PlanningLineResourceRelation;
 }
 
 /** Datos de saldo presupuestal devueltos por GET /budget/balance/:fiscalYearId */
@@ -67,6 +123,7 @@ export interface PlanningLine {
   budget_category_id: string;
   planning_type: PlanningType;
   resource_description: string;
+  resource_id?: string | null;
   operative_action_id?: string | null;
   territory_id?: string | null;
   importance?: string | null;
@@ -90,7 +147,10 @@ export interface PlanningLine {
   program?: PlanningLineNamedRelation | null;
   budgetCategory?: PlanningLineNamedRelation;
   territory?: PlanningLineNamedRelation | null;
+  territory_selection?: PlanningLineTerritorySelection;
   operativeAction?: PlanningLineOperativeActionRelation | null;
+  resource?: PlanningLineResourceRelation | null;
+  poaHierarchy?: PlanningLinePoaHierarchy | null;
   // Alias snake_case para compatibilidad con componentes existentes
   organizational_unit?: PlanningLineNamedRelation;
   budget_program?: PlanningLineNamedRelation | null;
@@ -99,6 +159,44 @@ export interface PlanningLine {
   monthly_distribution?: MonthlyEntry[]; // alias snake_case — usar monthlyDistribution
   fundingSources?: FundingSourceAllocation[];
   partners?: FundingSourceAllocation[];
+  source_authority?: PoaSourceAuthorityDetail;
+}
+
+export const POA_SOURCE_CELL_KIND = {
+  BLANK: "BLANK",
+  NUMBER: "NUMBER",
+} as const;
+
+export type PoaSourceCellKind =
+  (typeof POA_SOURCE_CELL_KIND)[keyof typeof POA_SOURCE_CELL_KIND];
+
+export const POA_SOURCE_SEMANTICS_VERSION = "poa-source-months-v1" as const;
+
+export interface PoaSourceMonth {
+  month: number;
+  cell_kind: PoaSourceCellKind;
+  unscaled: string | null;
+  scale: number | null;
+  value: string | null;
+}
+
+export interface PoaSourceStatistics {
+  semanticsVersion: typeof POA_SOURCE_SEMANTICS_VERSION;
+  sum: string | null;
+  average: string | null;
+  observedCount: number;
+  blankCount: number;
+  explicitZeroCount: number;
+  expectedCount: number;
+  coverage: string | null;
+  completeness: string;
+}
+
+export interface PoaSourceAuthorityDetail {
+  semantics_version: typeof POA_SOURCE_SEMANTICS_VERSION;
+  source_months: PoaSourceMonth[];
+  statistics: PoaSourceStatistics;
+  [key: string]: unknown;
 }
 
 export const MONTHLY_EXECUTION_DETAIL_SOURCE = {
@@ -127,7 +225,7 @@ export interface MonthlyEntry {
   planning_line_id: string;
   month: number;
   planned_amount: number;
-  executed_amount: number;
+  executed_amount: string;
   execution_details?: MonthlyExecutionDetail[];
 }
 

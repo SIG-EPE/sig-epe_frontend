@@ -18,6 +18,7 @@ export interface BudgetDashboardExecutionFilters {
   territory_id?: string;
   program_id?: string;
   budget_category_id?: string;
+  measure_authority?: "source" | "operational";
 }
 
 export interface BudgetDashboardTotals {
@@ -31,9 +32,25 @@ export interface BudgetDashboardTotals {
 
 export interface BudgetDashboardMonthlySeriesItem {
   month: number;
-  planned: number;
+  planned: number | null;
   executed: number;
   rendered: number | null;
+  observed_count?: number;
+  blank_count?: number;
+  explicit_zero_count?: number;
+  expected_count?: number;
+  coverage?: string | null;
+}
+
+export interface PoaSourceStatisticsResponse {
+  sum: string | null;
+  average: string | null;
+  observed_count: number;
+  blank_count: number;
+  explicit_zero_count: number;
+  expected_count: number;
+  coverage: string | null;
+  completeness: string;
 }
 
 export interface BudgetDashboardBreakdownItem {
@@ -46,6 +63,10 @@ export interface BudgetDashboardBreakdownItem {
   region_name?: string | null;
   display_label?: string | null;
   is_synthetic_territory?: boolean;
+  territory_region?: string | null;
+  territory_province?: string | null;
+  territory_district?: string | null;
+  territory_chain_mismatch?: boolean;
   planned: number;
   committed: number;
   executed: number;
@@ -74,6 +95,8 @@ export interface BudgetDashboardExecution {
   series: BudgetDashboardMonthlySeriesItem[];
   breakdowns: BudgetDashboardBreakdowns;
   alerts: BudgetDashboardAlert[];
+  semantics_version?: "poa-source-months-v1";
+  source_statistics?: PoaSourceStatisticsResponse;
 }
 
 export const ORG_UNIT_EXECUTION_LEVEL = {
@@ -103,6 +126,7 @@ export interface OrgUnitExecutionDashboardFilters {
   group_id?: string;
   search?: string;
   top_n?: number;
+  measure_authority?: "source" | "operational";
 }
 
 export interface OrgUnitExecutionAppliedFilters {
@@ -124,21 +148,21 @@ export interface OrgUnitExecutionAppliedFilters {
 }
 
 export interface OrgUnitExecutionKpis {
-  annual_programmed: number;
-  period_programmed: number;
+  annual_programmed: number | null;
+  period_programmed: number | null;
   period_executed: number;
-  period_variance: number;
-  not_executed: number;
-  excedente: number;
-  remaining_programmed: number;
+  period_variance: number | null;
+  not_executed: number | null;
+  excedente: number | null;
+  remaining_programmed: number | null;
   execution_rate: number | null;
   currency: string | null;
 }
 
 export interface OrgUnitExecutionTotals {
-  programmed: number;
+  programmed: number | null;
   executed: number;
-  variance: number;
+  variance: number | null;
   execution_rate: number | null;
   currency: string | null;
 }
@@ -153,8 +177,8 @@ export interface OrgUnitExecutionRow extends OrgUnitExecutionTotals {
 }
 
 export interface OrgUnitExecutionVarianceRow extends OrgUnitExecutionRow {
-  not_executed: number;
-  excedente: number;
+  not_executed: number | null;
+  excedente: number | null;
 }
 
 export interface OrgUnitExecutionOption {
@@ -181,8 +205,13 @@ export interface OrgUnitExecutionBreadcrumb {
 
 export interface OrgUnitExecutionMonthly {
   month: number;
-  programmed: number;
+  programmed: number | null;
   executed: number;
+  observed_count?: number;
+  blank_count?: number;
+  explicit_zero_count?: number;
+  expected_count?: number;
+  coverage?: string | null;
 }
 
 export interface OrgUnitExecutionWarning {
@@ -203,6 +232,8 @@ export interface OrgUnitExecutionDashboard {
   filter_options?: OrgUnitExecutionOptions;
   breadcrumbs?: OrgUnitExecutionBreadcrumb[];
   current_filters?: OrgUnitExecutionAppliedFilters;
+  semantics_version?: "poa-source-months-v1";
+  source_statistics?: PoaSourceStatisticsResponse;
   warnings: OrgUnitExecutionWarning[];
 }
 

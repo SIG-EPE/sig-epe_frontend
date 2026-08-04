@@ -33,7 +33,10 @@ import type {
   UpdateOrganizationalUnitDto,
   StrategicComponent,
   OperativeAction,
+  PoaResource,
+  CreatePoaResourceDto,
 } from "@/types/catalogs";
+import { isPoaCatalogCodeModelEnabled } from "@/config/features";
 
 // -------------------------------------------------------
 // useCatalogList — helper genérico para listas
@@ -543,7 +546,7 @@ export function useStrategicComponents(programId?: string | null) {
   const accessToken = useAuthStore((s) => s.accessToken);
 
   const refetch = useCallback(async () => {
-    if (authIsLoading || !accessToken || !programId) {
+    if (!isPoaCatalogCodeModelEnabled() || authIsLoading || !accessToken || !programId) {
       setData([]);
       return;
     }
@@ -581,7 +584,7 @@ export function useOperativeActions(componentId?: string | null) {
   const accessToken = useAuthStore((s) => s.accessToken);
 
   const refetch = useCallback(async () => {
-    if (authIsLoading || !accessToken || !componentId) {
+    if (!isPoaCatalogCodeModelEnabled() || authIsLoading || !accessToken || !componentId) {
       setData([]);
       return;
     }
@@ -604,4 +607,46 @@ export function useOperativeActions(componentId?: string | null) {
   }, [refetch]);
 
   return { data, isLoading, error, refetch };
+}
+
+// -------------------------------------------------------
+// POA RESOURCES — filtrable por action_id
+// -------------------------------------------------------
+
+export function usePoaResources(actionId?: string | null) {
+  const [data, setData] = useState<PoaResource[]>([]);
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const authIsLoading = useAuthStore((state) => state.isLoading);
+  const accessToken = useAuthStore((state) => state.accessToken);
+
+  const refetch = useCallback(async () => {
+    if (!isPoaCatalogCodeModelEnabled() || authIsLoading || !accessToken || !actionId) {
+      setData([]);
+      return;
+    }
+    setIsLoading(true);
+    setError(null);
+    try {
+      setData(
+        await api.get<PoaResource[]>(`/catalogs/poa-resources?action_id=${actionId}`),
+      );
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Error al cargar recursos POA");
+    } finally {
+      setIsLoading(false);
+    }
+  }, [accessToken, actionId, authIsLoading]);
+
+  useEffect(() => {
+    void refetch();
+  }, [refetch]);
+
+  return { data, isLoading, error, refetch };
+}
+
+export async function createPoaResource(dto: CreatePoaResourceDto): Promise<PoaResource> {
+  const created = await api.post<PoaResource>("/catalogs/poa-resources", dto);
+  invalidateCatalogDomain();
+  return created;
 }

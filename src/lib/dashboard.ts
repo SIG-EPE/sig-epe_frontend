@@ -22,6 +22,7 @@ export function buildBudgetExecutionDashboardPath(filters: BudgetDashboardExecut
   appendParam(params, "territory_id", filters.territory_id);
   appendParam(params, "program_id", filters.program_id);
   appendParam(params, "budget_category_id", filters.budget_category_id);
+  appendParam(params, "measure_authority", filters.measure_authority);
 
   return `/budget/dashboard/execution?${params.toString()}`;
 }
@@ -56,6 +57,7 @@ export function buildOrgUnitExecutionDashboardPath(filters: OrgUnitExecutionDash
   appendParam(params, "group_id", filters.group_id);
   appendParam(params, "search", filters.search);
   appendParam(params, "top_n", filters.top_n);
+  appendParam(params, "measure_authority", filters.measure_authority);
   const queryString = params.toString();
   return `/budget/dashboard/org-unit-execution${queryString ? `?${queryString}` : ""}`;
 }
@@ -77,6 +79,7 @@ export function buildOrgUnitExecutionExportPath(filters: OrgUnitExecutionDashboa
   appendParam(params, "parent_id", filters.parent_id);
   appendParam(params, "group_id", filters.group_id);
   appendParam(params, "search", filters.search);
+  appendParam(params, "measure_authority", filters.measure_authority);
 
   const queryString = params.toString();
   return `/budget/dashboard/org-unit-execution/export.xlsx${queryString ? `?${queryString}` : ""}`;

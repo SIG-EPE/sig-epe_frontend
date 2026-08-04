@@ -38,6 +38,7 @@ import { REPORT_DATE_FIELD, REPORT_SORT_DIRECTION, REPORT_SORT_FIELD, type Conce
 import { REQUEST_CURRENCY, type RequestCurrency, type RequestStatus, type RequestType } from "@/types/requests";
 import { useAuthStore } from "@/stores/auth-store";
 import { getCatalogOptionLabel, getOrgUnitFilterLabel } from "@/lib/ui-labels";
+import { TERRITORY_AGGREGATE_OPTIONS } from "@/lib/poa-territory-selection";
 
 const SELECT_ALL = "ALL";
 const DEFAULT_DETAILS_LIMIT = 50;
@@ -341,7 +342,7 @@ function ExpensesByConceptSection({ filters, detailsFilters, enabled, onPageChan
         </div>
         {details.data && details.data.rows.length > 0 ? (
           <Table>
-            <TableHeader><TableRow><TableHead>Solicitud</TableHead><TableHead>Tipo</TableHead><TableHead>Concepto</TableHead><TableHead>Proveedor</TableHead><TableHead>Fecha</TableHead><TableHead className="text-right">Monto</TableHead></TableRow></TableHeader>
+            <TableHeader><TableRow><TableHead>Solicitud</TableHead><TableHead>Tipo</TableHead><TableHead>Concepto</TableHead><TableHead>Proveedor</TableHead><TableHead>Región</TableHead><TableHead>Provincia</TableHead><TableHead>Distrito</TableHead><TableHead>Fecha</TableHead><TableHead className="text-right">Monto</TableHead></TableRow></TableHeader>
             <TableBody>
               {details.data.rows.map((row, index) => (
                 <TableRow key={`${row.request_id}-${row.concept}-${index}`}>
@@ -349,6 +350,14 @@ function ExpensesByConceptSection({ filters, detailsFilters, enabled, onPageChan
                   <TableCell>{getRequestTypeReportLabel(row.request_type)}</TableCell>
                   <TableCell><div className="max-w-72"><p className="font-medium">{row.concept}</p><p className="truncate text-xs text-muted-foreground">{row.detail}</p></div></TableCell>
                   <TableCell>{row.provider ?? "—"}</TableCell>
+                  <TableCell>{row.territory_region ?? "—"}</TableCell>
+                  <TableCell>{row.territory_province ?? "—"}</TableCell>
+                  <TableCell>
+                    <div className="flex items-center gap-2">
+                      <span>{row.territory_district ?? "—"}</span>
+                      {row.territory_chain_mismatch && <Badge variant="outline">Desajuste aprobado</Badge>}
+                    </div>
+                  </TableCell>
                   <TableCell>{getReportDateLabel(row.expense_date ?? row.paid_at)}</TableCell>
                   <TableCell className="text-right">{formatReportCurrency(row.amount, row.currency)}</TableCell>
                 </TableRow>
@@ -403,7 +412,7 @@ function AdvancedFiltersPanel(props: AdvancedFiltersPanelProps) {
         <div className="space-y-2"><Label>Línea POA</Label><Select value={props.draftFilters.planningLineId} onValueChange={(value) => props.onDraftChange("planningLineId", value)}><SelectTrigger><SelectValue placeholder="Todas" /></SelectTrigger><SelectContent><SelectItem value={SELECT_ALL}>Todas</SelectItem>{planningLines.lines.map((line) => <SelectItem key={line.id} value={line.id}>{line.line_code ?? line.resource_description}</SelectItem>)}</SelectContent></Select></div>
         <div className="space-y-2"><Label>Categoría</Label><Select value={props.draftFilters.categoryId} onValueChange={(value) => props.onDraftChange("categoryId", value)}><SelectTrigger><SelectValue placeholder="Todas" /></SelectTrigger><SelectContent><SelectItem value={SELECT_ALL}>Todas</SelectItem>{(categories.data ?? []).map((item) => <SelectItem key={item.id} value={item.id}>{item.name}</SelectItem>)}</SelectContent></Select></div>
         <div className="space-y-2"><Label>Programa</Label><Select value={props.draftFilters.programId} onValueChange={(value) => props.onDraftChange("programId", value)}><SelectTrigger><SelectValue placeholder="Todos" /></SelectTrigger><SelectContent><SelectItem value={SELECT_ALL}>Todos</SelectItem>{(programs.data ?? []).map((item) => <SelectItem key={item.id} value={item.id}>{catalogLabel(item)}</SelectItem>)}</SelectContent></Select></div>
-        <div className="space-y-2"><Label>Territorio</Label><Select value={props.draftFilters.territoryId} onValueChange={(value) => props.onDraftChange("territoryId", value)}><SelectTrigger><SelectValue placeholder="Todos" /></SelectTrigger><SelectContent><SelectItem value={SELECT_ALL}>Todos</SelectItem>{(territories.data ?? []).map((item) => <SelectItem key={item.id} value={item.id}>{catalogLabel(item)}</SelectItem>)}</SelectContent></Select></div>
+        <div className="space-y-2"><Label>Territorio o alcance agregado</Label><Select value={props.draftFilters.territoryId} onValueChange={(value) => props.onDraftChange("territoryId", value)}><SelectTrigger><SelectValue placeholder="Todos" /></SelectTrigger><SelectContent><SelectItem value={SELECT_ALL}>Todos</SelectItem>{Object.values(TERRITORY_AGGREGATE_OPTIONS).map((item) => <SelectItem key={item.id} value={item.id}>{item.name}</SelectItem>)}{(territories.data ?? []).map((item) => <SelectItem key={item.id} value={item.id}>{catalogLabel(item)}</SelectItem>)}</SelectContent></Select></div>
         <div className="space-y-2"><Label>Fuente de financiamiento</Label><Select value={props.draftFilters.fundingSourceId} onValueChange={(value) => props.onDraftChange("fundingSourceId", value)}><SelectTrigger><SelectValue placeholder="Todas" /></SelectTrigger><SelectContent><SelectItem value={SELECT_ALL}>Todas</SelectItem>{(fundingSources.data ?? []).map((item) => <SelectItem key={item.id} value={item.id}>{catalogLabel(item)}</SelectItem>)}</SelectContent></Select></div>
         {props.activeReport === REPORT_SECTION.EXPENSES_BY_CONCEPT && (
           <>

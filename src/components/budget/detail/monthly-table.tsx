@@ -101,12 +101,7 @@ export function MonthlyTable({
   const isGiofGestor = user?.role?.code === "GIOF_GESTOR" || user?.role?.code === "GIOF";
 
   const totalPlanned = Object.values(plannedAmounts).reduce((s, v) => s + Number(v), 0);
-  const totalExecuted = entries.reduce((s, e) => {
-    const manualSum = manualExecutions
-      .filter((m) => m.month === e.month)
-      .reduce((acc, m) => acc + Number(m.amount), 0);
-    return s + Number(e.executed_amount) + manualSum;
-  }, 0);
+  const totalExecuted = entries.reduce((sum, entry) => sum + Number(entry.executed_amount), 0);
   const totalBalance = totalPlanned - totalExecuted;
 
   const exceedsTotal = totalCost !== undefined && totalPlanned > totalCost;
@@ -172,10 +167,7 @@ export function MonthlyTable({
             const planned = plannedAmounts[month] ?? 0;
             const entry = entries.find((e) => e.month === month);
             const apiExecuted = Number(entry?.executed_amount ?? 0);
-            const manualSum = manualExecutions
-              .filter((me) => me.month === month)
-              .reduce((acc, me) => acc + Number(me.amount), 0);
-            const executed = apiExecuted + manualSum;
+            const executed = apiExecuted;
             const balance = planned - executed;
             const isExpanded = expandedMonths.has(month);
             const canAddExecution = lineStatus === "APPROVED" && isGiofGestor && !!lineId;

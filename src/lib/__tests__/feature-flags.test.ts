@@ -1,11 +1,29 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 import {
   SETTLEMENT_PREPARATION_EXPERIENCE,
   getSettlementPreparationExperience,
+  isPoaTerritorySelectionV2Enabled,
 } from "@/lib/feature-flags";
 import { REQUEST_EDIT_STEP, getRequestEditStepperItems } from "@/lib/requests";
 import { REQUEST_STATUS, REQUEST_TYPE } from "@/types/requests";
+
+const originalPoaTerritoryFlag = process.env.NEXT_PUBLIC_POA_TERRITORY_SELECTION_V2;
+
+afterEach(() => {
+  if (originalPoaTerritoryFlag === undefined) delete process.env.NEXT_PUBLIC_POA_TERRITORY_SELECTION_V2;
+  else process.env.NEXT_PUBLIC_POA_TERRITORY_SELECTION_V2 = originalPoaTerritoryFlag;
+});
+
+describe("POA territory selection V2 feature flag", () => {
+  it("keeps the legacy sentinel behavior unless the literal V2 flag is enabled", () => {
+    delete process.env.NEXT_PUBLIC_POA_TERRITORY_SELECTION_V2;
+    expect(isPoaTerritorySelectionV2Enabled()).toBe(false);
+
+    process.env.NEXT_PUBLIC_POA_TERRITORY_SELECTION_V2 = "true";
+    expect(isPoaTerritorySelectionV2Enabled()).toBe(true);
+  });
+});
 
 describe("REXAN settlement preparation eligibility", () => {
   it("selecciona la experiencia V2 solo para REXAN editable en modo edición", () => {

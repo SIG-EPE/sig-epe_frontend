@@ -14,6 +14,10 @@ interface SettlementPreparationExperienceInput {
   status: RequestStatus | null;
 }
 
+export function isPoaTerritorySelectionV2Enabled(): boolean {
+  return process.env.NEXT_PUBLIC_POA_TERRITORY_SELECTION_V2 === "true";
+}
+
 export function getSettlementPreparationExperience({
   mode,
   requestType,

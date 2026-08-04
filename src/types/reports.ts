@@ -135,6 +135,10 @@ export interface ExpensesByConceptDetailRow {
   budget_category_id: string | null;
   program_id: string | null;
   territory_id: string | null;
+  territory_region: string | null;
+  territory_province: string | null;
+  territory_district: string | null;
+  territory_chain_mismatch: boolean;
 }
 
 export interface ReportPagination {

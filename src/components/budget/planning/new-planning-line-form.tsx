@@ -16,11 +16,14 @@ import {
 import {
   useStrategicComponents,
   useOperativeActions,
+  usePoaResources,
+  createPoaResource,
 } from "@/hooks/use-catalogs";
 import { api } from "@/lib/api-client";
 import { SearchSelectModal } from "@/components/ui/search-select-modal";
 import { ComboboxCreate } from "@/components/ui/combobox-create";
 import { TerritorySelector } from "@/components/shared/territory-selector";
+import { StructuredTerritorySelector } from "@/components/shared/structured-territory-selector";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -33,6 +36,16 @@ import {
   hasValidOrgUnitPoaPrefix,
 } from "@/lib/poa-prefix";
 import { PLANNING_TYPE, PLANNING_TYPE_LABELS, PLANNING_TYPES, type PlanningType } from "@/lib/planning-types";
+import { isPoaCatalogCodeModelEnabled } from "@/config/features";
+import { getPoaTerritorySelectionFeatures } from "@/config/poa-territory-selection";
+import {
+  buildTerritorySelectionPayload,
+  type TerritoryAxisDraft,
+} from "@/lib/poa-territory-selection";
+import {
+  buildPlanningLineResourceFields,
+  poaCatalogOptionLabel,
+} from "./planning-line-resource-contract";
 
 // -------------------------------------------------------
 // Zod schema
@@ -56,7 +69,8 @@ const PlanningLineSchema = z.object({
   importance: z.string().optional(),
   frequency: z.string().optional(),
   budget_category_id: z.string().min(1, "El tipo de recurso es requerido"),
-  resource_description: z.string().min(1, "La descripción del recurso es requerida"),
+  resource_id: z.string().nullable().optional(),
+  resource_description: z.string().optional(),
   unit_price: requiredNumber("El precio unitario es requerido", "El precio unitario no puede ser negativo"),
   quantity: requiredNumber("La cantidad es requerida", "La cantidad no puede ser negativa"),
 });
@@ -99,6 +113,8 @@ const TEXTAREA_CLASS =
 
 export function NewPlanningLineForm() {
   const router = useRouter();
+  const poaCatalogEnabled = isPoaCatalogCodeModelEnabled();
+  const territorySelectionEnabled = getPoaTerritorySelectionFeatures().writeEnabled;
 
   // Datos del backend
   const { data: activeFiscalYear, isLoading: fyLoading } = useActiveFiscalYear();
@@ -120,12 +136,15 @@ export function NewPlanningLineForm() {
     importance: "",
     frequency: "",
     budget_category_id: "",
+    resource_id: null,
     resource_description: "",
     unit_price: "0",
     quantity: "0",
   });
 
   const [errors, setErrors] = useState<Partial<Record<keyof PlanningLineFormState, string>>>({});
+  const [territoryAxes, setTerritoryAxes] = useState<TerritoryAxisDraft>({});
+  const [territorySelectionError, setTerritorySelectionError] = useState<string>();
 
   // Programas filtrados por planning_type
   const {
@@ -136,6 +155,9 @@ export function NewPlanningLineForm() {
   // Jerarquía: componentes y acciones operativas en cascada
   const { data: components, refetch: refetchComponents } = useStrategicComponents(form.program_id || null);
   const { data: operativeActions, refetch: refetchActions } = useOperativeActions(form.component_id ?? null);
+  const { data: poaResources, refetch: refetchResources } = usePoaResources(
+    form.operative_action_id ?? null,
+  );
 
   // Limpiar program_id (y jerarquía) al cambiar planning_type
   const handlePlanningTypeChange = (newType: string) => {
@@ -145,6 +167,7 @@ export function NewPlanningLineForm() {
       program_id: "",
       component_id: null,
       operative_action_id: null,
+      resource_id: null,
     }));
   };
 
@@ -183,6 +206,19 @@ export function NewPlanningLineForm() {
     return created;
   };
 
+  const createResource = async (name: string) => {
+    if (!form.operative_action_id) {
+      toast.error("Selecciona primero una acción operativa.");
+      throw new Error("No hay acción operativa seleccionada");
+    }
+    const created = await createPoaResource({
+      name,
+      action_id: form.operative_action_id,
+    });
+    await refetchResources();
+    return created;
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
@@ -204,6 +240,7 @@ export function NewPlanningLineForm() {
       component_id: form.component_id || undefined,
       territory_id: form.territory_id || undefined,
       operative_action_id: form.operative_action_id || undefined,
+      resource_id: form.resource_id || undefined,
       importance: form.importance || undefined,
       frequency: form.frequency || undefined,
     };
@@ -223,7 +260,25 @@ export function NewPlanningLineForm() {
       return;
     }
 
+    if (poaCatalogEnabled && !parsed.data.resource_id) {
+      setErrors({ resource_id: "Selecciona o crea un recurso POA" });
+      return;
+    }
+    if (!poaCatalogEnabled && !parsed.data.resource_description?.trim()) {
+      setErrors({ resource_description: "La descripción del recurso es requerida" });
+      return;
+    }
+
     setErrors({});
+
+    const territorySelection = territorySelectionEnabled
+      ? buildTerritorySelectionPayload(territoryAxes)
+      : null;
+    if (territorySelectionEnabled && !territorySelection) {
+      setTerritorySelectionError("Selecciona un territorio oficial o agregado en cada uno de los tres ejes.");
+      return;
+    }
+    setTerritorySelectionError(undefined);
 
     try {
       const dto: CreatePlanningLineDto = {
@@ -231,10 +286,16 @@ export function NewPlanningLineForm() {
         organizational_unit_id: parsed.data.organizational_unit_id,
         budget_category_id: parsed.data.budget_category_id,
         planning_type: parsed.data.planning_type,
-        resource_description: parsed.data.resource_description,
+        ...buildPlanningLineResourceFields({
+          enabled: poaCatalogEnabled,
+          resourceId: parsed.data.resource_id ?? null,
+          legacyDescription: parsed.data.resource_description ?? "",
+        }),
         unit_price: parsed.data.unit_price,
         quantity: parsed.data.quantity,
-        territory_id: parsed.data.territory_id || undefined,
+        ...(territorySelectionEnabled
+          ? { territory_selection: territorySelection! }
+          : { territory_id: parsed.data.territory_id || undefined }),
         operative_action_id: parsed.data.operative_action_id || null,
         importance: parsed.data.importance,
         frequency: parsed.data.frequency,
@@ -363,6 +424,7 @@ export function NewPlanningLineForm() {
                 program_id: id ?? "",
                 component_id: null,
                 operative_action_id: null,
+                resource_id: null,
               }))}
               disabled={creating}
               onClear
@@ -375,17 +437,30 @@ export function NewPlanningLineForm() {
       <section className="space-y-4">
         <h2 className="text-base font-semibold border-b pb-2">2. Jerarquía</h2>
 
+        {poaCatalogEnabled && (
+          <>
         {/* Componente Estratégico — siempre visible, deshabilitado sin programa */}
         <div className="space-y-1">
           <Label>Componente Estratégico</Label>
           <ComboboxCreate
             items={components ?? []}
             value={form.component_id ?? null}
-            displayValue={components?.find((c) => c.id === form.component_id)?.name}
+            displayValue={
+              components?.find((component) => component.id === form.component_id)
+                ? poaCatalogOptionLabel(
+                    components.find((component) => component.id === form.component_id)!,
+                  )
+                : undefined
+            }
             placeholder="Buscar o agregar componente..."
             getItemId={(c) => c.id}
-            getItemLabel={(c) => c.name}
-            onChange={(id) => setForm((f) => ({ ...f, component_id: id, operative_action_id: null }))}
+            getItemLabel={(c) => poaCatalogOptionLabel(c)}
+            onChange={(id) => setForm((f) => ({
+              ...f,
+              component_id: id,
+              operative_action_id: null,
+              resource_id: null,
+            }))}
             onCreateNew={createStrategicComponent}
             disabled={creating || !form.program_id}
           />
@@ -402,11 +477,21 @@ export function NewPlanningLineForm() {
           <ComboboxCreate
             items={operativeActions ?? []}
             value={form.operative_action_id ?? null}
-            displayValue={operativeActions?.find((a) => a.id === form.operative_action_id)?.name}
+            displayValue={
+              operativeActions?.find((action) => action.id === form.operative_action_id)
+                ? poaCatalogOptionLabel(
+                    operativeActions.find((action) => action.id === form.operative_action_id)!,
+                  )
+                : undefined
+            }
             placeholder="Buscar o agregar acción operativa..."
             getItemId={(a) => a.id}
-            getItemLabel={(a) => a.name}
-            onChange={(id) => setForm((f) => ({ ...f, operative_action_id: id }))}
+            getItemLabel={(a) => poaCatalogOptionLabel(a)}
+            onChange={(id) => setForm((f) => ({
+              ...f,
+              operative_action_id: id,
+              resource_id: null,
+            }))}
             onCreateNew={createOperativeAction}
             disabled={creating || !form.component_id}
           />
@@ -416,39 +501,81 @@ export function NewPlanningLineForm() {
             </p>
           )}
         </div>
+          </>
+        )}
 
-        {/* Descripción del Recurso */}
-        <div className="space-y-1" data-error={!!errors.resource_description || undefined}>
-          <Label htmlFor="resource_description">Descripción del Recurso *</Label>
-          <textarea
-            id="resource_description"
-            value={form.resource_description}
-            onChange={(e) => {
-              setForm((f) => ({ ...f, resource_description: e.target.value }));
-              setErrors((prev) => ({ ...prev, resource_description: undefined }));
-            }}
-            rows={3}
-            disabled={creating}
-            className={`${TEXTAREA_CLASS} ${errors.resource_description ? "border-destructive" : ""}`}
-            placeholder="Describe detalladamente el recurso a utilizar..."
-          />
-          {errors.resource_description && (
-            <p className="text-xs text-destructive">{errors.resource_description}</p>
-          )}
-        </div>
+        {poaCatalogEnabled ? (
+          <div className="space-y-1" data-error={!!errors.resource_id || undefined}>
+            <Label>Recurso POA *</Label>
+            <ComboboxCreate
+              items={poaResources ?? []}
+              value={form.resource_id ?? null}
+              displayValue={
+                poaResources?.find((resource) => resource.id === form.resource_id)
+                  ? poaCatalogOptionLabel(
+                      poaResources.find((resource) => resource.id === form.resource_id)!,
+                    )
+                  : undefined
+              }
+              placeholder="Buscar o agregar recurso POA..."
+              getItemId={(resource) => resource.id}
+              getItemLabel={poaCatalogOptionLabel}
+              onChange={(id) => {
+                setForm((current) => ({ ...current, resource_id: id }));
+                setErrors((current) => ({ ...current, resource_id: undefined }));
+              }}
+              onCreateNew={createResource}
+              disabled={creating || !form.operative_action_id}
+            />
+            {errors.resource_id && (
+              <p className="text-xs text-destructive">{errors.resource_id}</p>
+            )}
+          </div>
+        ) : (
+          <div className="space-y-1" data-error={!!errors.resource_description || undefined}>
+            <Label htmlFor="resource_description">Descripción del Recurso *</Label>
+            <textarea
+              id="resource_description"
+              value={form.resource_description}
+              onChange={(e) => {
+                setForm((f) => ({ ...f, resource_description: e.target.value }));
+                setErrors((prev) => ({ ...prev, resource_description: undefined }));
+              }}
+              rows={3}
+              disabled={creating}
+              className={`${TEXTAREA_CLASS} ${errors.resource_description ? "border-destructive" : ""}`}
+              placeholder="Describe detalladamente el recurso a utilizar..."
+            />
+            {errors.resource_description && (
+              <p className="text-xs text-destructive">{errors.resource_description}</p>
+            )}
+          </div>
+        )}
       </section>
 
       {/* ─── Sección 3: Territorio ─────────────────────────── */}
       <section className="space-y-4">
         <h2 className="text-base font-semibold border-b pb-2">3. Región / Territorio</h2>
 
-        <TerritorySelector
-          value={form.territory_id || undefined}
-          onChange={(val) => setForm((f) => ({ ...f, territory_id: val ?? "" }))}
-          mode="persisted"
-          disabled={creating}
-          showLabel={false}
-        />
+        {territorySelectionEnabled ? (
+          <StructuredTerritorySelector
+            value={territoryAxes}
+            onChange={(value) => {
+              setTerritoryAxes(value);
+              setTerritorySelectionError(undefined);
+            }}
+            disabled={creating}
+            error={territorySelectionError}
+          />
+        ) : (
+          <TerritorySelector
+            value={form.territory_id || undefined}
+            onChange={(val) => setForm((f) => ({ ...f, territory_id: val ?? "" }))}
+            mode="persisted"
+            disabled={creating}
+            showLabel={false}
+          />
+        )}
       </section>
 
       {/* ─── Sección 4: Clasificación ──────────────────────── */}

@@ -16,6 +16,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useTerritories } from "@/hooks/use-budget";
+import { isPoaTerritorySelectionV2Enabled } from "@/lib/feature-flags";
 
 // -------------------------------------------------------
 // Valor especial para "ninguno" — shadcn Select no acepta value=""
@@ -78,6 +79,7 @@ export function TerritorySelector({
   const [districtId, setDistrictId] = useState<string>("");
 
   const isFilterMode = mode === TERRITORY_SELECTOR_MODE.FILTER;
+  const usesStructuredTerritories = isPoaTerritorySelectionV2Enabled();
 
   // Listas derivadas filtradas en cliente
   const regions = allTerritories?.filter((t) => t.level === "REGION") ?? [];
@@ -86,7 +88,7 @@ export function TerritorySelector({
     ? (allTerritories?.filter(
         (t) =>
           t.level === "PROVINCIA" &&
-          (t.parent_id === regionId || t.code === SYNTHETIC_TERRITORY_CODES.MULTIPROVINCIAL)
+          (t.parent_id === regionId || (!usesStructuredTerritories && t.code === SYNTHETIC_TERRITORY_CODES.MULTIPROVINCIAL))
       ) ?? [])
     : [];
 
@@ -94,7 +96,7 @@ export function TerritorySelector({
     ? (allTerritories?.filter(
         (t) =>
           t.level === "DISTRITO" &&
-          (t.parent_id === provinceId || t.code === SYNTHETIC_TERRITORY_CODES.MULTIDISTRITAL)
+          (t.parent_id === provinceId || (!usesStructuredTerritories && t.code === SYNTHETIC_TERRITORY_CODES.MULTIDISTRITAL))
       ) ?? [])
     : [];
 
