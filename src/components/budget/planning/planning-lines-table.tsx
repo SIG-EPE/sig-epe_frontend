@@ -77,7 +77,7 @@ export function PlanningLinesTable({ lines, isLoading, onRefetch }: PlanningLine
             <TableHead>Descripcion</TableHead>
             <TableHead>Unidad organica</TableHead>
             <TableHead>Tipo recurso</TableHead>
-            <TableHead>Total</TableHead>
+            <TableHead>Costo generado</TableHead>
             <TableHead>Estado</TableHead>
             <TableHead>Fecha</TableHead>
             <TableHead>Acciones</TableHead>
@@ -146,7 +146,7 @@ export function PlanningLinesTable({ lines, isLoading, onRefetch }: PlanningLine
             <TableHead>Descripcion</TableHead>
             <TableHead>Unidad organica</TableHead>
             <TableHead>Tipo recurso</TableHead>
-            <TableHead>Total</TableHead>
+            <TableHead>Costo generado</TableHead>
             <TableHead>Estado</TableHead>
             <TableHead>Fecha</TableHead>
             <TableHead className="w-12">Acciones</TableHead>

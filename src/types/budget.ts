@@ -90,6 +90,9 @@ export interface BalanceData {
   total_planned: number;
   total_committed: number;
   total_executed: number;
+  monthly_programmed_decimal?: string;
+  generated_cost_decimal?: string;
+  total_executed_decimal?: string;
   available: number;
   warning: boolean;
   from_cache: boolean;
@@ -226,7 +229,35 @@ export interface MonthlyEntry {
   month: number;
   planned_amount: number;
   executed_amount: string;
+  monthly_programmed_decimal?: string;
+  executed_amount_decimal?: string;
+  execution_provenance?: PoaExecutionProvenance;
   execution_details?: MonthlyExecutionDetail[];
+}
+
+export const POA_EXECUTION_SYSTEM_WINNER = {
+  RENDITION: "RENDITION",
+  PAID_ALLOCATION: "PAID_ALLOCATION",
+  PAID_LEGACY: "PAID_LEGACY",
+} as const;
+
+export type PoaExecutionSystemWinner =
+  (typeof POA_EXECUTION_SYSTEM_WINNER)[keyof typeof POA_EXECUTION_SYSTEM_WINNER];
+
+export interface PoaExecutionSystemLineage {
+  lineage_key: string;
+  winner: PoaExecutionSystemWinner;
+  amount: string;
+}
+
+export interface PoaExecutionProvenance {
+  imported: string;
+  manual: string;
+  system_rendition: string;
+  system_paid_allocation: string;
+  system_paid_legacy: string;
+  total: string;
+  system_lineages: PoaExecutionSystemLineage[];
 }
 
 export interface FundingSourceAllocation {

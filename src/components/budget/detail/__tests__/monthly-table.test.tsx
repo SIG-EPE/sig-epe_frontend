@@ -112,6 +112,27 @@ describe("MonthlyTable", () => {
     expect(screen.getByText(/Tipo: DIRECT_PAYMENT/)).toBeInTheDocument();
   });
 
+  it("renders the exact reconciled provenance breakdown", async () => {
+    await renderExpandedTable([
+      makeMonthlyEntry({
+        executed_amount: "6960.6",
+        execution_provenance: {
+          imported: "6960.6",
+          manual: "0",
+          system_rendition: "0",
+          system_paid_allocation: "0",
+          system_paid_legacy: "0",
+          total: "6960.6",
+          system_lineages: [],
+        },
+      }),
+    ]);
+
+    expect(screen.getByText("Ejecución reconciliada")).toBeInTheDocument();
+    expect(screen.getByText(/Importado:.*6,960.60/)).toBeInTheDocument();
+    expect(screen.getByText(/Total:.*6,960.60/)).toBeInTheDocument();
+  });
+
   it("keeps paid execution details static when requestId is missing", async () => {
     await renderExpandedTable([
       makeMonthlyEntry({

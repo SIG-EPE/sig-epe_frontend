@@ -96,7 +96,7 @@ function KpiCard({
 function BudgetKpis({ data }: { data: BudgetDashboardExecution }) {
   const metrics = [
     { title: "Asignado", value: formatMoneyStrict(data.totals.allocated), description: "Aportes y presupuesto disponible", Icon: Banknote },
-    { title: "Comprometido", value: formatMoneyStrict(data.totals.committed), description: "Solicitudes en compromiso", Icon: Clock3 },
+    { title: "Costo generado", value: formatMoneyStrict(Number(data.totals.generated_cost_decimal ?? data.totals.committed)), description: "Precio unitario por cantidad; no es programación mensual", Icon: Clock3 },
     { title: "Pagado", value: formatMoneyStrict(data.totals.executed), description: "Ejecución pagada", Icon: CheckCircle2 },
     { title: "Rendido", value: formatMoneyStrict(data.totals.rendered), description: data.totals.rendered === null ? "Sin dato estructurado" : "Gasto rendido", Icon: LineChartIcon },
     { title: "Disponible", value: formatMoneyStrict(data.totals.available), description: "Asignado menos compromiso y ejecución", Icon: Wallet },
@@ -115,7 +115,7 @@ function BudgetKpis({ data }: { data: BudgetDashboardExecution }) {
 function MonthlyChart({ data }: { data: BudgetDashboardExecution }) {
   const chartData = data.series.map((item) => ({
     month: formatMonthLabel(item.month),
-    Planificado: item.planned,
+    "Programado mensual": Number(item.monthly_programmed_decimal ?? item.planned),
     Pagado: item.executed,
     Rendido: chartNumberOrNull(item.rendered),
   }));
@@ -133,7 +133,7 @@ function MonthlyChart({ data }: { data: BudgetDashboardExecution }) {
             <YAxis tick={{ fill: CHART_COLORS.text, fontSize: 12 }} tickFormatter={(value) => formatMoneyStrict(Number(value))} width={104} />
             <DashboardTooltip valueFormat="money" />
             <DashboardLegend />
-            <Line type="monotone" dataKey="Planificado" stroke={CHART_COLORS.redSoft} strokeWidth={2} dot={false} connectNulls={false} />
+            <Line type="monotone" dataKey="Programado mensual" stroke={CHART_COLORS.redSoft} strokeWidth={2} dot={false} connectNulls={false} />
             <Line type="monotone" dataKey="Pagado" stroke={CHART_COLORS.primary} strokeWidth={2} dot={false} />
             <Line type="monotone" dataKey="Rendido" stroke={CHART_COLORS.green} strokeWidth={2} dot={false} connectNulls={false} />
           </LineChart>
@@ -175,7 +175,7 @@ function BreakdownBars({ title, rows }: { title: string; rows: BudgetDashboardBr
   const chartData = displayRows.map((row) => ({
     name: truncateChartLabel(getTerritoryDisplayLabel(row), 28),
     fullName: getTerritoryDisplayLabel(row),
-    Planificado: row.planned,
+    "Programado mensual": row.planned,
     Ejecutado: row.executed,
   }));
   const chartHeight = Math.max(320, chartData.length * 52 + 96);
@@ -196,7 +196,7 @@ function BreakdownBars({ title, rows }: { title: string; rows: BudgetDashboardBr
             <YAxis type="category" dataKey="name" tick={{ fill: CHART_COLORS.text, fontSize: 12 }} width={190} />
             <DashboardTooltip valueFormat="money" />
             <DashboardLegend />
-            <Bar dataKey="Planificado" fill={CHART_COLORS.redSoft} radius={[0, 4, 4, 0]} />
+            <Bar dataKey="Programado mensual" fill={CHART_COLORS.redSoft} radius={[0, 4, 4, 0]} />
             <Bar dataKey="Ejecutado" fill={CHART_COLORS.primary} radius={[0, 4, 4, 0]} />
           </BarChart>
         </ChartContainer>
@@ -224,7 +224,7 @@ function TerritoryTable({ rows }: { rows: BudgetDashboardBreakdownItem[] }) {
                   <th className="py-2 pr-3 font-medium">Región</th>
                   <th className="py-2 pr-3 font-medium">Provincia</th>
                   <th className="py-2 pr-3 font-medium">Distrito</th>
-                  <th className="py-2 pr-3 text-right font-medium">Planificado</th>
+                  <th className="py-2 pr-3 text-right font-medium">Programado mensual</th>
                   <th className="py-2 pr-3 text-right font-medium">Ejecutado</th>
                   <th className="py-2 pr-3 text-right font-medium">Rendido</th>
                   <th className="py-2 text-right font-medium">% ejecución</th>
