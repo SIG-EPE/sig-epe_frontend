@@ -13,6 +13,7 @@ import { useOrgUnitExecutionDashboard, useOrgUnitExecutionDashboardOptions } fro
 import { ApiRequestError } from "@/lib/api-client";
 import { downloadOrgUnitExecutionReport, saveDownloadedDashboardReport } from "@/lib/dashboard";
 import { formatMoneyStrict, formatMonthLabel, formatPercentStrict, truncateChartLabel } from "@/lib/dashboard-formatters";
+import { moneyDecimalToNumber } from "@/lib/money-decimal";
 import { formatBusinessName } from "@/lib/ui-labels";
 import { ORG_UNIT_EXECUTION_LEVEL, type OrgUnitExecutionDashboardFilters, type OrgUnitExecutionLevel, type OrgUnitExecutionOption, type OrgUnitExecutionRow } from "@/types/dashboard";
 
@@ -251,8 +252,8 @@ export function OrgUnitExecutionDashboard() {
   const chartData = topRows.map((row) => ({
     name: truncateChartLabel(row.name, 28),
     fullName: row.name,
-    Programado: row.programmed,
-    Ejecutado: row.executed,
+    Programado: moneyDecimalToNumber(row.monthly_programmed_decimal, row.programmed),
+    Ejecutado: moneyDecimalToNumber(row.executed_decimal, row.executed),
   }));
   const varianceData = (data?.no_ejecutado_rows ?? rows).slice(0, 8).map((row) => ({
     name: truncateChartLabel(row.name, 28),
@@ -339,8 +340,9 @@ export function OrgUnitExecutionDashboard() {
         <>
           <div className="grid gap-4 md:grid-cols-4">
             <KpiCard title="Presupuesto anual" value={formatMoneyStrict(kpis?.annual_programmed ?? data.totals.programmed)} description="Presupuesto total del año fiscal" Icon={Wallet} />
-             <KpiCard title={`Presupuesto hasta ${monthLabel}`} value={formatMoneyStrict(kpis ? kpis.period_programmed : data.totals.programmed)} description="Programado de enero al mes seleccionado" Icon={Calculator} />
-            <KpiCard title={`Ejecutado hasta ${monthLabel}`} value={formatMoneyStrict(kpis?.period_executed ?? data.totals.executed)} description="Pagado o rendido según POA" Icon={CheckCircle2} />
+             <KpiCard title={`Presupuesto hasta ${monthLabel}`} value={formatMoneyStrict(moneyDecimalToNumber(data.totals.monthly_programmed_decimal, kpis ? kpis.period_programmed : data.totals.programmed))} description="Programado de enero al mes seleccionado" Icon={Calculator} />
+            <KpiCard title="Costo generado" value={formatMoneyStrict(moneyDecimalToNumber(data.totals.generated_cost_decimal, null))} description="Precio unitario por cantidad; no es programación mensual" Icon={Calculator} />
+            <KpiCard title={`Ejecutado hasta ${monthLabel}`} value={formatMoneyStrict(moneyDecimalToNumber(data.totals.executed_decimal, kpis?.period_executed ?? data.totals.executed))} description="Pagado o rendido según POA" Icon={CheckCircle2} />
             <KpiCard title="% ejecutado" value={formatPercentStrict(kpis?.execution_rate ?? data.totals.execution_rate)} description="Ejecutado / programado del periodo" Icon={BarChart3} />
              <KpiCard title="No ejecutado" value={formatMoneyStrict(kpis ? kpis.not_executed : data.totals.variance === null ? null : Math.max(data.totals.variance, 0))} description={`Pendiente hasta ${monthLabel}`} Icon={Calculator} />
              <KpiCard title="Excedente" value={formatMoneyStrict(kpis ? kpis.excedente : data.totals.variance === null ? null : Math.max(-data.totals.variance, 0))} description="Sobre-ejecución del periodo" Icon={BarChart3} />
@@ -410,8 +412,8 @@ export function OrgUnitExecutionDashboard() {
                             {row.has_children && nextLevel(activeLevel) ? <button className="text-left text-primary hover:underline" onClick={() => drillDown(row)}>{row.name}</button> : row.name}
                             {row.code && <div className="text-xs font-normal text-muted-foreground">{row.code}</div>}
                           </td>
-                          <td className="py-2 pr-3 text-right tabular-nums">{formatMoneyStrict(row.programmed)}</td>
-                          <td className="py-2 pr-3 text-right tabular-nums">{formatMoneyStrict(row.executed)}</td>
+                          <td className="py-2 pr-3 text-right tabular-nums">{formatMoneyStrict(moneyDecimalToNumber(row.monthly_programmed_decimal, row.programmed))}</td>
+                          <td className="py-2 pr-3 text-right tabular-nums">{formatMoneyStrict(moneyDecimalToNumber(row.executed_decimal, row.executed))}</td>
                           <td className="py-2 pr-3 text-right tabular-nums">{formatMoneyStrict(row.variance)}</td>
                            <td className="py-2 pr-3 text-right tabular-nums">{row.variance === null ? "Sin dato" : row.variance >= 0 ? `No ejecutado ${formatMoneyStrict(row.variance)}` : `Excedente ${formatMoneyStrict(Math.abs(row.variance))}`}</td>
                           <td className="py-2 text-right tabular-nums">{formatPercentStrict(row.execution_rate)}</td>

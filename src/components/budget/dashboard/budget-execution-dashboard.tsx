@@ -34,6 +34,7 @@ import {
 import { getTerritoryBusinessBadge, getTerritoryDisplayLabel } from "@/lib/dashboard-territory";
 import { useBudgetBalanceStore } from "@/stores/budget-balance-store";
 import type { BudgetDashboardAlert, BudgetDashboardBreakdownItem, BudgetDashboardExecution } from "@/types/dashboard";
+import { moneyDecimalToNumber, sumMoneyDecimals } from "@/lib/money-decimal";
 
 function useDebouncedValue<T>(value: T, delayMs: number): T {
   const [debouncedValue, setDebouncedValue] = useState(value);
@@ -97,7 +98,7 @@ function BudgetKpis({ data }: { data: BudgetDashboardExecution }) {
   const metrics = [
     { title: "Asignado", value: formatMoneyStrict(data.totals.allocated), description: "Aportes y presupuesto disponible", Icon: Banknote },
     { title: "Costo generado", value: formatMoneyStrict(Number(data.totals.generated_cost_decimal ?? data.totals.committed)), description: "Precio unitario por cantidad; no es programación mensual", Icon: Clock3 },
-    { title: "Pagado", value: formatMoneyStrict(data.totals.executed), description: "Ejecución pagada", Icon: CheckCircle2 },
+    { title: "Pagado", value: formatMoneyStrict(moneyDecimalToNumber(data.totals.executed_decimal, data.totals.executed)), description: "Ejecución pagada", Icon: CheckCircle2 },
     { title: "Rendido", value: formatMoneyStrict(data.totals.rendered), description: data.totals.rendered === null ? "Sin dato estructurado" : "Gasto rendido", Icon: LineChartIcon },
     { title: "Disponible", value: formatMoneyStrict(data.totals.available), description: "Asignado menos compromiso y ejecución", Icon: Wallet },
     { title: "% ejecución", value: formatPercentStrict(data.totals.execution_rate), description: data.totals.execution_rate === null ? "No aplica sin asignado" : "Pagado / asignado", Icon: AlertCircle },
@@ -116,7 +117,7 @@ function MonthlyChart({ data }: { data: BudgetDashboardExecution }) {
   const chartData = data.series.map((item) => ({
     month: formatMonthLabel(item.month),
     "Programado mensual": Number(item.monthly_programmed_decimal ?? item.planned),
-    Pagado: item.executed,
+    Pagado: moneyDecimalToNumber(item.executed_decimal, item.executed),
     Rendido: chartNumberOrNull(item.rendered),
   }));
 
@@ -144,7 +145,8 @@ function MonthlyChart({ data }: { data: BudgetDashboardExecution }) {
 }
 
 function getTopBreakdownRows(rows: BudgetDashboardBreakdownItem[], limit = 6) {
-  const sortedRows = [...rows].sort((first, second) => second.executed - first.executed);
+  const sortedRows = [...rows].sort((first, second) =>
+    Number(second.executed_decimal ?? second.executed) - Number(first.executed_decimal ?? first.executed));
   const topRows = sortedRows.slice(0, limit);
   const remainingRows = sortedRows.slice(limit);
 
@@ -153,6 +155,9 @@ function getTopBreakdownRows(rows: BudgetDashboardBreakdownItem[], limit = 6) {
   const planned = remainingRows.reduce((total, row) => total + row.planned, 0);
   const committed = remainingRows.reduce((total, row) => total + row.committed, 0);
   const executed = remainingRows.reduce((total, row) => total + row.executed, 0);
+  const monthlyProgrammedDecimal = sumMoneyDecimals(remainingRows.map((row) => row.monthly_programmed_decimal ?? String(row.planned)));
+  const generatedCostDecimal = sumMoneyDecimals(remainingRows.map((row) => row.generated_cost_decimal ?? String(row.committed)));
+  const executedDecimal = sumMoneyDecimals(remainingRows.map((row) => row.executed_decimal ?? String(row.executed)));
   const renderedValues = remainingRows.map((row) => row.rendered).filter((value): value is number => value !== null);
   const rendered = renderedValues.length === 0 ? null : renderedValues.reduce((total, value) => total + value, 0);
 
@@ -162,8 +167,11 @@ function getTopBreakdownRows(rows: BudgetDashboardBreakdownItem[], limit = 6) {
       id: "__otros__",
       label: `Otros (${formatNumberStrict(remainingRows.length)})`,
       planned,
+      monthly_programmed_decimal: monthlyProgrammedDecimal,
       committed,
+      generated_cost_decimal: generatedCostDecimal,
       executed,
+      executed_decimal: executedDecimal,
       rendered,
       execution_rate: planned === 0 ? null : executed / planned,
     },
@@ -175,8 +183,8 @@ function BreakdownBars({ title, rows }: { title: string; rows: BudgetDashboardBr
   const chartData = displayRows.map((row) => ({
     name: truncateChartLabel(getTerritoryDisplayLabel(row), 28),
     fullName: getTerritoryDisplayLabel(row),
-    "Programado mensual": row.planned,
-    Ejecutado: row.executed,
+    "Programado mensual": moneyDecimalToNumber(row.monthly_programmed_decimal, row.planned),
+    Ejecutado: moneyDecimalToNumber(row.executed_decimal, row.executed),
   }));
   const chartHeight = Math.max(320, chartData.length * 52 + 96);
 
@@ -261,8 +269,8 @@ function TerritoryTable({ rows }: { rows: BudgetDashboardBreakdownItem[] }) {
                           )}
                         </div>
                       </td>
-                      <td className="py-2 pr-3 text-right tabular-nums">{formatMoneyStrict(row.planned)}</td>
-                      <td className="py-2 pr-3 text-right tabular-nums">{formatMoneyStrict(row.executed)}</td>
+                      <td className="py-2 pr-3 text-right tabular-nums">{formatMoneyStrict(moneyDecimalToNumber(row.monthly_programmed_decimal, row.planned))}</td>
+                      <td className="py-2 pr-3 text-right tabular-nums">{formatMoneyStrict(moneyDecimalToNumber(row.executed_decimal, row.executed))}</td>
                       <td className="py-2 pr-3 text-right tabular-nums">{formatMoneyStrict(row.rendered)}</td>
                       <td className="py-2 text-right tabular-nums">{formatPercentStrict(row.execution_rate)}</td>
                     </tr>
