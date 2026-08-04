@@ -116,7 +116,7 @@ describe("OrgUnitExecutionDashboard", () => {
     render(<OrgUnitExecutionDashboard />);
 
     expect(screen.getByRole("button", { name: "Aplicar filtros" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Descargar Excel" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Descargar Excel (fuente + actual)" })).toBeDisabled();
     expect(screen.queryByText("Presupuesto anual")).not.toBeInTheDocument();
     expect(screen.queryByText("Comparación por unidad orgánica")).not.toBeInTheDocument();
     expect(screen.queryByText("Detalle")).not.toBeInTheDocument();
@@ -255,7 +255,7 @@ describe("OrgUnitExecutionDashboard", () => {
     await user.click(screen.getByRole("button", { name: "Aplicar filtros" }));
     await user.selectOptions(screen.getByLabelText("Unidad orgánica"), "org-2");
 
-    await user.click(screen.getByRole("button", { name: "Descargar Excel" }));
+    await user.click(screen.getByRole("button", { name: "Descargar Excel (fuente + actual)" }));
 
     expect(downloadReport).toHaveBeenCalledWith(expect.objectContaining({
       fiscal_year: expect.any(Number),
@@ -279,13 +279,13 @@ describe("OrgUnitExecutionDashboard", () => {
 
     await user.selectOptions(screen.getByLabelText("Unidad orgánica"), "org-1");
     await user.click(screen.getByRole("button", { name: "Aplicar filtros" }));
-    await user.click(screen.getByRole("button", { name: "Descargar Excel" }));
+    await user.click(screen.getByRole("button", { name: "Descargar Excel (fuente + actual)" }));
 
     expect(screen.getByRole("button", { name: "Exportando..." })).toBeDisabled();
 
     resolveDownload({ blob: new Blob(["xlsx"]), filename: null });
 
-    await waitFor(() => expect(screen.getByRole("button", { name: "Descargar Excel" })).toBeEnabled());
+    await waitFor(() => expect(screen.getByRole("button", { name: "Descargar Excel (fuente + actual)" })).toBeEnabled());
   });
 
   it("shows a clear Spanish message if export rejects missing Unidad orgánica", async () => {
@@ -301,7 +301,7 @@ describe("OrgUnitExecutionDashboard", () => {
 
     await user.selectOptions(screen.getByLabelText("Unidad orgánica"), "org-1");
     await user.click(screen.getByRole("button", { name: "Aplicar filtros" }));
-    await user.click(screen.getByRole("button", { name: "Descargar Excel" }));
+    await user.click(screen.getByRole("button", { name: "Descargar Excel (fuente + actual)" }));
 
     await waitFor(() => expect(toastError).toHaveBeenCalledWith("Selecciona y aplica una unidad orgánica antes de descargar el Excel."));
   });

@@ -11,6 +11,7 @@ import {
   getGiofOperationsDashboard,
   getOrgUnitExecutionDashboard,
   getOrgUnitExecutionDashboardOptions,
+  POA_EXPORT_CONTENT_LABEL,
 } from "@/lib/dashboard";
 import { useAuthStore } from "@/stores/auth-store";
 
@@ -26,6 +27,10 @@ function getLastRequestHeaders(): Headers {
   const [, init] = fetchMock.mock.calls.at(-1) ?? [];
   return new Headers(init?.headers);
 }
+
+it("labels POA exports as exact source plus current data", () => {
+  expect(POA_EXPORT_CONTENT_LABEL).toBe("fuente exacta + datos actuales");
+});
 
 describe("dashboard API clients", () => {
   beforeEach(() => {
@@ -157,9 +162,12 @@ describe("dashboard API clients", () => {
 
   it("downloads org unit execution export through authenticated client", async () => {
     vi.mocked(fetch).mockResolvedValue(
-      new Response("xlsx", {
+      new Response(new Uint8Array([0x50, 0x4b, 0x03, 0x04, 0x78, 0x6c, 0x73, 0x78]), {
         status: 200,
-        headers: { "Content-Disposition": "attachment; filename=programado-ejecutado.xlsx" },
+        headers: {
+          "Content-Disposition": "attachment; filename=programado-ejecutado.xlsx",
+          "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        },
       }),
     );
 

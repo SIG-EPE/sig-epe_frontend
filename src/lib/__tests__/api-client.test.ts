@@ -10,6 +10,23 @@ function mockJsonResponse(body: unknown, status = 200): Response {
   });
 }
 
+const XLSX_MEDIA_TYPE =
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+const VALID_XLSX_BYTES = new Uint8Array([0x50, 0x4b, 0x03, 0x04, 0x78, 0x6c, 0x73, 0x78]);
+
+function mockXlsxResponse(
+  bytes: Uint8Array = VALID_XLSX_BYTES,
+  contentType = XLSX_MEDIA_TYPE,
+): Response {
+  return new Response(new Uint8Array(bytes).buffer as ArrayBuffer, {
+    status: 200,
+    headers: {
+      "Content-Type": contentType,
+      "Content-Disposition": 'attachment; filename="report.xlsx"',
+    },
+  });
+}
+
 function getLastRequestHeaders(): Headers {
   const fetchMock = vi.mocked(fetch);
   const [, init] = fetchMock.mock.calls.at(-1) ?? [];
@@ -109,10 +126,42 @@ describe("api client auth headers", () => {
   });
 
   it("preserves the access token when exporting reports", async () => {
-    vi.mocked(fetch).mockResolvedValue(new Response("xlsx", { status: 200 }));
+    vi.mocked(fetch).mockResolvedValue(mockXlsxResponse());
 
     await api.download("/reports/requests-by-status/export.xlsx");
 
     expect(getLastRequestHeaders().get("Authorization")).toBe("Bearer stale-admin-token");
+  });
+
+  it("accepts case-insensitive XLSX media type parameters and a PK signature", async () => {
+    vi.mocked(fetch).mockResolvedValue(
+      mockXlsxResponse(VALID_XLSX_BYTES, `${XLSX_MEDIA_TYPE.toUpperCase()}; Charset=binary`),
+    );
+
+    const result = await api.download("/reports/requests-by-status/export.xlsx");
+
+    expect(result.filename).toBe("report.xlsx");
+    expect(new Uint8Array(await result.blob.arrayBuffer())).toEqual(VALID_XLSX_BYTES);
+  });
+
+  it("rejects a successful response with a non-XLSX media type", async () => {
+    vi.mocked(fetch).mockResolvedValue(mockXlsxResponse(VALID_XLSX_BYTES, "application/json"));
+
+    const error = await api.download("/reports/requests-by-status/export.xlsx").catch((caught) => caught);
+
+    expect(error).toBeInstanceOf(ApiRequestError);
+    expect(error).toMatchObject({ status: 200, body: { code: "INVALID_DOWNLOAD_RESPONSE" } });
+  });
+
+  it.each([
+    ["wrong", new Uint8Array([0x7b, 0x22, 0x6f, 0x6b])],
+    ["truncated", new Uint8Array([0x50, 0x4b, 0x03])],
+  ])("rejects a successful XLSX response with a %s signature", async (_caseName, bytes) => {
+    vi.mocked(fetch).mockResolvedValue(mockXlsxResponse(bytes));
+
+    const error = await api.download("/reports/requests-by-status/export.xlsx").catch((caught) => caught);
+
+    expect(error).toBeInstanceOf(ApiRequestError);
+    expect(error).toMatchObject({ status: 200, body: { code: "INVALID_DOWNLOAD_RESPONSE" } });
   });
 });
