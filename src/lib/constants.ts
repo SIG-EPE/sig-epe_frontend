@@ -20,6 +20,7 @@ export const ROUTES = {
   BUDGET_PLANNING: "/budget/planning",
   BUDGET_PLANNING_NEW: "/budget/planning/new",
   CATALOGS: "/catalogs",
+  CATALOGS_POA_HIERARCHY: "/catalogs/poa-hierarchy",
   ACCOUNTABILITY: "/accountability",
   REPORTS: "/reports",
   ADMIN_USERS: "/admin/users",
@@ -58,27 +59,29 @@ export interface MenuItem {
 }
 
 /** Menu items available per role */
+const GIOF_MENU_ITEMS: MenuItem[] = [
+  { label: "Mis Solicitudes", href: `${ROUTES.REQUESTS}?scope=mine`, icon: "FileText" },
+  { label: "Bandeja de Revisión", href: `${ROUTES.REQUESTS}?scope=review`, icon: "ClipboardList" },
+  { label: "Cola de Pagos", href: ROUTES.PAYMENTS, icon: "CreditCard" },
+  { label: "Bandeja de Rendiciones", href: ROUTES.RENDITIONS, icon: "Receipt" },
+  { label: "Dashboard GIOF", href: ROUTES.DASHBOARD_GIOF, icon: "LayoutDashboard" },
+  { label: "Presupuesto", href: ROUTES.BUDGET, icon: "BarChart3" },
+  { label: "Programado vs Ejecutado", href: ROUTES.BUDGET_ORG_UNIT_EXECUTION, icon: "BarChart3" },
+  { label: "Años Fiscales", href: ROUTES.BUDGET_FISCAL_YEARS, icon: "CalendarDays" },
+  { label: "Plan Operativo (POA)", href: ROUTES.BUDGET_PLANNING, icon: "ListChecks" },
+  { label: "Aportes de Socios", href: ROUTES.BUDGET_ALLOCATIONS, icon: "Handshake" },
+  { label: "Reportes", href: ROUTES.REPORTS, icon: "BarChart3" },
+  { label: "Catálogos", href: ROUTES.CATALOGS, icon: "BookOpen" },
+  { label: "Usuarios", href: ROUTES.ADMIN_USERS, icon: "Users" },
+  { label: "Centro de ayuda", href: ROUTES.HELP, icon: "CircleHelp" },
+];
+
 export const ROLE_MENU_MAP: Record<RoleCode, MenuItem[]> = {
   SOLICITANTE_EPE: [
     { label: "Mis Solicitudes", href: `${ROUTES.REQUESTS}?scope=mine`, icon: "FileText" },
     { label: "Centro de ayuda", href: ROUTES.HELP, icon: "CircleHelp" },
   ],
-  GIOF_GESTOR: [
-    { label: "Mis Solicitudes", href: `${ROUTES.REQUESTS}?scope=mine`, icon: "FileText" },
-    { label: "Bandeja de Revisión", href: `${ROUTES.REQUESTS}?scope=review`, icon: "ClipboardList" },
-    { label: "Cola de Pagos", href: ROUTES.PAYMENTS, icon: "CreditCard" },
-    { label: "Bandeja de Rendiciones", href: ROUTES.RENDITIONS, icon: "Receipt" },
-    { label: "Dashboard GIOF", href: ROUTES.DASHBOARD_GIOF, icon: "LayoutDashboard" },
-    { label: "Presupuesto", href: ROUTES.BUDGET, icon: "BarChart3" },
-    { label: "Programado vs Ejecutado", href: ROUTES.BUDGET_ORG_UNIT_EXECUTION, icon: "BarChart3" },
-    { label: "Años Fiscales", href: ROUTES.BUDGET_FISCAL_YEARS, icon: "CalendarDays" },
-    { label: "Plan Operativo (POA)", href: ROUTES.BUDGET_PLANNING, icon: "ListChecks" },
-    { label: "Aportes de Socios", href: ROUTES.BUDGET_ALLOCATIONS, icon: "Handshake" },
-    { label: "Reportes", href: ROUTES.REPORTS, icon: "BarChart3" },
-    { label: "Catálogos", href: ROUTES.CATALOGS, icon: "BookOpen" },
-    { label: "Usuarios", href: ROUTES.ADMIN_USERS, icon: "Users" },
-    { label: "Centro de ayuda", href: ROUTES.HELP, icon: "CircleHelp" },
-  ],
+  GIOF_GESTOR: GIOF_MENU_ITEMS,
   AUDITOR_DIRECCION: [
     { label: "Mis Solicitudes", href: `${ROUTES.REQUESTS}?scope=mine`, icon: "FileText" },
     { label: "Presupuesto", href: ROUTES.BUDGET, icon: "BarChart3" },
@@ -95,6 +98,7 @@ export const ROLE_MENU_MAP: Record<RoleCode, MenuItem[]> = {
     { label: "Presupuesto", href: ROUTES.BUDGET, icon: "BarChart3" },
     { label: "Programado vs Ejecutado", href: ROUTES.BUDGET_ORG_UNIT_EXECUTION, icon: "BarChart3" },
     { label: "Reportes", href: ROUTES.REPORTS, icon: "BarChart3" },
+    { label: "Catálogos", href: ROUTES.CATALOGS, icon: "BookOpen" },
     { label: "Usuarios", href: ROUTES.ADMIN_USERS, icon: "Users" },
     { label: "Log de auditoría", href: ROUTES.ADMIN_AUDIT_LOGS, icon: "ClipboardList" },
     { label: "Centro de ayuda", href: ROUTES.HELP, icon: "CircleHelp" },

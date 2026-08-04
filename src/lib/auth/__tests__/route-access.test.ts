@@ -4,14 +4,16 @@ import { canAccessRoute } from "@/lib/auth/route-access";
 import { ROLE_CODE } from "@/lib/constants";
 
 describe("route access matrix", () => {
-  it("protects payment, budget management, and catalog routes for GIOF only", () => {
+  it("protects payment and budget management for GIOF, while catalogs align GIOF/Admin", () => {
     expect(canAccessRoute("/payments", ROLE_CODE.GIOF_GESTOR).isAllowed).toBe(true);
     expect(canAccessRoute("/budget/planning", ROLE_CODE.GIOF_GESTOR).isAllowed).toBe(true);
     expect(canAccessRoute("/catalogs/funding-sources", ROLE_CODE.GIOF_GESTOR).isAllowed).toBe(true);
 
     expect(canAccessRoute("/payments", ROLE_CODE.SOLICITANTE_EPE).isAllowed).toBe(false);
     expect(canAccessRoute("/budget/planning", ROLE_CODE.ADMIN_SISTEMA).isAllowed).toBe(false);
-    expect(canAccessRoute("/catalogs", ROLE_CODE.ADMIN_SISTEMA).isAllowed).toBe(false);
+    expect(canAccessRoute("/catalogs", ROLE_CODE.ADMIN_SISTEMA).isAllowed).toBe(true);
+    expect(canAccessRoute("/catalogs/poa-hierarchy", ROLE_CODE.ADMIN_SISTEMA).isAllowed).toBe(true);
+    expect(canAccessRoute("/catalogs/poa-hierarchy", ROLE_CODE.AUDITOR_DIRECCION).isAllowed).toBe(false);
   });
 
   it("allows restricted dashboards to GIOF, Admin and Auditor while denying Solicitante", () => {

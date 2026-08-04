@@ -6,6 +6,7 @@ import {
   Map,
   Building2,
   Layers,
+  GitBranch,
   ArrowRight,
 } from "lucide-react";
 
@@ -16,12 +17,20 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { ROUTES } from "@/lib/constants";
 
 // -------------------------------------------------------
 // Catalogs index page — 6 catálogos navegables
 // -------------------------------------------------------
 
 const CATALOGS = [
+  {
+    href: ROUTES.CATALOGS_POA_HIERARCHY,
+    icon: GitBranch,
+    title: "Jerarquía POA",
+    description:
+      "Programas, componentes, acciones y descripciones de recursos con código canónico.",
+  },
   {
     href: "/catalogs/organizational-units",
     icon: Building2,

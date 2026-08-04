@@ -204,8 +204,13 @@ export interface UpdateOrganizationalUnitDto {
 export interface StrategicComponent {
   id: string;
   name: string;
-  program_id: string;
-  is_active: boolean;
+  programId: string;
+  programName?: string | null;
+  sequenceNumber: string;
+  fullCode: string;
+  isActive: boolean;
+  publishedAt?: string | null;
+  dependencies?: PoaCatalogDependencyCounts;
 }
 
 // -------------------------------------------------------
@@ -215,6 +220,50 @@ export interface StrategicComponent {
 export interface OperativeAction {
   id: string;
   name: string;
-  component_id: string;
+  componentId: string;
+  componentName?: string | null;
+  sequenceNumber: string;
+  fullCode: string;
+  isActive: boolean;
+  publishedAt?: string | null;
+  dependencies?: PoaCatalogDependencyCounts;
+}
+
+export interface PoaResource {
+  id: string;
+  name: string;
+  actionId: string;
+  actionName?: string | null;
+  componentId?: string;
+  componentName?: string | null;
+  sequenceNumber: string;
+  fullCode: string;
+  isActive: boolean;
+  publishedAt?: string | null;
+  dependencies?: PoaCatalogDependencyCounts;
+}
+
+export interface CreatePoaResourceDto {
+  name: string;
+  action_id: string;
+}
+
+export interface PoaCatalogDependencyCounts {
+  total: number;
+  activeChildren?: number;
+  planningLines?: number;
+}
+
+export interface PoaHierarchyProgram {
+  id: string;
+  code: string;
+  name: string;
   is_active: boolean;
+}
+
+export interface PoaHierarchyData {
+  programs: PoaHierarchyProgram[];
+  components: StrategicComponent[];
+  actions: OperativeAction[];
+  resources: PoaResource[];
 }

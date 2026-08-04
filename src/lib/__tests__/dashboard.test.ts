@@ -44,6 +44,31 @@ describe("dashboard API clients", () => {
     ).toBe("/budget/dashboard/execution?fiscal_year_id=fy-1&org_unit_id=org-1&territory_id=territory-1");
   });
 
+  it("preserves source measure authority in dashboard and report paths", () => {
+    expect(
+      buildBudgetExecutionDashboardPath({
+        fiscal_year_id: "fy-1",
+        measure_authority: "source",
+      }),
+    ).toBe("/budget/dashboard/execution?fiscal_year_id=fy-1&measure_authority=source");
+
+    expect(
+      buildOrgUnitExecutionDashboardPath({
+        fiscal_year: 2026,
+        org_unit_id: "org-1",
+        measure_authority: "source",
+      }),
+    ).toBe("/budget/dashboard/org-unit-execution?fiscal_year=2026&org_unit_id=org-1&measure_authority=source");
+
+    expect(
+      buildOrgUnitExecutionExportPath({
+        fiscal_year: 2026,
+        org_unit_id: "org-1",
+        measure_authority: "source",
+      }),
+    ).toBe("/budget/dashboard/org-unit-execution/export.xlsx?fiscal_year=2026&org_unit_id=org-1&measure_authority=source");
+  });
+
   it("builds GIOF operations query params and omits empty optionals", () => {
     expect(buildGiofOperationsDashboardPath({ date_from: "2026-01-01", fiscal_year: 2026 })).toBe(
       "/dashboard/giof/operations?date_from=2026-01-01&fiscal_year=2026",

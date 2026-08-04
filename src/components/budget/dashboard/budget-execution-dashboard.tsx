@@ -133,7 +133,7 @@ function MonthlyChart({ data }: { data: BudgetDashboardExecution }) {
             <YAxis tick={{ fill: CHART_COLORS.text, fontSize: 12 }} tickFormatter={(value) => formatMoneyStrict(Number(value))} width={104} />
             <DashboardTooltip valueFormat="money" />
             <DashboardLegend />
-            <Line type="monotone" dataKey="Planificado" stroke={CHART_COLORS.redSoft} strokeWidth={2} dot={false} />
+            <Line type="monotone" dataKey="Planificado" stroke={CHART_COLORS.redSoft} strokeWidth={2} dot={false} connectNulls={false} />
             <Line type="monotone" dataKey="Pagado" stroke={CHART_COLORS.primary} strokeWidth={2} dot={false} />
             <Line type="monotone" dataKey="Rendido" stroke={CHART_COLORS.green} strokeWidth={2} dot={false} connectNulls={false} />
           </LineChart>
@@ -221,7 +221,9 @@ function TerritoryTable({ rows }: { rows: BudgetDashboardBreakdownItem[] }) {
             <table className="w-full text-sm">
               <thead className="text-left text-muted-foreground">
                 <tr className="border-b border-border">
-                  <th className="py-2 pr-3 font-medium">Territorio</th>
+                  <th className="py-2 pr-3 font-medium">Región</th>
+                  <th className="py-2 pr-3 font-medium">Provincia</th>
+                  <th className="py-2 pr-3 font-medium">Distrito</th>
                   <th className="py-2 pr-3 text-right font-medium">Planificado</th>
                   <th className="py-2 pr-3 text-right font-medium">Ejecutado</th>
                   <th className="py-2 pr-3 text-right font-medium">Rendido</th>
@@ -234,9 +236,9 @@ function TerritoryTable({ rows }: { rows: BudgetDashboardBreakdownItem[] }) {
                   const badgeLabel = getTerritoryBusinessBadge(row);
                   return (
                     <tr key={row.id ?? row.label} className="border-b border-border/60 last:border-0">
-                      <td className="max-w-72 py-2 pr-3 font-medium">
+                      <td className="max-w-56 py-2 pr-3 font-medium">
                         <div className="flex min-w-0 flex-col gap-1">
-                          <span className="block truncate" title={displayLabel}>{displayLabel}</span>
+                          <span className="block truncate" title={row.territory_region ?? displayLabel}>{row.territory_region ?? displayLabel}</span>
                           <span className="flex flex-wrap items-center gap-1.5 text-xs font-normal text-muted-foreground">
                             {badgeLabel && (
                               <span className="rounded-full border border-border bg-muted px-2 py-0.5 text-[11px] font-medium text-foreground">
@@ -246,6 +248,17 @@ function TerritoryTable({ rows }: { rows: BudgetDashboardBreakdownItem[] }) {
                             {row.territory_ubigeo_code && <span>UBIGEO {row.territory_ubigeo_code}</span>}
                             {row.territory_code && !row.territory_ubigeo_code && <span>{row.territory_code}</span>}
                           </span>
+                        </div>
+                      </td>
+                      <td className="max-w-48 py-2 pr-3">{row.territory_province ?? "—"}</td>
+                      <td className="max-w-48 py-2 pr-3">
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <span>{row.territory_district ?? "—"}</span>
+                          {row.territory_chain_mismatch && (
+                            <span className="rounded-full border border-border bg-muted px-2 py-0.5 text-[11px] font-medium">
+                              Desajuste aprobado
+                            </span>
+                          )}
                         </div>
                       </td>
                       <td className="py-2 pr-3 text-right tabular-nums">{formatMoneyStrict(row.planned)}</td>
@@ -272,6 +285,10 @@ export function BudgetExecutionDashboard() {
         fiscal_year_id: fiscalYearId,
         org_unit_id: filters.org_unit_id,
         territory_id: filters.territory_id,
+        measure_authority:
+          process.env.NEXT_PUBLIC_POA_SOURCE_MONTHS_ENABLED === "true"
+            ? ("source" as const)
+            : ("operational" as const),
       }
     : null;
   const debouncedFilters = useDebouncedValue(dashboardFilters, 250);
@@ -318,6 +335,18 @@ export function BudgetExecutionDashboard() {
           <AlertDescription>{message}</AlertDescription>
         </Alert>
       ))}
+      {data.source_statistics && (
+        <Alert>
+          <AlertDescription>
+            Cobertura de programación fuente:{" "}
+            {data.source_statistics.coverage === null
+              ? "Sin selección"
+              : `${(Number(data.source_statistics.coverage) * 100).toFixed(2)}%`}
+            {" · "}{data.source_statistics.blank_count} sin dato
+            {" · "}{data.source_statistics.explicit_zero_count} ceros explícitos
+          </AlertDescription>
+        </Alert>
+      )}
       <BudgetKpis data={data} />
       <MonthlyChart data={data} />
       <BreakdownBars title="Ejecución por categoría" rows={data.breakdowns.by_category} />

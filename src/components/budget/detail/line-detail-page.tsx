@@ -8,14 +8,21 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { StatusBadge } from "@/components/budget/planning/status-badge";
 import { MonthlyTable } from "./monthly-table";
+import { SourceMonthGrid } from "./source-month-grid";
 import { FundingSourceDistribution } from "./funding-source-distribution";
 import { StatusTimeline } from "./status-timeline";
+import { PlanningLineTerritoryCard } from "./planning-line-territory-card";
 import { LineActions } from "./line-actions";
 import { usePlanningLine } from "@/hooks/use-budget";
 import { formatBusinessDateTime } from "@/lib/business-timezone";
 import { PLANNING_TYPE_LABELS, PLANNING_TYPES, type PlanningType } from "@/lib/planning-types";
 import { useAuthStore } from "@/stores/auth-store";
 import type { FundingSourceAllocation, PlanningLine } from "@/types/budget";
+import {
+  getPoaTerritorySelectionFeatures,
+  resolvePoaTerritorySelectionRead,
+} from "@/config/poa-territory-selection";
+import { isUnclassifiedLabel } from "@/lib/poa-territory-selection";
 
 function formatCurrency(amount: number): string {
   return new Intl.NumberFormat("es-PE", {
@@ -84,7 +91,11 @@ export function LineDetailPage() {
   const router = useRouter();
   const id = params.id as string;
 
-  const { line, isLoading, error, refetch } = usePlanningLine(id);
+  const sourceMonthsEnabled =
+    process.env.NEXT_PUBLIC_POA_SOURCE_MONTHS_ENABLED === "true";
+  const { line, isLoading, error, refetch } = usePlanningLine(id, {
+    measureAuthority: sourceMonthsEnabled ? "source" : "operational",
+  });
   const { user } = useAuthStore();
   const isGiof =
     user?.role?.code === "GIOF" || user?.role?.code === "GIOF_GESTOR";
@@ -114,6 +125,18 @@ export function LineDetailPage() {
       </div>
     );
   }
+
+  const territoryFeatures = getPoaTerritorySelectionFeatures();
+  const territoryRead = resolvePoaTerritorySelectionRead(
+    line.territory_selection,
+    line.territory ?? null,
+  );
+  const legacyTerritoryLabel = formatCodeName(line.territory);
+  const categoryLabel = formatCodeName(line.budgetCategory ?? line.budget_category);
+  const isUnclassified = territoryFeatures.readEnabled && (
+    isUnclassifiedLabel(categoryLabel)
+      || getLineFundingSources(line).some((source) => isUnclassifiedLabel(formatCodeName(source.fundingSource)))
+  );
 
   return (
     <div className="flex flex-col gap-6">
@@ -152,12 +175,32 @@ export function LineDetailPage() {
 
       <DetailSection title="Clasificación y alcance">
         <DetailItem label="Recurso" value={line.resource_description} />
-        <DetailItem label="Categoría / tipo de recurso" value={formatCodeName(line.budgetCategory ?? line.budget_category)} />
-        <DetailItem label="Territorio" value={formatCodeName(line.territory)} />
+        <DetailItem label="Categoría / tipo de recurso" value={categoryLabel} />
+        {territoryRead.source === "LEGACY_ANCHOR" && (
+          <DetailItem label="Territorio" value={legacyTerritoryLabel} />
+        )}
         <DetailItem label="Importancia" value={line.importance} />
         <DetailItem label="Frecuencia" value={line.frequency} />
         <DetailItem label="Estado actual" value={line.status} />
       </DetailSection>
+
+      {territoryRead.source === "STRUCTURED" && (
+        <PlanningLineTerritoryCard
+          lineId={line.id}
+          selection={territoryRead.value}
+          legacyLabel={legacyTerritoryLabel}
+          canEdit={territoryFeatures.writeEnabled && line.status === "DRAFT" && (isGiof || line.created_by === user?.id)}
+          onUpdated={refetch}
+        />
+      )}
+
+      {isUnclassified && (
+        <Alert>
+          <AlertDescription>
+            <strong>POR CLASIFICAR:</strong> esta línea conserva una clasificación temporal. Revisa la categoría y las fuentes de financiamiento antes de enviarla.
+          </AlertDescription>
+        </Alert>
+      )}
 
       {/* 3. Cost */}
       <div className="flex flex-col gap-2 rounded-lg border bg-card p-4">
@@ -194,6 +237,10 @@ export function LineDetailPage() {
           onConflictRefetch={refetch}
         />
       </div>
+
+      {line.source_authority && (
+        <SourceMonthGrid sourceAuthority={line.source_authority} />
+      )}
 
       {/* 5. Funding source distribution */}
       <div className="flex flex-col gap-2">

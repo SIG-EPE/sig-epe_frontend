@@ -23,6 +23,7 @@ import type {
   ManualExecution,
   PlanningLineStats,
   PlanningLineStatsResponse,
+  PlanningLineTerritorySelectionInput,
 } from "@/types/budget";
 
 const PLANNING_LINE_STAT_KEYS = ["DRAFT", "SUBMITTED", "APPROVED", "REJECTED"] as const;
@@ -436,7 +437,10 @@ export function usePlanningLines(filters?: {
 // GET /budget/planning-lines/:id
 // -------------------------------------------------------
 
-export function usePlanningLine(id: string) {
+export function usePlanningLine(
+  id: string,
+  options: { measureAuthority?: "source" | "operational" } = {},
+) {
   const [data, setData] = useState<PlanningLine | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -448,14 +452,18 @@ export function usePlanningLine(id: string) {
     setIsLoading(true);
     setError(null);
     try {
-      const result = await api.get<PlanningLine>(`/budget/planning-lines/${id}`);
+      const query =
+        options.measureAuthority === "source"
+          ? "?measure_authority=source"
+          : "";
+      const result = await api.get<PlanningLine>(`/budget/planning-lines/${id}${query}`);
       setData(result);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Error al cargar linea");
     } finally {
       setIsLoading(false);
     }
-  }, [id]);
+  }, [id, options.measureAuthority]);
 
   useEffect(() => {
     if (!id || authIsLoading || !accessToken) return;
@@ -1057,19 +1065,48 @@ export function useActiveFiscalYear() {
 // POST /budget/planning-lines
 // -------------------------------------------------------
 
+export interface CreatePlanningLineResourceDto {
+  name: string;
+  action_id: string;
+}
+
 export interface CreatePlanningLineDto {
   fiscal_year_id: string;
   organizational_unit_id: string;
   budget_category_id: string;
   territory_id?: string;
+  territory_selection?: PlanningLineTerritorySelectionInput;
   planning_type: PlanningType;
-  resource_description: string;
+  resource_description?: string;
+  resource_id?: string;
+  new_resource?: CreatePlanningLineResourceDto;
   operative_action_id?: string | null;
   importance?: string;
   frequency?: string;
   unit_price: number;
   quantity: number;
   program_id?: string;
+}
+
+export function useUpdatePlanningLineTerritory(id: string) {
+  const [isLoading, setIsLoading] = useState(false);
+
+  const update = async (
+    territorySelection: PlanningLineTerritorySelectionInput,
+  ): Promise<PlanningLine> => {
+    setIsLoading(true);
+    try {
+      const result = await api.patch<PlanningLine>(`/budget/planning-lines/${id}`, {
+        territory_selection: territorySelection,
+      });
+      invalidateBudgetMutationCaches();
+      return result;
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  return { update, isLoading };
 }
 
 export function useCreatePlanningLine() {

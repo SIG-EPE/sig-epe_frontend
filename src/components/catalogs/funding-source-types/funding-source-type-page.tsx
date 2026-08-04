@@ -6,16 +6,12 @@ import { Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { useAuthStore } from "@/stores/auth-store";
+import { ROLE_CODE } from "@/lib/constants";
 import { FundingSourceTypeForm } from "./funding-source-type-form";
 import { FundingSourceTypeTable } from "./funding-source-type-table";
 
-const CATALOG_MANAGER_ROLES = {
-  GIOF_GESTOR: "GIOF_GESTOR",
-  ADMIN_SISTEMA: "ADMIN_SISTEMA",
-} as const;
-
 function canManageFundingSourceTypes(roleCode: string | undefined): boolean {
-  return roleCode === CATALOG_MANAGER_ROLES.GIOF_GESTOR || roleCode === CATALOG_MANAGER_ROLES.ADMIN_SISTEMA;
+  return roleCode === ROLE_CODE.GIOF_GESTOR || roleCode === ROLE_CODE.ADMIN_SISTEMA;
 }
 
 export function FundingSourceTypePage() {

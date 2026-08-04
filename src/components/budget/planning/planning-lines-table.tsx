@@ -30,6 +30,10 @@ import {
   getPlanningLineMutationErrorMessage,
   recoverFromPlanningLineStateConflict,
 } from "@/hooks/use-budget";
+import { Badge } from "@/components/ui/badge";
+import { ROUTES } from "@/lib/constants";
+import { isUnclassifiedLabel } from "@/lib/poa-territory-selection";
+import { getPoaTerritorySelectionFeatures } from "@/config/poa-territory-selection";
 
 interface PlanningLinesTableProps {
   lines: PlanningLine[];
@@ -57,6 +61,7 @@ export function PlanningLinesTable({ lines, isLoading, onRefetch }: PlanningLine
   const { user } = useAuthStore();
   const isGiof = user?.role?.code === "GIOF" || user?.role?.code === "GIOF_GESTOR";
   const userId = user?.id;
+  const territoryFeatures = getPoaTerritorySelectionFeatures();
 
   const [rejectModalOpen, setRejectModalOpen] = useState(false);
   const [rejectLineId, setRejectLineId] = useState<string | null>(null);
@@ -150,6 +155,12 @@ export function PlanningLinesTable({ lines, isLoading, onRefetch }: PlanningLine
         <TableBody>
           {lines.map((line) => {
             const isOwner = line.created_by === userId;
+            const categoryLabel = line.budgetCategory?.name ?? line.budget_category?.name;
+            const hasUnclassifiedFunding = (line.fundingSources ?? line.partners ?? []).some(
+              (source) => isUnclassifiedLabel(source.fundingSource?.name),
+            );
+            const isUnclassified = territoryFeatures.readEnabled
+              && (isUnclassifiedLabel(categoryLabel) || hasUnclassifiedFunding);
             return (
               <TableRow key={line.id}>
                 <TableCell className="font-mono text-xs">
@@ -170,7 +181,12 @@ export function PlanningLinesTable({ lines, isLoading, onRefetch }: PlanningLine
                 <TableCell>
                   {line.organizationalUnit?.name ?? line.organizational_unit?.name ?? "-"}
                 </TableCell>
-                <TableCell>{line.planning_type}</TableCell>
+                <TableCell>
+                  <div className="flex flex-col items-start gap-1">
+                    <span>{line.planning_type}</span>
+                    {isUnclassified && <Badge variant="outline">POR CLASIFICAR</Badge>}
+                  </div>
+                </TableCell>
                 <TableCell className="font-mono">
                   {formatCurrency(line.total_cost)}
                 </TableCell>
@@ -192,10 +208,18 @@ export function PlanningLinesTable({ lines, isLoading, onRefetch }: PlanningLine
                       <DropdownMenuSeparator />
 
                       <DropdownMenuItem
-                        onClick={() => router.push(`/budget/planning/${line.id}`)}
+                        onClick={() => router.push(`${ROUTES.BUDGET_PLANNING}/${line.id}`)}
                       >
                         Ver detalle
                       </DropdownMenuItem>
+
+                      {isUnclassified && line.status === "DRAFT" && (isOwner || isGiof) && (
+                        <DropdownMenuItem
+                          onClick={() => router.push(`${ROUTES.BUDGET_PLANNING}/${line.id}`)}
+                        >
+                          Reclasificar
+                        </DropdownMenuItem>
+                      )}
 
                       {line.status === "DRAFT" && isOwner && (
                         <DropdownMenuItem

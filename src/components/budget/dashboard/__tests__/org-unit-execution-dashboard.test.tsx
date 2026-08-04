@@ -153,6 +153,44 @@ describe("OrgUnitExecutionDashboard", () => {
     expect(dashboardHook).toHaveBeenLastCalledWith(expect.objectContaining({ org_unit_id: "org-1" }), { enabled: true });
   });
 
+  it("renders all-blank source aggregate KPIs and derived values as no-data instead of zero", async () => {
+    const user = userEvent.setup();
+    dashboardHook.mockImplementation((filters) => ({
+      data: filters ? {
+        ...dashboardData,
+        semantics_version: "poa-source-months-v1",
+        totals: { programmed: null, executed: 0, variance: null, execution_rate: null, currency: "PEN" },
+        kpis: {
+          annual_programmed: null,
+          period_programmed: null,
+          period_executed: 0,
+          period_variance: null,
+          not_executed: null,
+          excedente: null,
+          remaining_programmed: null,
+          execution_rate: null,
+          currency: "PEN",
+        },
+        rows: [{ ...dashboardData.rows[0], programmed: null, executed: 0, variance: null, execution_rate: null }],
+        no_ejecutado_rows: [{ ...dashboardData.no_ejecutado_rows![0], programmed: null, executed: 0, variance: null, execution_rate: null, not_executed: null, excedente: null }],
+      } : null,
+      isLoading: false,
+      isInitialLoading: false,
+      isRefreshing: false,
+      error: null,
+      refetch: vi.fn(),
+    }));
+    render(<OrgUnitExecutionDashboard />);
+
+    await user.selectOptions(screen.getByLabelText("Unidad orgánica"), "org-1");
+    await user.click(screen.getByRole("button", { name: "Aplicar filtros" }));
+
+    expect(screen.getAllByText("—").length).toBeGreaterThanOrEqual(5);
+    expect(screen.getAllByText("No aplica").length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText("Sin dato")).toBeInTheDocument();
+    expect(screen.queryByText("No ejecutado S/ 0.00")).not.toBeInTheDocument();
+  });
+
   it("shows empty-state copy when no rows are returned after applying", async () => {
     const user = userEvent.setup();
     dashboardHook.mockReturnValue({

@@ -45,6 +45,12 @@ vi.mock("@/hooks/use-reports", () => ({
 describe("ReportsPageView", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    catalogCategoriesMock.mockReturnValue({ data: [] });
+    catalogProgramsMock.mockReturnValue({ data: [] });
+    catalogFundingSourcesMock.mockReturnValue({ data: [] });
+    catalogOrgUnitsMock.mockReturnValue({ data: [] });
+    catalogTerritoriesMock.mockReturnValue({ data: [] });
+    planningLinesMock.mockReturnValue({ lines: [] });
     requestsByStatusMock.mockReturnValue({
       data: {
         report: "requests-by-status",
@@ -107,5 +113,41 @@ describe("ReportsPageView", () => {
     expect(screen.getByTestId("participation-cell")).toHaveClass("grid", "w-44");
     expect(screen.getByTestId("participation-bar")).toHaveStyle({ width: "4%" });
     expect(screen.getByTestId("participation-label")).toHaveTextContent("0.5%");
+  });
+
+  it("mantiene POR CLASIFICAR visible en filtros y muestra los tres ejes con el desajuste aprobado", async () => {
+    const user = userEvent.setup();
+    catalogCategoriesMock.mockReturnValue({ data: [{ id: "cat-unclassified", name: "POR CLASIFICAR" } as never] });
+    catalogFundingSourcesMock.mockReturnValue({ data: [{ id: "source-unclassified", code: "POR_CLASIFICAR", name: "POR CLASIFICAR" } as never] });
+    expensesByConceptMock.mockReturnValue({
+      data: { report: "expenses-by-concept", totals: { row_count: 1, request_count: 1, by_currency: [] }, groups: [{ concept: "Prueba", currency: "PEN", row_count: 1, request_count: 1, amount: 10, amount_percentage: 100 }] },
+      error: null, isLoading: false, isRefreshing: false, refetch: vi.fn(),
+    });
+    expensesByConceptDetailsMock.mockReturnValue({
+      data: {
+        report: "expenses-by-concept-details", pagination: { page: 1, limit: 50, total: 1, total_pages: 1, has_next: false }, totals: { by_currency: [] },
+        rows: [{
+          source_kind: "RENDITION", request_id: "req-1", request_code: "REQ-1", request_type: "ADVANCE", status: "PAID",
+          concept: "Prueba", detail: "Detalle", provider: null, expense_date: "2026-08-01", paid_at: null, amount: 10, currency: "PEN",
+          budget_planning_line_id: "line-1", budget_line_code: "POA-1", org_unit_id: "org-1", budget_category_id: "cat-unclassified",
+          program_id: null, territory_id: "anchor", territory_region: "Ayacucho", territory_province: "Huamanga",
+          territory_district: "San Pedro de Coris", territory_chain_mismatch: true,
+        }],
+      },
+      error: null, isLoading: false, isRefreshing: false, refetch: vi.fn(),
+    });
+
+    render(<ReportsPageView />);
+    await user.click(screen.getByRole("button", { name: /Gastos por concepto/ }));
+    await user.click(screen.getByTestId("advanced-filters-toggle"));
+
+    expect(catalogCategoriesMock).toHaveBeenCalled();
+    expect(catalogFundingSourcesMock).toHaveBeenCalled();
+    expect(catalogCategoriesMock()).toEqual({ data: [expect.objectContaining({ name: "POR CLASIFICAR" })] });
+    expect(catalogFundingSourcesMock()).toEqual({ data: [expect.objectContaining({ name: "POR CLASIFICAR" })] });
+    expect(screen.getByText("Ayacucho")).toBeInTheDocument();
+    expect(screen.getByText("Huamanga")).toBeInTheDocument();
+    expect(screen.getByText("San Pedro de Coris")).toBeInTheDocument();
+    expect(screen.getByText("Desajuste aprobado")).toBeInTheDocument();
   });
 });

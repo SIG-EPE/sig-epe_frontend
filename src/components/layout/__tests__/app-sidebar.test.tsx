@@ -218,6 +218,7 @@ describe("AppSidebar", () => {
     expect(screen.getByText("Mis Solicitudes")).toBeInTheDocument();
     expect(screen.getByText("Bandeja de Rendiciones")).toBeInTheDocument();
     expect(screen.getByText("Log de auditoría")).toBeInTheDocument();
+    expect(screen.getByText("Catálogos")).toBeInTheDocument();
     expect(screen.queryByText("Configuración")).not.toBeInTheDocument();
 
     expect(screen.getByText("Dashboard GIOF")).toBeInTheDocument();

@@ -67,6 +67,10 @@ function toDashboardFilters(draftFilters: DraftFilters, overrides: Partial<OrgUn
     search: draftFilters.search.trim() || undefined,
     top_n: Number.isFinite(parsedTopN) && parsedTopN > 0 ? parsedTopN : 12,
     level: draftFilters.level,
+    measure_authority:
+      process.env.NEXT_PUBLIC_POA_SOURCE_MONTHS_ENABLED === "true"
+        ? "source"
+        : "operational",
     parent_id: undefined,
     ...overrides,
   };
@@ -253,8 +257,8 @@ export function OrgUnitExecutionDashboard() {
   const varianceData = (data?.no_ejecutado_rows ?? rows).slice(0, 8).map((row) => ({
     name: truncateChartLabel(row.name, 28),
     fullName: row.name,
-    "No ejecutado": "not_executed" in row ? row.not_executed : Math.max(row.variance, 0),
-    Excedente: "excedente" in row ? row.excedente : Math.max(-row.variance, 0),
+    "No ejecutado": "not_executed" in row ? row.not_executed : row.variance === null ? null : Math.max(row.variance, 0),
+    Excedente: "excedente" in row ? row.excedente : row.variance === null ? null : Math.max(-row.variance, 0),
   }));
 
   return (
@@ -316,6 +320,18 @@ export function OrgUnitExecutionDashboard() {
       {optionsRefreshing && <p className="text-xs text-muted-foreground">Actualizando filtros disponibles...</p>}
       {isRefreshing && data && <p className="text-xs text-muted-foreground">Actualizando análisis en segundo plano...</p>}
       {data?.warnings.map((warning) => <Alert key={warning.code}><AlertDescription>{warning.message}</AlertDescription></Alert>)}
+      {data?.source_statistics && (
+        <Alert>
+          <AlertDescription>
+            Cobertura de programación fuente:{" "}
+            {data.source_statistics.coverage === null
+              ? "Sin selección"
+              : `${(Number(data.source_statistics.coverage) * 100).toFixed(2)}%`}
+            {" · "}{data.source_statistics.blank_count} sin dato
+            {" · "}{data.source_statistics.explicit_zero_count} ceros explícitos
+          </AlertDescription>
+        </Alert>
+      )}
 
       {hasAppliedFilters && isLoading && !data && <Skeleton className="h-96 rounded-xl" />}
 
@@ -323,12 +339,12 @@ export function OrgUnitExecutionDashboard() {
         <>
           <div className="grid gap-4 md:grid-cols-4">
             <KpiCard title="Presupuesto anual" value={formatMoneyStrict(kpis?.annual_programmed ?? data.totals.programmed)} description="Presupuesto total del año fiscal" Icon={Wallet} />
-            <KpiCard title={`Presupuesto hasta ${monthLabel}`} value={formatMoneyStrict(kpis?.period_programmed ?? data.totals.programmed)} description="Programado de enero al mes seleccionado" Icon={Calculator} />
+             <KpiCard title={`Presupuesto hasta ${monthLabel}`} value={formatMoneyStrict(kpis ? kpis.period_programmed : data.totals.programmed)} description="Programado de enero al mes seleccionado" Icon={Calculator} />
             <KpiCard title={`Ejecutado hasta ${monthLabel}`} value={formatMoneyStrict(kpis?.period_executed ?? data.totals.executed)} description="Pagado o rendido según POA" Icon={CheckCircle2} />
             <KpiCard title="% ejecutado" value={formatPercentStrict(kpis?.execution_rate ?? data.totals.execution_rate)} description="Ejecutado / programado del periodo" Icon={BarChart3} />
-            <KpiCard title="No ejecutado" value={formatMoneyStrict(kpis?.not_executed ?? Math.max(data.totals.variance, 0))} description={`Pendiente hasta ${monthLabel}`} Icon={Calculator} />
-            <KpiCard title="Excedente" value={formatMoneyStrict(kpis?.excedente ?? Math.max(-data.totals.variance, 0))} description="Sobre-ejecución del periodo" Icon={BarChart3} />
-            <KpiCard title="Presupuesto meses restantes" value={formatMoneyStrict(kpis?.remaining_programmed ?? 0)} description={`Posterior a ${monthLabel}`} Icon={Wallet} />
+             <KpiCard title="No ejecutado" value={formatMoneyStrict(kpis ? kpis.not_executed : data.totals.variance === null ? null : Math.max(data.totals.variance, 0))} description={`Pendiente hasta ${monthLabel}`} Icon={Calculator} />
+             <KpiCard title="Excedente" value={formatMoneyStrict(kpis ? kpis.excedente : data.totals.variance === null ? null : Math.max(-data.totals.variance, 0))} description="Sobre-ejecución del periodo" Icon={BarChart3} />
+            <KpiCard title="Presupuesto meses restantes" value={formatMoneyStrict(kpis ? kpis.remaining_programmed : null)} description={`Posterior a ${monthLabel}`} Icon={Wallet} />
             <KpiCard title="Semántica" value="POA" description="Ejecución poa_spent_v1" Icon={CheckCircle2} />
           </div>
 
@@ -397,7 +413,7 @@ export function OrgUnitExecutionDashboard() {
                           <td className="py-2 pr-3 text-right tabular-nums">{formatMoneyStrict(row.programmed)}</td>
                           <td className="py-2 pr-3 text-right tabular-nums">{formatMoneyStrict(row.executed)}</td>
                           <td className="py-2 pr-3 text-right tabular-nums">{formatMoneyStrict(row.variance)}</td>
-                          <td className="py-2 pr-3 text-right tabular-nums">{row.variance >= 0 ? `No ejecutado ${formatMoneyStrict(row.variance)}` : `Excedente ${formatMoneyStrict(Math.abs(row.variance))}`}</td>
+                           <td className="py-2 pr-3 text-right tabular-nums">{row.variance === null ? "Sin dato" : row.variance >= 0 ? `No ejecutado ${formatMoneyStrict(row.variance)}` : `Excedente ${formatMoneyStrict(Math.abs(row.variance))}`}</td>
                           <td className="py-2 text-right tabular-nums">{formatPercentStrict(row.execution_rate)}</td>
                         </tr>
                       ))}

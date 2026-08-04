@@ -131,6 +131,12 @@ export function PlanningLinesPage() {
       if (effectiveFiscalYearId) params.set("fiscal_year_id", effectiveFiscalYearId);
       if (orgUnitId) params.set("org_unit_id", orgUnitId);
       if (effectiveStatus) params.set("status", effectiveStatus);
+      params.set(
+        "measure_authority",
+        process.env.NEXT_PUBLIC_POA_SOURCE_MONTHS_ENABLED === "true"
+          ? "source"
+          : "operational",
+      );
 
       const query = params.toString() ? `?${params.toString()}` : "";
       const { blob, filename } = await api.download(`/budget/planning-lines/export.xlsx${query}`);

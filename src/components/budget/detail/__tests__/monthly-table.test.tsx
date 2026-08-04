@@ -48,7 +48,7 @@ function makeMonthlyEntry(overrides: Partial<MonthlyEntry> = {}): MonthlyEntry {
     planning_line_id: "line-1",
     month: 5,
     planned_amount: 500,
-    executed_amount: 123.45,
+    executed_amount: "123.45",
     execution_details: [
       {
         id: "payment-1",
@@ -88,6 +88,16 @@ describe("MonthlyTable", () => {
     refetchManualExecutionsMock.mockClear();
     mocks.upsert.mockReset();
     mocks.toastError.mockReset();
+  });
+
+  it("renders the official QM April executed amount with two decimals", () => {
+    render(
+      <MonthlyTable
+        entries={[makeMonthlyEntry({ month: 4, executed_amount: "6960.6", execution_details: [] })]}
+      />,
+    );
+
+    expect(screen.getAllByText((content) => content.includes("6,960.60"))).toHaveLength(2);
   });
 
   it("renders paid request execution details as a request link when requestId exists", async () => {
