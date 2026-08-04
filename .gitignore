@@ -6,6 +6,9 @@
 
 # testing
 /coverage
+/cypress/screenshots/
+/cypress/videos/
+/cypress/downloads/
 
 # next.js
 /.next/
