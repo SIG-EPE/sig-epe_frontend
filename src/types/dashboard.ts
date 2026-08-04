@@ -76,8 +76,11 @@ export interface BudgetDashboardBreakdownItem {
   territory_district?: string | null;
   territory_chain_mismatch?: boolean;
   planned: number;
+  monthly_programmed_decimal?: string;
   committed: number;
+  generated_cost_decimal?: string;
   executed: number;
+  executed_decimal?: string;
   rendered: number | null;
   execution_rate: number | null;
 }

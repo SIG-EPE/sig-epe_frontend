@@ -68,7 +68,7 @@ const dashboardData: OrgUnitExecutionDashboardData = {
   execution_semantics: "poa_spent_v1",
   applied_filters: { fiscal_year_id: "fy-1", fiscal_year: 2026, selected_month: 7, month_from: 1, month_to: 7, level: "area", parent_id: null },
   current_filters: { fiscal_year_id: "fy-1", fiscal_year: 2026, selected_month: 7, month_from: 1, month_to: 7, level: "area", parent_id: null },
-  totals: { programmed: 100, executed: 80, variance: 20, execution_rate: 0.8, currency: "PEN" },
+  totals: { programmed: 155060.41999999998, monthly_programmed_decimal: "155060.42", generated_cost_decimal: "160000.42", executed: 80.00000000001, executed_decimal: "80", variance: 20, execution_rate: 0.8, currency: "PEN" },
   kpis: {
     annual_programmed: 180,
     period_programmed: 100,
@@ -144,6 +144,9 @@ describe("OrgUnitExecutionDashboard", () => {
     expect(screen.getByText("Presupuesto anual")).toBeInTheDocument();
     expect(screen.getByText(/Presupuesto hasta/i)).toBeInTheDocument();
     expect(screen.getByText("S/ 180.00")).toBeInTheDocument();
+    expect(screen.getByText("Costo generado")).toBeInTheDocument();
+    expect(screen.getByText("S/ 160,000.42")).toBeInTheDocument();
+    expect(screen.getByText("S/ 155,060.42")).toBeInTheDocument();
     expect(screen.getAllByText("S/ 100.00").length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByText(/80/).length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText("Hay líneas con múltiples fuentes sin monto ni porcentaje asignado.")).toBeInTheDocument();
