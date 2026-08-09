@@ -25,6 +25,7 @@ interface CreateUserModalProps {
 const ROLES = [
   { code: ROLE_CODE.SOLICITANTE_EPE, label: "Solicitante EPE" },
   { code: ROLE_CODE.GIOF_GESTOR, label: "GIOF Gestor" },
+  { code: ROLE_CODE.GIOF_MANAGER, label: "GIOF Manager" },
   { code: ROLE_CODE.AUDITOR_DIRECCION, label: "Auditor Dirección" },
   { code: ROLE_CODE.ADMIN_SISTEMA, label: "Admin Sistema" },
 ] as const;
@@ -33,7 +34,8 @@ const ROLE_LEVEL = {
   [ROLE_CODE.SOLICITANTE_EPE]: 1,
   [ROLE_CODE.AUDITOR_DIRECCION]: 2,
   [ROLE_CODE.GIOF_GESTOR]: 3,
-  [ROLE_CODE.ADMIN_SISTEMA]: 4,
+  [ROLE_CODE.GIOF_MANAGER]: 4,
+  [ROLE_CODE.ADMIN_SISTEMA]: 5,
 } as const;
 
 const INITIAL_FORM: CreateUserPayload = {

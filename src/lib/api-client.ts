@@ -2,6 +2,7 @@ import type { ApiResponse, ApiError } from "@/types/api";
 import { useAuthStore } from "@/stores/auth-store";
 import { clearClientAuthSession } from "@/lib/auth/session-sync";
 import { refreshSession } from "@/lib/auth/refresh-session";
+import { getGiofMutationHeaders } from "@/lib/giof-work-lease-session";
 
 // -------------------------------------------------------
 // API Client — SIG-EPE
@@ -54,6 +55,12 @@ async function apiFetch<T>(
   const { accessToken } = useAuthStore.getState();
 
   const headers = new Headers(options.headers);
+  const giofHeaders = getGiofMutationHeaders(path, options.method);
+  if (giofHeaders) {
+    new Headers(giofHeaders).forEach((value, key) => {
+      if (!headers.has(key)) headers.set(key, value);
+    });
+  }
   if (!headers.has("Content-Type") && typeof options.body === "string") {
     headers.set("Content-Type", "application/json");
   }

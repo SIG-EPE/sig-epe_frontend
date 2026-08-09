@@ -10,7 +10,7 @@ describe("FaqSearch", () => {
     render(<FaqSearch items={FAQ_ITEMS} />);
 
     expect(screen.getByRole("searchbox", { name: /buscar en preguntas frecuentes/i })).toBeInTheDocument();
-    expect(screen.getAllByRole("button", { name: /¿/ })).toHaveLength(18);
+    expect(screen.getAllByRole("button", { name: /¿/ })).toHaveLength(19);
   });
 
   it("filters locally by question, answer and keyword", async () => {
@@ -41,7 +41,7 @@ describe("FaqSearch", () => {
     expect(screen.getByRole("status")).toHaveTextContent(/no encontramos preguntas/i);
 
     await user.click(screen.getByRole("button", { name: /limpiar búsqueda/i }));
-    expect(screen.getAllByRole("button", { name: /¿/ })).toHaveLength(18);
+    expect(screen.getAllByRole("button", { name: /¿/ })).toHaveLength(19);
     expect(screen.getByRole("searchbox", { name: /buscar en preguntas frecuentes/i })).toHaveValue("");
   });
 
@@ -80,5 +80,15 @@ describe("FaqSearch", () => {
     expect(
       within(document.getElementById("faq-panel-sso-institucional")!).getByText(/acceso automático desde Enseña Perú/i),
     ).toBeVisible();
+  });
+
+  it("enlaza el resultado de asignación a la guía especializada", async () => {
+    const user = userEvent.setup();
+    render(<FaqSearch items={FAQ_ITEMS} />);
+
+    await user.type(screen.getByRole("searchbox"), "casilla");
+    await user.click(screen.getByRole("button", { name: /cómo funciona la asignación/i }));
+
+    expect(screen.getByRole("link", { name: /abrir guía de asignación giof/i })).toHaveAttribute("href", "/help/giof-assignment");
   });
 });

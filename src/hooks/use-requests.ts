@@ -2,12 +2,13 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { api } from "@/lib/api-client";
+import { api, ApiRequestError } from "@/lib/api-client";
 import { useCachedResource, type CachedResourceCacheMode } from "@/hooks/use-cached-resource";
 import { cachedQuery, QUERY_CACHE_TTL_MS, stableSerialize } from "@/lib/query-cache";
 import { QUERY_TAGS, invalidateRequestDomain } from "@/lib/query-tags";
 import { useAuthStore } from "@/stores/auth-store";
 import { REQUEST_DOCUMENT_CATEGORY } from "@/types/requests";
+import type { GiofWorkScope } from "@/types/giof-work";
 import type {
   AttachPaymentProofInput,
   BudgetPreviewInput,
@@ -103,6 +104,8 @@ export function getRequestsPath(filters?: RequestsListFilters): string {
   appendIfPresent(params, "drive_sync_status", filters?.drive_sync_status);
   appendIfPresent(params, "search", filters?.search);
   appendIfPresent(params, "scope", filters?.scope);
+  appendIfPresent(params, "work_scope", filters?.work_scope);
+  appendIfPresent(params, "assignee_id", filters?.assignee_id);
   const query = params.toString();
   return `/requests${query ? `?${query}` : ""}`;
 }
@@ -115,6 +118,8 @@ export function getPaymentQueuePath(filters?: PaymentQueueFilters): string {
   appendIfPresent(params, "pending_proof", filters?.pending_proof);
   appendIfPresent(params, "pending_details", filters?.pending_details);
   appendIfPresent(params, "search", filters?.search);
+  appendIfPresent(params, "work_scope", filters?.work_scope);
+  appendIfPresent(params, "assignee_id", filters?.assignee_id);
   const query = params.toString();
   return `/requests/payment-queue${query ? `?${query}` : ""}`;
 }
@@ -130,6 +135,8 @@ export function getRenditionsPath(filters?: RenditionsInboxFilters): string {
   appendIfPresent(params, "due_to", filters?.due_to);
   appendIfPresent(params, "sort", filters?.sort);
   appendIfPresent(params, "direction", filters?.direction);
+  appendIfPresent(params, "work_scope", filters?.work_scope);
+  appendIfPresent(params, "assignee_id", filters?.assignee_id);
   const query = params.toString();
   return `/requests/renditions${query ? `?${query}` : ""}`;
 }
@@ -141,8 +148,44 @@ export function getRenditionCountsPath(filters?: Omit<RenditionsInboxFilters, "s
   appendIfPresent(params, "due_to", filters?.due_to);
   appendIfPresent(params, "sort", filters?.sort);
   appendIfPresent(params, "direction", filters?.direction);
+  appendIfPresent(params, "work_scope", filters?.work_scope);
+  appendIfPresent(params, "assignee_id", filters?.assignee_id);
   const query = params.toString();
   return `/requests/renditions/counts${query ? `?${query}` : ""}`;
+}
+
+type GiofWorkFilterFields = {
+  work_scope?: GiofWorkScope;
+  assignee_id?: string;
+};
+
+export function withoutGiofWorkFilters<T extends GiofWorkFilterFields>(
+  filters: T,
+): Omit<T, keyof GiofWorkFilterFields> {
+  const { work_scope: _workScope, assignee_id: _assigneeId, ...legacyFilters } = filters;
+  return legacyFilters;
+}
+
+function isLegacyGiofFilterRejection(error: unknown): boolean {
+  if (!(error instanceof ApiRequestError) || error.status !== 400) return false;
+  const messages = Array.isArray(error.body.message)
+    ? error.body.message
+    : [error.body.message];
+  return messages.some((message) =>
+    /property (work_scope|assignee_id) should not exist/i.test(message),
+  );
+}
+
+export async function fetchGiofCompatibleQueue<T>(
+  currentRequest: () => Promise<T>,
+  legacyRequest: () => Promise<T>,
+): Promise<T> {
+  try {
+    return await currentRequest();
+  } catch (error) {
+    if (!isLegacyGiofFilterRejection(error)) throw error;
+    return legacyRequest();
+  }
 }
 
 export function getStartAdvanceSettlementPath(requestId: string): string {
@@ -181,7 +224,13 @@ export function useRequests(filters?: RequestsListFilters, options?: UseRequests
     keepPreviousData: options?.keepPreviousData,
     cacheMode: options?.cacheMode,
     errorMessage: "Error al cargar solicitudes",
-    queryFn: (signal) => api.get<RequestsListResponse>(getRequestsPath(filters), { signal }),
+    queryFn: (signal) => fetchGiofCompatibleQueue(
+      () => api.get<RequestsListResponse>(getRequestsPath(filters), { signal }),
+      () => api.get<RequestsListResponse>(
+        getRequestsPath(filters ? withoutGiofWorkFilters(filters) : filters),
+        { signal },
+      ),
+    ),
   });
   const data = resource.data;
 
@@ -211,7 +260,12 @@ export function usePaymentQueue(filters?: PaymentQueueFilters) {
     ttlMs: QUERY_CACHE_TTL_MS.MUTABLE_LIST,
     tags: [QUERY_TAGS.PAYMENTS, QUERY_TAGS.REQUESTS, QUERY_TAGS.DASHBOARD],
     errorMessage: "Error al cargar cola de pagos",
-    queryFn: () => api.get<RequestsListResponse>(getPaymentQueuePath(filters)),
+    queryFn: () => fetchGiofCompatibleQueue(
+      () => api.get<RequestsListResponse>(getPaymentQueuePath(filters)),
+      () => api.get<RequestsListResponse>(
+        getPaymentQueuePath(filters ? withoutGiofWorkFilters(filters) : filters),
+      ),
+    ),
   });
   const data = resource.data;
 
@@ -244,7 +298,12 @@ export function useRenditionsInbox(filters?: RenditionsInboxFilters) {
     ttlMs: QUERY_CACHE_TTL_MS.MUTABLE_LIST,
     tags: [QUERY_TAGS.RENDITIONS, QUERY_TAGS.REQUESTS, QUERY_TAGS.DASHBOARD],
     errorMessage: "Error al cargar rendiciones",
-    queryFn: () => api.get<RenditionsInboxResponse>(getRenditionsPath(filters)),
+    queryFn: () => fetchGiofCompatibleQueue(
+      () => api.get<RenditionsInboxResponse>(getRenditionsPath(filters)),
+      () => api.get<RenditionsInboxResponse>(
+        getRenditionsPath(filters ? withoutGiofWorkFilters(filters) : filters),
+      ),
+    ),
   });
   const data = resource.data;
 
@@ -268,7 +327,12 @@ export function useRenditionCounts(filters?: Omit<RenditionsInboxFilters, "statu
     ttlMs: QUERY_CACHE_TTL_MS.MUTABLE_LIST,
     tags: [QUERY_TAGS.RENDITIONS, QUERY_TAGS.REQUESTS, QUERY_TAGS.DASHBOARD],
     errorMessage: "Error al cargar resumen de rendiciones",
-    queryFn: () => api.get<RenditionInboxCounts>(getRenditionCountsPath(filters)),
+    queryFn: () => fetchGiofCompatibleQueue(
+      () => api.get<RenditionInboxCounts>(getRenditionCountsPath(filters)),
+      () => api.get<RenditionInboxCounts>(
+        getRenditionCountsPath(filters ? withoutGiofWorkFilters(filters) : filters),
+      ),
+    ),
   });
 
   return { counts: resource.data, isLoading: resource.isLoading, isInitialLoading: resource.isInitialLoading, isRefreshing: resource.isRefreshing, error: resource.error, refetch: resource.refetch };

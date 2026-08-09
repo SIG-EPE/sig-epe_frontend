@@ -26,6 +26,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock("next/navigation", () => ({
   useParams: () => ({ id: "rexan-1" }),
   useRouter: () => ({ push: vi.fn() }),
+  useSearchParams: () => new URLSearchParams(),
 }));
 
 vi.mock("sonner", () => ({
@@ -103,6 +104,17 @@ function makeRequest(overrides: Partial<PaymentRequest> = {}): PaymentRequest {
     disbursed_at: null,
     amount_disbursed: null,
     notes: null,
+    giof_work: {
+      pool: "REXAN",
+      assigneeId: "giof-1",
+      assigneeName: "Gestor Uno",
+      assignmentVersion: "1",
+      lease: { ownerId: "giof-1", heartbeatAt: "2026-05-01T10:00:00.000Z", expiresAt: "2099-05-01T10:05:00.000Z" },
+      canAssign: true,
+      canAcquire: true,
+      canEdit: true,
+      readOnly: false,
+    },
     created_at: "2026-05-01T10:00:00.000Z",
     updated_at: "2026-05-01T10:00:00.000Z",
     ...overrides,
@@ -278,6 +290,38 @@ describe("RequestDetailPage REXAN approval", () => {
     mocks.useRequestDocuments.mockReturnValue({ documents: [], isLoading: false, error: null, refetch: mocks.documentsRefetch });
     mocks.useRequestRenditionReport.mockReturnValue({ report: null, isLoading: false, error: null, refetch: mocks.reportRefetch });
     mocks.useSettlementContext.mockReturnValue({ context: null, isLoading: false, error: null, refetch: mocks.settlementContextRefetch });
+  });
+
+  it("mantiene el detalle sin acciones mutantes cuando el trabajo pertenece a otra persona", () => {
+    mocks.useRequest.mockReturnValue({
+      request: makeRequest({
+        giof_work: {
+          pool: "REXAN",
+          assigneeId: "giof-2",
+          assigneeName: "Otra Gestora",
+          assignmentVersion: "2",
+          lease: null,
+          canAssign: true,
+          canAcquire: false,
+          canEdit: false,
+          readOnly: true,
+        },
+      }),
+      isInitialLoading: false,
+      isRefreshing: false,
+      error: null,
+      refetch: mocks.requestRefetch,
+      patchRequest: vi.fn(),
+    });
+
+    render(<RequestDetailPage />);
+
+    expect(screen.getByText("Asignado a Otra Gestora")).toBeInTheDocument();
+    expect(screen.getByText(/Vista de solo lectura/)).toBeInTheDocument();
+    expect(screen.queryByText("Acciones de revisión")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Observar rendición" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Aprobar rendición" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Rechazar rendición" })).not.toBeInTheDocument();
   });
 
   it("muestra quién creó un reembolso en Datos principales", () => {

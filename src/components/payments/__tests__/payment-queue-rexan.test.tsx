@@ -35,6 +35,20 @@ vi.mock("@/stores/auth-store", () => ({
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: vi.fn(), refresh: vi.fn() }),
+  useSearchParams: () => new URLSearchParams(),
+}));
+
+vi.mock("@/hooks/use-giof-work", () => ({
+  useGiofWorkLeaseSet: () => ({
+    leases: [],
+    acquire: vi.fn().mockResolvedValue({ token: "lease-token" }),
+    release: vi.fn().mockResolvedValue(undefined),
+    releaseAll: vi.fn().mockResolvedValue(undefined),
+  }),
+  fetchGiofAssignees: vi.fn().mockResolvedValue([]),
+  fetchGiofHistory: vi.fn().mockResolvedValue([]),
+  bulkAssignGiofWork: vi.fn(),
+  getGiofConflictMessage: (error: unknown) => error instanceof Error ? error.message : "Error",
 }));
 
 function makeAllocation(overrides: Partial<RequestAllocation> = {}): RequestAllocation {
@@ -107,6 +121,17 @@ function makeRequest(overrides: Partial<PaymentRequest> = {}): PaymentRequest {
     disbursed_at: null,
     amount_disbursed: null,
     notes: null,
+    giof_work: {
+      pool: "PAYMENT",
+      assigneeId: "giof-1",
+      assigneeName: "Gestor Uno",
+      assignmentVersion: "1",
+      lease: null,
+      canAssign: true,
+      canAcquire: true,
+      canEdit: false,
+      readOnly: true,
+    },
     created_at: "2026-05-01T10:00:00.000Z",
     updated_at: "2026-05-01T10:00:00.000Z",
     ...overrides,
@@ -122,6 +147,26 @@ describe("REXAN payment queue and modal", () => {
     mocks.attachPaymentProofLoading.mockReturnValue(false);
     mocks.usePaymentQueue.mockReturnValue({ requests: [], total: 0, isLoading: false, error: null, refetch: vi.fn() });
     mocks.roleCode.mockReturnValue("GIOF_GESTOR");
+  });
+
+  it("permite asignar APPROVED y PAID con datos pendientes, pero deshabilita PAID completo", () => {
+    const work = { pool: "PAYMENT" as const, assigneeId: null, assigneeName: null, assignmentVersion: "0", lease: null, canAcquire: false, canEdit: false, readOnly: true };
+    render(<PaymentQueueTable
+      requests={[
+        makeRequest({ id: "approved", request_code: "PAY-ACTIVE", giof_work: { ...work, canAssign: true } }),
+        makeRequest({ id: "paid-pending", request_code: "PAY-PENDING-DATA", status: REQUEST_STATUS.PAID, payment_proof_pending: true, giof_work: { ...work, canAssign: true } }),
+        makeRequest({ id: "paid-complete", request_code: "PAY-COMPLETE", status: REQUEST_STATUS.PAID, payment_proof_pending: false, payment_details_pending: false, giof_work: { ...work, canAssign: false } }),
+      ]}
+      isLoading={false}
+      onRegisterPayment={vi.fn()}
+      isGiofManager
+      onToggleAssignment={vi.fn()}
+      onToggleAllAssignments={vi.fn()}
+    />);
+
+    expect(screen.getByRole("checkbox", { name: "Seleccionar PAY-ACTIVE para asignar" })).toBeEnabled();
+    expect(screen.getByRole("checkbox", { name: "Seleccionar PAY-PENDING-DATA para asignar" })).toBeEnabled();
+    expect(screen.getByRole("checkbox", { name: "PAY-COMPLETE: trabajo de pago completo" })).toBeDisabled();
   });
 
   it("muestra el saldo REXAN para EXCESS y el monto normal para otros pagos", () => {

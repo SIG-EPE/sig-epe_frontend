@@ -10,11 +10,12 @@ vi.mock("@/components/help/faq-search", () => ({
 }));
 
 describe("HelpPage", () => {
-  it("defines page metadata and composes the 18 FAQ catalog", () => {
+  it("defines page metadata, links the GIOF guide and composes the FAQ catalog", () => {
     render(<HelpPage />);
 
     expect(metadata.title).toBe("Centro de ayuda | SIG-EPE");
     expect(screen.getByRole("heading", { name: /centro de ayuda/i })).toBeInTheDocument();
-    expect(screen.getByTestId("faq-search")).toHaveTextContent("18 preguntas");
+    expect(screen.getByRole("link", { name: "Abrir guía" })).toHaveAttribute("href", "/help/giof-assignment");
+    expect(screen.getByTestId("faq-search")).toHaveTextContent("19 preguntas");
   });
 });

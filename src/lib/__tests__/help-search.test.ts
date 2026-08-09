@@ -18,26 +18,29 @@ const EXPECTED_QUESTIONS = [
   "¿Cómo sé si mi solicitud está lista para el pago?",
   "¿Dónde reviso el estado de mi pago?",
   "¿Por qué no puedo solicitar otro anticipo?",
-  "¿Qué es una rendición de anticipo (REXAN) y cuándo aparece?",
+  "¿Qué es una rendición de anticipo y cuándo aparece?",
   "¿Qué documentos necesito para rendir un anticipo?",
   "¿Cuál es el plazo para rendir y cuándo recibiré recordatorios?",
   "¿Qué correos envía SIG-EPE y qué hago si no los recibo?",
+  "¿Cómo funciona la asignación de trabajo GIOF?",
 ] as const;
 
 describe("FAQ catalog", () => {
-  it("contains the exact 18 essential questions in stable order", () => {
-    expect(FAQ_ITEMS).toHaveLength(18);
+  it("contains the essential questions in stable order", () => {
+    expect(FAQ_ITEMS).toHaveLength(19);
     expect(FAQ_ITEMS.map((item) => item.question)).toEqual(EXPECTED_QUESTIONS);
 
     const visibleCopy = FAQ_ITEMS.map((item) => `${item.question} ${item.answer}`).join(" ");
     expect(visibleCopy).not.toMatch(/\b(?:SSO|token|handoff|replay)\b/i);
+    expect(visibleCopy).not.toMatch(/\b(?:SUBMITTED|ADVANCE_SETTLEMENT|REQUEST|PAYMENT|REXAN|DRAFT|IN_VALIDATION|OBSERVED|PAID)\b/);
     expect(FAQ_ITEMS[0].keywords).toContain("SSO institucional");
     expect(FAQ_ITEMS[1].keywords).toContain("SSO");
 
     const pxqItem = FAQ_ITEMS.find((item) => item.id === "adjuntar-pxq");
     const rexanItem = FAQ_ITEMS.find((item) => item.id === "rexan-generacion");
     expect(pxqItem?.answer).toMatch(/PxQ significa presupuesto por cantidad/i);
-    expect(rexanItem?.answer).toMatch(/REXAN significa rendición de anticipo/i);
+    expect(rexanItem?.answer).toMatch(/SIG-EPE crea la rendición de anticipo/i);
+    expect(FAQ_ITEMS.find((item) => item.id === "asignacion-giof")?.href).toBe("/help/giof-assignment");
   });
 
   it("has complete, unique, DOM-safe and categorized entries", () => {
@@ -71,6 +74,9 @@ describe("FAQ search", () => {
     expect(filterFaqItems(FAQ_ITEMS, "bandeja de entrada").map((item) => item.id)).toContain(
       "correos-sig-epe",
     );
+    for (const query of ["asignación", "GIOF", "Rendición", "casilla", "solo lectura"]) {
+      expect(filterFaqItems(FAQ_ITEMS, query).map((item) => item.id)).toContain("asignacion-giof");
+    }
   });
 
   it("returns every item for a blank query and does not mutate the input", () => {

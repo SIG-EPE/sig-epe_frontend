@@ -1853,7 +1853,7 @@ export function getPlanningLineDisplay(line: { line_code?: string | null; resour
 }
 
 export function isRequestReviewRole(roleCode?: string | null): boolean {
-  return roleCode === ROLE_CODE.GIOF_GESTOR || roleCode === ROLE_CODE.ADMIN_SISTEMA;
+  return roleCode === ROLE_CODE.GIOF_GESTOR || roleCode === ROLE_CODE.GIOF_MANAGER;
 }
 
 export function isRequesterRole(roleCode?: string | null): boolean {
@@ -1886,7 +1886,7 @@ export function canManageRequestDocuments(
   if (!isEditable) return false;
   if (Boolean(currentUserId) && request.requester_id === currentUserId) return true;
   if (roleCode === ROLE_CODE.ADMIN_SISTEMA) return true;
-  if (roleCode === ROLE_CODE.GIOF_GESTOR) {
+  if (roleCode === ROLE_CODE.GIOF_GESTOR || roleCode === ROLE_CODE.GIOF_MANAGER) {
     return status === REQUEST_STATUS.OBSERVED && request.request_type !== REQUEST_TYPE.ADVANCE_SETTLEMENT;
   }
   return false;

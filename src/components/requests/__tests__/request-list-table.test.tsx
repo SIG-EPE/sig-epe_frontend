@@ -100,6 +100,26 @@ function makeAllocation(overrides: Partial<RequestAllocation> = {}): RequestAllo
 }
 
 describe("RequestListTable", () => {
+  it("permite seleccionar SUBMITTED y bloquea filas terminales para asignación", () => {
+    const active = makeRequest({
+      id: "active",
+      request_code: "SOL-ACTIVE",
+      status: REQUEST_STATUS.SUBMITTED,
+      giof_work: { pool: "REQUEST", assigneeId: null, assigneeName: null, assignmentVersion: "0", lease: null, canAssign: true, canAcquire: false, canEdit: false, readOnly: true },
+    });
+    const closed = makeRequest({
+      id: "closed",
+      request_code: "SOL-CLOSED",
+      status: REQUEST_STATUS.CLOSED,
+      giof_work: { pool: "REQUEST", assigneeId: null, assigneeName: null, assignmentVersion: "0", lease: null, canAssign: false, canAcquire: false, canEdit: false, readOnly: true },
+    });
+
+    render(<RequestListTable requests={[active, closed]} isLoading={false} roleCode={ROLE_CODE.GIOF_MANAGER} isGiofManager onToggleAssignment={() => undefined} onToggleAllAssignments={() => undefined} />);
+
+    expect(screen.getByRole("checkbox", { name: "Seleccionar SOL-ACTIVE para asignar" })).toBeEnabled();
+    expect(screen.getByRole("checkbox", { name: "SOL-CLOSED: no asignable en su estado actual" })).toBeDisabled();
+  });
+
   it("muestra acciones de fila solo dentro del menú de tres puntos", async () => {
     const user = userEvent.setup();
 

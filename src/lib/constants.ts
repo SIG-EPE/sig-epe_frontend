@@ -28,6 +28,7 @@ export const ROUTES = {
   ADMIN_AUDIT_LOGS: "/admin/audit-logs",
   PROFILE: "/profile",
   HELP: "/help",
+  HELP_GIOF_ASSIGNMENT: "/help/giof-assignment",
 } as const;
 
 export type AppRoute = (typeof ROUTES)[keyof typeof ROUTES];
@@ -36,6 +37,7 @@ export type AppRoute = (typeof ROUTES)[keyof typeof ROUTES];
 const ROLE_CODE = {
   SOLICITANTE_EPE: "SOLICITANTE_EPE",
   GIOF_GESTOR: "GIOF_GESTOR",
+  GIOF_MANAGER: "GIOF_MANAGER",
   AUDITOR_DIRECCION: "AUDITOR_DIRECCION",
   ADMIN_SISTEMA: "ADMIN_SISTEMA",
 } as const;
@@ -47,6 +49,7 @@ export { ROLE_CODE };
 export const ROLE_LABELS: Record<RoleCode, string> = {
   SOLICITANTE_EPE: "Solicitante EPE",
   GIOF_GESTOR: "GIOF Gestor",
+  GIOF_MANAGER: "GIOF Manager",
   AUDITOR_DIRECCION: "Auditor / Dirección",
   ADMIN_SISTEMA: "Administrador del Sistema",
 };
@@ -82,6 +85,7 @@ export const ROLE_MENU_MAP: Record<RoleCode, MenuItem[]> = {
     { label: "Centro de ayuda", href: ROUTES.HELP, icon: "CircleHelp" },
   ],
   GIOF_GESTOR: GIOF_MENU_ITEMS,
+  GIOF_MANAGER: GIOF_MENU_ITEMS,
   AUDITOR_DIRECCION: [
     { label: "Mis Solicitudes", href: `${ROUTES.REQUESTS}?scope=mine`, icon: "FileText" },
     { label: "Presupuesto", href: ROUTES.BUDGET, icon: "BarChart3" },
