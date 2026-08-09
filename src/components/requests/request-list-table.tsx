@@ -12,6 +12,8 @@ import { REQUEST_TYPE_LABELS, formatRequestCurrency, formatRequestDateTime, getP
 import { getSafeDocumentUrl } from "@/lib/safe-url";
 import { REQUEST_TYPE, type PaymentRequest } from "@/types/requests";
 import { StatusBadge } from "./status-badge";
+import { GiofWorkStatus } from "@/components/giof-work/giof-work-controls";
+import { isGiofOperationalRole } from "@/lib/role-capabilities";
 
 interface RequestListTableProps {
   requests: PaymentRequest[];
@@ -19,6 +21,10 @@ interface RequestListTableProps {
   roleCode?: string | null;
   currentUserId?: string | null;
   showResponsible?: boolean;
+  isGiofManager?: boolean;
+  selectedAssignmentIds?: string[];
+  onToggleAssignment?: (requestId: string, checked: boolean) => void;
+  onToggleAllAssignments?: (checked: boolean) => void;
 }
 
 interface RequestPoaLineDisplay {
@@ -98,7 +104,7 @@ function RequestPoaTooltip({ poaLines, conceptLabel, currency, children }: Reque
   );
 }
 
-export function RequestListTable({ requests, isLoading, roleCode, currentUserId }: RequestListTableProps) {
+export function RequestListTable({ requests, isLoading, roleCode, currentUserId, isGiofManager = false, selectedAssignmentIds = [], onToggleAssignment, onToggleAllAssignments }: RequestListTableProps) {
   if (isLoading) {
     return <p className="rounded-md border p-6 text-sm text-muted-foreground">Cargando solicitudes...</p>;
   }
@@ -107,16 +113,20 @@ export function RequestListTable({ requests, isLoading, roleCode, currentUserId 
     return <p className="rounded-md border p-6 text-sm text-muted-foreground">Aún no hay solicitudes registradas.</p>;
   }
 
+  const assignableRequests = requests.filter((request) => request.giof_work?.canAssign === true);
+
   return (
     <TooltipProvider delayDuration={0}>
-      <Table>
+      <div className="overflow-x-auto"><Table>
         <TableHeader>
           <TableRow>
+            {isGiofManager && <TableHead className="w-10"><span className="sr-only">Seleccionar para asignar</span></TableHead>}
             <TableHead>Código</TableHead>
             <TableHead>Tipo</TableHead>
             <TableHead className="max-w-48">Registrado por</TableHead>
             <TableHead className="max-w-56">A nombre de</TableHead>
             <TableHead>Estado</TableHead>
+            <TableHead>Asignación</TableHead>
             <TableHead>Línea POA</TableHead>
             <TableHead>Mes</TableHead>
             <TableHead className="text-right">Monto</TableHead>
@@ -125,8 +135,14 @@ export function RequestListTable({ requests, isLoading, roleCode, currentUserId 
           </TableRow>
         </TableHeader>
         <TableBody>
+          {isGiofManager && onToggleAllAssignments && assignableRequests.length > 0 && (
+            <TableRow><TableCell colSpan={12}><label className="flex items-center gap-2 text-sm text-muted-foreground"><input type="checkbox" className="size-4" checked={assignableRequests.every((request) => selectedAssignmentIds.includes(request.id))} onChange={(event) => onToggleAllAssignments(event.target.checked)} />Seleccionar los trabajos asignables visibles</label></TableCell></TableRow>
+          )}
           {requests.map((request) => {
-          const actions = getRequestListActions(roleCode, request.status, request.id, request.requester_id, currentUserId);
+          const defaultActions = getRequestListActions(roleCode, request.status, request.id, request.requester_id, currentUserId);
+          const actions = isGiofOperationalRole(roleCode) && request.giof_work
+            ? [{ kind: "detail" as const, label: request.giof_work.canAcquire ? "Procesar" : "Ver", href: `${ROUTES.REQUESTS}/${request.id}${request.giof_work.canAcquire ? "?mode=process" : ""}` as Route, testId: "request-detail-link" }]
+            : defaultActions;
           const driveFolderUrl = getSafeDocumentUrl(request.drive_folder_url);
           const documentsCount = request.documents_count ?? request.documents?.length ?? 0;
           const hasDocuments = documentsCount > 0;
@@ -149,6 +165,7 @@ export function RequestListTable({ requests, isLoading, roleCode, currentUserId 
 
           return (
             <TableRow key={request.id} data-testid="request-list-row">
+              {isGiofManager && <TableCell><input type="checkbox" className="size-4" checked={selectedAssignmentIds.includes(request.id)} disabled={request.giof_work?.canAssign !== true} title={request.giof_work?.canAssign === true ? "Seleccionar para asignar" : "No asignable en su estado actual"} onChange={(event) => onToggleAssignment?.(request.id, event.target.checked)} aria-label={request.giof_work?.canAssign === true ? `Seleccionar ${request.request_code ?? "solicitud"} para asignar` : `${request.request_code ?? "Solicitud"}: no asignable en su estado actual`} /></TableCell>}
               <TableCell className="font-medium whitespace-nowrap">{request.request_code ?? request.sequential_number ?? "—"}</TableCell>
               <TableCell className="whitespace-nowrap">{REQUEST_TYPE_LABELS[request.request_type]}</TableCell>
               <TableCell className="max-w-48 truncate">{createdBy}</TableCell>
@@ -158,6 +175,7 @@ export function RequestListTable({ requests, isLoading, roleCode, currentUserId 
                   <span className="truncate text-xs text-muted-foreground">{registeredPartyDocument}</span>
                 </div>
               </TableCell>
+              <TableCell><GiofWorkStatus requestId={request.id} work={request.giof_work} currentUserId={currentUserId} isManager={isGiofManager} /></TableCell>
               <TableCell>
                 <div className="flex flex-col gap-1">
                   <StatusBadge status={request.status} context={request} />
@@ -265,7 +283,7 @@ export function RequestListTable({ requests, isLoading, roleCode, currentUserId 
           );
           })}
         </TableBody>
-      </Table>
+      </Table></div>
     </TooltipProvider>
   );
 }

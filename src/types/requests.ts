@@ -1,4 +1,5 @@
 // -------------------------------------------------------
+import type { GiofWorkMetadata, GiofWorkScope } from "@/types/giof-work";
 // Request types — SIG-EPE
 // Tipos del frontend alineados a respuestas del backend
 // -------------------------------------------------------
@@ -768,6 +769,7 @@ export interface PaymentRequest {
   details_pending?: boolean;
   relatedRequest?: RelatedRequestSummary | null;
   advanceSettlements?: RelatedRequestSummary[];
+  giof_work?: GiofWorkMetadata;
 }
 
 export type StartAdvanceSettlementResponse = PaymentRequest;
@@ -1136,6 +1138,8 @@ export interface RequestsListFilters {
   drive_sync_status?: DriveSyncStatus;
   search?: string;
   scope?: "mine" | "review" | "history";
+  work_scope?: GiofWorkScope;
+  assignee_id?: string;
 }
 
 export interface PaymentQueueFilters {
@@ -1145,6 +1149,8 @@ export interface PaymentQueueFilters {
   pending_proof?: boolean;
   pending_details?: boolean;
   search?: string;
+  work_scope?: GiofWorkScope;
+  assignee_id?: string;
 }
 
 export const BULK_PAYMENT_RESULT_STATUS = {
@@ -1177,9 +1183,16 @@ export type PaymentRexanStatus = (typeof PAYMENT_REXAN_STATUS)[keyof typeof PAYM
 
 export interface BulkMarkPaidInput {
   request_ids: string[];
+  giof_items?: BulkPaymentWorkCredential[];
   paid_at?: string;
   operation_reference?: string;
   notes?: string;
+}
+
+export interface BulkPaymentWorkCredential {
+  request_id: string;
+  assignment_version: number;
+  lease_token: string;
 }
 
 export interface BulkPaymentRexanResult {
@@ -1272,6 +1285,7 @@ export interface RenditionInboxRow {
   settlement_documents_complete: boolean;
   payment_proof_document_id: string | null;
   last_activity_at: string | null;
+  giof_work?: GiofWorkMetadata;
 }
 
 export interface RenditionInboxCounts extends Record<RenditionStatus, number> {
@@ -1296,6 +1310,8 @@ export interface RenditionsInboxFilters {
   due_to?: string;
   sort?: RenditionSortField;
   direction?: RenditionSortDirection;
+  work_scope?: GiofWorkScope;
+  assignee_id?: string;
 }
 
 export interface RegisterPaymentInput {

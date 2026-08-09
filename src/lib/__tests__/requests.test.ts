@@ -1270,9 +1270,10 @@ describe("requests helpers", () => {
     expect(sanitizeBudgetMessage("budget_ceiling no configurado")).toBe("límite presupuestal no configurado");
   });
 
-  it("habilita acciones de revisión solo para GIOF o admin en solicitudes enviadas", () => {
+  it("habilita acciones de revisión solo para roles operativos GIOF en solicitudes enviadas", () => {
     expect(canReviewRequest(ROLE_CODE.GIOF_GESTOR, REQUEST_STATUS.SUBMITTED)).toBe(true);
-    expect(canReviewRequest(ROLE_CODE.ADMIN_SISTEMA, REQUEST_STATUS.SUBMITTED)).toBe(true);
+    expect(canReviewRequest(ROLE_CODE.GIOF_MANAGER, REQUEST_STATUS.SUBMITTED)).toBe(true);
+    expect(canReviewRequest(ROLE_CODE.ADMIN_SISTEMA, REQUEST_STATUS.SUBMITTED)).toBe(false);
     expect(canReviewRequest(ROLE_CODE.SOLICITANTE_EPE, REQUEST_STATUS.SUBMITTED)).toBe(false);
     expect(canReviewRequest(ROLE_CODE.GIOF_GESTOR, REQUEST_STATUS.OBSERVED)).toBe(false);
   });

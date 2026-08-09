@@ -1,7 +1,7 @@
 "use client";
 
-import { useState } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { useEffect, useState } from "react";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { toast } from "sonner";
 
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -13,6 +13,9 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { useApproveRequest, useObserveRequest, useRejectRequest, useRequest, useRequestDocuments, useRequestRenditionReport, useRetryRexanActivation, useSettlementContext, useStartAdvanceSettlement } from "@/hooks/use-requests";
+import { useGiofWorkLease } from "@/hooks/use-giof-work";
+import { GiofWorkStatus } from "@/components/giof-work/giof-work-controls";
+import { isGiofManagerRole, isGiofOperationalRole } from "@/lib/role-capabilities";
 import { ROUTES } from "@/lib/constants";
 import {
   canCorrectObservedRequest,
@@ -199,12 +202,17 @@ function PaymentProofCard({ items, currency }: { items: PaymentProofDisplayItem[
 export function RequestDetailPage() {
   const params = useParams<{ id: string }>();
   const router = useRouter();
+  const searchParams = useSearchParams();
   const { request, isInitialLoading, isRefreshing, error, refetch, patchRequest } = useRequest(params.id);
   const requestDocuments = useRequestDocuments(params.id);
   const settlementContextState = useSettlementContext(params.id, request?.request_type === REQUEST_TYPE.ADVANCE_SETTLEMENT);
   const structuredReportState = useRequestRenditionReport(params.id, request?.request_type === REQUEST_TYPE.ADVANCE_SETTLEMENT);
   const user = useAuthStore((state) => state.user);
   const roleCode = user?.role?.code;
+  const isGiofOperational = isGiofOperationalRole(roleCode);
+  const isGiofManager = isGiofManagerRole(roleCode);
+  const leaseSession = useGiofWorkLease();
+  const shouldProcess = searchParams.get("mode") === "process";
   const [observeOpen, setObserveOpen] = useState(false);
   const [approveOpen, setApproveOpen] = useState(false);
   const [rejectOpen, setRejectOpen] = useState(false);
@@ -219,6 +227,13 @@ export function RequestDetailPage() {
   const { rejectRequest, isLoading: rejecting } = useRejectRequest();
   const { startAdvanceSettlement, isLoading: startingSettlement } = useStartAdvanceSettlement();
   const { retryRexanActivation, isLoading: retryingRexan } = useRetryRexanActivation();
+
+  useEffect(() => {
+    if (!request || !shouldProcess || !request.giof_work?.canAcquire || leaseSession.lease || leaseSession.isLoading) return;
+    void leaseSession.acquire(request.id, request.giof_work, [request.payment?.id ?? request.payment_id ?? ""])
+      .then(() => refetch({ background: true }))
+      .catch((reason: unknown) => toast.error(reason instanceof Error ? reason.message : "Actualiza la solicitud antes de continuar."));
+  }, [request?.id, request?.giof_work?.assignmentVersion, request?.giof_work?.canAcquire, shouldProcess, leaseSession.lease?.token, leaseSession.isLoading]);
 
   const RETURN_PROOF_OBSERVATION_FIELD = "Constancia de devolución";
 
@@ -237,13 +252,14 @@ export function RequestDetailPage() {
 
   const openObservations = (request.observations ?? []).filter((observation) => !observation.is_resolved);
   const allObservations = request.observations ?? [];
-  const canReview = canReviewRequest(roleCode, request.status);
+  const canReview = canReviewRequest(roleCode, request.status)
+    && (!isGiofOperational || request.giof_work?.canEdit === true);
   const isRequestOwner = Boolean(user?.id && request.requester_id === user.id);
   const canCorrect = isRequestOwner && canCorrectObservedRequest(roleCode, request.status);
   const canEditDraft = isRequestOwner && canEditDraftRequest(roleCode, request.status);
   const advanceSettlementCta = getAdvanceSettlementCta(roleCode, request, user?.id);
   const renditionNextStepGuidance = getRenditionNextStepGuidance(roleCode, request, user?.id);
-  const canRetryRexan = roleCode === "GIOF_GESTOR" || roleCode === "ADMIN_SISTEMA";
+  const canRetryRexan = isGiofOperational && request.giof_work?.canEdit === true;
   const driveFolderUrl = getSafeDocumentUrl(request.drive_folder_url);
   const ownPaymentProofItems = getPaymentProofDisplayItems(request.payment);
   const createdByDisplayName = getPaymentRequestCreatorDisplayName(request);
@@ -324,6 +340,7 @@ export function RequestDetailPage() {
         field_reference: fieldReference.trim() || undefined,
       });
       patchRequest(observed);
+      await leaseSession.release();
       toast.success("Solicitud observada correctamente");
       setObserveOpen(false);
       setObserveComment("");
@@ -370,6 +387,7 @@ export function RequestDetailPage() {
     try {
       const approved = await approveRequest(request.id, payload);
       patchRequest(approved);
+      await leaseSession.release();
       toast.success(isAdvanceSettlement && rexanPreviewOutcome !== REXAN_OUTCOME.EXCESS ? "Rendición aprobada correctamente" : "Solicitud enviada a gestión de pago");
       setApproveOpen(false);
       setApproveComment("");
@@ -392,6 +410,7 @@ export function RequestDetailPage() {
     try {
       const rejected = await rejectRequest(request.id, { reason });
       patchRequest(rejected);
+      await leaseSession.release();
       toast.success("Solicitud rechazada correctamente");
       setRejectOpen(false);
       setRejectReason("");
@@ -422,6 +441,7 @@ export function RequestDetailPage() {
         </div>
         <div className="flex items-center gap-2">
           <StatusBadge status={request.status} context={request} />
+          <GiofWorkStatus requestId={request.id} work={request.giof_work} currentUserId={user?.id} isManager={isGiofManager} />
           {driveFolderUrl && (
             <Button variant="outline" asChild>
               <a href={driveFolderUrl} target="_blank" rel="noopener noreferrer" data-testid="request-detail-drive-folder-link">
@@ -438,6 +458,9 @@ export function RequestDetailPage() {
           Actualizando solicitud en segundo plano…
         </p>
       )}
+
+      {leaseSession.error && <p className="rounded-md border border-destructive/40 p-3 text-sm text-destructive" role="alert">{leaseSession.error.message} Actualiza esta vista.</p>}
+      {isGiofOperational && request.giof_work?.canEdit !== true && !leaseSession.isLoading && <p className="rounded-md border bg-muted/30 p-3 text-sm text-muted-foreground">Vista de solo lectura. Para procesar un trabajo asignado a ti, ingresa desde la acción “Procesar” de tu bandeja.</p>}
 
       {canEditDraft && (
         <Card>

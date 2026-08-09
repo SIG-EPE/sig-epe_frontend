@@ -9,6 +9,7 @@ import type { RoleCode } from "@/lib/constants";
 const ROLE_HOME_PATHS: Record<RoleCode, string> = {
   SOLICITANTE_EPE: ROUTES.REQUESTS,
   GIOF_GESTOR: ROUTES.REQUESTS,
+  GIOF_MANAGER: `${ROUTES.REQUESTS}?scope=review&work_scope=mine`,
   AUDITOR_DIRECCION: ROUTES.REPORTS,
   ADMIN_SISTEMA: ROUTES.ADMIN_USERS,
 };

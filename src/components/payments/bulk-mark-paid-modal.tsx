@@ -18,6 +18,7 @@ import { useAuthStore } from "@/stores/auth-store";
 import { getBusinessDateTimeLocalValue, parseBusinessDateTimeLocalToIso } from "@/lib/business-timezone";
 import { formatRequestCurrency, getApiErrorMessage, getBulkPaymentResultLabel, getBulkPaymentRexanHref, getPaymentEmailStatusLabel, getPaymentRexanStatusLabel, getRequestDisplayCode, getRequestPayableAmount } from "@/lib/requests";
 import type { BulkMarkPaidResponse, PaymentRequest } from "@/types/requests";
+import { getGiofLeaseCredential } from "@/lib/giof-work-lease-session";
 
 const bulkMarkPaidSchema = z.object({
   paid_at: z.string().min(1, "Indica la fecha y hora de pago."),
@@ -69,6 +70,10 @@ export function BulkMarkPaidModal({ requests, open, onOpenChange, onSuccess }: B
     try {
       const response = await bulkMarkPaid({
         request_ids: requests.map((request) => request.id),
+        giof_items: requests.map((request) => {
+          const lease = getGiofLeaseCredential(request.id);
+          return lease ? { request_id: request.id, assignment_version: Number(lease.assignmentVersion), lease_token: lease.token } : null;
+        }).filter((item): item is NonNullable<typeof item> => item !== null),
         paid_at: parseBusinessDateTimeLocalToIso(values.paid_at),
         operation_reference: values.operation_reference?.trim() || undefined,
         notes: values.notes?.trim() || undefined,

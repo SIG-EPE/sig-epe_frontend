@@ -6,6 +6,8 @@ import { ROLE_CODE } from "@/lib/constants";
 describe("route access matrix", () => {
   it("protects payment and budget management for GIOF, while catalogs align GIOF/Admin", () => {
     expect(canAccessRoute("/payments", ROLE_CODE.GIOF_GESTOR).isAllowed).toBe(true);
+    expect(canAccessRoute("/payments", ROLE_CODE.GIOF_MANAGER).isAllowed).toBe(true);
+    expect(canAccessRoute("/payments", ROLE_CODE.ADMIN_SISTEMA).isAllowed).toBe(false);
     expect(canAccessRoute("/budget/planning", ROLE_CODE.GIOF_GESTOR).isAllowed).toBe(true);
     expect(canAccessRoute("/catalogs/funding-sources", ROLE_CODE.GIOF_GESTOR).isAllowed).toBe(true);
 
@@ -72,6 +74,27 @@ describe("route access matrix", () => {
     expect(canAccessRoute("/help", ROLE_CODE.AUDITOR_DIRECCION).isAllowed).toBe(true);
     expect(canAccessRoute("/help", ROLE_CODE.ADMIN_SISTEMA).isAllowed).toBe(true);
     expect(canAccessRoute("/help", null).isAllowed).toBe(false);
+  });
+
+  it("keeps assignment help readable under the shared help policy without granting operational queues", () => {
+    const assignmentHelpRoles = [
+      ROLE_CODE.SOLICITANTE_EPE,
+      ROLE_CODE.GIOF_GESTOR,
+      ROLE_CODE.GIOF_MANAGER,
+      ROLE_CODE.AUDITOR_DIRECCION,
+      ROLE_CODE.ADMIN_SISTEMA,
+    ];
+
+    for (const role of assignmentHelpRoles) {
+      expect(canAccessRoute("/help/giof-assignment", role).isAllowed).toBe(true);
+    }
+    expect(canAccessRoute("/help/giof-assignment", null).isAllowed).toBe(false);
+
+    expect(canAccessRoute("/payments", ROLE_CODE.SOLICITANTE_EPE).isAllowed).toBe(false);
+    expect(canAccessRoute("/payments", ROLE_CODE.ADMIN_SISTEMA).isAllowed).toBe(false);
+    expect(canAccessRoute("/payments", ROLE_CODE.AUDITOR_DIRECCION).isAllowed).toBe(false);
+    expect(canAccessRoute("/renditions", ROLE_CODE.SOLICITANTE_EPE).isAllowed).toBe(false);
+    expect(canAccessRoute("/renditions", ROLE_CODE.AUDITOR_DIRECCION).isAllowed).toBe(false);
   });
 
   it("keeps report and accountability pages limited to review/admin roles", () => {

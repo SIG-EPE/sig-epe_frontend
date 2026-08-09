@@ -12,6 +12,7 @@ export const QUERY_TAGS = {
   DASHBOARD: "dashboard",
   DASHBOARD_OPTIONS: "dashboard-options",
   POA: "poa",
+  GIOF_WORK: "giof-work",
 } as const;
 
 export type QueryTag = (typeof QUERY_TAGS)[keyof typeof QUERY_TAGS];
@@ -36,6 +37,7 @@ export function invalidateRequestDomain(requestId?: string): void {
     QUERY_TAGS.DASHBOARD,
     QUERY_TAGS.BUDGET,
     QUERY_TAGS.POA,
+    QUERY_TAGS.GIOF_WORK,
   ]);
   if (requestId) invalidateQueryPrefixes([["requests", "detail", requestId]]);
 }

@@ -1,5 +1,6 @@
 import { render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import userEvent from "@testing-library/user-event";
+import { describe, expect, it, vi } from "vitest";
 
 import { RenditionsTable } from "@/components/renditions/renditions-table";
 import { RENDITION_STATUS, REQUEST_STATUS, type RenditionInboxRow } from "@/types/requests";
@@ -36,6 +37,28 @@ function makeRendition(overrides: Partial<RenditionInboxRow> = {}): RenditionInb
 }
 
 describe("RenditionsTable", () => {
+  it("asigna usando el settlement vinculado en estados activos y deshabilita una rendida", async () => {
+    const user = userEvent.setup();
+    const onToggleAssignment = vi.fn();
+    const work = { requestId: "settlement-active", pool: "REXAN" as const, assigneeId: null, assigneeName: null, assignmentVersion: "0", lease: null, canAcquire: false, canEdit: false, readOnly: true };
+    render(<RenditionsTable
+      renditions={[
+        makeRendition({ advance_id: "active", request_code: "REXAN-ACTIVE", settlement_request_id: "settlement-active", giof_work: { ...work, canAssign: true } }),
+        makeRendition({ advance_id: "observed", request_code: "REXAN-OBSERVED", settlement_request_id: "settlement-observed", settlement_status: REQUEST_STATUS.OBSERVED, rendition_status: RENDITION_STATUS.OBSERVED, giof_work: { ...work, requestId: "settlement-observed", assignmentVersion: "3", canAssign: true } }),
+        makeRendition({ advance_id: "settled", request_code: "REXAN-SETTLED", settlement_request_id: "settlement-closed", settlement_status: REQUEST_STATUS.CLOSED, rendition_status: RENDITION_STATUS.SETTLED, giof_work: { ...work, requestId: "settlement-closed", canAssign: false } }),
+      ]}
+      isLoading={false}
+      isGiofManager
+      onToggleAssignment={onToggleAssignment}
+      onToggleAllAssignments={() => undefined}
+    />);
+
+    expect(screen.getByRole("checkbox", { name: "Seleccionar REXAN-ACTIVE para asignar" })).toBeEnabled();
+    await user.click(screen.getByRole("checkbox", { name: "Seleccionar REXAN-OBSERVED para asignar" }));
+    expect(onToggleAssignment).toHaveBeenCalledWith("settlement-observed", true);
+    expect(screen.getByRole("checkbox", { name: "REXAN-SETTLED: rendición finalizada" })).toBeDisabled();
+  });
+
   it("muestra datos operativos y acción REXAN vinculada", () => {
     render(<RenditionsTable renditions={[makeRendition()]} isLoading={false} />);
 

@@ -35,6 +35,10 @@ import { cn } from "@/lib/utils";
 import { useAuthStore } from "@/stores/auth-store";
 import { DRIVE_SYNC_STATUS, REQUEST_LIST_DATE_FIELD, REQUEST_STATUS, REQUEST_TYPE, type DriveSyncStatus, type RequestListDateField, type RequestStatus, type RequestType } from "@/types/requests";
 import { RequestListTable } from "./request-list-table";
+import { GiofBulkAssignmentBar, GiofWorkScopeFilter } from "@/components/giof-work/giof-work-controls";
+import { isGiofManagerRole, isGiofOperationalRole } from "@/lib/role-capabilities";
+import { GIOF_WORK_POOL, GIOF_WORK_SCOPE, type GiofWorkScope } from "@/types/giof-work";
+import { GIOF_HELP_CONTEXT } from "@/lib/giof-assignment-help";
 
 const ALL_STATUSES_FILTER = "ALL";
 const REQUEST_SEARCH_DEBOUNCE_MS = 500;
@@ -101,6 +105,7 @@ export function RequestsPage() {
       || searchParams.get("has_documents")
       || searchParams.get("drive_sync_status"),
     ));
+  const [selectedAssignmentIds, setSelectedAssignmentIds] = useState<string[]>([]);
 
   useEffect(() => {
     const nextStatus = parseRequestStatusFilter(searchParams.get("status"));
@@ -134,8 +139,10 @@ export function RequestsPage() {
   const limit = Number(searchParams.get("limit") ?? "20") || 20;
   const user = useAuthStore((state) => state.user);
   const roleCode = user?.role?.code;
+  const isGiofOperational = isGiofOperationalRole(roleCode);
+  const isGiofManager = isGiofManagerRole(roleCode);
   const isRolePending = roleCode === undefined;
-  const canUseHistory = roleCode === ROLE_CODE.GIOF_GESTOR || roleCode === ROLE_CODE.ADMIN_SISTEMA || roleCode === ROLE_CODE.AUDITOR_DIRECCION;
+  const canUseHistory = roleCode === ROLE_CODE.GIOF_GESTOR || roleCode === ROLE_CODE.GIOF_MANAGER || roleCode === ROLE_CODE.ADMIN_SISTEMA || roleCode === ROLE_CODE.AUDITOR_DIRECCION;
   const rawScope = searchParams.get("scope");
   const requestScope: RequestScope = rawScope === REQUEST_SCOPE.HISTORY && (canUseHistory || isRolePending)
     ? REQUEST_SCOPE.HISTORY
@@ -144,7 +151,12 @@ export function RequestsPage() {
       : REQUEST_SCOPE.MINE;
   const isReviewInbox = requestScope === "review";
   const isHistory = requestScope === "history";
-  const isGiofReviewInbox = isReviewInbox && roleCode === ROLE_CODE.GIOF_GESTOR;
+  const isGiofReviewInbox = isReviewInbox && isGiofOperational;
+  const rawWorkScope = searchParams.get("work_scope");
+  const workScope: GiofWorkScope = isGiofOperational && Object.values(GIOF_WORK_SCOPE).includes(rawWorkScope as GiofWorkScope)
+    ? rawWorkScope as GiofWorkScope
+    : GIOF_WORK_SCOPE.MINE;
+  const workAssigneeId = workScope === GIOF_WORK_SCOPE.ASSIGNEE ? searchParams.get("assignee_id") ?? undefined : undefined;
   const activeQueueFilter = activeQueue ? getRequestReviewQueueFilter(activeQueue) : undefined;
   const isUnsupportedQueue = Boolean(activeQueueFilter?.unsupportedReason);
   const defaultReviewStatuses = isReviewInbox && !status && !activeQueue && !isExplicitAllStatuses
@@ -157,6 +169,8 @@ export function RequestsPage() {
     status: isUnsupportedQueue ? undefined : status,
     statuses: isUnsupportedQueue ? undefined : defaultReviewStatuses,
     scope: requestScope,
+    work_scope: isReviewInbox && isGiofOperational ? workScope : undefined,
+    assignee_id: isReviewInbox && isGiofManager ? workAssigneeId : undefined,
     date_from: isHistory ? dateFrom || undefined : undefined,
     date_to: isHistory ? dateTo || undefined : undefined,
     date_field: isHistory ? dateField : undefined,
@@ -175,6 +189,8 @@ export function RequestsPage() {
     limit: 100,
     search: serverSearch,
     scope: requestScope,
+    work_scope: isReviewInbox && isGiofOperational ? workScope : undefined,
+    assignee_id: isReviewInbox && isGiofManager ? workAssigneeId : undefined,
   }, {
     keepPreviousData: false,
     cacheMode: CACHED_RESOURCE_CACHE_MODE.NO_STORE,
@@ -227,6 +243,15 @@ export function RequestsPage() {
     setActiveQueue(undefined);
     setStatus(undefined);
     replaceQuery({ scope, status: undefined, queue: undefined, page: 1 });
+  }
+
+  function setWorkScopeFilter(nextScope: GiofWorkScope, assigneeId?: string) {
+    setSelectedAssignmentIds([]);
+    replaceQuery({ work_scope: nextScope, assignee_id: nextScope === GIOF_WORK_SCOPE.ASSIGNEE ? assigneeId : undefined, page: 1 });
+  }
+
+  function toggleAssignment(requestId: string, checked: boolean) {
+    setSelectedAssignmentIds((current) => checked ? [...new Set([...current, requestId])].slice(0, 50) : current.filter((id) => id !== requestId));
   }
 
   function setAdvancedFilter(key: string, value: string | undefined) {
@@ -377,7 +402,8 @@ export function RequestsPage() {
               </CardDescription>
               {isReviewInbox && <p className="text-sm text-muted-foreground">Total: {displayedTotal}</p>}
             </div>
-            <div className="flex w-full flex-col gap-2 lg:max-w-3xl">
+              <div className="flex w-full flex-col gap-2 lg:max-w-3xl">
+              {isReviewInbox && isGiofOperational && <GiofWorkScopeFilter value={workScope} assigneeId={workAssigneeId} isManager={isGiofManager} onChange={setWorkScopeFilter} helpContext={GIOF_HELP_CONTEXT.REQUEST} />}
               <div className="relative">
                 <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                 <Input
@@ -534,6 +560,7 @@ export function RequestsPage() {
           )}
         </CardHeader>
         <CardContent>
+          {isGiofManager && isReviewInbox && <GiofBulkAssignmentBar pool={GIOF_WORK_POOL.REQUEST} items={displayedRequests.filter((request) => selectedAssignmentIds.includes(request.id) && request.giof_work?.canAssign === true).map((request) => ({ requestId: request.id, label: request.request_code ?? "Solicitud", work: request.giof_work! }))} onClear={() => setSelectedAssignmentIds([])} onSuccess={() => refetch()} />}
           {isRefreshing && !error && (
             <p className="mb-3 rounded-md border bg-muted/40 px-3 py-2 text-sm text-muted-foreground" role="status">
               Actualizando solicitudes...
@@ -545,7 +572,7 @@ export function RequestsPage() {
               <Button size="sm" variant="outline" onClick={() => void refetch()}>Reintentar</Button>
             </div>
           ) : (
-            <RequestListTable requests={displayedRequests} isLoading={isUnsupportedQueue ? false : isLoading} roleCode={roleCode} currentUserId={user?.id} showResponsible={isReviewInbox || isHistory} />
+            <RequestListTable requests={displayedRequests} isLoading={isUnsupportedQueue ? false : isLoading} roleCode={roleCode} currentUserId={user?.id} showResponsible={isReviewInbox || isHistory} isGiofManager={isGiofManager && isReviewInbox} selectedAssignmentIds={selectedAssignmentIds} onToggleAssignment={toggleAssignment} onToggleAllAssignments={(checked) => setSelectedAssignmentIds(checked ? displayedRequests.filter((request) => request.giof_work?.canAssign === true).map((request) => request.id).slice(0, 50) : [])} />
           )}
         </CardContent>
       </Card>
