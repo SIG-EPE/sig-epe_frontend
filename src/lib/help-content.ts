@@ -1,9 +1,13 @@
+import { GIOF_ASSIGNMENT_HELP } from "@/lib/giof-assignment-help";
+import type { AppRoute } from "@/lib/constants";
+
 export const FAQ_CATEGORIES = {
   ACCESS: "Acceso",
   REQUESTS: "Solicitudes",
   DOCUMENTS: "Documentos",
   PAYMENTS_AND_RENDITIONS: "Pagos y rendiciones",
   NOTIFICATIONS: "Notificaciones",
+  GIOF_WORK: "Asignación GIOF",
 } as const;
 
 export type FaqCategory = (typeof FAQ_CATEGORIES)[keyof typeof FAQ_CATEGORIES];
@@ -14,6 +18,8 @@ export interface FaqItem {
   readonly question: string;
   readonly answer: string;
   readonly keywords: readonly string[];
+  readonly href?: AppRoute;
+  readonly linkLabel?: string;
 }
 
 export const FAQ_ITEMS = [
@@ -35,8 +41,8 @@ export const FAQ_ITEMS = [
     id: "tipos-solicitud",
     category: FAQ_CATEGORIES.REQUESTS,
     question: "¿Qué solicitudes puedo realizar?",
-    answer: "Puedes realizar un Anticipo, un Pago a Proveedor o un Reembolso. Después de pagar un Anticipo, el sistema crea una Rendición de anticipo (REXAN); esta no se crea desde Nueva solicitud.",
-    keywords: ["anticipo", "proveedor", "reembolso", "rexan"],
+    answer: "Puedes realizar un Anticipo, un Pago a Proveedor o un Reembolso. Después de pagar un Anticipo, el sistema crea una Rendición de anticipo; esta no se crea desde Nueva solicitud.",
+    keywords: ["anticipo", "proveedor", "reembolso", "rendición"],
   },
   {
     id: "crear-enviar-solicitud",
@@ -118,9 +124,9 @@ export const FAQ_ITEMS = [
   {
     id: "rexan-generacion",
     category: FAQ_CATEGORIES.PAYMENTS_AND_RENDITIONS,
-    question: "¿Qué es una rendición de anticipo (REXAN) y cuándo aparece?",
-    answer: "REXAN significa Rendición de anticipo. SIG-EPE la crea cuando un Anticipo queda Pagado. Puede tardar unos momentos en aparecer y podrás verla en el detalle del anticipo.",
-    keywords: ["rendición de anticipo", "anticipo pagado", "activación", "rexan"],
+    question: "¿Qué es una rendición de anticipo y cuándo aparece?",
+    answer: "SIG-EPE crea la Rendición de anticipo cuando un Anticipo queda Pagado. Puede tardar unos momentos en aparecer y podrás verla en el detalle del anticipo.",
+    keywords: ["rendición de anticipo", "anticipo pagado", "activación"],
   },
   {
     id: "documentos-rendicion",
@@ -142,5 +148,14 @@ export const FAQ_ITEMS = [
     question: "¿Qué correos envía SIG-EPE y qué hago si no los recibo?",
     answer: "SIG-EPE puede enviarte correos sobre solicitudes, pagos y recordatorios de rendición. Si no los recibes, revisa la bandeja de entrada y la carpeta de correo no deseado (spam), confirma el correo de tu perfil y pide ayuda al administrador si el problema continúa.",
     keywords: ["email", "notificaciones", "spam", "bandeja de entrada", "correo de perfil"],
+  },
+  {
+    id: "asignacion-giof",
+    category: FAQ_CATEGORIES.GIOF_WORK,
+    question: "¿Cómo funciona la asignación de trabajo GIOF?",
+    answer: GIOF_ASSIGNMENT_HELP.summary,
+    keywords: GIOF_ASSIGNMENT_HELP.keywords,
+    href: GIOF_ASSIGNMENT_HELP.href,
+    linkLabel: "Abrir guía de asignación GIOF",
   },
 ] as const satisfies readonly FaqItem[];

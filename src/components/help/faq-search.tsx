@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import { ChevronDown, Search } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -96,7 +97,12 @@ export function FaqSearch({ items }: FaqSearchProps) {
                           hidden={!isOpen}
                           className="border-t px-4 py-4 text-sm leading-6 text-muted-foreground sm:px-5"
                         >
-                          {item.answer}
+                          <p>{item.answer}</p>
+                          {item.href && item.linkLabel && (
+                            <Button asChild variant="link" className="mt-2 h-auto p-0">
+                              <Link href={item.href}>{item.linkLabel}</Link>
+                            </Button>
+                          )}
                         </div>
                       </article>
                     );
