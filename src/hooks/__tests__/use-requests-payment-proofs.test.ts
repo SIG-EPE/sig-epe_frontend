@@ -17,7 +17,6 @@ describe("attachPaymentProof", () => {
 
     await expect(attachPaymentProof("payment-1", {
       proof,
-      request_allocation_ids: ["allocation-1", "allocation-2"],
       operation_reference: " OP-123 ",
       paid_at: "2026-06-08T20:00:00.000Z",
       notes: " Línea 1 y 2 ",
