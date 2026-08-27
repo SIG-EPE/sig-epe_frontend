@@ -45,7 +45,6 @@ import {
   type RequestAllocationsBudgetPreview,
   type RequiredDocumentChecklist,
   type RequiredDocumentChecklistItem,
-  type ConditionalDocumentChecklistNote,
   type BulkPaymentItemResult,
   type BulkPaymentRexanResult,
   type RequestDocumentUploadQueueItem,
@@ -1511,67 +1510,31 @@ export function getRequestReviewNavigationIssues(
   };
 }
 
-const REQUIRED_DOCUMENT_RULES: Record<RequestType, Omit<RequiredDocumentChecklistItem, "satisfied">[]> = {
-  [REQUEST_TYPE.ADVANCE]: [{
-    key: "advance-pxq",
-    category: REQUEST_DOCUMENT_CATEGORY.PXQ,
-    label: "Excel PxQ",
-    description: "Adjunta la plantilla PxQ en formato XLS o XLSX.",
-    required: true,
-    acceptedFormatsLabel: "XLS o XLSX",
-    missingMessage: "Falta adjuntar Excel PxQ.",
-  }],
-  [REQUEST_TYPE.REIMBURSEMENT]: [
-    {
-      key: "reimbursement-settlement-report",
-      category: REQUEST_DOCUMENT_CATEGORY.SETTLEMENT_REPORT,
-      label: "Informe de rendición Excel",
-      description: "Adjunta el informe de rendición en XLS o XLSX.",
-      required: true,
-      acceptedFormatsLabel: "XLS o XLSX",
-      missingMessage: "Falta adjuntar informe de rendición Excel.",
-    },
-    {
-      key: "reimbursement-receipt",
-      category: REQUEST_DOCUMENT_CATEGORY.RECEIPT,
-      label: "Comprobante",
-      description: "Adjunta al menos un comprobante de gasto.",
-      required: true,
-      acceptedFormatsLabel: "PDF, JPG o PNG",
-      missingMessage: "Falta adjuntar comprobante.",
-    },
-  ],
-  [REQUEST_TYPE.SUPPLIER_PAYMENT]: [{
-    key: "supplier-receipt",
-    category: REQUEST_DOCUMENT_CATEGORY.RECEIPT,
-    label: "Comprobante factura/RH",
-    description: "Adjunta la factura o recibo por honorarios del proveedor.",
-    required: true,
-    acceptedFormatsLabel: "PDF, JPG o PNG",
-    missingMessage: "Falta adjuntar comprobante factura/RH.",
-  }],
-  [REQUEST_TYPE.ADVANCE_SETTLEMENT]: [],
+const REQUEST_PXQ_REQUIRED_RULE: Omit<RequiredDocumentChecklistItem, "satisfied"> = {
+  key: "request-pxq",
+  category: REQUEST_DOCUMENT_CATEGORY.PXQ,
+  label: "PXQ",
+  description: "Adjunta un PXQ asociado a la solicitud. Puede pertenecer a cualquiera de sus líneas POA.",
+  required: true,
+  acceptedFormatsLabel: "Formato PXQ permitido",
+  missingMessage: "Falta adjuntar Excel PxQ.",
 };
 
-const SUPPLIER_PAYMENT_CONDITIONAL_NOTES: ConditionalDocumentChecklistNote[] = [
-  {
-    key: "supplier-rh-support",
-    label: "Suspensión RH o sustento aplicable",
-    description: "Se solicitará cuando correspondan sustentos por recibo por honorarios, monto UIT u otros datos de la solicitud.",
-  },
-  {
-    key: "supplier-contract-deliverables",
-    label: "Contrato y entregables",
-    description: "Se solicitará cuando correspondan contrato, entregables u otros sustentos aplicables.",
-  },
-];
+const REQUIRED_DOCUMENT_RULES: Record<RequestType, Omit<RequiredDocumentChecklistItem, "satisfied">[]> = {
+  [REQUEST_TYPE.ADVANCE]: [REQUEST_PXQ_REQUIRED_RULE],
+  [REQUEST_TYPE.REIMBURSEMENT]: [REQUEST_PXQ_REQUIRED_RULE],
+  [REQUEST_TYPE.SUPPLIER_PAYMENT]: [REQUEST_PXQ_REQUIRED_RULE],
+  [REQUEST_TYPE.ADVANCE_SETTLEMENT]: [],
+};
 
 export function getRequiredDocumentChecklist(requestType: RequestType, documents: RequestDocument[]): RequiredDocumentChecklist {
   const rules = REQUIRED_DOCUMENT_RULES[requestType] ?? [];
   const items = rules.map((rule): RequiredDocumentChecklistItem => {
-    const matchingDocuments = documents.filter((document) => document.document_category === rule.category);
-    const requiresExcel = isExcelDocumentCategory(rule.category);
-    const satisfied = matchingDocuments.some((document) => !requiresExcel || isExcelMimeOrExtension(document.mime_type, document.original_filename || document.safe_filename));
+    const satisfied = documents.some(
+      (document) =>
+        document.document_category === rule.category &&
+        document.upload_status === REQUEST_DOCUMENT_UPLOAD_STATUS.PERMANENT,
+    );
 
     return { ...rule, satisfied };
   });
@@ -1579,7 +1542,7 @@ export function getRequiredDocumentChecklist(requestType: RequestType, documents
 
   return {
     items,
-    conditionalNotes: requestType === REQUEST_TYPE.SUPPLIER_PAYMENT ? SUPPLIER_PAYMENT_CONDITIONAL_NOTES : [],
+    conditionalNotes: [],
     missingMessages,
     isComplete: missingMessages.length === 0,
   };

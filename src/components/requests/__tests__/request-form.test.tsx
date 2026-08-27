@@ -965,6 +965,42 @@ describe("RequestForm payload helpers", () => {
     expect(mocks.push).toHaveBeenCalledWith("/requests/request-1");
   });
 
+  it("bloquea continuar a revisión sin el PxQ obligatorio a nivel de solicitud", async () => {
+    const user = userEvent.setup();
+    mocks.requestDocuments = [];
+    const advanceRequest = makePaymentRequest({
+      request_type: REQUEST_TYPE.ADVANCE,
+      requested_amount: 250.5,
+      allocations: [{
+        id: "allocation-1",
+        payment_request_id: "request-1",
+        budget_planning_line_id: "line-1",
+        amount: 250.5,
+        currency: REQUEST_CURRENCY.PEN,
+        budget_month: 1,
+        fiscal_year: 2026,
+        org_unit_id: null,
+        sort_order: 0,
+        budgetPlanningLine: null,
+        planning_line: null,
+        org_unit: null,
+        documents: [],
+        payment_execution: null,
+      }],
+    });
+
+    render(<RequestForm activeStep={REQUEST_EDIT_STEP.DOCUMENTS} initialRequest={advanceRequest} mode="edit" />);
+
+    expect(screen.getByRole("button", { name: "Adjuntar documentos para continuar" })).toBeEnabled();
+    expect(screen.queryByRole("button", { name: "Continuar a revisión" })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Adjuntar documentos para continuar" }));
+
+    expect(screen.getByText("Falta adjuntar Excel PxQ.")).toBeInTheDocument();
+    expect(mocks.toastError).toHaveBeenCalledWith("Adjunta los documentos requeridos antes de pasar a revisión.");
+    expect(mocks.push).not.toHaveBeenCalledWith(expect.stringContaining("?step=review"));
+  });
+
   it("recupera una edición en conflicto al guardar sin reintentar", async () => {
     const user = userEvent.setup();
     mocks.updateRequest.mockRejectedValue(makeRequestStateConflict());
