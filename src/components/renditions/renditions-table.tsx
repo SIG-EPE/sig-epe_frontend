@@ -19,6 +19,7 @@ import {
 } from "@/lib/requests";
 import type { RenditionInboxRow } from "@/types/requests";
 import { GiofWorkStatus } from "@/components/giof-work/giof-work-controls";
+import { canOperateAssignedGiofWork } from "@/lib/role-capabilities";
 
 interface RenditionsTableProps {
   renditions: RenditionInboxRow[];
@@ -61,15 +62,21 @@ export function RenditionsTable({ renditions, isLoading, currentUserId, isGiofMa
         {isGiofManager && onToggleAllAssignments && assignableRenditions.length > 0 && <TableRow><TableCell colSpan={10}><label className="flex items-center gap-2 text-sm text-muted-foreground"><input type="checkbox" className="size-4" checked={assignableRenditions.every((row) => selectedAssignmentIds.includes(row.giof_work?.requestId as string))} onChange={(event) => onToggleAllAssignments(event.target.checked)} />Seleccionar rendiciones asignables visibles</label></TableCell></TableRow>}
         {renditions.map((row) => {
           const action = getRenditionAction(row);
+          const primaryRequestCode = row.settlement_request_code ?? row.request_code ?? row.advance_id;
+          const originRequestCode = row.advance_request_code ?? row.request_code;
           const registeredParty = getRegisteredPartyDisplay(row);
           const registeredPartyDocument = getRegisteredPartyDocumentLabel(row);
           const registeredBy = getRegisteredByDisplayName(row);
+          const canOperate = canOperateAssignedGiofWork(row.giof_work, currentUserId);
           return (
             <TableRow key={row.advance_id} data-testid="rendition-row">
-              {isGiofManager && <TableCell>{row.giof_work?.requestId ? <input type="checkbox" className="size-4" checked={selectedAssignmentIds.includes(row.giof_work.requestId)} disabled={row.giof_work.canAssign !== true} title={row.giof_work.canAssign === true ? "Seleccionar para asignar" : "Rendición finalizada: no tiene seguimiento REXAN pendiente"} onChange={(event) => onToggleAssignment?.(row.giof_work?.requestId as string, event.target.checked)} aria-label={row.giof_work.canAssign === true ? `Seleccionar ${row.request_code ?? "rendición"} para asignar` : `${row.request_code ?? "Rendición"}: rendición finalizada`} /> : null}</TableCell>}
+              {isGiofManager && <TableCell>{row.giof_work?.requestId ? <input type="checkbox" className="size-4" checked={selectedAssignmentIds.includes(row.giof_work.requestId)} disabled={row.giof_work.canAssign !== true} title={row.giof_work.canAssign === true ? "Seleccionar para asignar" : "Rendición finalizada: no tiene seguimiento REXAN pendiente"} onChange={(event) => onToggleAssignment?.(row.giof_work?.requestId as string, event.target.checked)} aria-label={row.giof_work.canAssign === true ? `Seleccionar ${primaryRequestCode} para asignar` : `${primaryRequestCode}: rendición finalizada`} /> : null}</TableCell>}
               <TableCell className="font-medium whitespace-nowrap">
                 <div className="flex flex-col">
-                  <span>{row.request_code ?? row.advance_id}</span>
+                  <span>{primaryRequestCode}</span>
+                  {originRequestCode && originRequestCode !== primaryRequestCode && (
+                    <span className="text-xs text-muted-foreground">Origen / anticipo: {originRequestCode}</span>
+                  )}
                   <span className="text-xs text-muted-foreground">{row.concept}</span>
                 </div>
               </TableCell>
@@ -97,7 +104,7 @@ export function RenditionsTable({ renditions, isLoading, currentUserId, isGiofMa
               <TableCell>{row.giof_work?.requestId && <GiofWorkStatus requestId={row.giof_work.requestId} work={row.giof_work} currentUserId={currentUserId} isManager={isGiofManager} />}</TableCell>
               <TableCell className="text-right">
                 <Button asChild size="sm" variant={row.settlement_request_id ? "default" : "outline"}>
-                  <Link href={row.settlement_request_id && row.giof_work?.canAcquire ? `${action.href}?mode=process` : action.href}>{row.settlement_request_id && row.giof_work && !row.giof_work.canAcquire ? "Ver" : action.label}</Link>
+                  <Link href={row.settlement_request_id && canOperate ? `${action.href}?mode=process` : action.href}>{row.settlement_request_id && row.giof_work && !canOperate ? "Ver" : action.label}</Link>
                 </Button>
               </TableCell>
             </TableRow>

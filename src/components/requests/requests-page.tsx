@@ -23,7 +23,6 @@ import {
   getRequestReviewQueueCount,
   getRequestReviewQueueFilter,
   getRequestReviewQueueForStatus,
-  isRequestReviewRole,
   parseRequestListSort,
   parseRequestReviewQueue,
   parseRequestStatusFilter,
@@ -36,7 +35,7 @@ import { useAuthStore } from "@/stores/auth-store";
 import { DRIVE_SYNC_STATUS, REQUEST_LIST_DATE_FIELD, REQUEST_STATUS, REQUEST_TYPE, type DriveSyncStatus, type RequestListDateField, type RequestStatus, type RequestType } from "@/types/requests";
 import { RequestListTable } from "./request-list-table";
 import { GiofBulkAssignmentBar, GiofWorkScopeFilter } from "@/components/giof-work/giof-work-controls";
-import { isGiofManagerRole, isGiofOperationalRole } from "@/lib/role-capabilities";
+import { ROLE_CAPABILITY, hasRoleCapability, isGiofManagerRole, isGiofOperationalRole } from "@/lib/role-capabilities";
 import { GIOF_WORK_POOL, GIOF_WORK_SCOPE, type GiofWorkScope } from "@/types/giof-work";
 import { GIOF_HELP_CONTEXT } from "@/lib/giof-assignment-help";
 
@@ -142,11 +141,11 @@ export function RequestsPage() {
   const isGiofOperational = isGiofOperationalRole(roleCode);
   const isGiofManager = isGiofManagerRole(roleCode);
   const isRolePending = roleCode === undefined;
-  const canUseHistory = roleCode === ROLE_CODE.GIOF_GESTOR || roleCode === ROLE_CODE.GIOF_MANAGER || roleCode === ROLE_CODE.ADMIN_SISTEMA || roleCode === ROLE_CODE.AUDITOR_DIRECCION;
+  const canUseHistory = hasRoleCapability(roleCode, ROLE_CAPABILITY.REQUEST_HISTORY);
   const rawScope = searchParams.get("scope");
   const requestScope: RequestScope = rawScope === REQUEST_SCOPE.HISTORY && (canUseHistory || isRolePending)
     ? REQUEST_SCOPE.HISTORY
-    : rawScope === REQUEST_SCOPE.REVIEW && (isRequestReviewRole(roleCode) || isRolePending)
+    : rawScope === REQUEST_SCOPE.REVIEW && (isGiofOperational || isRolePending)
       ? REQUEST_SCOPE.REVIEW
       : REQUEST_SCOPE.MINE;
   const isReviewInbox = requestScope === "review";
@@ -155,7 +154,9 @@ export function RequestsPage() {
   const rawWorkScope = searchParams.get("work_scope");
   const workScope: GiofWorkScope = isGiofOperational && Object.values(GIOF_WORK_SCOPE).includes(rawWorkScope as GiofWorkScope)
     ? rawWorkScope as GiofWorkScope
-    : GIOF_WORK_SCOPE.MINE;
+    : isGiofManager
+      ? GIOF_WORK_SCOPE.ALL
+      : GIOF_WORK_SCOPE.MINE;
   const workAssigneeId = workScope === GIOF_WORK_SCOPE.ASSIGNEE ? searchParams.get("assignee_id") ?? undefined : undefined;
   const activeQueueFilter = activeQueue ? getRequestReviewQueueFilter(activeQueue) : undefined;
   const isUnsupportedQueue = Boolean(activeQueueFilter?.unsupportedReason);
@@ -331,19 +332,19 @@ export function RequestsPage() {
             {isHistory ? "Consulta solicitudes históricas con filtros avanzados." : isReviewInbox ? "Abre una solicitud enviada para observar, aprobar o rechazar." : "Consulta y crea solicitudes de pago."}
           </p>
         </div>
-        <Button onClick={() => router.push(ROUTES.REQUESTS_NEW)} data-testid="new-request-button">
+        {requestScope === REQUEST_SCOPE.MINE && <Button onClick={() => router.push(ROUTES.REQUESTS_NEW)} data-testid="new-request-button">
           <Plus className="h-4 w-4" />
           Nueva solicitud
-        </Button>
+        </Button>}
       </div>
 
       <div className="flex flex-wrap gap-2" data-testid="requests-scope-tabs">
         <Button variant={requestScope === "mine" ? "default" : "outline"} onClick={() => setScopeFilter("mine")}>Mis solicitudes</Button>
-        {isRequestReviewRole(roleCode) && <Button variant={requestScope === "review" ? "default" : "outline"} onClick={() => setScopeFilter("review")}>Bandeja</Button>}
+        {isGiofOperational && <Button variant={requestScope === "review" ? "default" : "outline"} onClick={() => setScopeFilter("review")}>Bandeja</Button>}
         {canUseHistory && <Button variant={requestScope === "history" ? "default" : "outline"} onClick={() => setScopeFilter("history")}>Historial</Button>}
       </div>
 
-      <div className={cn("grid gap-3 sm:grid-cols-2", isGiofReviewInbox ? "lg:grid-cols-3" : "lg:grid-cols-5")} data-testid="requests-status-summary">
+      {requestScope !== REQUEST_SCOPE.MINE && <div className={cn("grid gap-3 sm:grid-cols-2", isGiofReviewInbox ? "lg:grid-cols-3" : "lg:grid-cols-5")} data-testid="requests-status-summary">
         {isGiofReviewInbox ? REQUEST_REVIEW_QUEUE_CARDS.map((card) => {
           const isActive = activeQueue === card.value;
 
@@ -384,7 +385,7 @@ export function RequestsPage() {
             </button>
           );
         })}
-      </div>
+      </div>}
 
       {activeQueueFilter?.unsupportedReason && (
         <p className="rounded-md border border-dashed p-3 text-sm text-muted-foreground" data-testid="requests-review-queue-note">
@@ -415,7 +416,7 @@ export function RequestsPage() {
                 />
               </div>
               <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-end">
-                <Select
+                {requestScope !== REQUEST_SCOPE.MINE && <Select
                   value={isExplicitAllStatuses ? ALL_STATUSES_FILTER : (status ?? ALL_STATUSES_FILTER)}
                   onValueChange={(value) => setStatusFilter(value === ALL_STATUSES_FILTER ? undefined : (value as RequestStatus))}
                 >
@@ -428,7 +429,7 @@ export function RequestsPage() {
                       <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
                     ))}
                   </SelectContent>
-                </Select>
+                </Select>}
                 <Select
                   value={sort}
                   onValueChange={(value) => setSortOption(value as RequestListSort)}
@@ -572,7 +573,7 @@ export function RequestsPage() {
               <Button size="sm" variant="outline" onClick={() => void refetch()}>Reintentar</Button>
             </div>
           ) : (
-            <RequestListTable requests={displayedRequests} isLoading={isUnsupportedQueue ? false : isLoading} roleCode={roleCode} currentUserId={user?.id} showResponsible={isReviewInbox || isHistory} isGiofManager={isGiofManager && isReviewInbox} selectedAssignmentIds={selectedAssignmentIds} onToggleAssignment={toggleAssignment} onToggleAllAssignments={(checked) => setSelectedAssignmentIds(checked ? displayedRequests.filter((request) => request.giof_work?.canAssign === true).map((request) => request.id).slice(0, 50) : [])} />
+            <RequestListTable requests={displayedRequests} isLoading={isUnsupportedQueue ? false : isLoading} roleCode={roleCode} currentUserId={user?.id} showResponsible={isReviewInbox || isHistory} showAssignment={isReviewInbox} isGiofManager={isGiofManager && isReviewInbox} selectedAssignmentIds={selectedAssignmentIds} onToggleAssignment={toggleAssignment} onToggleAllAssignments={(checked) => setSelectedAssignmentIds(checked ? displayedRequests.filter((request) => request.giof_work?.canAssign === true).map((request) => request.id).slice(0, 50) : [])} />
           )}
         </CardContent>
       </Card>

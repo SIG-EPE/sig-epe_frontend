@@ -25,7 +25,8 @@ export const REQUEST_STATUS = {
   VOIDED: "VOIDED",
 } as const;
 
-export type RequestStatus = (typeof REQUEST_STATUS)[keyof typeof REQUEST_STATUS];
+export type RequestStatus =
+  (typeof REQUEST_STATUS)[keyof typeof REQUEST_STATUS];
 
 export const DRIVE_SYNC_STATUS = {
   NOT_CONFIGURED: "NOT_CONFIGURED",
@@ -35,7 +36,8 @@ export const DRIVE_SYNC_STATUS = {
   BLOCKED: "BLOCKED",
 } as const;
 
-export type DriveSyncStatus = (typeof DRIVE_SYNC_STATUS)[keyof typeof DRIVE_SYNC_STATUS];
+export type DriveSyncStatus =
+  (typeof DRIVE_SYNC_STATUS)[keyof typeof DRIVE_SYNC_STATUS];
 
 export const REQUEST_LIST_DATE_FIELD = {
   CREATED_AT: "created_at",
@@ -45,7 +47,8 @@ export const REQUEST_LIST_DATE_FIELD = {
   UPDATED_AT: "updated_at",
 } as const;
 
-export type RequestListDateField = (typeof REQUEST_LIST_DATE_FIELD)[keyof typeof REQUEST_LIST_DATE_FIELD];
+export type RequestListDateField =
+  (typeof REQUEST_LIST_DATE_FIELD)[keyof typeof REQUEST_LIST_DATE_FIELD];
 
 export const RENDITION_STATUS = {
   PENDING: "PENDING",
@@ -55,13 +58,15 @@ export const RENDITION_STATUS = {
   SETTLED: "SETTLED",
 } as const;
 
-export type RenditionStatus = (typeof RENDITION_STATUS)[keyof typeof RENDITION_STATUS];
+export type RenditionStatus =
+  (typeof RENDITION_STATUS)[keyof typeof RENDITION_STATUS];
 
 export const RENDITION_BUCKET = {
   DUE_SOON: "due_soon",
 } as const;
 
-export type RenditionBucket = (typeof RENDITION_BUCKET)[keyof typeof RENDITION_BUCKET];
+export type RenditionBucket =
+  (typeof RENDITION_BUCKET)[keyof typeof RENDITION_BUCKET];
 
 export const RENDITION_SORT_FIELD = {
   LAST_ACTIVITY: "last_activity",
@@ -69,21 +74,24 @@ export const RENDITION_SORT_FIELD = {
   PAID_AT: "paid_at",
 } as const;
 
-export type RenditionSortField = (typeof RENDITION_SORT_FIELD)[keyof typeof RENDITION_SORT_FIELD];
+export type RenditionSortField =
+  (typeof RENDITION_SORT_FIELD)[keyof typeof RENDITION_SORT_FIELD];
 
 export const RENDITION_SORT_DIRECTION = {
   ASC: "asc",
   DESC: "desc",
 } as const;
 
-export type RenditionSortDirection = (typeof RENDITION_SORT_DIRECTION)[keyof typeof RENDITION_SORT_DIRECTION];
+export type RenditionSortDirection =
+  (typeof RENDITION_SORT_DIRECTION)[keyof typeof RENDITION_SORT_DIRECTION];
 
 export const REQUEST_CURRENCY = {
   PEN: "PEN",
   USD: "USD",
 } as const;
 
-export type RequestCurrency = (typeof REQUEST_CURRENCY)[keyof typeof REQUEST_CURRENCY];
+export type RequestCurrency =
+  (typeof REQUEST_CURRENCY)[keyof typeof REQUEST_CURRENCY];
 
 export const REQUEST_DOCUMENT_CATEGORY = {
   PXQ: "PXQ",
@@ -96,7 +104,8 @@ export const REQUEST_DOCUMENT_CATEGORY = {
   OTHER: "OTHER",
 } as const;
 
-export type RequestDocumentCategory = (typeof REQUEST_DOCUMENT_CATEGORY)[keyof typeof REQUEST_DOCUMENT_CATEGORY];
+export type RequestDocumentCategory =
+  (typeof REQUEST_DOCUMENT_CATEGORY)[keyof typeof REQUEST_DOCUMENT_CATEGORY];
 
 export const REQUEST_DOCUMENT_STORAGE_PROVIDER = {
   LOCAL: "LOCAL",
@@ -105,7 +114,8 @@ export const REQUEST_DOCUMENT_STORAGE_PROVIDER = {
   AZURE_BLOB: "AZURE_BLOB",
 } as const;
 
-export type RequestDocumentStorageProvider = (typeof REQUEST_DOCUMENT_STORAGE_PROVIDER)[keyof typeof REQUEST_DOCUMENT_STORAGE_PROVIDER];
+export type RequestDocumentStorageProvider =
+  (typeof REQUEST_DOCUMENT_STORAGE_PROVIDER)[keyof typeof REQUEST_DOCUMENT_STORAGE_PROVIDER];
 
 export const REQUEST_DOCUMENT_UPLOAD_STATUS = {
   TEMPORARY: "TEMPORARY",
@@ -115,14 +125,16 @@ export const REQUEST_DOCUMENT_UPLOAD_STATUS = {
   FAILED: "FAILED",
 } as const;
 
-export type RequestDocumentUploadStatus = (typeof REQUEST_DOCUMENT_UPLOAD_STATUS)[keyof typeof REQUEST_DOCUMENT_UPLOAD_STATUS];
+export type RequestDocumentUploadStatus =
+  (typeof REQUEST_DOCUMENT_UPLOAD_STATUS)[keyof typeof REQUEST_DOCUMENT_UPLOAD_STATUS];
 
 export const REQUEST_DOCUMENT_SCOPE_TYPE = {
   REQUEST: "REQUEST",
   ALLOCATION: "ALLOCATION",
 } as const;
 
-export type RequestDocumentScopeType = (typeof REQUEST_DOCUMENT_SCOPE_TYPE)[keyof typeof REQUEST_DOCUMENT_SCOPE_TYPE];
+export type RequestDocumentScopeType =
+  (typeof REQUEST_DOCUMENT_SCOPE_TYPE)[keyof typeof REQUEST_DOCUMENT_SCOPE_TYPE];
 
 export const REQUEST_RECEIPT_OCR_STATUS = {
   MANUAL: "MANUAL",
@@ -133,7 +145,8 @@ export const REQUEST_RECEIPT_OCR_STATUS = {
   REQUIRES_REVIEW: "REQUIRES_REVIEW",
 } as const;
 
-export type RequestReceiptOcrStatus = (typeof REQUEST_RECEIPT_OCR_STATUS)[keyof typeof REQUEST_RECEIPT_OCR_STATUS];
+export type RequestReceiptOcrStatus =
+  (typeof REQUEST_RECEIPT_OCR_STATUS)[keyof typeof REQUEST_RECEIPT_OCR_STATUS];
 
 export const REQUEST_RECEIPT_DUPLICATE_STATUS = {
   UNIQUE: "UNIQUE",
@@ -142,7 +155,8 @@ export const REQUEST_RECEIPT_DUPLICATE_STATUS = {
   IGNORED: "IGNORED",
 } as const;
 
-export type RequestReceiptDuplicateStatus = (typeof REQUEST_RECEIPT_DUPLICATE_STATUS)[keyof typeof REQUEST_RECEIPT_DUPLICATE_STATUS];
+export type RequestReceiptDuplicateStatus =
+  (typeof REQUEST_RECEIPT_DUPLICATE_STATUS)[keyof typeof REQUEST_RECEIPT_DUPLICATE_STATUS];
 
 export const REQUEST_RECEIPT_TYPE = {
   INVOICE: "INVOICE",
@@ -152,7 +166,8 @@ export const REQUEST_RECEIPT_TYPE = {
   OTHER: "OTHER",
 } as const;
 
-export type RequestReceiptType = (typeof REQUEST_RECEIPT_TYPE)[keyof typeof REQUEST_RECEIPT_TYPE];
+export type RequestReceiptType =
+  (typeof REQUEST_RECEIPT_TYPE)[keyof typeof REQUEST_RECEIPT_TYPE];
 
 export const REQUEST_RENDITION_REPORT_STATUS = {
   DRAFT: "DRAFT",
@@ -164,21 +179,24 @@ export const REQUEST_RENDITION_REPORT_STATUS = {
   OBSERVED: "OBSERVED",
 } as const;
 
-export type RequestRenditionReportStatus = (typeof REQUEST_RENDITION_REPORT_STATUS)[keyof typeof REQUEST_RENDITION_REPORT_STATUS];
+export type RequestRenditionReportStatus =
+  (typeof REQUEST_RENDITION_REPORT_STATUS)[keyof typeof REQUEST_RENDITION_REPORT_STATUS];
 
 export const REQUEST_RENDITION_EXPORT_PENDING_STATE = {
   IN_PROGRESS: "IN_PROGRESS",
   STALE_RETRY_AVAILABLE: "STALE_RETRY_AVAILABLE",
 } as const;
 
-export type RequestRenditionExportPendingState = (typeof REQUEST_RENDITION_EXPORT_PENDING_STATE)[keyof typeof REQUEST_RENDITION_EXPORT_PENDING_STATE];
+export type RequestRenditionExportPendingState =
+  (typeof REQUEST_RENDITION_EXPORT_PENDING_STATE)[keyof typeof REQUEST_RENDITION_EXPORT_PENDING_STATE];
 
 export const REQUEST_RENDITION_ROW_TYPE = {
   OCR_RECEIPT: "OCR_RECEIPT",
   MANUAL_EXTRA: "MANUAL_EXTRA",
 } as const;
 
-export type RequestRenditionRowType = (typeof REQUEST_RENDITION_ROW_TYPE)[keyof typeof REQUEST_RENDITION_ROW_TYPE];
+export type RequestRenditionRowType =
+  (typeof REQUEST_RENDITION_ROW_TYPE)[keyof typeof REQUEST_RENDITION_ROW_TYPE];
 
 export const REQUEST_RENDITION_ROW_REVIEW_STATUS = {
   DRAFT: "DRAFT",
@@ -186,7 +204,8 @@ export const REQUEST_RENDITION_ROW_REVIEW_STATUS = {
   SUBMIT_READY: "SUBMIT_READY",
 } as const;
 
-export type RequestRenditionRowReviewStatus = (typeof REQUEST_RENDITION_ROW_REVIEW_STATUS)[keyof typeof REQUEST_RENDITION_ROW_REVIEW_STATUS];
+export type RequestRenditionRowReviewStatus =
+  (typeof REQUEST_RENDITION_ROW_REVIEW_STATUS)[keyof typeof REQUEST_RENDITION_ROW_REVIEW_STATUS];
 
 export const REQUEST_RENDITION_LINE_RETURN_STATUS = {
   DRAFT: "DRAFT",
@@ -195,7 +214,8 @@ export const REQUEST_RENDITION_LINE_RETURN_STATUS = {
   OBSERVED: "OBSERVED",
 } as const;
 
-export type RequestRenditionLineReturnStatus = (typeof REQUEST_RENDITION_LINE_RETURN_STATUS)[keyof typeof REQUEST_RENDITION_LINE_RETURN_STATUS];
+export type RequestRenditionLineReturnStatus =
+  (typeof REQUEST_RENDITION_LINE_RETURN_STATUS)[keyof typeof REQUEST_RENDITION_LINE_RETURN_STATUS];
 
 export const LINE_RETURN_VALIDATION_STATUS = {
   NOT_REQUIRED: "NOT_REQUIRED",
@@ -208,7 +228,8 @@ export const LINE_RETURN_VALIDATION_STATUS = {
   MISSING_EXECUTION: "MISSING_EXECUTION",
 } as const;
 
-export type LineReturnValidationStatus = (typeof LINE_RETURN_VALIDATION_STATUS)[keyof typeof LINE_RETURN_VALIDATION_STATUS];
+export type LineReturnValidationStatus =
+  (typeof LINE_RETURN_VALIDATION_STATUS)[keyof typeof LINE_RETURN_VALIDATION_STATUS];
 
 export const REXAN_OUTCOME = {
   EXACT: "EXACT",
@@ -224,7 +245,8 @@ export const BENEFICIARY_DOCUMENT_TYPE = {
   RUC: "RUC",
 } as const;
 
-export type BeneficiaryDocumentType = (typeof BENEFICIARY_DOCUMENT_TYPE)[keyof typeof BENEFICIARY_DOCUMENT_TYPE];
+export type BeneficiaryDocumentType =
+  (typeof BENEFICIARY_DOCUMENT_TYPE)[keyof typeof BENEFICIARY_DOCUMENT_TYPE];
 
 export const BANK_CODE = {
   BCP: "BCP",
@@ -496,6 +518,7 @@ export interface RequestStatusHistoryItem {
   actor_role: string | null;
   reason: string | null;
   comment: string | null;
+  metadata?: Readonly<Record<string, unknown>> | null;
   created_at: string;
 }
 
@@ -506,42 +529,14 @@ export interface RequestPaymentUserSummary {
   email?: string | null;
 }
 
-export const DRIVE_PAYMENT_PROJECTION_STATUS = {
-  SOURCE_REQUIRED: "SOURCE_REQUIRED",
-  PENDING: "PENDING",
-  PROCESSING: "PROCESSING",
-  SUCCEEDED: "SUCCEEDED",
-  FAILED: "FAILED",
-} as const;
-
-export type DrivePaymentProjectionStatus =
-  (typeof DRIVE_PAYMENT_PROJECTION_STATUS)[keyof typeof DRIVE_PAYMENT_PROJECTION_STATUS];
-
 export const DRIVE_PAYMENT_ROUTE_MODEL = {
   DAILY_V1: "DAILY_V1",
 } as const;
 
-export type DrivePaymentRouteModel =
+export type KnownDrivePaymentRouteModel =
   (typeof DRIVE_PAYMENT_ROUTE_MODEL)[keyof typeof DRIVE_PAYMENT_ROUTE_MODEL];
 
-export const DRIVE_SOURCE_ACCOUNT = {
-  BCP_PEN: "BCP_PEN",
-  BCP_USD: "BCP_USD",
-  BCP_ODF: "BCP_ODF",
-  BBVA_PEN: "BBVA_PEN",
-  BBVA_USD: "BBVA_USD",
-} as const;
-
-export type DriveSourceAccount =
-  (typeof DRIVE_SOURCE_ACCOUNT)[keyof typeof DRIVE_SOURCE_ACCOUNT];
-
-export const PAYMENT_CYCLE_KIND = {
-  ADVANCE_OR_REIMBURSEMENT: "ADVANCE_OR_REIMBURSEMENT",
-  SUPPLIER: "SUPPLIER",
-} as const;
-
-export type PaymentCycleKind =
-  (typeof PAYMENT_CYCLE_KIND)[keyof typeof PAYMENT_CYCLE_KIND];
+export type DrivePaymentRouteModel = KnownDrivePaymentRouteModel;
 
 export interface RequestPayment {
   id: string;
@@ -561,12 +556,18 @@ export interface RequestPayment {
   desired_parent_logical_key?: string | null;
   drive_projection_version?: number | null;
   drive_projection_status?: DrivePaymentProjectionStatus | null;
-  drive_projection_phase?: string | null;
+  drive_projection_eligible?: boolean | null;
+  drive_projection_attempt_count?: number;
+  drive_projection_max_attempts?: number;
+  drive_projection_next_attempt_at?: string | null;
+  drive_projection_completed_at?: string | null;
   drive_projection_error_code?: string | null;
   drive_projection_error_message?: string | null;
+  drive_projection_phase?: string | null;
   drive_projection_reconciliation_required?: boolean;
   drive_projection_frozen?: boolean;
-  drive_projection_completed_at?: string | null;
+  readonly drive_projection_destination_id?: string | null;
+  readonly drive_projection_topology_evidence?: Readonly<Record<string, unknown>> | null;
   proof_document_id: string | null;
   proofDocument?: RequestDocument | null;
   proof_pending?: boolean;
@@ -835,14 +836,16 @@ export const ADVANCE_SETTLEMENT_CTA_STATE = {
   COMPLETED: "completed",
 } as const;
 
-export type AdvanceSettlementCtaState = (typeof ADVANCE_SETTLEMENT_CTA_STATE)[keyof typeof ADVANCE_SETTLEMENT_CTA_STATE];
+export type AdvanceSettlementCtaState =
+  (typeof ADVANCE_SETTLEMENT_CTA_STATE)[keyof typeof ADVANCE_SETTLEMENT_CTA_STATE];
 
 export const RENDITION_NEXT_STEP_ACTION = {
   START: "start",
   NAVIGATE: "navigate",
 } as const;
 
-export type RenditionNextStepAction = (typeof RENDITION_NEXT_STEP_ACTION)[keyof typeof RENDITION_NEXT_STEP_ACTION];
+export type RenditionNextStepAction =
+  (typeof RENDITION_NEXT_STEP_ACTION)[keyof typeof RENDITION_NEXT_STEP_ACTION];
 
 export interface AdvanceSettlementCta {
   state: AdvanceSettlementCtaState;
@@ -1146,7 +1149,8 @@ export const REQUEST_DOCUMENT_UPLOAD_QUEUE_STATUS = {
   REMOVED: "removed",
 } as const;
 
-export type RequestDocumentUploadQueueStatus = (typeof REQUEST_DOCUMENT_UPLOAD_QUEUE_STATUS)[keyof typeof REQUEST_DOCUMENT_UPLOAD_QUEUE_STATUS];
+export type RequestDocumentUploadQueueStatus =
+  (typeof REQUEST_DOCUMENT_UPLOAD_QUEUE_STATUS)[keyof typeof REQUEST_DOCUMENT_UPLOAD_QUEUE_STATUS];
 
 export const REQUEST_DOCUMENT_UPLOAD_QUEUE_ERROR_KIND = {
   VALIDATION: "validation",
@@ -1154,7 +1158,8 @@ export const REQUEST_DOCUMENT_UPLOAD_QUEUE_ERROR_KIND = {
   BACKEND: "backend",
 } as const;
 
-export type RequestDocumentUploadQueueErrorKind = (typeof REQUEST_DOCUMENT_UPLOAD_QUEUE_ERROR_KIND)[keyof typeof REQUEST_DOCUMENT_UPLOAD_QUEUE_ERROR_KIND];
+export type RequestDocumentUploadQueueErrorKind =
+  (typeof REQUEST_DOCUMENT_UPLOAD_QUEUE_ERROR_KIND)[keyof typeof REQUEST_DOCUMENT_UPLOAD_QUEUE_ERROR_KIND];
 
 export interface RequestDocumentUploadQueueItem {
   id: string;
@@ -1212,7 +1217,29 @@ export const BULK_PAYMENT_RESULT_STATUS = {
   FAILED: "FAILED",
 } as const;
 
-export type BulkPaymentResultStatus = (typeof BULK_PAYMENT_RESULT_STATUS)[keyof typeof BULK_PAYMENT_RESULT_STATUS];
+export type BulkPaymentResultStatus =
+  (typeof BULK_PAYMENT_RESULT_STATUS)[keyof typeof BULK_PAYMENT_RESULT_STATUS];
+
+export const DRIVE_SOURCE_ACCOUNT = {
+  BCP_PEN: "BCP_PEN",
+  BCP_USD: "BCP_USD",
+  BCP_ODF: "BCP_ODF",
+  BBVA_PEN: "BBVA_PEN",
+  BBVA_USD: "BBVA_USD",
+} as const;
+export type DriveSourceAccount =
+  (typeof DRIVE_SOURCE_ACCOUNT)[keyof typeof DRIVE_SOURCE_ACCOUNT];
+export type PaymentCycleKind = "ADVANCE_OR_REIMBURSEMENT" | "SUPPLIER";
+export const DRIVE_PAYMENT_PROJECTION_STATUS = {
+  SOURCE_REQUIRED: "SOURCE_REQUIRED",
+  PENDING: "PENDING",
+  PROCESSING: "PROCESSING",
+  SUCCEEDED: "SUCCEEDED",
+  FAILED: "FAILED",
+} as const;
+
+export type DrivePaymentProjectionStatus =
+  (typeof DRIVE_PAYMENT_PROJECTION_STATUS)[keyof typeof DRIVE_PAYMENT_PROJECTION_STATUS];
 
 export const PAYMENT_EMAIL_STATUS = {
   QUEUED: "QUEUED",
@@ -1221,7 +1248,8 @@ export const PAYMENT_EMAIL_STATUS = {
   SKIPPED: "SKIPPED",
 } as const;
 
-export type PaymentEmailStatus = (typeof PAYMENT_EMAIL_STATUS)[keyof typeof PAYMENT_EMAIL_STATUS] | string;
+export type PaymentEmailStatus =
+  (typeof PAYMENT_EMAIL_STATUS)[keyof typeof PAYMENT_EMAIL_STATUS] | string;
 
 export const PAYMENT_REXAN_STATUS = {
   PENDING: "PENDING",
@@ -1233,12 +1261,13 @@ export const PAYMENT_REXAN_STATUS = {
   FAILED: "FAILED",
 } as const;
 
-export type PaymentRexanStatus = (typeof PAYMENT_REXAN_STATUS)[keyof typeof PAYMENT_REXAN_STATUS] | string;
+export type PaymentRexanStatus =
+  (typeof PAYMENT_REXAN_STATUS)[keyof typeof PAYMENT_REXAN_STATUS] | string;
 
 export interface BulkMarkPaidInput {
   request_ids: string[];
   giof_items?: BulkPaymentWorkCredential[];
-  paid_at?: string;
+  paid_at: string;
   operation_reference?: string;
   notes?: string;
 }
@@ -1277,6 +1306,16 @@ export interface BulkPaymentItemResult {
   email_status?: PaymentEmailStatus | null;
   rexan_activation?: RexanActivation | null;
   error?: string | null;
+  source_account_key?: null;
+  drive_route_model?: DrivePaymentRouteModel | null;
+  drive_routing_date?: string | null;
+  drive_route_cutover_at?: string | null;
+  readonly drive_route_classified_at?: string | null;
+  payment_cycle_kind?: PaymentCycleKind;
+  payment_cycle_date?: string;
+  desired_parent_logical_key?: null;
+  drive_projection_version?: number;
+  drive_projection_status?: "SOURCE_REQUIRED";
 }
 
 export interface BulkMarkPaidResponse {
@@ -1310,6 +1349,8 @@ export interface AttachPaymentProofInput {
 export interface RenditionInboxRow {
   advance_id: string;
   request_code: string | null;
+  advance_request_code?: string | null;
+  settlement_request_code?: string | null;
   requester: string | null;
   registered_by?: string | null;
   registered_party_name?: string | null;

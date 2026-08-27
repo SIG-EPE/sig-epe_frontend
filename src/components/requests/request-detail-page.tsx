@@ -14,8 +14,9 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Textarea } from "@/components/ui/textarea";
 import { useApproveRequest, useObserveRequest, useRejectRequest, useRequest, useRequestDocuments, useRequestRenditionReport, useRetryRexanActivation, useSettlementContext, useStartAdvanceSettlement } from "@/hooks/use-requests";
 import { useGiofWorkLease } from "@/hooks/use-giof-work";
+import { useDriveProjectionPolling } from "@/hooks/use-drive-projection-polling";
 import { GiofWorkStatus } from "@/components/giof-work/giof-work-controls";
-import { isGiofManagerRole, isGiofOperationalRole } from "@/lib/role-capabilities";
+import { canEditAssignedGiofWork, canOperateAssignedGiofWork, canRetryGiofWork, isGiofManagerRole, isGiofOperationalRole } from "@/lib/role-capabilities";
 import { ROUTES } from "@/lib/constants";
 import {
   canCorrectObservedRequest,
@@ -56,6 +57,7 @@ import { RequestStatusStepper } from "./request-status-stepper";
 import { RequestDocumentsCard } from "./request-documents-card";
 import { StructuredRenditionReportCard } from "./structured-rendition-report-card";
 import { StatusBadge } from "./status-badge";
+import { DriveProjectionState } from "./drive-projection-state";
 
 function getStructuredReportTotal(report: RequestRenditionReport | null): number | null {
   return normalizeMoneyAmount(report?.totals.total_amount ?? report?.total_amount);
@@ -191,7 +193,7 @@ function PaymentProofRows({ items, currency }: { items: PaymentProofDisplayItem[
 function PaymentProofCard({ items, currency }: { items: PaymentProofDisplayItem[]; currency: string }) {
   return (
     <Card data-testid="request-payment-proof-card">
-      <CardHeader><CardTitle>Pago y constancias</CardTitle></CardHeader>
+      <CardHeader><CardTitle>Pago y constancia</CardTitle></CardHeader>
       <CardContent>
         <PaymentProofRows items={items} currency={currency} />
       </CardContent>
@@ -204,6 +206,14 @@ export function RequestDetailPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { request, isInitialLoading, isRefreshing, error, refetch, patchRequest } = useRequest(params.id);
+  const hasPendingDriveProjection =
+    request?.payment?.drive_projection_status === "PENDING"
+    || request?.payment?.drive_projection_status === "PROCESSING";
+
+  useDriveProjectionPolling({
+    hasPendingProjection: hasPendingDriveProjection,
+    refetch: () => refetch({ background: true }),
+  });
   const requestDocuments = useRequestDocuments(params.id);
   const settlementContextState = useSettlementContext(params.id, request?.request_type === REQUEST_TYPE.ADVANCE_SETTLEMENT);
   const structuredReportState = useRequestRenditionReport(params.id, request?.request_type === REQUEST_TYPE.ADVANCE_SETTLEMENT);
@@ -229,11 +239,12 @@ export function RequestDetailPage() {
   const { retryRexanActivation, isLoading: retryingRexan } = useRetryRexanActivation();
 
   useEffect(() => {
-    if (!request || !shouldProcess || !request.giof_work?.canAcquire || leaseSession.lease || leaseSession.isLoading) return;
-    void leaseSession.acquire(request.id, request.giof_work, [request.payment?.id ?? request.payment_id ?? ""])
+    const giofWork = request?.giof_work;
+    if (!request || !giofWork || !shouldProcess || !canOperateAssignedGiofWork(giofWork, user?.id) || leaseSession.lease || leaseSession.isLoading) return;
+    void leaseSession.acquire(request.id, giofWork, [request.payment?.id ?? request.payment_id ?? ""])
       .then(() => refetch({ background: true }))
       .catch((reason: unknown) => toast.error(reason instanceof Error ? reason.message : "Actualiza la solicitud antes de continuar."));
-  }, [request?.id, request?.giof_work?.assignmentVersion, request?.giof_work?.canAcquire, shouldProcess, leaseSession.lease?.token, leaseSession.isLoading]);
+  }, [request?.id, request?.giof_work?.assignmentVersion, request?.giof_work?.canAcquire, request?.giof_work?.assigneeId, user?.id, shouldProcess, leaseSession.lease?.token, leaseSession.isLoading]);
 
   const RETURN_PROOF_OBSERVATION_FIELD = "Constancia de devolución";
 
@@ -253,13 +264,13 @@ export function RequestDetailPage() {
   const openObservations = (request.observations ?? []).filter((observation) => !observation.is_resolved);
   const allObservations = request.observations ?? [];
   const canReview = canReviewRequest(roleCode, request.status)
-    && (!isGiofOperational || request.giof_work?.canEdit === true);
+    && (!isGiofOperational || canEditAssignedGiofWork(request.giof_work, user?.id));
   const isRequestOwner = Boolean(user?.id && request.requester_id === user.id);
   const canCorrect = isRequestOwner && canCorrectObservedRequest(roleCode, request.status);
   const canEditDraft = isRequestOwner && canEditDraftRequest(roleCode, request.status);
   const advanceSettlementCta = getAdvanceSettlementCta(roleCode, request, user?.id);
   const renditionNextStepGuidance = getRenditionNextStepGuidance(roleCode, request, user?.id);
-  const canRetryRexan = isGiofOperational && request.giof_work?.canEdit === true;
+  const canRetryRexan = canRetryGiofWork(roleCode) && canEditAssignedGiofWork(request.giof_work, user?.id);
   const driveFolderUrl = getSafeDocumentUrl(request.drive_folder_url);
   const ownPaymentProofItems = getPaymentProofDisplayItems(request.payment);
   const createdByDisplayName = getPaymentRequestCreatorDisplayName(request);
@@ -565,6 +576,41 @@ export function RequestDetailPage() {
                   }}
                 >{retryingRexan ? "Reintentando..." : "Reintentar REXAN"}</Button>
               )}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {request.payment?.drive_projection_status && (
+        <Card data-testid="drive-payment-projection-state-card">
+          <CardHeader><CardTitle>Archivo contable en Drive</CardTitle></CardHeader>
+          <CardContent className="grid gap-3 text-sm sm:grid-cols-4">
+            <div>
+              <p className="text-xs text-muted-foreground">Estado</p>
+              <DriveProjectionState payment={request.payment} />
+            </div>
+            <div>
+              <p className="text-xs text-muted-foreground">Intentos</p>
+              <p className="font-medium">
+                {request.payment.drive_projection_attempt_count ?? 0}/
+                {request.payment.drive_projection_max_attempts ?? 5}
+              </p>
+            </div>
+            <div>
+              <p className="text-xs text-muted-foreground">Próximo intento</p>
+              <p className="font-medium">
+                {formatRequestDate(request.payment.drive_projection_next_attempt_at)}
+              </p>
+            </div>
+            <div>
+              <p className="text-xs text-muted-foreground">Resultado</p>
+              <p className="font-medium">
+                {request.payment.drive_projection_completed_at
+                  ? `Completado ${formatRequestDate(request.payment.drive_projection_completed_at)}`
+                  : request.payment.drive_projection_error_message ??
+                    request.payment.drive_projection_error_code ??
+                    "Pendiente"}
+              </p>
             </div>
           </CardContent>
         </Card>

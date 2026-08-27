@@ -1,6 +1,7 @@
 import { ApiRequestError } from "@/lib/api-client";
 import { formatBusinessDate, formatBusinessDateTime, getBusinessDateString, getDateOnlyUtcTime } from "@/lib/business-timezone";
 import { ROLE_CODE, ROUTES } from "@/lib/constants";
+import { isGiofOperationalRole } from "@/lib/role-capabilities";
 import { getSafeDocumentUrl } from "@/lib/safe-url";
 import type { Route } from "next";
 import {
@@ -1079,7 +1080,7 @@ function canAccessAdvanceSettlementCta(
   request: Pick<PaymentRequest, "requester_id">,
   currentUserId?: string | null,
 ): boolean {
-  if (roleCode === ROLE_CODE.ADMIN_SISTEMA || roleCode === ROLE_CODE.GIOF_GESTOR) return true;
+  if (roleCode === ROLE_CODE.ADMIN_SISTEMA || isGiofOperationalRole(roleCode)) return true;
   return roleCode === ROLE_CODE.SOLICITANTE_EPE && Boolean(currentUserId) && request.requester_id === currentUserId;
 }
 
@@ -1167,7 +1168,7 @@ export function getRenditionNextStepGuidance(
     };
   }
 
-  if (roleCode === ROLE_CODE.GIOF_GESTOR || roleCode === ROLE_CODE.ADMIN_SISTEMA) {
+  if (isGiofOperationalRole(roleCode) || roleCode === ROLE_CODE.ADMIN_SISTEMA) {
     const activeSettlement = getActiveAdvanceSettlement(request);
     return {
       title: "Siguiente paso: espera de rendición del solicitante",
@@ -1518,13 +1519,13 @@ export function getRequestReviewNavigationIssues(
 }
 
 const REQUEST_PXQ_REQUIRED_RULE: Omit<RequiredDocumentChecklistItem, "satisfied"> = {
-  key: "request-pxq",
-  category: REQUEST_DOCUMENT_CATEGORY.PXQ,
-  label: "PXQ",
-  description: "Adjunta un PXQ asociado a la solicitud. Puede pertenecer a cualquiera de sus líneas POA.",
-  required: true,
-  acceptedFormatsLabel: "Formato PXQ permitido",
-  missingMessage: "Falta adjuntar Excel PxQ.",
+    key: "request-pxq",
+    category: REQUEST_DOCUMENT_CATEGORY.PXQ,
+    label: "PXQ",
+    description: "Adjunta un PXQ asociado a la solicitud. Puede pertenecer a cualquiera de sus líneas POA.",
+    required: true,
+    acceptedFormatsLabel: "Formato PXQ permitido",
+    missingMessage: "Falta adjuntar Excel PxQ.",
 };
 
 const REQUIRED_DOCUMENT_RULES: Record<RequestType, Omit<RequiredDocumentChecklistItem, "satisfied">[]> = {
@@ -1566,14 +1567,20 @@ export function getRequestDocumentPermissionMessage(
   currentUserId?: string | null,
 ): string | null {
   if (canManageRequestDocuments(roleCode, status, request, currentUserId)) return null;
-  if (status !== REQUEST_STATUS.DRAFT && status !== REQUEST_STATUS.OBSERVED) {
-    return "Los documentos solo pueden modificarse en borrador u observación. Puedes revisar los adjuntos disponibles.";
+  if (status === REQUEST_STATUS.REJECTED || status === REQUEST_STATUS.CLOSED || status === REQUEST_STATUS.VOIDED) {
+    return "La solicitud está en un estado final y sus documentos ya no pueden modificarse.";
   }
   if (roleCode === ROLE_CODE.SOLICITANTE_EPE && request.requester_id !== currentUserId) {
     return "Solo el solicitante titular puede modificar documentos en esta solicitud.";
   }
-  if (roleCode === ROLE_CODE.GIOF_GESTOR && request.request_type === REQUEST_TYPE.ADVANCE_SETTLEMENT && status === REQUEST_STATUS.OBSERVED) {
+  if (roleCode === ROLE_CODE.SOLICITANTE_EPE && request.requester_id === currentUserId) {
+    return "Como solicitante titular, solo puedes modificar documentos en borrador u observación.";
+  }
+  if (isGiofOperationalRole(roleCode) && request.request_type === REQUEST_TYPE.ADVANCE_SETTLEMENT && status === REQUEST_STATUS.OBSERVED) {
     return "GIOF solo puede revisar los documentos de una rendición observada; el solicitante titular debe corregirlos.";
+  }
+  if (isGiofOperationalRole(roleCode)) {
+    return "Para cargar o eliminar documentos, debes tener la asignación y el bloqueo de trabajo GIOF vigentes.";
   }
   return "Tu rol no tiene permisos para cargar o eliminar documentos en este estado.";
 }
@@ -1848,7 +1855,7 @@ export function getPlanningLineDisplay(line: { line_code?: string | null; resour
 }
 
 export function isRequestReviewRole(roleCode?: string | null): boolean {
-  return roleCode === ROLE_CODE.GIOF_GESTOR || roleCode === ROLE_CODE.GIOF_MANAGER;
+  return isGiofOperationalRole(roleCode);
 }
 
 const GIOF_OPERATIONAL_ERROR_CODE = {
@@ -1892,16 +1899,22 @@ export function canEditRequest(roleCode: string | null | undefined, status: Requ
 export function canManageRequestDocuments(
   roleCode: string | null | undefined,
   status: RequestStatus,
-  request: Pick<PaymentRequest, "requester_id" | "request_type">,
+  request: Pick<PaymentRequest, "requester_id" | "request_type" | "giof_work">,
   currentUserId?: string | null,
 ): boolean {
-  const isEditable = status === REQUEST_STATUS.DRAFT || status === REQUEST_STATUS.OBSERVED;
-  if (!isEditable) return false;
-  if (Boolean(currentUserId) && request.requester_id === currentUserId) return true;
-  if (roleCode === ROLE_CODE.ADMIN_SISTEMA) return true;
-  if (roleCode === ROLE_CODE.GIOF_GESTOR || roleCode === ROLE_CODE.GIOF_MANAGER) {
-    return status === REQUEST_STATUS.OBSERVED && request.request_type !== REQUEST_TYPE.ADVANCE_SETTLEMENT;
-  }
+  const isTerminal = status === REQUEST_STATUS.REJECTED
+    || status === REQUEST_STATUS.CLOSED
+    || status === REQUEST_STATUS.VOIDED;
+  if (isTerminal) return false;
+  const isOwnerEditable = (status === REQUEST_STATUS.DRAFT || status === REQUEST_STATUS.OBSERVED)
+    && Boolean(currentUserId)
+    && request.requester_id === currentUserId;
+  if (isOwnerEditable) return true;
+  if (
+    roleCode === ROLE_CODE.ADMIN_SISTEMA
+    || roleCode === ROLE_CODE.AUDITOR_DIRECCION
+  ) return true;
+  if (isGiofOperationalRole(roleCode)) return Boolean(request.giof_work?.canEdit);
   return false;
 }
 

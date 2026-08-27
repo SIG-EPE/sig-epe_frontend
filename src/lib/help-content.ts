@@ -69,14 +69,14 @@ export const FAQ_ITEMS = [
     id: "adjuntar-pxq",
     category: FAQ_CATEGORIES.DOCUMENTS,
     question: "¿Cuándo debo adjuntar un archivo PxQ (presupuesto por cantidad)?",
-    answer: "PxQ significa presupuesto por cantidad. En una solicitud de Anticipo, adjunta un Excel PxQ en cada línea POA. Cada archivo corresponde solo a la línea donde lo adjuntas.",
+    answer: "PXQ significa presupuesto por cantidad y es el único documento obligatorio para avanzar una solicitud. Un único PXQ activo asociado a la solicitud es suficiente, ya sea general o vinculado a cualquiera de sus líneas POA.",
     keywords: ["excel", "anticipo", "línea POA", "presupuesto por cantidad"],
   },
   {
     id: "documentos-por-tipo",
     category: FAQ_CATEGORIES.DOCUMENTS,
     question: "¿Qué documentos necesito según mi solicitud?",
-    answer: "Para un Anticipo, adjunta un Excel PxQ por cada línea POA. Para un Pago a Proveedor, adjunta la factura o el recibo por honorarios. Para un Reembolso, adjunta el informe Excel de rendición y el comprobante correspondiente.",
+    answer: "Para enviar, aprobar y pagar una solicitud, el único documento obligatorio es un PXQ activo asociado a la solicitud. Un solo PXQ es suficiente aunque pertenezca a cualquiera de sus líneas POA; los comprobantes, contratos, informes y otros sustentos son opcionales en esta etapa.",
     keywords: ["factura", "recibo por honorarios", "informe de rendición", "sustento"],
   },
   {
@@ -111,8 +111,8 @@ export const FAQ_ITEMS = [
     id: "estado-pago",
     category: FAQ_CATEGORIES.PAYMENTS_AND_RENDITIONS,
     question: "¿Dónde reviso el estado de mi pago?",
-    answer: "En Mis Solicitudes, abre el detalle de la solicitud. Cuando el pago esté registrado, verás el estado Pagada, la referencia y las constancias en Pago y constancias.",
-    keywords: ["pagada", "referencia", "constancia de pago", "pago y constancias"],
+    answer: "En Mis Solicitudes, abre el detalle de la solicitud. Cuando el pago esté registrado, verás el estado Pagada, la referencia y la constancia en Pago y constancia.",
+    keywords: ["pagada", "referencia", "constancia de pago", "pago y constancia"],
   },
   {
     id: "bloqueo-nuevo-anticipo",

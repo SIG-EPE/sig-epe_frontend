@@ -279,6 +279,24 @@ describe("requests helpers", () => {
     expect(getApiErrorMessages(error)).toEqual(["Campo requerido", "Monto inválido"]);
   });
 
+  it("traduce duplicados, permisos y conflictos de pago sin exponer códigos internos", () => {
+    expect(getApiErrorMessages(new ApiRequestError(409, {
+      statusCode: 409,
+      code: "PAYMENT_ALREADY_EXISTS",
+      message: "PAYMENT_ALREADY_EXISTS",
+      error: "Conflict",
+      timestamp: "2026-08-21T00:00:00.000Z",
+      path: "/requests/request-1/payments",
+    }))).toEqual(["Esta solicitud ya tiene un pago registrado. Actualiza la cola para ver su estado."]);
+    expect(getApiErrorMessages(new ApiRequestError(403, {
+      statusCode: 403,
+      message: "FORBIDDEN",
+      error: "Forbidden",
+      timestamp: "2026-08-21T00:00:00.000Z",
+      path: "/requests/request-1/payments",
+    }))).toEqual(["No tienes permiso para realizar esta acción o tu asignación ya no está vigente."]);
+  });
+
   it("habilita inicio de rendición solo para anticipos pagados y usuarios autorizados", () => {
     const paidAdvance = makeRequest({ status: REQUEST_STATUS.PAID, requester_id: "user-1" });
     const paidReimbursement = makeRequest({ request_type: REQUEST_TYPE.REIMBURSEMENT, status: REQUEST_STATUS.PAID });
@@ -697,7 +715,7 @@ describe("requests helpers", () => {
     ]));
   });
 
-  it("impide entrar a revisión cuando faltan documentos requeridos", () => {
+  it("impide entrar a revisión cuando falta el PxQ autoritativo", () => {
     const checklist = getRequiredDocumentChecklist(REQUEST_TYPE.REIMBURSEMENT, []);
     const result = getRequestReviewNavigationIssues(makeRequest({
       request_type: REQUEST_TYPE.REIMBURSEMENT,
@@ -714,15 +732,12 @@ describe("requests helpers", () => {
 
     expect(result.canEnterReview).toBe(false);
     expect(result.dataIssues).toEqual([]);
-    expect(result.documentMessages).toEqual([
-      "Falta adjuntar informe de rendición Excel.",
-      "Falta adjuntar comprobante.",
-    ]);
+    expect(result.documentMessages).toEqual(["Falta adjuntar Excel PxQ."]);
   });
 
   it("permite entrar a revisión cuando datos y documentos están completos", () => {
     const checklist = getRequiredDocumentChecklist(REQUEST_TYPE.SUPPLIER_PAYMENT, [
-      makeDocument({ document_category: REQUEST_DOCUMENT_CATEGORY.RECEIPT }),
+      makeDocument({ document_category: REQUEST_DOCUMENT_CATEGORY.PXQ }),
     ]);
     const result = getRequestReviewNavigationIssues(makeRequest({
       request_type: REQUEST_TYPE.SUPPLIER_PAYMENT,
@@ -929,6 +944,13 @@ describe("requests helpers", () => {
     const advanceMissing = getRequiredDocumentChecklist(REQUEST_TYPE.ADVANCE, []);
     expect(advanceMissing.isComplete).toBe(false);
     expect(advanceMissing.missingMessages).toEqual(["Falta adjuntar Excel PxQ."]);
+    expect(advanceMissing.items).toEqual([
+      expect.objectContaining({
+        category: REQUEST_DOCUMENT_CATEGORY.PXQ,
+        required: true,
+        satisfied: false,
+      }),
+    ]);
 
     const advanceComplete = getRequiredDocumentChecklist(REQUEST_TYPE.ADVANCE, [
       makeDocument({
@@ -941,13 +963,14 @@ describe("requests helpers", () => {
     expect(advanceComplete.isComplete).toBe(true);
 
     const reimbursement = getRequiredDocumentChecklist(REQUEST_TYPE.REIMBURSEMENT, [
+      makeDocument({ document_category: REQUEST_DOCUMENT_CATEGORY.PXQ }),
       makeDocument({ document_category: REQUEST_DOCUMENT_CATEGORY.RECEIPT }),
     ]);
-    expect(reimbursement.missingMessages).toEqual(["Falta adjuntar informe de rendición Excel."]);
+    expect(reimbursement.missingMessages).toEqual([]);
 
     const supplier = getRequiredDocumentChecklist(REQUEST_TYPE.SUPPLIER_PAYMENT, []);
-    expect(supplier.missingMessages).toEqual(["Falta adjuntar comprobante factura/RH."]);
-    expect(supplier.conditionalNotes.length).toBeGreaterThan(0);
+    expect(supplier.missingMessages).toEqual(["Falta adjuntar Excel PxQ."]);
+    expect(supplier.conditionalNotes).toEqual([]);
 
     const rexanMissing = getRequiredDocumentChecklist(REQUEST_TYPE.ADVANCE_SETTLEMENT, []);
     expect(rexanMissing.items).toEqual([]);
@@ -976,12 +999,15 @@ describe("requests helpers", () => {
 
     expect(canManageRequestDocuments(ROLE_CODE.SOLICITANTE_EPE, REQUEST_STATUS.DRAFT, draft, "user-1")).toBe(true);
     expect(canManageRequestDocuments(ROLE_CODE.SOLICITANTE_EPE, REQUEST_STATUS.DRAFT, draft, "other-user")).toBe(false);
-    expect(canManageRequestDocuments(ROLE_CODE.AUDITOR_DIRECCION, REQUEST_STATUS.DRAFT, draft, "user-1")).toBe(true);
-    expect(canManageRequestDocuments(ROLE_CODE.GIOF_GESTOR, REQUEST_STATUS.OBSERVED, observed, "giof-1")).toBe(true);
+    expect(canManageRequestDocuments(ROLE_CODE.AUDITOR_DIRECCION, REQUEST_STATUS.DRAFT, draft, "auditor-1")).toBe(true);
+    expect(canManageRequestDocuments(ROLE_CODE.GIOF_GESTOR, REQUEST_STATUS.OBSERVED, { ...observed, giof_work: { canEdit: true } } as PaymentRequest, "giof-1")).toBe(true);
     expect(canManageRequestDocuments(ROLE_CODE.GIOF_GESTOR, REQUEST_STATUS.OBSERVED, observedRexan, "giof-1")).toBe(false);
     expect(canManageRequestDocuments(ROLE_CODE.SOLICITANTE_EPE, REQUEST_STATUS.OBSERVED, observedRexan, "user-1")).toBe(true);
     expect(canManageRequestDocuments(ROLE_CODE.ADMIN_SISTEMA, REQUEST_STATUS.DRAFT, draft, "admin-1")).toBe(true);
-    expect(canManageRequestDocuments(ROLE_CODE.ADMIN_SISTEMA, REQUEST_STATUS.SUBMITTED, submitted, "admin-1")).toBe(false);
+    expect(canManageRequestDocuments(ROLE_CODE.ADMIN_SISTEMA, REQUEST_STATUS.SUBMITTED, submitted, "admin-1")).toBe(true);
+    expect(canManageRequestDocuments(ROLE_CODE.GIOF_MANAGER, REQUEST_STATUS.PAID, draft, "manager-1")).toBe(false);
+    expect(canManageRequestDocuments(ROLE_CODE.GIOF_MANAGER, REQUEST_STATUS.PAID, { ...draft, giof_work: { canEdit: true } } as PaymentRequest, "manager-1")).toBe(true);
+    expect(canManageRequestDocuments(ROLE_CODE.AUDITOR_DIRECCION, REQUEST_STATUS.REJECTED, draft, "auditor-1")).toBe(false);
     expect(getRequestDocumentPermissionMessage(ROLE_CODE.SOLICITANTE_EPE, REQUEST_STATUS.SUBMITTED, submitted, "user-1")).toContain("borrador u observación");
     expect(getRequestDocumentPermissionMessage(ROLE_CODE.SOLICITANTE_EPE, REQUEST_STATUS.DRAFT, draft, "other-user")).toContain("solicitante titular");
   });
@@ -1270,7 +1296,7 @@ describe("requests helpers", () => {
     expect(sanitizeBudgetMessage("budget_ceiling no configurado")).toBe("límite presupuestal no configurado");
   });
 
-  it("habilita acciones de revisión solo para roles operativos GIOF en solicitudes enviadas", () => {
+  it("habilita revisión a gestor y manager en solicitudes enviadas", () => {
     expect(canReviewRequest(ROLE_CODE.GIOF_GESTOR, REQUEST_STATUS.SUBMITTED)).toBe(true);
     expect(canReviewRequest(ROLE_CODE.GIOF_MANAGER, REQUEST_STATUS.SUBMITTED)).toBe(true);
     expect(canReviewRequest(ROLE_CODE.ADMIN_SISTEMA, REQUEST_STATUS.SUBMITTED)).toBe(false);

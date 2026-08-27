@@ -1,10 +1,44 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { getPaymentQueuePath, getRenditionCountsPath, getRenditionsPath, getRequestsPath, getSettlementContextPath, getStartAdvanceSettlementPath, invalidateRequestCaches, useBulkMarkPaid, useCompletePaymentDetails, useHydrateRequestPlanningLines, useRequest, useRequestDocuments, useRequestPlanningLineFacets, useRequestPlanningLineSearch, useRequestReceiptReviews, useRequestRenditionReport, useRequestRenditionReportActions, useSettlementContext, useStartAdvanceSettlement } from "@/hooks/use-requests";
+import {
+  getPaymentQueuePath,
+  getRenditionCountsPath,
+  getRenditionsPath,
+  getRequestsPath,
+  getSettlementContextPath,
+  getStartAdvanceSettlementPath,
+  invalidateRequestCaches,
+  useBulkMarkPaid,
+  useCompletePaymentDetails,
+  useHydrateRequestPlanningLines,
+  useRegisterPayment,
+  useRequest,
+  useRequestDocuments,
+  useRequestPlanningLineFacets,
+  useRequestPlanningLineSearch,
+  useRequestReceiptReviews,
+  useRequestRenditionReport,
+  useRequestRenditionReportActions,
+  useSettlementContext,
+  useStartAdvanceSettlement,
+} from "@/hooks/use-requests";
 import { api } from "@/lib/api-client";
 import { clearQueryCache } from "@/lib/query-cache";
-import { RENDITION_BUCKET, RENDITION_SORT_DIRECTION, RENDITION_SORT_FIELD, RENDITION_STATUS, REQUEST_CURRENCY, REQUEST_STATUS, REQUEST_TYPE, type PaymentRequest, type RequestPlanningLineFacetsResponse, type RequestPlanningLineHydrateResponse, type RequestPlanningLineSearchResponse } from "@/types/requests";
+import { GIOF_WORK_POOL, type GiofWorkLease } from "@/types/giof-work";
+import {
+  RENDITION_BUCKET,
+  RENDITION_SORT_DIRECTION,
+  RENDITION_SORT_FIELD,
+  RENDITION_STATUS,
+  REQUEST_CURRENCY,
+  REQUEST_STATUS,
+  REQUEST_TYPE,
+  type PaymentRequest,
+  type RequestPlanningLineFacetsResponse,
+  type RequestPlanningLineHydrateResponse,
+  type RequestPlanningLineSearchResponse,
+} from "@/types/requests";
 
 vi.mock("@/lib/api-client", () => ({
   api: {
@@ -33,21 +67,25 @@ beforeEach(() => {
   vi.useRealTimers();
 });
 
-function makePlanningLineSearchResponse(id: string): RequestPlanningLineSearchResponse {
+function makePlanningLineSearchResponse(
+  id: string,
+): RequestPlanningLineSearchResponse {
   return {
-    items: [{
-      id,
-      line_code: `POA-${id}`,
-      resource_description: id,
-      planning_type: "PROGRAMA",
-      fiscal_year: { id: "fy-1", year: 2026 },
-      org_unit: { id: "org-1", name: "Operaciones", code: "OPS" },
-      program: null,
-      component: null,
-      operative_action: null,
-      category: null,
-      territory: null,
-    }],
+    items: [
+      {
+        id,
+        line_code: `POA-${id}`,
+        resource_description: id,
+        planning_type: "PROGRAMA",
+        fiscal_year: { id: "fy-1", year: 2026 },
+        org_unit: { id: "org-1", name: "Operaciones", code: "OPS" },
+        program: null,
+        component: null,
+        operative_action: null,
+        category: null,
+        territory: null,
+      },
+    ],
     total: 1,
     page: 1,
     limit: 25,
@@ -59,7 +97,8 @@ describe("planning line lazy search", () => {
   it("does not fetch without intent or with one character", async () => {
     vi.useFakeTimers();
     const { rerender } = renderHook(
-      ({ search, enabled }) => useRequestPlanningLineSearch({ search }, enabled),
+      ({ search, enabled }) =>
+        useRequestPlanningLineSearch({ search }, enabled),
       { initialProps: { search: "", enabled: false } },
     );
 
@@ -77,7 +116,8 @@ describe("planning line lazy search", () => {
       .mockReturnValueOnce(oldRequest.promise)
       .mockReturnValueOnce(currentRequest.promise);
     const { result, rerender } = renderHook(
-      ({ search, enabled }) => useRequestPlanningLineSearch({ search }, enabled),
+      ({ search, enabled }) =>
+        useRequestPlanningLineSearch({ search }, enabled),
       { initialProps: { search: "old-term-4267", enabled: false } },
     );
 
@@ -101,7 +141,9 @@ describe("planning line lazy search", () => {
     });
 
     expect(result.current.items[0]?.id).toBe("current");
-    expect(vi.mocked(api.get).mock.calls[0]?.[1]).toEqual(expect.objectContaining({ signal: expect.any(AbortSignal) }));
+    expect(vi.mocked(api.get).mock.calls[0]?.[1]).toEqual(
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
   });
 
   it("preserves prior results when load-more fails and retries only that page without duplicates", async () => {
@@ -118,15 +160,28 @@ describe("planning line lazy search", () => {
       .mockRejectedValueOnce(new Error("No se pudo cargar la siguiente página"))
       .mockResolvedValueOnce(secondPage);
 
-    const { result } = renderHook(() => useRequestPlanningLineSearch({ search: "page-failure-4277" }, true));
-    await waitFor(() => expect(result.current.items.map((item) => item.id)).toEqual(["line-1"]));
+    const { result } = renderHook(() =>
+      useRequestPlanningLineSearch({ search: "page-failure-4277" }, true),
+    );
+    await waitFor(() =>
+      expect(result.current.items.map((item) => item.id)).toEqual(["line-1"]),
+    );
 
     act(() => result.current.loadMore());
-    await waitFor(() => expect(result.current.error?.message).toBe("No se pudo cargar la siguiente página"));
+    await waitFor(() =>
+      expect(result.current.error?.message).toBe(
+        "No se pudo cargar la siguiente página",
+      ),
+    );
     expect(result.current.items.map((item) => item.id)).toEqual(["line-1"]);
 
     act(() => result.current.retry());
-    await waitFor(() => expect(result.current.items.map((item) => item.id)).toEqual(["line-1", "line-2"]));
+    await waitFor(() =>
+      expect(result.current.items.map((item) => item.id)).toEqual([
+        "line-1",
+        "line-2",
+      ]),
+    );
     expect(result.current.error).toBeNull();
     expect(api.get).toHaveBeenCalledTimes(3);
     expect(vi.mocked(api.get).mock.calls.map(([path]) => path)).toEqual([
@@ -147,21 +202,41 @@ describe("planning line lazy search", () => {
       territories: [],
     };
     const second = { ...first, planning_types: ["PROYECTO"] };
-    vi.mocked(api.get).mockResolvedValueOnce(first).mockResolvedValueOnce(second);
+    vi.mocked(api.get)
+      .mockResolvedValueOnce(first)
+      .mockResolvedValueOnce(second);
 
     const filters = { org_unit_id: "org-parent", scope: "hierarchy" as const };
-    const firstRender = renderHook(() => useRequestPlanningLineFacets(filters, true));
-    await waitFor(() => expect(firstRender.result.current.data?.planning_types).toEqual(["PROGRAMA"]));
+    const firstRender = renderHook(() =>
+      useRequestPlanningLineFacets(filters, true),
+    );
+    await waitFor(() =>
+      expect(firstRender.result.current.data?.planning_types).toEqual([
+        "PROGRAMA",
+      ]),
+    );
     firstRender.unmount();
 
-    const cachedRender = renderHook(() => useRequestPlanningLineFacets(filters, true));
-    await waitFor(() => expect(cachedRender.result.current.data?.planning_types).toEqual(["PROGRAMA"]));
+    const cachedRender = renderHook(() =>
+      useRequestPlanningLineFacets(filters, true),
+    );
+    await waitFor(() =>
+      expect(cachedRender.result.current.data?.planning_types).toEqual([
+        "PROGRAMA",
+      ]),
+    );
     expect(api.get).toHaveBeenCalledTimes(1);
     cachedRender.unmount();
 
     invalidateRequestCaches();
-    const refreshedRender = renderHook(() => useRequestPlanningLineFacets(filters, true));
-    await waitFor(() => expect(refreshedRender.result.current.data?.planning_types).toEqual(["PROYECTO"]));
+    const refreshedRender = renderHook(() =>
+      useRequestPlanningLineFacets(filters, true),
+    );
+    await waitFor(() =>
+      expect(refreshedRender.result.current.data?.planning_types).toEqual([
+        "PROYECTO",
+      ]),
+    );
     expect(api.get).toHaveBeenCalledTimes(2);
   });
 
@@ -174,13 +249,22 @@ describe("planning line lazy search", () => {
       .mockResolvedValueOnce(hydrated)
       .mockRejectedValueOnce(new Error("temporary hydrate failure"))
       .mockResolvedValueOnce(hydrated);
-    const { result } = renderHook(() => useHydrateRequestPlanningLines(["selected-out-of-page", "unavailable-id"]));
+    const { result } = renderHook(() =>
+      useHydrateRequestPlanningLines([
+        "selected-out-of-page",
+        "unavailable-id",
+      ]),
+    );
 
-    await waitFor(() => expect(result.current.items[0]?.id).toBe("selected-out-of-page"));
+    await waitFor(() =>
+      expect(result.current.items[0]?.id).toBe("selected-out-of-page"),
+    );
     expect(result.current.unavailableIds).toEqual(["unavailable-id"]);
 
     act(() => result.current.retry());
-    await waitFor(() => expect(result.current.error?.message).toBe("temporary hydrate failure"));
+    await waitFor(() =>
+      expect(result.current.error?.message).toBe("temporary hydrate failure"),
+    );
     expect(result.current.items[0]?.id).toBe("selected-out-of-page");
 
     act(() => result.current.retry());
@@ -191,7 +275,12 @@ describe("planning line lazy search", () => {
 });
 
 vi.mock("@/stores/auth-store", () => ({
-  useAuthStore: (selector: (state: { isLoading: boolean; accessToken: string | null }) => unknown) => selector({ isLoading: false, accessToken: "token" }),
+  useAuthStore: (
+    selector: (state: {
+      isLoading: boolean;
+      accessToken: string | null;
+    }) => unknown,
+  ) => selector({ isLoading: false, accessToken: "token" }),
 }));
 
 function makeRequest(overrides: Partial<PaymentRequest> = {}): PaymentRequest {
@@ -237,54 +326,111 @@ function makeRequest(overrides: Partial<PaymentRequest> = {}): PaymentRequest {
   };
 }
 
+function makePaymentLease(requestId: string): GiofWorkLease {
+  return {
+    pool: GIOF_WORK_POOL.PAYMENT,
+    requestId,
+    ownerId: "giof-user-1",
+    token: "payment-lease-token",
+    assignmentVersion: "7",
+    heartbeatAt: "2026-08-27T10:00:00.000Z",
+    expiresAt: "2099-12-31T23:59:59.999Z",
+    ttlSeconds: 300,
+    heartbeatIntervalSeconds: 60,
+  };
+}
+
 describe("request hook URL helpers", () => {
   it("serializa filtros multiestado para la bandeja de revisión", () => {
-    expect(getRequestsPath({
-      page: 2,
-      limit: 10,
-      statuses: [REQUEST_STATUS.SUBMITTED, REQUEST_STATUS.IN_VALIDATION, REQUEST_STATUS.OBSERVED],
-      search: "SOL-2026",
-    })).toBe("/requests?page=2&limit=10&statuses=SUBMITTED%2CIN_VALIDATION%2COBSERVED&search=SOL-2026");
+    expect(
+      getRequestsPath({
+        page: 2,
+        limit: 10,
+        statuses: [
+          REQUEST_STATUS.SUBMITTED,
+          REQUEST_STATUS.IN_VALIDATION,
+          REQUEST_STATUS.OBSERVED,
+        ],
+        search: "SOL-2026",
+      }),
+    ).toBe(
+      "/requests?page=2&limit=10&statuses=SUBMITTED%2CIN_VALIDATION%2COBSERVED&search=SOL-2026",
+    );
   });
 
   it("serializa fecha exacta de historial como rango inclusivo del mismo día", () => {
-    expect(getRequestsPath({
-      scope: "history",
-      date_field: "updated_at",
-      date_from: "2026-06-01",
-      date_to: "2026-06-01",
-    })).toBe("/requests?date_from=2026-06-01&date_to=2026-06-01&date_field=updated_at&scope=history");
+    expect(
+      getRequestsPath({
+        scope: "history",
+        date_field: "updated_at",
+        date_from: "2026-06-01",
+        date_to: "2026-06-01",
+      }),
+    ).toBe(
+      "/requests?date_from=2026-06-01&date_to=2026-06-01&date_field=updated_at&scope=history",
+    );
   });
 
   it("serializa la cola de pagos explícita por estado", () => {
-    expect(getPaymentQueuePath({ status: REQUEST_STATUS.PAID, page: 1, limit: 20 })).toBe("/requests/payment-queue?page=1&limit=20&status=PAID");
+    expect(
+      getPaymentQueuePath({ status: REQUEST_STATUS.PAID, page: 1, limit: 20 }),
+    ).toBe("/requests/payment-queue?page=1&limit=20&status=PAID");
   });
 
   it("serializa filtros de datos pendientes de pago", () => {
-    expect(getPaymentQueuePath({ status: REQUEST_STATUS.PAID, pending_proof: true, pending_details: false, page: 1, limit: 20 })).toBe("/requests/payment-queue?page=1&limit=20&status=PAID&pending_proof=true&pending_details=false");
+    expect(
+      getPaymentQueuePath({
+        status: REQUEST_STATUS.PAID,
+        pending_proof: true,
+        pending_details: false,
+        page: 1,
+        limit: 20,
+      }),
+    ).toBe(
+      "/requests/payment-queue?page=1&limit=20&status=PAID&pending_proof=true&pending_details=false",
+    );
+  });
+
+  it("serializa el predicado autoritativo de datos pendientes", () => {
+    expect(
+      getPaymentQueuePath({ pending_data: true, page: 2, limit: 20 }),
+    ).toBe("/requests/payment-queue?page=2&limit=20&pending_data=true");
   });
 
   it("construye la ruta para iniciar una rendición de anticipo", () => {
-    expect(getStartAdvanceSettlementPath("advance-1")).toBe("/requests/advance-1/start-advance-settlement");
+    expect(getStartAdvanceSettlementPath("advance-1")).toBe(
+      "/requests/advance-1/start-advance-settlement",
+    );
   });
 
   it("construye la ruta para cargar contexto de rendición", () => {
-    expect(getSettlementContextPath("settlement-1")).toBe("/requests/settlement-1/settlement-context");
+    expect(getSettlementContextPath("settlement-1")).toBe(
+      "/requests/settlement-1/settlement-context",
+    );
   });
 
   it("serializa filtros de bandeja de rendiciones y resumen", () => {
-    expect(getRenditionsPath({
-      page: 2,
-      limit: 10,
-      status: RENDITION_STATUS.OVERDUE,
-      bucket: RENDITION_BUCKET.DUE_SOON,
-      search: "REXAN",
-      due_from: "2026-06-01",
-      due_to: "2026-06-30",
-      sort: RENDITION_SORT_FIELD.PAID_AT,
-      direction: RENDITION_SORT_DIRECTION.DESC,
-    })).toBe("/requests/renditions?page=2&limit=10&status=OVERDUE&bucket=due_soon&search=REXAN&due_from=2026-06-01&due_to=2026-06-30&sort=paid_at&direction=desc");
-    expect(getRenditionCountsPath({ search: "SOL-2026", sort: RENDITION_SORT_FIELD.DUE_DATE })).toBe("/requests/renditions/counts?search=SOL-2026&sort=due_date");
+    expect(
+      getRenditionsPath({
+        page: 2,
+        limit: 10,
+        status: RENDITION_STATUS.OVERDUE,
+        bucket: RENDITION_BUCKET.DUE_SOON,
+        search: "REXAN",
+        due_from: "2026-06-01",
+        due_to: "2026-06-30",
+        sort: RENDITION_SORT_FIELD.PAID_AT,
+        direction: RENDITION_SORT_DIRECTION.DESC,
+      }),
+    ).toBe(
+      "/requests/renditions?page=2&limit=10&status=OVERDUE&bucket=due_soon&search=REXAN&due_from=2026-06-01&due_to=2026-06-30&sort=paid_at&direction=desc",
+    );
+    expect(
+      getRenditionCountsPath({
+        search: "SOL-2026",
+        sort: RENDITION_SORT_FIELD.DUE_DATE,
+      }),
+    ).toBe("/requests/renditions/counts?search=SOL-2026&sort=due_date");
   });
 
   it("ejecuta el hook de inicio de rendición contra el endpoint dedicado", async () => {
@@ -292,27 +438,41 @@ describe("request hook URL helpers", () => {
     const { result } = renderHook(() => useStartAdvanceSettlement());
 
     await act(async () => {
-      await expect(result.current.startAdvanceSettlement("advance-1")).resolves.toMatchObject({ id: "settlement-1" });
+      await expect(
+        result.current.startAdvanceSettlement("advance-1"),
+      ).resolves.toMatchObject({ id: "settlement-1" });
     });
 
     await waitFor(() => expect(result.current.isLoading).toBe(false));
-    expect(api.post).toHaveBeenCalledWith("/requests/advance-1/start-advance-settlement");
+    expect(api.post).toHaveBeenCalledWith(
+      "/requests/advance-1/start-advance-settlement",
+    );
   });
 
   it("carga contexto de rendición solo cuando está habilitado", async () => {
-    vi.mocked(api.get).mockResolvedValueOnce({ settlement: { id: "settlement-1" } });
-    const { result } = renderHook(() => useSettlementContext("settlement-1", true));
+    vi.mocked(api.get).mockResolvedValueOnce({
+      settlement: { id: "settlement-1" },
+    });
+    const { result } = renderHook(() =>
+      useSettlementContext("settlement-1", true),
+    );
 
     await waitFor(() => expect(result.current.isLoading).toBe(false));
 
-    expect(api.get).toHaveBeenCalledWith("/requests/settlement-1/settlement-context");
-    expect(result.current.context).toMatchObject({ settlement: { id: "settlement-1" } });
+    expect(api.get).toHaveBeenCalledWith(
+      "/requests/settlement-1/settlement-context",
+    );
+    expect(result.current.context).toMatchObject({
+      settlement: { id: "settlement-1" },
+    });
   });
 
   it("no carga contexto de rendición cuando el flujo no es REXAN", () => {
     renderHook(() => useSettlementContext("request-1", false));
 
-    expect(api.get).not.toHaveBeenCalledWith("/requests/request-1/settlement-context");
+    expect(api.get).not.toHaveBeenCalledWith(
+      "/requests/request-1/settlement-context",
+    );
   });
 
   it("ejecuta marcado masivo pagado con contrato JSON confirmado", async () => {
@@ -327,12 +487,14 @@ describe("request hook URL helpers", () => {
     const { result } = renderHook(() => useBulkMarkPaid());
 
     await act(async () => {
-      await expect(result.current.bulkMarkPaid({
-        request_ids: ["req-1", "req-2"],
-        paid_at: "2026-05-30T10:00:00.000Z",
-        operation_reference: "OP-1",
-        notes: "Pagado por lote",
-      })).resolves.toMatchObject({ batch_id: "batch-1" });
+      await expect(
+        result.current.bulkMarkPaid({
+          request_ids: ["req-1", "req-2"],
+          paid_at: "2026-05-30T10:00:00.000Z",
+          operation_reference: "OP-1",
+          notes: "Pagado por lote",
+        }),
+      ).resolves.toMatchObject({ batch_id: "batch-1" });
     });
 
     expect(api.post).toHaveBeenCalledWith("/requests/bulk/mark-paid", {
@@ -343,32 +505,79 @@ describe("request hook URL helpers", () => {
     });
   });
 
+  it("envía paid_at y source_account_key en el pago individual", async () => {
+    vi.mocked(api.postForm).mockResolvedValueOnce({ payment_id: "payment-1" });
+    const { result } = renderHook(() => useRegisterPayment());
+    const paymentLease = makePaymentLease("req-1");
+    await act(async () => {
+      await result.current.registerPayment(
+        "req-1",
+        {
+          paid_at: "2026-05-30T10:00:00.001Z",
+          source_account_key: "BBVA_USD",
+          operation_reference: "OP-1",
+          amount_paid: 100,
+          proof: new File(["proof"], "proof.pdf", {
+            type: "application/pdf",
+          }),
+        },
+        paymentLease,
+      );
+    });
+    expect(api.postForm).toHaveBeenCalledWith(
+      "/requests/req-1/register-payment",
+      expect.any(FormData),
+      {
+        headers: {
+          "x-giof-assignment-version": paymentLease.assignmentVersion,
+          "x-giof-lease-token": paymentLease.token,
+        },
+      },
+    );
+    const formData = vi.mocked(api.postForm).mock.calls.at(-1)?.[1] as FormData;
+    expect(formData.get("paid_at")).toBe("2026-05-30T10:00:00.001Z");
+    expect(formData.get("source_account_key")).toBe("BBVA_USD");
+  });
+
   it("ejecuta completado de datos de pago como multipart sin monto ni fecha", async () => {
     vi.mocked(api.patchForm).mockResolvedValueOnce({ id: "payment-1" });
     const { result } = renderHook(() => useCompletePaymentDetails());
 
     await act(async () => {
       await result.current.completePaymentDetails("payment-1", {
-        proof: new File(["proof"], "constancia.pdf", { type: "application/pdf" }),
+        proof: new File(["proof"], "constancia.pdf", {
+          type: "application/pdf",
+        }),
         operation_reference: " OP-2 ",
+        source_account_key: "BCP_PEN",
         bank_commission: 1.5,
         notes: "Listo",
       });
     });
 
-    expect(api.patchForm).toHaveBeenCalledWith("/request-payments/payment-1/details", expect.any(FormData));
-    const formData = vi.mocked(api.patchForm).mock.calls.at(-1)?.[1] as FormData;
+    expect(api.patchForm).toHaveBeenCalledWith(
+      "/request-payments/payment-1/details",
+      expect.any(FormData),
+    );
+    const formData = vi
+      .mocked(api.patchForm)
+      .mock.calls.at(-1)?.[1] as FormData;
     expect(formData.get("operation_reference")).toBe("OP-2");
+    expect(formData.get("source_account_key")).toBe("BCP_PEN");
     expect(formData.get("bank_commission")).toBe("1.5");
     expect(formData.has("amount_paid")).toBe(false);
     expect(formData.has("paid_at")).toBe(false);
   });
 
   it("mantiene la solicitud visible durante un refetch en segundo plano", async () => {
-    vi.mocked(api.get).mockResolvedValueOnce(makeRequest({ concept: "Inicial" }));
+    vi.mocked(api.get).mockResolvedValueOnce(
+      makeRequest({ concept: "Inicial" }),
+    );
     const { result } = renderHook(() => useRequest("request-1"));
 
-    await waitFor(() => expect(result.current.request?.concept).toBe("Inicial"));
+    await waitFor(() =>
+      expect(result.current.request?.concept).toBe("Inicial"),
+    );
     expect(result.current.isInitialLoading).toBe(false);
 
     const background = deferred<PaymentRequest>();
@@ -392,19 +601,27 @@ describe("request hook URL helpers", () => {
   });
 
   it("parcha documentos y comprobantes sin marcar carga inicial", async () => {
-    vi.mocked(api.get)
-      .mockResolvedValueOnce([])
-      .mockResolvedValueOnce([]);
+    vi.mocked(api.get).mockResolvedValueOnce([]).mockResolvedValueOnce([]);
 
-    const { result: documentsResult } = renderHook(() => useRequestDocuments("request-1"));
-    const { result: receiptsResult } = renderHook(() => useRequestReceiptReviews("request-1"));
+    const { result: documentsResult } = renderHook(() =>
+      useRequestDocuments("request-1"),
+    );
+    const { result: receiptsResult } = renderHook(() =>
+      useRequestReceiptReviews("request-1"),
+    );
 
     await waitFor(() => expect(documentsResult.current.isLoading).toBe(false));
     await waitFor(() => expect(receiptsResult.current.isLoading).toBe(false));
 
     act(() => {
-      documentsResult.current.upsertDocument({ id: "doc-1", document_category: "REQUEST_SUPPORT" } as never);
-      receiptsResult.current.upsertReceipt({ id: "receipt-review-1", receipt: { id: "receipt-1" } } as never);
+      documentsResult.current.upsertDocument({
+        id: "doc-1",
+        document_category: "REQUEST_SUPPORT",
+      } as never);
+      receiptsResult.current.upsertReceipt({
+        id: "receipt-review-1",
+        receipt: { id: "receipt-1" },
+      } as never);
     });
 
     expect(documentsResult.current.documents).toHaveLength(1);
@@ -414,7 +631,11 @@ describe("request hook URL helpers", () => {
   });
 
   it("actualiza filas del informe localmente y conserva el informe montado", async () => {
-    vi.mocked(api.get).mockResolvedValueOnce({ rows: [], totals: { missing_allocations: [] }, allocation_coverage: [] });
+    vi.mocked(api.get).mockResolvedValueOnce({
+      rows: [],
+      totals: { missing_allocations: [] },
+      allocation_coverage: [],
+    });
     const { result } = renderHook(() => useRequestRenditionReport("request-1"));
 
     await waitFor(() => expect(result.current.isLoading).toBe(false));
@@ -434,17 +655,24 @@ describe("request hook URL helpers", () => {
   });
 
   it("genera informe de rendición con respuesta de informe y documento", async () => {
-    vi.mocked(api.post).mockResolvedValueOnce({ report: { id: "report-1" }, document: { id: "document-1" } });
+    vi.mocked(api.post).mockResolvedValueOnce({
+      report: { id: "report-1" },
+      document: { id: "document-1" },
+    });
     const { result } = renderHook(() => useRequestRenditionReportActions());
 
     await act(async () => {
-      await expect(result.current.generateReport("settlement-1")).resolves.toMatchObject({
+      await expect(
+        result.current.generateReport("settlement-1"),
+      ).resolves.toMatchObject({
         report: { id: "report-1" },
         document: { id: "document-1" },
       });
     });
 
-    expect(api.post).toHaveBeenCalledWith("/requests/settlement-1/rendition-report/generate");
+    expect(api.post).toHaveBeenCalledWith(
+      "/requests/settlement-1/rendition-report/generate",
+    );
   });
 
   it("registra y elimina devolución de línea POA usando endpoints allocation-scoped", async () => {
@@ -453,23 +681,32 @@ describe("request hook URL helpers", () => {
     const { result } = renderHook(() => useRequestRenditionReportActions());
 
     await act(async () => {
-      await expect(result.current.upsertLineReturn("settlement-1", "allocation-1", {
+      await expect(
+        result.current.upsertLineReturn("settlement-1", "allocation-1", {
+          returned_amount: 175,
+          justification: "Saldo no utilizado.",
+          return_proof_document_id: "document-1",
+        }),
+      ).resolves.toMatchObject({ id: "report-1" });
+    });
+
+    expect(api.patch).toHaveBeenCalledWith(
+      "/requests/settlement-1/rendition-report/line-returns/allocation-1",
+      {
         returned_amount: 175,
         justification: "Saldo no utilizado.",
         return_proof_document_id: "document-1",
-      })).resolves.toMatchObject({ id: "report-1" });
-    });
-
-    expect(api.patch).toHaveBeenCalledWith("/requests/settlement-1/rendition-report/line-returns/allocation-1", {
-      returned_amount: 175,
-      justification: "Saldo no utilizado.",
-      return_proof_document_id: "document-1",
-    });
+      },
+    );
 
     await act(async () => {
-      await expect(result.current.deleteLineReturn("settlement-1", "allocation-1")).resolves.toMatchObject({ deleted: true });
+      await expect(
+        result.current.deleteLineReturn("settlement-1", "allocation-1"),
+      ).resolves.toMatchObject({ deleted: true });
     });
 
-    expect(api.delete).toHaveBeenCalledWith("/requests/settlement-1/rendition-report/line-returns/allocation-1");
+    expect(api.delete).toHaveBeenCalledWith(
+      "/requests/settlement-1/rendition-report/line-returns/allocation-1",
+    );
   });
 });

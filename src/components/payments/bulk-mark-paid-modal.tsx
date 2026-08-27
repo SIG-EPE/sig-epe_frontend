@@ -19,6 +19,11 @@ import { getBusinessDateTimeLocalValue, parseBusinessDateTimeLocalToIso } from "
 import { formatRequestCurrency, getApiErrorMessage, getBulkPaymentResultLabel, getBulkPaymentRexanHref, getPaymentEmailStatusLabel, getPaymentRexanStatusLabel, getRequestDisplayCode, getRequestPayableAmount } from "@/lib/requests";
 import type { BulkMarkPaidResponse, PaymentRequest } from "@/types/requests";
 import { getGiofLeaseCredential } from "@/lib/giof-work-lease-session";
+import { canRetryGiofWork } from "@/lib/role-capabilities";
+
+const DAILY_BULK_PAYMENT_AVAILABLE = false;
+const DAILY_BULK_PAYMENT_UNAVAILABLE_MESSAGE =
+  "El pago masivo está deshabilitado con destinos diarios. Registra cada pago individualmente con su cuenta de origen, importe completo y constancia canónica.";
 
 const bulkMarkPaidSchema = z.object({
   paid_at: z.string().min(1, "Indica la fecha y hora de pago."),
@@ -43,7 +48,7 @@ export function BulkMarkPaidModal({ requests, open, onOpenChange, onSuccess }: B
   const { bulkMarkPaid, isLoading } = useBulkMarkPaid();
   const { retryRexanActivation, isLoading: isRetrying } = useRetryRexanActivation();
   const roleCode = useAuthStore((state) => state.user?.role?.code);
-  const canRetryRexan = roleCode === "GIOF_GESTOR" || roleCode === "ADMIN_SISTEMA";
+  const canRetryRexan = canRetryGiofWork(roleCode);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [result, setResult] = useState<BulkMarkPaidResponse | null>(null);
   const totalAmount = requests.reduce((total, request) => total + getRequestPayableAmount(request), 0);
@@ -65,6 +70,10 @@ export function BulkMarkPaidModal({ requests, open, onOpenChange, onSuccess }: B
   }, [form, open]);
 
   async function submit(values: BulkMarkPaidFormValues) {
+    if (!DAILY_BULK_PAYMENT_AVAILABLE) {
+      setSubmitError(DAILY_BULK_PAYMENT_UNAVAILABLE_MESSAGE);
+      return;
+    }
     setSubmitError(null);
     setResult(null);
     try {
@@ -112,20 +121,20 @@ export function BulkMarkPaidModal({ requests, open, onOpenChange, onSuccess }: B
         <Form {...form}>
           <form className="space-y-4" onSubmit={form.handleSubmit(submit)}>
             <div className="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
-              Al confirmar, estas solicitudes quedarán como pagadas. Las notificaciones de pagos masivos se agruparán según la política vigente. Si falta constancia o referencia, podrás completar esos datos después.
+              {DAILY_BULK_PAYMENT_UNAVAILABLE_MESSAGE}
             </div>
             <div className="grid gap-4 md:grid-cols-2">
               <FormField control={form.control} name="paid_at" render={({ field }) => (
                 <FormItem>
-                  <FormLabel>Fecha y hora de pago (hora Perú)</FormLabel>
-                  <FormControl><Input type="datetime-local" {...field} data-testid="bulk-payment-paid-at-input" /></FormControl>
+                   <FormLabel>Fecha efectiva del pago (hora Perú)</FormLabel>
+                   <FormControl><Input type="datetime-local" {...field} disabled={!DAILY_BULK_PAYMENT_AVAILABLE} data-testid="bulk-payment-paid-at-input" /></FormControl>
                   <FormMessage />
                 </FormItem>
               )} />
               <FormField control={form.control} name="operation_reference" render={({ field }) => (
                 <FormItem>
                   <FormLabel>Referencia de operación</FormLabel>
-                  <FormControl><Input placeholder="Opcional" {...field} data-testid="bulk-payment-reference-input" /></FormControl>
+                   <FormControl><Input placeholder="Opcional" {...field} disabled={!DAILY_BULK_PAYMENT_AVAILABLE} data-testid="bulk-payment-reference-input" /></FormControl>
                   <FormMessage />
                 </FormItem>
               )} />
@@ -133,7 +142,7 @@ export function BulkMarkPaidModal({ requests, open, onOpenChange, onSuccess }: B
             <FormField control={form.control} name="notes" render={({ field }) => (
               <FormItem>
                 <FormLabel>Notas</FormLabel>
-                <FormControl><Textarea placeholder="Opcional" {...field} data-testid="bulk-payment-notes-input" /></FormControl>
+                 <FormControl><Textarea placeholder="Opcional" {...field} disabled={!DAILY_BULK_PAYMENT_AVAILABLE} data-testid="bulk-payment-notes-input" /></FormControl>
                 <FormMessage />
               </FormItem>
             )} />
@@ -188,7 +197,7 @@ export function BulkMarkPaidModal({ requests, open, onOpenChange, onSuccess }: B
 
             <DialogFooter>
               <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={isLoading}>Cerrar</Button>
-              <Button type="submit" disabled={isLoading || requests.length === 0}>{isLoading ? "Marcando..." : "Marcar como pagadas"}</Button>
+              <Button type="submit" disabled={!DAILY_BULK_PAYMENT_AVAILABLE || isLoading || requests.length === 0}>{isLoading ? "Marcando..." : "Pago masivo no disponible"}</Button>
             </DialogFooter>
           </form>
         </Form>

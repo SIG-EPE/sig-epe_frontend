@@ -402,7 +402,7 @@ describe("RequestDetailPage REXAN approval", () => {
     expect(within(card).getByText("2")).toBeInTheDocument();
   });
 
-  it("muestra Pago y constancias en una solicitud original pagada con constancia propia", () => {
+  it("muestra Pago y constancia en una solicitud original pagada con constancia propia", () => {
     const proofDocument = makeDocument({
       id: "payment-proof-1",
       payment_request_id: "advance-1",
@@ -443,7 +443,7 @@ describe("RequestDetailPage REXAN approval", () => {
     render(<RequestDetailPage />);
 
     const paymentCard = screen.getByTestId("request-payment-proof-card");
-    expect(within(paymentCard).getByText("Pago y constancias")).toBeInTheDocument();
+    expect(within(paymentCard).getByText("Pago y constancia")).toBeInTheDocument();
     expect(within(paymentCard).getByText("Constancia de pago")).toBeInTheDocument();
     expect(within(paymentCard).getByText("constancia-pago.pdf")).toBeInTheDocument();
     expect(within(paymentCard).getByRole("link", { name: "Ver constancia" })).toHaveAttribute("href", "https://drive.example/payment-proof");

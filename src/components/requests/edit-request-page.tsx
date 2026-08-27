@@ -8,6 +8,8 @@ import { useRequest, useSettlementContext } from "@/hooks/use-requests";
 import { ROUTES } from "@/lib/constants";
 import { getRequestEditStep, REQUEST_EDIT_STEP } from "@/lib/requests";
 import { REQUEST_STATUS, REQUEST_TYPE } from "@/types/requests";
+import { useAuthStore } from "@/stores/auth-store";
+import { canEditAssignedGiofWork, isGiofOperationalRole } from "@/lib/role-capabilities";
 import { RequestForm } from "./request-form";
 
 export function EditRequestPage() {
@@ -15,6 +17,7 @@ export function EditRequestPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { request, isInitialLoading, isRefreshing, error, refetch } = useRequest(params.id);
+  const user = useAuthStore((state) => state.user);
   const isSettlement = request?.request_type === REQUEST_TYPE.ADVANCE_SETTLEMENT;
   const settlementContext = useSettlementContext(params.id, Boolean(isSettlement));
 
@@ -34,6 +37,21 @@ export function EditRequestPage() {
   const isDraft = request.status === REQUEST_STATUS.DRAFT;
   const isObserved = request.status === REQUEST_STATUS.OBSERVED;
   const activeStep = getRequestEditStep(searchParams.get("step"));
+  const isOwner = request.requester_id === user?.id;
+  const isAuthorizedGiofEditor = isGiofOperationalRole(user?.role?.code)
+    && canEditAssignedGiofWork(request.giof_work, user?.id);
+
+  if (!isOwner && isGiofOperationalRole(user?.role?.code) && !isAuthorizedGiofEditor) {
+    return (
+      <div className="space-y-4 rounded-md border p-6">
+        <div>
+          <h1 className="text-xl font-semibold">Solicitud disponible en solo lectura</h1>
+          <p className="text-sm text-muted-foreground">Debes ser el responsable asignado y mantener un bloqueo activo para editar este trabajo.</p>
+        </div>
+        <Button variant="outline" onClick={() => router.replace(`${ROUTES.REQUESTS}/${request.id}`)}>Volver al detalle</Button>
+      </div>
+    );
+  }
 
   if (!isDraft && !isObserved) {
     return (

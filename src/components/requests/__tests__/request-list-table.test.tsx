@@ -100,6 +100,42 @@ function makeAllocation(overrides: Partial<RequestAllocation> = {}): RequestAllo
 }
 
 describe("RequestListTable", () => {
+  it("shows persisted projection phase and reconciliation state in the request row", () => {
+    render(
+      <RequestListTable
+        requests={[
+          makeRequest({
+            payment: {
+              id: "payment-1",
+              payment_request_id: "req-1",
+              paid_at: "2026-08-25T10:00:00.000Z",
+              operation_reference: null,
+              amount_paid: 100,
+              bank_commission: null,
+              notes: null,
+              drive_projection_status: "FAILED",
+              drive_projection_phase: "MOVED_UNVERIFIED",
+              drive_projection_error_code: "MOVE_RECONCILIATION_REQUIRED",
+              drive_projection_error_message: "Parent evidence contradicted",
+              drive_projection_reconciliation_required: true,
+              drive_projection_frozen: true,
+              proof_document_id: null,
+              registered_by_id: "user-1",
+              created_at: "2026-08-25T10:00:00.000Z",
+              updated_at: "2026-08-25T10:00:00.000Z",
+            },
+          }),
+        ]}
+        isLoading={false}
+        roleCode={ROLE_CODE.GIOF_GESTOR}
+      />,
+    );
+
+    expect(screen.getByText("Drive: requiere atención")).toBeInTheDocument();
+    expect(screen.getByText(/Fase: MOVED_UNVERIFIED/)).toBeInTheDocument();
+    expect(screen.getByText(/reconciliación/i)).toBeInTheDocument();
+  });
+
   it("permite seleccionar SUBMITTED y bloquea filas terminales para asignación", () => {
     const active = makeRequest({
       id: "active",

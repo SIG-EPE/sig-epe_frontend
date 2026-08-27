@@ -47,6 +47,14 @@ function makeGiofUser(): AuthUser {
   };
 }
 
+function makeUser(role: NonNullable<AuthUser["role"]>["code"]): AuthUser {
+  return {
+    ...makeGiofUser(),
+    id: `${role.toLowerCase()}-1`,
+    role: { code: role, name: role },
+  };
+}
+
 function makeRequest(overrides: Partial<PaymentRequest> = {}): PaymentRequest {
   return {
     id: "req-1",
@@ -123,11 +131,41 @@ describe("RequestsPage", () => {
     expect(screen.getByTestId("requests-page-title")).toHaveTextContent("Mis Solicitudes");
     expect(screen.getByTestId("new-request-button")).toBeInTheDocument();
     expect(screen.queryByText("Por revisar")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("requests-status-filter")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("requests-status-summary")).not.toBeInTheDocument();
 
     await user.click(screen.getByTestId("new-request-button"));
 
     expect(pushMock).toHaveBeenCalledWith("/requests/new");
   });
+
+  it("restaura la Bandeja de Revisión para GIOF_MANAGER con controles de asignación pero sin acciones de gestor", () => {
+    currentQuery = "scope=review";
+    authUser = makeUser("GIOF_MANAGER");
+
+    render(<RequestsPage />);
+
+    expect(screen.getByTestId("requests-page-title")).toHaveTextContent("Bandeja de Revisión");
+    expect(screen.getByTestId("giof-work-scope-filter")).toBeInTheDocument();
+    expect(useRequestsMock).toHaveBeenCalledWith(expect.objectContaining({
+      scope: "review",
+      work_scope: "all",
+    }), expect.anything());
+    expect(screen.queryByText("Procesar")).not.toBeInTheDocument();
+  });
+
+  it.each(["SOLICITANTE_EPE", "AUDITOR_DIRECCION", "ADMIN_SISTEMA"] as const)(
+    "no habilita scope review para %s",
+    (role) => {
+      currentQuery = "scope=review";
+      authUser = makeUser(role);
+
+      render(<RequestsPage />);
+
+      expect(screen.getByTestId("requests-page-title")).toHaveTextContent("Mis Solicitudes");
+      expect(useRequestsMock).toHaveBeenCalledWith(expect.objectContaining({ scope: "mine" }), expect.anything());
+    },
+  );
 
   it("renderiza tarjetas GIOF en scope de revisión y activa el filtro de validación en la URL", async () => {
     currentQuery = "scope=review";
@@ -135,7 +173,7 @@ describe("RequestsPage", () => {
     render(<RequestsPage />);
 
     expect(screen.getByTestId("requests-page-title")).toHaveTextContent("Bandeja de Revisión");
-    expect(screen.getByTestId("new-request-button")).toBeInTheDocument();
+    expect(screen.queryByTestId("new-request-button")).not.toBeInTheDocument();
     expect(screen.getByTestId(`requests-review-queue-card-${REQUEST_REVIEW_QUEUE.PENDING_LEVEL_1}`)).toHaveTextContent("Por revisar");
     expect(screen.getByTestId(`requests-review-queue-card-${REQUEST_REVIEW_QUEUE.PENDING_LEVEL_2}`)).toHaveTextContent("En validación");
     expect(screen.getByTestId(`requests-review-queue-card-${REQUEST_REVIEW_QUEUE.OBSERVED_RETURNED}`)).toHaveTextContent("Observadas");

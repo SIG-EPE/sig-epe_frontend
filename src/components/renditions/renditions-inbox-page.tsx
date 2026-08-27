@@ -50,7 +50,7 @@ export function RenditionsInboxPage() {
   const isGiofManager = isGiofManagerRole(user?.role?.code);
   const isGiofOperational = isGiofOperationalRole(user?.role?.code);
   const rawWorkScope = searchParams.get("work_scope");
-  const workScope: GiofWorkScope = Object.values(GIOF_WORK_SCOPE).includes(rawWorkScope as GiofWorkScope) ? rawWorkScope as GiofWorkScope : GIOF_WORK_SCOPE.MINE;
+  const workScope: GiofWorkScope = Object.values(GIOF_WORK_SCOPE).includes(rawWorkScope as GiofWorkScope) ? rawWorkScope as GiofWorkScope : isGiofManager ? GIOF_WORK_SCOPE.ALL : GIOF_WORK_SCOPE.MINE;
   const workAssigneeId = workScope === GIOF_WORK_SCOPE.ASSIGNEE ? searchParams.get("assignee_id") ?? undefined : undefined;
   const page = Number(searchParams.get("page") ?? "1") || 1;
   const limit = Number(searchParams.get("limit") ?? "20") || 20;
