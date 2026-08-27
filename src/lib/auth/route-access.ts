@@ -16,6 +16,11 @@ const DASHBOARD_ROLES = [ROLE_CODE.GIOF_GESTOR, ROLE_CODE.GIOF_MANAGER, ROLE_COD
 const ADMIN_ONLY_ROLES = [ROLE_CODE.ADMIN_SISTEMA] as const;
 const ADMIN_USERS_ROLES = [ROLE_CODE.ADMIN_SISTEMA, ROLE_CODE.GIOF_GESTOR, ROLE_CODE.GIOF_MANAGER] as const;
 const CATALOG_MANAGER_ROLES = [ROLE_CODE.GIOF_GESTOR, ROLE_CODE.GIOF_MANAGER, ROLE_CODE.ADMIN_SISTEMA] as const;
+const DRIVE_MANAGEMENT_ROLES = [
+  ROLE_CODE.GIOF_MANAGER,
+  ROLE_CODE.AUDITOR_DIRECCION,
+  ROLE_CODE.ADMIN_SISTEMA,
+] as const;
 
 interface RouteAccessRule {
   path: string;
@@ -35,7 +40,7 @@ export const ROUTE_ACCESS_RULES = [
   { path: ROUTES.PROFILE, allowedRoles: ALL_AUTHENTICATED_ROLES, match: "prefix" },
   { path: ROUTES.HELP_GIOF_ASSIGNMENT, allowedRoles: ALL_AUTHENTICATED_ROLES, match: "exact" },
   { path: ROUTES.HELP, allowedRoles: ALL_AUTHENTICATED_ROLES, match: "prefix" },
-  { path: ROUTES.MANAGEMENT, allowedRoles: ALL_AUTHENTICATED_ROLES, match: "prefix" },
+  { path: ROUTES.MANAGEMENT, allowedRoles: DRIVE_MANAGEMENT_ROLES, match: "prefix" },
   { path: ROUTES.ADMIN_CONFIG, allowedRoles: ADMIN_ONLY_ROLES, match: "prefix" },
   { path: ROUTES.ADMIN_AUDIT_LOGS, allowedRoles: ADMIN_ONLY_ROLES, match: "prefix" },
   { path: ROUTES.ADMIN_USERS, allowedRoles: ADMIN_USERS_ROLES, match: "prefix" },

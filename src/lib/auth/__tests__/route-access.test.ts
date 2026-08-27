@@ -62,10 +62,16 @@ describe("route access matrix", () => {
     expect(canAccessRoute("/admin/audit-logs", ROLE_CODE.ADMIN_SISTEMA).isAllowed).toBe(true);
   });
 
-  it("allows shared authenticated pages explicitly", () => {
+  it("allows shared authenticated pages and restricts Drive management", () => {
     expect(canAccessRoute("/dashboard", ROLE_CODE.SOLICITANTE_EPE).isAllowed).toBe(true);
     expect(canAccessRoute("/profile", ROLE_CODE.AUDITOR_DIRECCION).isAllowed).toBe(true);
+
+    expect(canAccessRoute("/management", ROLE_CODE.GIOF_MANAGER).isAllowed).toBe(true);
+    expect(canAccessRoute("/management", ROLE_CODE.AUDITOR_DIRECCION).isAllowed).toBe(true);
     expect(canAccessRoute("/management", ROLE_CODE.ADMIN_SISTEMA).isAllowed).toBe(true);
+    expect(canAccessRoute("/management", ROLE_CODE.GIOF_GESTOR).isAllowed).toBe(false);
+    expect(canAccessRoute("/management/nodes/root", ROLE_CODE.GIOF_GESTOR).isAllowed).toBe(false);
+    expect(canAccessRoute("/management", ROLE_CODE.SOLICITANTE_EPE).isAllowed).toBe(false);
   });
 
   it("allows the help center to every authenticated role and no missing role", () => {

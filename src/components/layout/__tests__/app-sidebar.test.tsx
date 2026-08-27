@@ -151,6 +151,12 @@ const giofUser: AuthUser = {
   authSource: "LOCAL",
 };
 
+const managerUser: AuthUser = {
+  ...giofUser,
+  id: "5",
+  role: { code: "GIOF_MANAGER", name: "GIOF Manager" },
+};
+
 const auditorUser: AuthUser = {
   id: "4",
   firstName: "Auditor",
@@ -223,6 +229,9 @@ describe("AppSidebar", () => {
 
     expect(screen.getByText("Dashboard GIOF")).toBeInTheDocument();
     expect(screen.getByText("Presupuesto")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Gestión de Drive" })).toHaveAttribute(
+      "href", "/management",
+    );
   });
 
   it("usa scopes distintos para Mis Solicitudes y Bandeja de Revisión", () => {
@@ -314,6 +323,20 @@ describe("AppSidebar", () => {
     expect(screen.getByText("Catálogos")).toBeInTheDocument();
     expect(screen.getByText("Usuarios")).toBeInTheDocument();
     expect(screen.queryByText("Bandeja de Gestión")).not.toBeInTheDocument();
+    expect(screen.queryByText("Gestión de Drive")).not.toBeInTheDocument();
+  });
+
+  it("muestra Gestión de Drive al responsable GIOF", () => {
+    mockUseAuthStore.mockImplementation(
+      (selector: (state: { user: AuthUser }) => unknown) =>
+        selector({ user: managerUser }),
+    );
+
+    renderSidebar();
+
+    expect(screen.getByRole("link", { name: "Gestión de Drive" })).toHaveAttribute(
+      "href", "/management",
+    );
   });
 
   it("✅ Muestra dashboards y Reportes para AUDITOR_DIRECCION", () => {
@@ -328,6 +351,9 @@ describe("AppSidebar", () => {
     expect(screen.getByText("Presupuesto")).toBeInTheDocument();
     expect(screen.getByText("Reportes")).toBeInTheDocument();
     expect(screen.getByText("Mis Solicitudes")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Gestión de Drive" })).toHaveAttribute(
+      "href", "/management",
+    );
   });
 
   it.each([

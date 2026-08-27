@@ -79,19 +79,26 @@ const GIOF_MENU_ITEMS: MenuItem[] = [
   { label: "Centro de ayuda", href: ROUTES.HELP, icon: "CircleHelp" },
 ];
 
+const GIOF_MANAGER_MENU_ITEMS: MenuItem[] = [
+  ...GIOF_MENU_ITEMS.slice(0, -1),
+  { label: "Gestión de Drive", href: ROUTES.MANAGEMENT, icon: "FolderTree" },
+  GIOF_MENU_ITEMS[GIOF_MENU_ITEMS.length - 1],
+];
+
 export const ROLE_MENU_MAP: Record<RoleCode, MenuItem[]> = {
   SOLICITANTE_EPE: [
     { label: "Mis Solicitudes", href: `${ROUTES.REQUESTS}?scope=mine`, icon: "FileText" },
     { label: "Centro de ayuda", href: ROUTES.HELP, icon: "CircleHelp" },
   ],
   GIOF_GESTOR: GIOF_MENU_ITEMS,
-  GIOF_MANAGER: GIOF_MENU_ITEMS,
+  GIOF_MANAGER: GIOF_MANAGER_MENU_ITEMS,
   AUDITOR_DIRECCION: [
     { label: "Mis Solicitudes", href: `${ROUTES.REQUESTS}?scope=mine`, icon: "FileText" },
     { label: "Presupuesto", href: ROUTES.BUDGET, icon: "BarChart3" },
     { label: "Programado vs Ejecutado", href: ROUTES.BUDGET_ORG_UNIT_EXECUTION, icon: "BarChart3" },
     { label: "Dashboard GIOF", href: ROUTES.DASHBOARD_GIOF, icon: "LayoutDashboard" },
     { label: "Reportes", href: ROUTES.REPORTS, icon: "BarChart3" },
+    { label: "Gestión de Drive", href: ROUTES.MANAGEMENT, icon: "FolderTree" },
     { label: "Centro de ayuda", href: ROUTES.HELP, icon: "CircleHelp" },
   ],
   ADMIN_SISTEMA: [
@@ -105,6 +112,7 @@ export const ROLE_MENU_MAP: Record<RoleCode, MenuItem[]> = {
     { label: "Catálogos", href: ROUTES.CATALOGS, icon: "BookOpen" },
     { label: "Usuarios", href: ROUTES.ADMIN_USERS, icon: "Users" },
     { label: "Log de auditoría", href: ROUTES.ADMIN_AUDIT_LOGS, icon: "ClipboardList" },
+    { label: "Gestión de Drive", href: ROUTES.MANAGEMENT, icon: "FolderTree" },
     { label: "Centro de ayuda", href: ROUTES.HELP, icon: "CircleHelp" },
   ],
 };
