@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { RequestsPage } from "@/components/requests/requests-page";
 import { ApiRequestError } from "@/lib/api-client";
 import { ACTIVE_REVIEW_STATUSES, REQUEST_REVIEW_QUEUE } from "@/lib/requests";
-import { REQUEST_CURRENCY, REQUEST_STATUS, REQUEST_TYPE, type PaymentRequest, type RequestsListFilters } from "@/types/requests";
+import { REQUEST_CURRENCY, REQUEST_STATUS, REQUEST_TYPE, type PaymentRequest, type RequestReviewFilters, type RequestsListFilters } from "@/types/requests";
 import type { AuthUser } from "@/types/auth";
 
 const replaceMock = vi.fn((href: string) => {
@@ -14,6 +14,7 @@ const replaceMock = vi.fn((href: string) => {
 const pushMock = vi.fn();
 let currentQuery = "";
 const useRequestsMock = vi.fn();
+const useRequestReviewMock = vi.fn();
 let authUser: AuthUser | null = null;
 
 vi.mock("next/navigation", () => ({
@@ -32,6 +33,7 @@ vi.mock("@/stores/auth-store", () => ({
 
 vi.mock("@/hooks/use-requests", () => ({
   useRequests: (filters: RequestsListFilters, options?: { keepPreviousData?: boolean; cacheMode?: string }) => useRequestsMock(filters, options),
+  useRequestReview: (filters: RequestReviewFilters, options?: { keepPreviousData?: boolean; cacheMode?: string; enabled?: boolean }) => useRequestReviewMock(filters, options),
 }));
 
 function makeGiofUser(): AuthUser {
@@ -122,6 +124,21 @@ describe("RequestsPage", () => {
         refetch: vi.fn(),
       };
     });
+    useRequestReviewMock.mockReturnValue({
+      requests: [makeRequest()],
+      total: 1,
+      page: 1,
+      limit: 20,
+      summary: {
+        count: 1,
+        requested_amount_by_currency: { PEN: "100.00" },
+        status_counts: { SUBMITTED: 1 },
+      },
+      isLoading: false,
+      isRefreshing: false,
+      error: null,
+      refetch: vi.fn(),
+    });
   });
 
   it("muestra Mis Solicitudes por defecto para GIOF y permite crear", async () => {
@@ -167,23 +184,15 @@ describe("RequestsPage", () => {
     },
   );
 
-  it("renderiza tarjetas GIOF en scope de revisión y activa el filtro de validación en la URL", async () => {
+  it("retira las tarjetas y el ordenamiento heredados del scope de revisión", () => {
     currentQuery = "scope=review";
-    const user = userEvent.setup();
     render(<RequestsPage />);
 
     expect(screen.getByTestId("requests-page-title")).toHaveTextContent("Bandeja de Revisión");
     expect(screen.queryByTestId("new-request-button")).not.toBeInTheDocument();
-    expect(screen.getByTestId(`requests-review-queue-card-${REQUEST_REVIEW_QUEUE.PENDING_LEVEL_1}`)).toHaveTextContent("Por revisar");
-    expect(screen.getByTestId(`requests-review-queue-card-${REQUEST_REVIEW_QUEUE.PENDING_LEVEL_2}`)).toHaveTextContent("En validación");
-    expect(screen.getByTestId(`requests-review-queue-card-${REQUEST_REVIEW_QUEUE.OBSERVED_RETURNED}`)).toHaveTextContent("Observadas");
+    expect(screen.queryByTestId(`requests-review-queue-card-${REQUEST_REVIEW_QUEUE.PENDING_LEVEL_1}`)).not.toBeInTheDocument();
+    expect(screen.queryByTestId("requests-sort-control")).not.toBeInTheDocument();
     expect(screen.queryByText("Colaboradores bloqueados")).not.toBeInTheDocument();
-
-    await user.click(screen.getByTestId(`requests-review-queue-card-${REQUEST_REVIEW_QUEUE.PENDING_LEVEL_2}`));
-
-    await waitFor(() => {
-      expect(replaceMock).toHaveBeenLastCalledWith("/requests?scope=review&queue=pending-level-2&status=IN_VALIDATION&sort=OLDEST_FIRST&page=1");
-    });
   });
 
   it("carga Mis Solicitudes por defecto con scope propio", () => {
@@ -270,14 +279,15 @@ describe("RequestsPage", () => {
 
   it("en link directo scope=review muestra loading inicial y no vacío hasta terminar fetch", () => {
     currentQuery = "scope=review";
-    useRequestsMock.mockImplementation((filters: RequestsListFilters) => ({
+    useRequestReviewMock.mockReturnValue({
       requests: [],
       total: 0,
-      isLoading: filters.scope === "review" && filters.limit !== 100,
+      summary: null,
+      isLoading: true,
       isRefreshing: false,
       error: null,
       refetch: vi.fn(),
-    }));
+    });
 
     render(<RequestsPage />);
 
@@ -304,7 +314,7 @@ describe("RequestsPage", () => {
 
   it("muestra quién creó un reembolso sin usar el beneficiario como responsable", () => {
     currentQuery = "scope=review";
-    useRequestsMock.mockImplementation(() => ({
+    useRequestReviewMock.mockReturnValue({
       requests: [makeRequest({
         id: "reimbursement-1",
         request_type: REQUEST_TYPE.REIMBURSEMENT,
@@ -312,10 +322,12 @@ describe("RequestsPage", () => {
         requester_name: "Ana Paredes",
       })],
       total: 1,
+      summary: null,
       isLoading: false,
+      isRefreshing: false,
       error: null,
       refetch: vi.fn(),
-    }));
+    });
 
     render(<RequestsPage />);
 
@@ -337,6 +349,8 @@ describe("RequestsPage", () => {
     expect(useRequestsMock).not.toHaveBeenCalledWith(expect.objectContaining({
       scope: "mine",
     }), expect.anything());
+    expect(screen.getByText("Cargando solicitudes...")).toBeInTheDocument();
+    expect(screen.queryByText("Aún no hay solicitudes registradas.")).not.toBeInTheDocument();
   });
 
   it("sincroniza los filtros con la URL al volver a Bandeja de Revisión", async () => {
@@ -353,13 +367,13 @@ describe("RequestsPage", () => {
     currentQuery = "scope=review";
     rerender(<RequestsPage />);
 
-    await waitFor(() => expect(screen.getByTestId("requests-search-input")).toHaveValue(""));
-    expect(useRequestsMock).toHaveBeenCalledWith(expect.objectContaining({
-      scope: "review",
-      statuses: [...ACTIVE_REVIEW_STATUSES],
-      status: undefined,
-      search: undefined,
-    }), expect.objectContaining({ keepPreviousData: false }));
+    await waitFor(() => expect(screen.getByLabelText("Buscar solicitudes")).toHaveValue(""));
+    expect(useRequestReviewMock).toHaveBeenCalledWith(expect.objectContaining({
+      work_scope: "mine",
+    }), expect.objectContaining({ keepPreviousData: false, enabled: true }));
+    const lastEnabledReviewFilters = useRequestReviewMock.mock.calls.filter((call) => call[1]?.enabled).at(-1)?.[0];
+    expect(lastEnabledReviewFilters).not.toHaveProperty("status");
+    expect(lastEnabledReviewFilters).not.toHaveProperty("search");
   });
 
   it("oculta la tarjeta no soportada de colaboradores bloqueados", () => {
@@ -457,5 +471,91 @@ describe("RequestsPage", () => {
 
     expect(screen.getByText("Hay muchas búsquedas seguidas. Espera unos segundos e inténtalo nuevamente.")).toBeInTheDocument();
     expect(screen.queryByText(/ThrottlerException|Too Many Requests/i)).not.toBeInTheDocument();
+  });
+
+  it("usa el endpoint aditivo de revisión con la URL como fuente de verdad y conserva el alcance por rol", () => {
+    currentQuery = "scope=review&page=3&status=OBSERVED&search=viatico";
+    authUser = makeUser("GIOF_MANAGER");
+
+    render(<RequestsPage />);
+
+    expect(useRequestReviewMock).toHaveBeenCalledWith(expect.objectContaining({
+      page: 3,
+      limit: 20,
+      status: REQUEST_STATUS.OBSERVED,
+      search: "viatico",
+      work_scope: "all",
+    }), expect.objectContaining({ enabled: true, keepPreviousData: false }));
+    expect(screen.queryByTestId("requests-sort-control")).not.toBeInTheDocument();
+    expect(screen.getByText("Total: 1")).toBeInTheDocument();
+  });
+
+  it("no consulta parámetros de revisión inválidos y ofrece una recuperación segura", async () => {
+    currentQuery = "scope=review&sort=OLDEST_FIRST&status=OBSERVED";
+    const user = userEvent.setup();
+
+    render(<RequestsPage />);
+
+    expect(useRequestReviewMock).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ enabled: false }));
+    expect(screen.getByRole("alert")).toHaveTextContent("No se pudieron aplicar los filtros de la URL");
+    expect(screen.queryByText("OLDEST_FIRST")).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Restablecer filtros" }));
+    expect(replaceMock).toHaveBeenLastCalledWith("/requests?scope=review");
+  });
+
+  it("impide que Gestor use o enumere alcances globales desde una URL manipulada", () => {
+    currentQuery = "scope=review&work_scope=all";
+
+    render(<RequestsPage />);
+
+    expect(useRequestReviewMock).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ enabled: false }));
+    expect(screen.getByRole("alert")).toHaveTextContent("No se pudieron aplicar los filtros de la URL");
+    expect(screen.queryByTestId("giof-work-scope-filter")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("giof-assignee-filter")).not.toBeInTheDocument();
+  });
+
+  it("actualiza filtros de revisión en la URL, reinicia página y preserva filtros válidos no relacionados", async () => {
+    currentQuery = "scope=review&page=4&status=OBSERVED";
+    const user = userEvent.setup();
+
+    render(<RequestsPage />);
+    await user.type(screen.getByLabelText("Buscar solicitudes"), "viático");
+    await user.click(screen.getByRole("button", { name: "Buscar" }));
+
+    expect(replaceMock).toHaveBeenLastCalledWith("/requests?scope=review&status=OBSERVED&search=vi%C3%A1tico");
+  });
+
+  it("reproduce chips desde URL, elimina uno y limpia todos sin perder el scope", async () => {
+    currentQuery = "scope=review&page=2&status=SUBMITTED&search=viatico";
+    const user = userEvent.setup();
+
+    render(<RequestsPage />);
+    expect(screen.getByRole("button", { name: "Quitar filtro Búsqueda: viatico" })).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Quitar filtro Búsqueda: viatico" }));
+    expect(replaceMock).toHaveBeenLastCalledWith("/requests?scope=review&status=SUBMITTED");
+
+    await user.click(screen.getByRole("button", { name: "Limpiar todos los filtros" }));
+    expect(replaceMock).toHaveBeenLastCalledWith("/requests?scope=review");
+  });
+
+  it("muestra errores de revisión accionables sin exponer detalles técnicos", () => {
+    currentQuery = "scope=review";
+    useRequestReviewMock.mockReturnValue({
+      requests: [],
+      total: 0,
+      summary: null,
+      isLoading: false,
+      isRefreshing: false,
+      error: new Error("QueryFailedError: relation payment_requests_internal does not exist"),
+      refetch: vi.fn(),
+    });
+
+    render(<RequestsPage />);
+
+    expect(screen.getByRole("alert")).toHaveTextContent("No se pudieron cargar las solicitudes para revisión");
+    expect(screen.queryByText(/QueryFailedError|payment_requests_internal/i)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Reintentar" })).toBeInTheDocument();
   });
 });
