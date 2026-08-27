@@ -1,11 +1,9 @@
-import { redirect } from "next/navigation";
-
-import { ROUTES } from "@/lib/constants";
+import { DriveHierarchyManagement } from "@/components/drive-hierarchy/drive-hierarchy-management";
 
 // -------------------------------------------------------
-// Management page — legacy redirect for bookmarked URLs
+// Gestión operativa de la jerarquía contable de Drive
 // -------------------------------------------------------
 
 export default function ManagementPage() {
-  redirect(ROUTES.REQUESTS);
+  return <DriveHierarchyManagement />;
 }

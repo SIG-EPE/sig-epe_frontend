@@ -14,6 +14,8 @@ const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3001";
 const XLSX_MEDIA_TYPE =
   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
 const XLSX_SIGNATURE = [0x50, 0x4b, 0x03, 0x04] as const;
+const READINESS_CSV_HEADER =
+  '"sequence","stable_id","relative_path","item_type","disposition","reason_code","reference_status","reference_details","manifest_hash"';
 
 const AUTH_HEADER_EXCLUDED_PATHS = [
   "/auth/login",
@@ -80,7 +82,9 @@ async function apiFetch<T>(
 
   // --- 401: attempt token refresh + retry ---
   if (res.status === 401 && shouldAttachAuthHeader(path)) {
-    const refreshResult = await refreshSession({ reason: "api-401" }).catch(() => null);
+    const refreshResult = await refreshSession({ reason: "api-401" }).catch(
+      () => null,
+    );
     const newToken = refreshResult?.accessToken ?? null;
 
     if (newToken) {
@@ -142,7 +146,9 @@ async function apiFetch<T>(
   return json.data;
 }
 
-function getFilenameFromContentDisposition(value: string | null): string | null {
+function getFilenameFromContentDisposition(
+  value: string | null,
+): string | null {
   if (!value) {
     return null;
   }
@@ -159,6 +165,7 @@ function getFilenameFromContentDisposition(value: string | null): string | null 
 async function apiDownload(
   path: string,
   options: RequestInit = {},
+  expectedMediaType: typeof XLSX_MEDIA_TYPE | "text/csv" = XLSX_MEDIA_TYPE,
 ): Promise<ApiDownloadResult> {
   const { accessToken } = useAuthStore.getState();
 
@@ -180,7 +187,9 @@ async function apiDownload(
   let res = await fetch(`${API_URL}${path}`, requestOptions);
 
   if (res.status === 401 && shouldAttachAuthHeader(path)) {
-    const refreshResult = await refreshSession({ reason: "api-401" }).catch(() => null);
+    const refreshResult = await refreshSession({ reason: "api-401" }).catch(
+      () => null,
+    );
     const newToken = refreshResult?.accessToken ?? null;
 
     if (newToken) {
@@ -218,18 +227,22 @@ async function apiDownload(
     .trim()
     .toLowerCase();
   const blob = await res.blob();
-  const signature = new Uint8Array(await blob.slice(0, XLSX_SIGNATURE.length).arrayBuffer());
+  const signature = new Uint8Array(
+    await blob.slice(0, XLSX_SIGNATURE.length).arrayBuffer(),
+  );
   const hasValidSignature =
-    signature.length === XLSX_SIGNATURE.length &&
-    XLSX_SIGNATURE.every((byte, index) => signature[index] === byte);
+    expectedMediaType === "text/csv"
+      ? (await blob.text()).split(/\r?\n/, 1)[0] === READINESS_CSV_HEADER
+      : signature.length === XLSX_SIGNATURE.length &&
+        XLSX_SIGNATURE.every((byte, index) => signature[index] === byte);
 
-  if (mediaType !== XLSX_MEDIA_TYPE || !hasValidSignature) {
+  if (mediaType !== expectedMediaType || !hasValidSignature) {
     throw new ApiRequestError(
       200,
       {
         statusCode: 200,
         code: "INVALID_DOWNLOAD_RESPONSE",
-        message: "Invalid XLSX download response",
+        message: "Invalid download response",
         error: "Invalid Download Response",
         timestamp: new Date().toISOString(),
         path,
@@ -240,7 +253,9 @@ async function apiDownload(
 
   return {
     blob,
-    filename: getFilenameFromContentDisposition(res.headers.get("Content-Disposition")),
+    filename: getFilenameFromContentDisposition(
+      res.headers.get("Content-Disposition"),
+    ),
   };
 }
 
@@ -255,6 +270,27 @@ export const api = {
 
   download(path: string, options?: RequestInit): Promise<ApiDownloadResult> {
     return apiDownload(path, { ...options, method: "GET" });
+  },
+
+  downloadCsv(
+    path: string,
+    body: unknown,
+    options?: RequestInit,
+  ): Promise<ApiDownloadResult> {
+    const headers = new Headers(options?.headers);
+    if (!headers.has("Content-Type")) {
+      headers.set("Content-Type", "application/json");
+    }
+    return apiDownload(
+      path,
+      {
+        ...options,
+        method: "POST",
+        body: JSON.stringify(body),
+        headers,
+      },
+      "text/csv",
+    );
   },
 
   post<T>(path: string, body?: unknown, options?: RequestInit): Promise<T> {
@@ -281,7 +317,11 @@ export const api = {
     });
   },
 
-  patchForm<T>(path: string, body: FormData, options?: RequestInit): Promise<T> {
+  patchForm<T>(
+    path: string,
+    body: FormData,
+    options?: RequestInit,
+  ): Promise<T> {
     return apiFetch<T>(path, {
       ...options,
       method: "PATCH",
