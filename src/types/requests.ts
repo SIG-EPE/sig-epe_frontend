@@ -517,14 +517,49 @@ export const DRIVE_PAYMENT_PROJECTION_STATUS = {
 export type DrivePaymentProjectionStatus =
   (typeof DRIVE_PAYMENT_PROJECTION_STATUS)[keyof typeof DRIVE_PAYMENT_PROJECTION_STATUS];
 
+export const DRIVE_PAYMENT_ROUTE_MODEL = {
+  DAILY_V1: "DAILY_V1",
+} as const;
+
+export type DrivePaymentRouteModel =
+  (typeof DRIVE_PAYMENT_ROUTE_MODEL)[keyof typeof DRIVE_PAYMENT_ROUTE_MODEL];
+
+export const DRIVE_SOURCE_ACCOUNT = {
+  BCP_PEN: "BCP_PEN",
+  BCP_USD: "BCP_USD",
+  BCP_ODF: "BCP_ODF",
+  BBVA_PEN: "BBVA_PEN",
+  BBVA_USD: "BBVA_USD",
+} as const;
+
+export type DriveSourceAccount =
+  (typeof DRIVE_SOURCE_ACCOUNT)[keyof typeof DRIVE_SOURCE_ACCOUNT];
+
+export const PAYMENT_CYCLE_KIND = {
+  ADVANCE_OR_REIMBURSEMENT: "ADVANCE_OR_REIMBURSEMENT",
+  SUPPLIER: "SUPPLIER",
+} as const;
+
+export type PaymentCycleKind =
+  (typeof PAYMENT_CYCLE_KIND)[keyof typeof PAYMENT_CYCLE_KIND];
+
 export interface RequestPayment {
   id: string;
   payment_request_id: string;
   paid_at: string;
   operation_reference: string | null;
   amount_paid: number;
+  drive_route_model?: DrivePaymentRouteModel | null;
+  drive_routing_date?: string | null;
+  drive_route_cutover_at?: string | null;
+  readonly drive_route_classified_at?: string | null;
   bank_commission: number | null;
   notes: string | null;
+  source_account_key?: DriveSourceAccount | null;
+  payment_cycle_kind?: PaymentCycleKind | null;
+  payment_cycle_date?: string | null;
+  desired_parent_logical_key?: string | null;
+  drive_projection_version?: number | null;
   drive_projection_status?: DrivePaymentProjectionStatus | null;
   drive_projection_phase?: string | null;
   drive_projection_error_code?: string | null;
@@ -1166,6 +1201,7 @@ export interface PaymentQueueFilters {
   status?: typeof REQUEST_STATUS.APPROVED | typeof REQUEST_STATUS.PAID;
   pending_proof?: boolean;
   pending_details?: boolean;
+  pending_data?: boolean;
   search?: string;
   work_scope?: GiofWorkScope;
   assignee_id?: string;
@@ -1255,22 +1291,16 @@ export interface BulkMarkPaidResponse {
 
 export interface CompletePaymentDetailsInput {
   proof?: File;
+  source_account_key?: DriveSourceAccount;
   operation_reference?: string;
   bank_commission?: number;
   notes?: string;
   proof_document_id?: string;
 }
 
-export interface AttachPaymentProofAllocationInput {
-  request_allocation_id: string;
-  amount_covered?: number;
-}
-
 export interface AttachPaymentProofInput {
   proof?: File;
   proof_document_id?: string;
-  request_allocation_ids?: string[];
-  allocations?: AttachPaymentProofAllocationInput[];
   operation_reference?: string;
   paid_at?: string;
   amount_paid?: number;
@@ -1334,6 +1364,7 @@ export interface RenditionsInboxFilters {
 
 export interface RegisterPaymentInput {
   paid_at: string;
+  source_account_key: DriveSourceAccount;
   operation_reference: string;
   amount_paid: number;
   bank_commission?: number;

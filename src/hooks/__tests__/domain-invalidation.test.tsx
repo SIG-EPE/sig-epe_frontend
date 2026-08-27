@@ -6,6 +6,7 @@ import { useCreateRequest, useRegisterPayment, useRequestRenditionReportActions 
 import { useCreateUser } from "@/hooks/use-users";
 import { api } from "@/lib/api-client";
 import { invalidateCatalogDomain, invalidateRequestDomain, invalidateUserDomain } from "@/lib/query-tags";
+import { GIOF_WORK_POOL, type GiofWorkLease } from "@/types/giof-work";
 
 vi.mock("@/lib/api-client", () => ({
   api: {
@@ -33,6 +34,20 @@ vi.mock("@/lib/query-tags", async (importActual) => {
 beforeEach(() => {
   vi.clearAllMocks();
 });
+
+function makePaymentLease(requestId: string): GiofWorkLease {
+  return {
+    pool: GIOF_WORK_POOL.PAYMENT,
+    requestId,
+    ownerId: "giof-user-1",
+    token: "payment-lease-token",
+    assignmentVersion: "7",
+    heartbeatAt: "2026-08-27T10:00:00.000Z",
+    expiresAt: "2099-12-31T23:59:59.999Z",
+    ttlSeconds: 300,
+    heartbeatIntervalSeconds: 60,
+  };
+}
 
 describe("domain mutation invalidation", () => {
   it("invalida el dominio de usuarios al crear usuarios", async () => {
@@ -69,18 +84,34 @@ describe("domain mutation invalidation", () => {
     const { result: createRequest } = renderHook(() => useCreateRequest());
     const { result: registerPayment } = renderHook(() => useRegisterPayment());
     const { result: renditionActions } = renderHook(() => useRequestRenditionReportActions());
+    const paymentLease = makePaymentLease("request-1");
 
     await act(async () => {
       await createRequest.current.createRequest({ concept: "Solicitud" } as never);
-      await registerPayment.current.registerPayment("request-1", {
-        paid_at: "2026-06-18T10:00:00.000Z",
-        operation_reference: "OP-1",
-        amount_paid: 10,
-        proof: new File(["proof"], "proof.pdf", { type: "application/pdf" }),
-      });
+      await registerPayment.current.registerPayment(
+        "request-1",
+        {
+          paid_at: "2026-06-18T10:00:00.000Z",
+          source_account_key: "BCP_PEN",
+          operation_reference: "OP-1",
+          amount_paid: 10,
+          proof: new File(["proof"], "proof.pdf", { type: "application/pdf" }),
+        },
+        paymentLease,
+      );
       await renditionActions.current.generateReport("request-1");
     });
 
+    expect(api.postForm).toHaveBeenCalledWith(
+      "/requests/request-1/register-payment",
+      expect.any(FormData),
+      {
+        headers: {
+          "x-giof-assignment-version": paymentLease.assignmentVersion,
+          "x-giof-lease-token": paymentLease.token,
+        },
+      },
+    );
     expect(invalidateRequestDomain).toHaveBeenCalledTimes(3);
   });
 });

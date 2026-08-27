@@ -1261,12 +1261,16 @@ export function hasPaymentDetailsPending(request: Pick<PaymentRequest, "payment_
   return Boolean(request.payment_details_pending ?? request.details_pending ?? request.payment?.details_pending);
 }
 
+export function hasPaymentSourcePending(request: Pick<PaymentRequest, "payment">): boolean {
+  return request.payment?.drive_projection_status === "SOURCE_REQUIRED";
+}
+
 export function getPaymentId(request: Pick<PaymentRequest, "payment_id" | "payment">): string | null {
   return request.payment_id ?? request.payment?.id ?? null;
 }
 
 export function getRequestPaymentProofEntries(payment?: Pick<RequestPayment, "proof_entries" | "proofs"> | null): RequestPaymentProof[] {
-  return payment?.proof_entries ?? payment?.proofs ?? [];
+  return (payment?.proof_entries ?? payment?.proofs ?? []).slice(0, 1);
 }
 
 export function getPaymentProofDocumentName(document?: Pick<RequestDocument, "original_filename" | "safe_filename"> | null): string {
@@ -1302,13 +1306,15 @@ export function getPaymentProofDisplayItems(
     });
   }
 
-  getRequestPaymentProofEntries(payment).forEach((proof, index) => {
+  if (items.length > 0) return items;
+
+  getRequestPaymentProofEntries(payment).forEach((proof) => {
     const key = getPaymentProofDocumentKey(proof.proof_document_id, proof.proof_document) ?? proof.id;
     if (seen.has(key)) return;
     seen.add(key);
     items.push({
       id: key,
-      label: items.length === 0 && index === 0 ? "Constancia de pago" : "Constancia de pago adicional",
+      label: "Constancia de pago",
       document: proof.proof_document ?? null,
       documentId: proof.proof_document_id,
       filename: getPaymentProofDocumentName(proof.proof_document),
@@ -1352,7 +1358,7 @@ export function getAllocationProofCoverageLabel(
   allocation: Pick<RequestAllocation, "id">,
   payment: Pick<RequestPayment, "proof_entries" | "proofs"> | null | undefined,
 ): string {
-  return hasAllocationPaymentProofCoverage(payment, allocation.id) ? "Con comprobante asociado" : "Sin comprobante específico";
+  return hasAllocationPaymentProofCoverage(payment, allocation.id) ? "Cubierta por la constancia global" : "Constancia pendiente";
 }
 
 export function getAllocationFinanciersLabel(financiers?: RequestAllocationFundingSource[] | null): string {
@@ -1366,6 +1372,7 @@ export function getPaymentPendingBadges(request: Pick<PaymentRequest, "payment_p
   const badges: string[] = [];
   if (hasPaymentProofPending(request)) badges.push("Falta constancia");
   if (hasPaymentDetailsPending(request)) badges.push("Falta referencia");
+  if (hasPaymentSourcePending(request)) badges.push("Falta cuenta de origen");
   return badges;
 }
 
@@ -1705,6 +1712,31 @@ export function getRequestMonthLabel(month?: number | null): string {
 
 export function getApiErrorMessages(error: unknown): string[] {
   if (error instanceof ApiRequestError) {
+    const code = typeof error.body.code === "string" ? error.body.code : null;
+    const paymentErrorMessages: Record<string, string> = {
+      PAYMENT_ALREADY_EXISTS: "Esta solicitud ya tiene un pago registrado. Actualiza la cola para ver su estado.",
+      PAYMENT_PROOF_ALREADY_EXISTS: "Esta solicitud ya tiene una constancia global de pago.",
+      PAYMENT_AMOUNT_MISMATCH: "El pago debe cubrir el importe completo de la solicitud; no se admiten pagos parciales.",
+      REQUEST_STATE_CONFLICT: "La solicitud cambió de estado. Actualiza la cola antes de continuar.",
+      GIOF_WORK_ASSIGNMENT_REQUIRED: "Este pago debe estar asignado a tu usuario antes de procesarlo.",
+      GIOF_WORK_LEASE_REQUIRED: "Tu sesión de trabajo venció o no corresponde. Vuelve a abrir el pago desde la cola.",
+      GIOF_ASSIGNMENT_VERSION_REQUIRED: "Falta el contexto vigente de asignación. Actualiza la cola y vuelve a Procesar el pago.",
+      GIOF_ASSIGNMENT_VERSION_STALE: "La asignación cambió mientras procesabas el pago. Actualiza la cola y vuelve a adquirir la sesión.",
+      GIOF_LEASE_TOKEN_REQUIRED: "Falta la sesión operativa del pago. Cierra esta ventana y vuelve a Procesar desde la cola.",
+      GIOF_LEASE_EXPIRED: "La sesión operativa venció. Actualiza la cola y vuelve a Procesar el pago.",
+      GIOF_LEASE_FOREIGN: "La sesión del pago pertenece a otra persona o a otro proceso. Actualiza la cola antes de continuar.",
+      GIOF_NOT_ASSIGNED_OWNER: "El pago ya no está asignado a tu usuario. Actualiza la cola.",
+      GIOF_OPERATION_FORBIDDEN: "Tu usuario ya no puede ejecutar este pago. Actualiza la cola o solicita una nueva asignación.",
+      GIOF_LIFECYCLE_CONFLICT: "El pago ya no está disponible para edición. Actualiza la cola para ver su estado.",
+      PAYMENT_PAID_AT_IN_FUTURE: "La fecha efectiva del pago supera el máximo permitido por la política vigente. Revisa la fecha y hora de pago.",
+      PAYMENT_ROUTE_POLICY_UNAVAILABLE: "El registro de pagos está temporalmente cerrado porque la política de destino no está disponible. No reintentes hasta que Operaciones confirme la configuración.",
+      PAYMENT_BULK_DAILY_UNAVAILABLE: "El pago masivo no está disponible con destinos diarios. Registra cada pago individualmente con su cuenta de origen y constancia.",
+    };
+    if (code && paymentErrorMessages[code]) return [paymentErrorMessages[code]];
+    if (error.status === 403) return ["No tienes permiso para realizar esta acción o tu asignación ya no está vigente."];
+    if (error.status === 409 && /(?:request-payments|\/payments(?:\/|$))/i.test(error.body.path ?? "")) {
+      return ["El pago cambió mientras lo procesabas. Actualiza la cola y verifica si ya fue registrado."];
+    }
     const message = error.body.message;
     if (Array.isArray(message)) return message.filter((item): item is string => typeof item === "string").map(mapApiValidationMessage);
     if (typeof message === "string") return [mapApiValidationMessage(message)];
@@ -1817,6 +1849,24 @@ export function getPlanningLineDisplay(line: { line_code?: string | null; resour
 
 export function isRequestReviewRole(roleCode?: string | null): boolean {
   return roleCode === ROLE_CODE.GIOF_GESTOR || roleCode === ROLE_CODE.GIOF_MANAGER;
+}
+
+const GIOF_OPERATIONAL_ERROR_CODE = {
+  ASSIGNMENT_VERSION_REQUIRED: "GIOF_ASSIGNMENT_VERSION_REQUIRED",
+  ASSIGNMENT_VERSION_STALE: "GIOF_ASSIGNMENT_VERSION_STALE",
+  LEASE_TOKEN_REQUIRED: "GIOF_LEASE_TOKEN_REQUIRED",
+  LEASE_EXPIRED: "GIOF_LEASE_EXPIRED",
+  LEASE_FOREIGN: "GIOF_LEASE_FOREIGN",
+  NOT_ASSIGNED_OWNER: "GIOF_NOT_ASSIGNED_OWNER",
+  OPERATION_FORBIDDEN: "GIOF_OPERATION_FORBIDDEN",
+  LIFECYCLE_CONFLICT: "GIOF_LIFECYCLE_CONFLICT",
+} as const;
+
+export function isGiofOperationalContextError(error: unknown): boolean {
+  if (!(error instanceof ApiRequestError)) return false;
+  if (error.status === 409) return true;
+  const code = typeof error.body.code === "string" ? error.body.code : "";
+  return Object.values(GIOF_OPERATIONAL_ERROR_CODE).some((candidate) => candidate === code);
 }
 
 export function isRequesterRole(roleCode?: string | null): boolean {

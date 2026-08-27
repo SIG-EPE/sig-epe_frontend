@@ -8,7 +8,8 @@ import { cachedQuery, QUERY_CACHE_TTL_MS, stableSerialize } from "@/lib/query-ca
 import { QUERY_TAGS, invalidateRequestDomain } from "@/lib/query-tags";
 import { useAuthStore } from "@/stores/auth-store";
 import { REQUEST_DOCUMENT_CATEGORY } from "@/types/requests";
-import type { GiofWorkScope } from "@/types/giof-work";
+import { GIOF_WORK_POOL, type GiofWorkLease, type GiofWorkScope } from "@/types/giof-work";
+import { isGiofLeaseCurrent } from "@/lib/giof-work-lease-session";
 import type {
   AttachPaymentProofInput,
   BudgetPreviewInput,
@@ -117,6 +118,7 @@ export function getPaymentQueuePath(filters?: PaymentQueueFilters): string {
   appendIfPresent(params, "status", filters?.status);
   appendIfPresent(params, "pending_proof", filters?.pending_proof);
   appendIfPresent(params, "pending_details", filters?.pending_details);
+  appendIfPresent(params, "pending_data", filters?.pending_data);
   appendIfPresent(params, "search", filters?.search);
   appendIfPresent(params, "work_scope", filters?.work_scope);
   appendIfPresent(params, "assignee_id", filters?.assignee_id);
@@ -342,12 +344,13 @@ export function useRegisterPayment() {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<Error | null>(null);
 
-  const registerPayment = async (requestId: string, input: RegisterPaymentInput): Promise<RegisterPaymentResponse> => {
+  const registerPayment = async (requestId: string, input: RegisterPaymentInput, operationalContext?: GiofWorkLease): Promise<RegisterPaymentResponse> => {
     setIsLoading(true);
     setError(null);
     try {
       const formData = new FormData();
       formData.append("paid_at", input.paid_at);
+      formData.append("source_account_key", input.source_account_key);
       formData.append("operation_reference", input.operation_reference);
       formData.append("amount_paid", String(input.amount_paid));
       if (input.bank_commission !== undefined) {
@@ -357,7 +360,19 @@ export function useRegisterPayment() {
         formData.append("notes", input.notes.trim());
       }
       formData.append("proof", input.proof);
-      const result = await api.postForm<RegisterPaymentResponse>(`/requests/${requestId}/register-payment`, formData);
+      if (!operationalContext || !isGiofLeaseCurrent(operationalContext, {
+        requestId,
+        pool: GIOF_WORK_POOL.PAYMENT,
+        assignmentVersion: operationalContext.assignmentVersion,
+      })) {
+        throw new Error("La sesión de pago no está vigente. Cierra esta ventana y vuelve a Procesar desde la cola.");
+      }
+      const result = await api.postForm<RegisterPaymentResponse>(`/requests/${requestId}/register-payment`, formData, {
+        headers: {
+          "x-giof-assignment-version": operationalContext.assignmentVersion,
+          "x-giof-lease-token": operationalContext.token,
+        },
+      });
       invalidateRequestCaches();
       return result;
     } catch (e) {
@@ -426,6 +441,7 @@ export function useCompletePaymentDetails() {
     try {
       const formData = new FormData();
       if (input.proof) formData.append("proof", input.proof);
+      if (input.source_account_key) formData.append("source_account_key", input.source_account_key);
       if (input.operation_reference?.trim()) formData.append("operation_reference", input.operation_reference.trim());
       if (input.bank_commission !== undefined) formData.append("bank_commission", String(input.bank_commission));
       if (input.notes?.trim()) formData.append("notes", input.notes.trim());

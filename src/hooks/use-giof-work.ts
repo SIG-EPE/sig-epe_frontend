@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 
 import { api, ApiRequestError } from "@/lib/api-client";
-import { bindGiofLeaseCredential, unbindGiofLeaseCredential } from "@/lib/giof-work-lease-session";
+import { bindGiofLeaseCredential, isGiofLeaseCurrent, unbindGiofLeaseCredential } from "@/lib/giof-work-lease-session";
 import { invalidateRequestDomain } from "@/lib/query-tags";
 import type {
   GiofAssigneeCandidate,
@@ -128,7 +128,8 @@ export function useGiofWorkLeaseSet() {
 
   async function acquire(requestId: string, work: GiofWorkMetadata, aliases: readonly string[] = []): Promise<GiofWorkLease> {
     const existing = leasesRef.current.find((candidate) => candidate.requestId === requestId);
-    if (existing) return existing;
+    if (isGiofLeaseCurrent(existing, { requestId, pool: work.pool, assignmentVersion: work.assignmentVersion })) return existing;
+    if (existing) await release(requestId);
     if (!work.canAcquire) throw new Error("Este trabajo está disponible únicamente en modo de solo lectura.");
     try {
       const nextLease = await api.post<GiofWorkLease>("/giof-work/leases/acquire", {

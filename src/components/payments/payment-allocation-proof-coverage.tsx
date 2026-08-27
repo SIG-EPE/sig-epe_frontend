@@ -1,11 +1,7 @@
 import { Badge } from "@/components/ui/badge";
 import {
   formatRequestCurrency,
-  formatRequestDate,
   getAllocationFinanciersLabel,
-  getAllocationProofCoverageLabel,
-  getPaymentProofEntriesForAllocation,
-  getRequestDocumentDisplayName,
   getPlanningLineDisplay,
 } from "@/lib/requests";
 import type { PaymentRequest } from "@/types/requests";
@@ -36,13 +32,17 @@ export function PaymentAllocationProofCoverage({ request, compact = false, mode 
       <p className="text-xs text-muted-foreground">
         {isRegisterGeneralProofMode
           ? "La constancia que adjuntes en este pago cubrirá todas las líneas POA de la solicitud."
-          : "El pago es de la solicitud completa; estos comprobantes respaldan líneas POA específicas."}
+          : "La constancia de pago es global y respalda todas las líneas POA activas de la solicitud."}
       </p>
       <div className="space-y-2">
         {allocations.map((allocation, index) => {
           const line = allocation.planning_line ?? allocation.budgetPlanningLine;
-          const proofs = isRegisterGeneralProofMode ? [] : getPaymentProofEntriesForAllocation(request.payment, allocation.id);
-          const coverageLabel = isRegisterGeneralProofMode ? "Se cubrirá con la constancia general" : getAllocationProofCoverageLabel(allocation, request.payment);
+          const hasConstancia = Boolean(request.payment?.proof_document_id);
+          const coverageLabel = isRegisterGeneralProofMode && !hasConstancia
+            ? "Se cubrirá con la constancia global"
+            : hasConstancia
+              ? "Cubierta por la constancia global"
+              : "Constancia pendiente";
           const financiers = allocation.financiers ?? allocation.funding_sources;
 
           return (
@@ -55,20 +55,9 @@ export function PaymentAllocationProofCoverage({ request, compact = false, mode 
                 </div>
                 <div className="flex flex-wrap items-center gap-2 sm:justify-end">
                   <span className="text-sm font-semibold">{formatRequestCurrency(allocation.amount, request.currency)}</span>
-                  <Badge variant={isRegisterGeneralProofMode || proofs.length > 0 ? "default" : "outline"}>{coverageLabel}</Badge>
+                  <Badge variant={isRegisterGeneralProofMode || hasConstancia ? "default" : "outline"}>{coverageLabel}</Badge>
                 </div>
               </div>
-              {proofs.length > 0 && !compact && (
-                <div className="mt-2 space-y-1 text-xs text-muted-foreground">
-                  {proofs.map((proof) => (
-                    <p key={proof.id}>
-                      {proof.proof_document ? getRequestDocumentDisplayName(proof.proof_document) : proof.proof_document_id}
-                      {proof.operation_reference ? ` · Ref. ${proof.operation_reference}` : ""}
-                      {proof.paid_at ? ` · ${formatRequestDate(proof.paid_at)}` : ""}
-                    </p>
-                  ))}
-                </div>
-              )}
             </div>
           );
         })}
