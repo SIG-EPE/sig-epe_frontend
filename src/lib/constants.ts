@@ -62,57 +62,129 @@ export interface MenuItem {
 }
 
 /** Menu items available per role */
-const GIOF_MENU_ITEMS: MenuItem[] = [
-  { label: "Mis Solicitudes", href: `${ROUTES.REQUESTS}?scope=mine`, icon: "FileText" },
-  { label: "Bandeja de Revisión", href: `${ROUTES.REQUESTS}?scope=review`, icon: "ClipboardList" },
+const GIOF_OPERATIONAL_MENU_ITEMS: MenuItem[] = [
+  {
+    label: "Mis Solicitudes",
+    href: `${ROUTES.REQUESTS}?scope=mine`,
+    icon: "FileText",
+  },
+  {
+    label: "Bandeja de Revisión",
+    href: `${ROUTES.REQUESTS}?scope=review`,
+    icon: "ClipboardList",
+  },
   { label: "Cola de Pagos", href: ROUTES.PAYMENTS, icon: "CreditCard" },
   { label: "Bandeja de Rendiciones", href: ROUTES.RENDITIONS, icon: "Receipt" },
-  { label: "Dashboard GIOF", href: ROUTES.DASHBOARD_GIOF, icon: "LayoutDashboard" },
-  { label: "Presupuesto", href: ROUTES.BUDGET, icon: "BarChart3" },
-  { label: "Programado vs Ejecutado", href: ROUTES.BUDGET_ORG_UNIT_EXECUTION, icon: "BarChart3" },
-  { label: "Años Fiscales", href: ROUTES.BUDGET_FISCAL_YEARS, icon: "CalendarDays" },
-  { label: "Plan Operativo (POA)", href: ROUTES.BUDGET_PLANNING, icon: "ListChecks" },
-  { label: "Aportes de Socios", href: ROUTES.BUDGET_ALLOCATIONS, icon: "Handshake" },
-  { label: "Reportes", href: ROUTES.REPORTS, icon: "BarChart3" },
-  { label: "Catálogos", href: ROUTES.CATALOGS, icon: "BookOpen" },
-  { label: "Usuarios", href: ROUTES.ADMIN_USERS, icon: "Users" },
+  {
+    label: "Dashboard GIOF",
+    href: ROUTES.DASHBOARD_GIOF,
+    icon: "LayoutDashboard",
+  },
   { label: "Centro de ayuda", href: ROUTES.HELP, icon: "CircleHelp" },
 ];
 
 const GIOF_MANAGER_MENU_ITEMS: MenuItem[] = [
-  ...GIOF_MENU_ITEMS.slice(0, -1),
-  { label: "Gestión de Drive", href: ROUTES.MANAGEMENT, icon: "FolderTree" },
-  GIOF_MENU_ITEMS[GIOF_MENU_ITEMS.length - 1],
+  ...GIOF_OPERATIONAL_MENU_ITEMS.slice(0, 3),
+  { label: "Jerarquía de Drive", href: ROUTES.MANAGEMENT, icon: "FolderTree" },
+  ...GIOF_OPERATIONAL_MENU_ITEMS.slice(3, 5),
+  { label: "Presupuesto", href: ROUTES.BUDGET, icon: "BarChart3" },
+  {
+    label: "Programado vs Ejecutado",
+    href: ROUTES.BUDGET_ORG_UNIT_EXECUTION,
+    icon: "BarChart3",
+  },
+  {
+    label: "Años Fiscales",
+    href: ROUTES.BUDGET_FISCAL_YEARS,
+    icon: "CalendarDays",
+  },
+  {
+    label: "Plan Operativo (POA)",
+    href: ROUTES.BUDGET_PLANNING,
+    icon: "ListChecks",
+  },
+  {
+    label: "Aportes de Socios",
+    href: ROUTES.BUDGET_ALLOCATIONS,
+    icon: "Handshake",
+  },
+  { label: "Reportes", href: ROUTES.REPORTS, icon: "BarChart3" },
+  { label: "Catálogos", href: ROUTES.CATALOGS, icon: "BookOpen" },
+  { label: "Usuarios", href: ROUTES.ADMIN_USERS, icon: "Users" },
+  GIOF_OPERATIONAL_MENU_ITEMS[GIOF_OPERATIONAL_MENU_ITEMS.length - 1],
 ];
 
 export const ROLE_MENU_MAP: Record<RoleCode, MenuItem[]> = {
   SOLICITANTE_EPE: [
-    { label: "Mis Solicitudes", href: `${ROUTES.REQUESTS}?scope=mine`, icon: "FileText" },
+    {
+      label: "Mis Solicitudes",
+      href: `${ROUTES.REQUESTS}?scope=mine`,
+      icon: "FileText",
+    },
     { label: "Centro de ayuda", href: ROUTES.HELP, icon: "CircleHelp" },
   ],
-  GIOF_GESTOR: GIOF_MENU_ITEMS,
+  GIOF_GESTOR: GIOF_OPERATIONAL_MENU_ITEMS,
   GIOF_MANAGER: GIOF_MANAGER_MENU_ITEMS,
   AUDITOR_DIRECCION: [
-    { label: "Mis Solicitudes", href: `${ROUTES.REQUESTS}?scope=mine`, icon: "FileText" },
+    {
+      label: "Mis Solicitudes",
+      href: `${ROUTES.REQUESTS}?scope=mine`,
+      icon: "FileText",
+    },
     { label: "Presupuesto", href: ROUTES.BUDGET, icon: "BarChart3" },
-    { label: "Programado vs Ejecutado", href: ROUTES.BUDGET_ORG_UNIT_EXECUTION, icon: "BarChart3" },
-    { label: "Dashboard GIOF", href: ROUTES.DASHBOARD_GIOF, icon: "LayoutDashboard" },
+    {
+      label: "Programado vs Ejecutado",
+      href: ROUTES.BUDGET_ORG_UNIT_EXECUTION,
+      icon: "BarChart3",
+    },
+    {
+      label: "Dashboard GIOF",
+      href: ROUTES.DASHBOARD_GIOF,
+      icon: "LayoutDashboard",
+    },
     { label: "Reportes", href: ROUTES.REPORTS, icon: "BarChart3" },
-    { label: "Gestión de Drive", href: ROUTES.MANAGEMENT, icon: "FolderTree" },
+    {
+      label: "Operaciones Drive readiness",
+      href: ROUTES.MANAGEMENT,
+      icon: "FolderTree",
+    },
     { label: "Centro de ayuda", href: ROUTES.HELP, icon: "CircleHelp" },
   ],
   ADMIN_SISTEMA: [
-    { label: "Mis Solicitudes", href: `${ROUTES.REQUESTS}?scope=mine`, icon: "FileText" },
-    { label: "Bandeja de Revisión", href: `${ROUTES.REQUESTS}?scope=review`, icon: "ClipboardList" },
-    { label: "Bandeja de Rendiciones", href: ROUTES.RENDITIONS, icon: "Receipt" },
-    { label: "Dashboard GIOF", href: ROUTES.DASHBOARD_GIOF, icon: "LayoutDashboard" },
+    {
+      label: "Mis Solicitudes",
+      href: `${ROUTES.REQUESTS}?scope=mine`,
+      icon: "FileText",
+    },
+    {
+      label: "Bandeja de Rendiciones",
+      href: ROUTES.RENDITIONS,
+      icon: "Receipt",
+    },
+    {
+      label: "Dashboard GIOF",
+      href: ROUTES.DASHBOARD_GIOF,
+      icon: "LayoutDashboard",
+    },
     { label: "Presupuesto", href: ROUTES.BUDGET, icon: "BarChart3" },
-    { label: "Programado vs Ejecutado", href: ROUTES.BUDGET_ORG_UNIT_EXECUTION, icon: "BarChart3" },
+    {
+      label: "Programado vs Ejecutado",
+      href: ROUTES.BUDGET_ORG_UNIT_EXECUTION,
+      icon: "BarChart3",
+    },
     { label: "Reportes", href: ROUTES.REPORTS, icon: "BarChart3" },
     { label: "Catálogos", href: ROUTES.CATALOGS, icon: "BookOpen" },
     { label: "Usuarios", href: ROUTES.ADMIN_USERS, icon: "Users" },
-    { label: "Log de auditoría", href: ROUTES.ADMIN_AUDIT_LOGS, icon: "ClipboardList" },
-    { label: "Gestión de Drive", href: ROUTES.MANAGEMENT, icon: "FolderTree" },
+    {
+      label: "Operaciones Drive readiness",
+      href: ROUTES.MANAGEMENT,
+      icon: "FolderTree",
+    },
+    {
+      label: "Log de auditoría",
+      href: ROUTES.ADMIN_AUDIT_LOGS,
+      icon: "ClipboardList",
+    },
     { label: "Centro de ayuda", href: ROUTES.HELP, icon: "CircleHelp" },
   ],
 };

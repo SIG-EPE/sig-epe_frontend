@@ -8,7 +8,7 @@ import { ROLE_CODE } from "@/lib/constants";
 
 const mocks = vi.hoisted(() => ({
   actorId: "actor-1",
-  actorRole: "GIOF_GESTOR",
+  actorRole: "GIOF_MANAGER",
   assignRole: vi.fn(),
   membershipLoading: false,
   setGiofMembership: vi.fn(),
@@ -89,7 +89,7 @@ async function openActions() {
 describe("UserRow GIOF membership", () => {
   beforeEach(() => {
     mocks.actorId = "actor-1";
-    mocks.actorRole = ROLE_CODE.GIOF_GESTOR;
+    mocks.actorRole = ROLE_CODE.GIOF_MANAGER;
     mocks.membershipLoading = false;
     mocks.assignRole.mockReset();
     mocks.setGiofMembership.mockReset();
@@ -152,6 +152,17 @@ describe("UserRow GIOF membership", () => {
     expect(screen.getByRole("menuitem", { name: "Editar" })).toBeEnabled();
     expect(screen.getByText("Asignar rol")).toBeInTheDocument();
     expect(screen.getByRole("menuitem", { name: "Desactivar" })).toBeEnabled();
+  });
+
+  it("does not expose user administration actions to GIOF_GESTOR", async () => {
+    mocks.actorRole = ROLE_CODE.GIOF_GESTOR;
+    renderRow(buildUser(ROLE_CODE.SOLICITANTE_EPE));
+
+    await openActions();
+
+    expect(screen.queryByText(/(?:Conceder|Retirar) rol GIOF/)).not.toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: "Editar" })).toHaveAttribute("data-disabled");
+    expect(screen.getByRole("menuitem", { name: "Asignar rol" })).toHaveAttribute("data-disabled");
   });
 
   it("requires confirmation, calls the dedicated mutation and refreshes after success", async () => {

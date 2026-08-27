@@ -8,6 +8,7 @@ import {
   type CreateUserPayload,
 } from "@/hooks/use-users";
 import { ROLE_CODE } from "@/lib/constants";
+import { ROLE_CAPABILITY, hasRoleCapability } from "@/lib/role-capabilities";
 import {
   EPE_DNI_LENGTH,
   optionalUserEmailSchema,
@@ -52,6 +53,7 @@ export function CreateUserModal({ onClose, onSuccess }: CreateUserModalProps) {
   const { createUser, isLoading } = useCreateUser();
   const actorRoleCode = useAuthStore((state) => state.user?.role?.code);
   const availableRoles = ROLES.filter((role) => {
+    if (!hasRoleCapability(actorRoleCode, ROLE_CAPABILITY.USER_ADMIN)) return false;
     if (actorRoleCode === ROLE_CODE.ADMIN_SISTEMA) return true;
     if (!actorRoleCode || !(actorRoleCode in ROLE_LEVEL)) return false;
 

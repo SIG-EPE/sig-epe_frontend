@@ -26,6 +26,7 @@ import {
 import { useAuthStore } from "@/stores/auth-store";
 import { MONTHLY_EXECUTION_DETAIL_SOURCE, type MonthlyEntry, type MonthlyExecutionDetail } from "@/types/budget";
 import { ManualExecutionModal } from "./manual-execution-modal";
+import { ROLE_CAPABILITY, hasRoleCapability } from "@/lib/role-capabilities";
 
 const MONTHS_ES = [
   "Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio",
@@ -98,7 +99,7 @@ export function MonthlyTable({
   const { upsert, isLoading: isSaving } = useUpsertMonthly();
   const { data: manualExecutions, refetch: refetchManualExecutions } = useManualExecutions(lineId ?? "");
   const { user } = useAuthStore();
-  const isGiofGestor = user?.role?.code === "GIOF_GESTOR" || user?.role?.code === "GIOF";
+  const isGiofGestor = hasRoleCapability(user?.role?.code, ROLE_CAPABILITY.BUDGET_ADMIN);
 
   const totalPlanned = Object.values(plannedAmounts).reduce((s, v) => s + Number(v), 0);
   const totalExecuted = entries.reduce((sum, entry) => sum + Number(entry.executed_amount), 0);

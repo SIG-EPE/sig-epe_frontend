@@ -1,120 +1,34 @@
 import { describe, expect, it } from "vitest";
-
 import { canAccessRoute } from "@/lib/auth/route-access";
-import { ROLE_CODE } from "@/lib/constants";
+import { ROLE_CODE, type RoleCode } from "@/lib/constants";
+
+const ROUTE_MATRIX: ReadonlyArray<{ path: string; allowed: readonly RoleCode[] }> = [
+  { path: "/requests", allowed: Object.values(ROLE_CODE) },
+  { path: "/payments", allowed: [ROLE_CODE.GIOF_GESTOR, ROLE_CODE.GIOF_MANAGER] },
+  { path: "/renditions", allowed: [ROLE_CODE.GIOF_GESTOR, ROLE_CODE.GIOF_MANAGER] },
+  { path: "/dashboard/giof", allowed: [ROLE_CODE.GIOF_GESTOR, ROLE_CODE.GIOF_MANAGER, ROLE_CODE.AUDITOR_DIRECCION, ROLE_CODE.ADMIN_SISTEMA] },
+  { path: "/management", allowed: [ROLE_CODE.GIOF_MANAGER, ROLE_CODE.AUDITOR_DIRECCION, ROLE_CODE.ADMIN_SISTEMA] },
+  { path: "/budget", allowed: [ROLE_CODE.GIOF_MANAGER, ROLE_CODE.AUDITOR_DIRECCION, ROLE_CODE.ADMIN_SISTEMA] },
+  { path: "/budget/org-unit-execution", allowed: [ROLE_CODE.GIOF_MANAGER, ROLE_CODE.AUDITOR_DIRECCION, ROLE_CODE.ADMIN_SISTEMA] },
+  { path: "/budget/fiscal-years", allowed: [ROLE_CODE.GIOF_MANAGER, ROLE_CODE.ADMIN_SISTEMA] },
+  { path: "/budget/planning", allowed: [ROLE_CODE.GIOF_MANAGER, ROLE_CODE.ADMIN_SISTEMA] },
+  { path: "/budget/allocations", allowed: [ROLE_CODE.GIOF_MANAGER, ROLE_CODE.ADMIN_SISTEMA] },
+  { path: "/reports", allowed: [ROLE_CODE.GIOF_MANAGER, ROLE_CODE.AUDITOR_DIRECCION, ROLE_CODE.ADMIN_SISTEMA] },
+  { path: "/catalogs", allowed: [ROLE_CODE.GIOF_MANAGER, ROLE_CODE.ADMIN_SISTEMA] },
+  { path: "/admin/users", allowed: [ROLE_CODE.GIOF_MANAGER, ROLE_CODE.ADMIN_SISTEMA] },
+  { path: "/help", allowed: Object.values(ROLE_CODE) },
+];
 
 describe("route access matrix", () => {
-  it("protects payment and budget management for GIOF, while catalogs align GIOF/Admin", () => {
-    expect(canAccessRoute("/payments", ROLE_CODE.GIOF_GESTOR).isAllowed).toBe(true);
-    expect(canAccessRoute("/payments", ROLE_CODE.GIOF_MANAGER).isAllowed).toBe(true);
-    expect(canAccessRoute("/payments", ROLE_CODE.ADMIN_SISTEMA).isAllowed).toBe(false);
-    expect(canAccessRoute("/budget/planning", ROLE_CODE.GIOF_GESTOR).isAllowed).toBe(true);
-    expect(canAccessRoute("/catalogs/funding-sources", ROLE_CODE.GIOF_GESTOR).isAllowed).toBe(true);
-
-    expect(canAccessRoute("/payments", ROLE_CODE.SOLICITANTE_EPE).isAllowed).toBe(false);
-    expect(canAccessRoute("/budget/planning", ROLE_CODE.ADMIN_SISTEMA).isAllowed).toBe(false);
-    expect(canAccessRoute("/catalogs", ROLE_CODE.ADMIN_SISTEMA).isAllowed).toBe(true);
-    expect(canAccessRoute("/catalogs/poa-hierarchy", ROLE_CODE.ADMIN_SISTEMA).isAllowed).toBe(true);
-    expect(canAccessRoute("/catalogs/poa-hierarchy", ROLE_CODE.AUDITOR_DIRECCION).isAllowed).toBe(false);
-  });
-
-  it("allows restricted dashboards to GIOF, Admin and Auditor while denying Solicitante", () => {
-    expect(canAccessRoute("/budget", ROLE_CODE.GIOF_GESTOR).isAllowed).toBe(true);
-    expect(canAccessRoute("/budget", ROLE_CODE.ADMIN_SISTEMA).isAllowed).toBe(true);
-    expect(canAccessRoute("/budget", ROLE_CODE.AUDITOR_DIRECCION).isAllowed).toBe(true);
-    expect(canAccessRoute("/budget", ROLE_CODE.SOLICITANTE_EPE).isAllowed).toBe(false);
-
-    expect(canAccessRoute("/budget/org-unit-execution", ROLE_CODE.GIOF_GESTOR).isAllowed).toBe(true);
-    expect(canAccessRoute("/budget/org-unit-execution", ROLE_CODE.ADMIN_SISTEMA).isAllowed).toBe(true);
-    expect(canAccessRoute("/budget/org-unit-execution", ROLE_CODE.AUDITOR_DIRECCION).isAllowed).toBe(true);
-    expect(canAccessRoute("/budget/org-unit-execution", ROLE_CODE.SOLICITANTE_EPE).isAllowed).toBe(false);
-
-    expect(canAccessRoute("/dashboard/giof", ROLE_CODE.GIOF_GESTOR).isAllowed).toBe(true);
-    expect(canAccessRoute("/dashboard/giof", ROLE_CODE.ADMIN_SISTEMA).isAllowed).toBe(true);
-    expect(canAccessRoute("/dashboard/giof", ROLE_CODE.AUDITOR_DIRECCION).isAllowed).toBe(true);
-    expect(canAccessRoute("/dashboard/giof", ROLE_CODE.SOLICITANTE_EPE).isAllowed).toBe(false);
-  });
-
-  it("allows request creation to every authenticated role", () => {
-    expect(canAccessRoute("/requests/new", ROLE_CODE.SOLICITANTE_EPE).isAllowed).toBe(true);
-    expect(canAccessRoute("/requests/new", ROLE_CODE.GIOF_GESTOR).isAllowed).toBe(true);
-    expect(canAccessRoute("/requests/new", ROLE_CODE.AUDITOR_DIRECCION).isAllowed).toBe(true);
-    expect(canAccessRoute("/requests/new", ROLE_CODE.ADMIN_SISTEMA).isAllowed).toBe(true);
-  });
-
-  it("allows request detail routes to every authenticated role", () => {
-    expect(canAccessRoute("/requests/request-1", ROLE_CODE.SOLICITANTE_EPE).isAllowed).toBe(true);
-    expect(canAccessRoute("/requests/request-1", ROLE_CODE.GIOF_GESTOR).isAllowed).toBe(true);
-    expect(canAccessRoute("/requests/request-1", ROLE_CODE.ADMIN_SISTEMA).isAllowed).toBe(true);
-    expect(canAccessRoute("/requests/request-1", ROLE_CODE.AUDITOR_DIRECCION).isAllowed).toBe(true);
-  });
-
-  it("allows request edit routes to every authenticated role", () => {
-    expect(canAccessRoute("/requests/request-1/edit", ROLE_CODE.SOLICITANTE_EPE).isAllowed).toBe(true);
-    expect(canAccessRoute("/requests/request-1/edit", ROLE_CODE.GIOF_GESTOR).isAllowed).toBe(true);
-    expect(canAccessRoute("/requests/request-1/edit", ROLE_CODE.AUDITOR_DIRECCION).isAllowed).toBe(true);
-    expect(canAccessRoute("/requests/request-1/edit", ROLE_CODE.ADMIN_SISTEMA).isAllowed).toBe(true);
-  });
-
-  it("keeps admin sub-routes role-specific", () => {
-    expect(canAccessRoute("/admin/users", ROLE_CODE.GIOF_GESTOR).isAllowed).toBe(true);
-    expect(canAccessRoute("/admin/config", ROLE_CODE.GIOF_GESTOR).isAllowed).toBe(false);
-    expect(canAccessRoute("/admin/audit-logs", ROLE_CODE.ADMIN_SISTEMA).isAllowed).toBe(true);
-  });
-
-  it("allows shared authenticated pages and restricts Drive management", () => {
-    expect(canAccessRoute("/dashboard", ROLE_CODE.SOLICITANTE_EPE).isAllowed).toBe(true);
-    expect(canAccessRoute("/profile", ROLE_CODE.AUDITOR_DIRECCION).isAllowed).toBe(true);
-
-    expect(canAccessRoute("/management", ROLE_CODE.GIOF_MANAGER).isAllowed).toBe(true);
-    expect(canAccessRoute("/management", ROLE_CODE.AUDITOR_DIRECCION).isAllowed).toBe(true);
-    expect(canAccessRoute("/management", ROLE_CODE.ADMIN_SISTEMA).isAllowed).toBe(true);
-    expect(canAccessRoute("/management", ROLE_CODE.GIOF_GESTOR).isAllowed).toBe(false);
-    expect(canAccessRoute("/management/nodes/root", ROLE_CODE.GIOF_GESTOR).isAllowed).toBe(false);
-    expect(canAccessRoute("/management", ROLE_CODE.SOLICITANTE_EPE).isAllowed).toBe(false);
-  });
-
-  it("allows the help center to every authenticated role and no missing role", () => {
-    expect(canAccessRoute("/help", ROLE_CODE.SOLICITANTE_EPE).isAllowed).toBe(true);
-    expect(canAccessRoute("/help", ROLE_CODE.GIOF_GESTOR).isAllowed).toBe(true);
-    expect(canAccessRoute("/help", ROLE_CODE.AUDITOR_DIRECCION).isAllowed).toBe(true);
-    expect(canAccessRoute("/help", ROLE_CODE.ADMIN_SISTEMA).isAllowed).toBe(true);
-    expect(canAccessRoute("/help", null).isAllowed).toBe(false);
-  });
-
-  it("keeps assignment help readable under the shared help policy without granting operational queues", () => {
-    const assignmentHelpRoles = [
-      ROLE_CODE.SOLICITANTE_EPE,
-      ROLE_CODE.GIOF_GESTOR,
-      ROLE_CODE.GIOF_MANAGER,
-      ROLE_CODE.AUDITOR_DIRECCION,
-      ROLE_CODE.ADMIN_SISTEMA,
-    ];
-
-    for (const role of assignmentHelpRoles) {
-      expect(canAccessRoute("/help/giof-assignment", role).isAllowed).toBe(true);
+  it.each(ROUTE_MATRIX)("enforces the named capability for $path", ({ path, allowed }) => {
+    for (const role of Object.values(ROLE_CODE)) {
+      expect(canAccessRoute(path, role).isAllowed, `${role} at ${path}`).toBe(allowed.includes(role));
     }
-    expect(canAccessRoute("/help/giof-assignment", null).isAllowed).toBe(false);
-
-    expect(canAccessRoute("/payments", ROLE_CODE.SOLICITANTE_EPE).isAllowed).toBe(false);
-    expect(canAccessRoute("/payments", ROLE_CODE.ADMIN_SISTEMA).isAllowed).toBe(false);
-    expect(canAccessRoute("/payments", ROLE_CODE.AUDITOR_DIRECCION).isAllowed).toBe(false);
-    expect(canAccessRoute("/renditions", ROLE_CODE.SOLICITANTE_EPE).isAllowed).toBe(false);
-    expect(canAccessRoute("/renditions", ROLE_CODE.AUDITOR_DIRECCION).isAllowed).toBe(false);
   });
 
-  it("keeps report and accountability pages limited to review/admin roles", () => {
-    expect(canAccessRoute("/reports", ROLE_CODE.GIOF_GESTOR).isAllowed).toBe(true);
-    expect(canAccessRoute("/reports", ROLE_CODE.AUDITOR_DIRECCION).isAllowed).toBe(true);
-    expect(canAccessRoute("/accountability", ROLE_CODE.ADMIN_SISTEMA).isAllowed).toBe(true);
-    expect(canAccessRoute("/reports", ROLE_CODE.SOLICITANTE_EPE).isAllowed).toBe(false);
-    expect(canAccessRoute("/accountability", ROLE_CODE.AUDITOR_DIRECCION).isAllowed).toBe(false);
-  });
-
-  it("denies authenticated app routes that do not have an explicit rule", () => {
-    const decision = canAccessRoute("/unknown-feature", ROLE_CODE.ADMIN_SISTEMA);
-
-    expect(decision.isProtectedRoute).toBe(true);
-    expect(decision.isAllowed).toBe(false);
+  it("denies URL tampering", () => {
+    expect(canAccessRoute("/unknown-feature", ROLE_CODE.ADMIN_SISTEMA).isAllowed).toBe(false);
+    expect(canAccessRoute("/budget/planning/secret", ROLE_CODE.GIOF_GESTOR).isAllowed).toBe(false);
+    expect(canAccessRoute("/management/nodes/root", ROLE_CODE.GIOF_GESTOR).isAllowed).toBe(false);
   });
 });

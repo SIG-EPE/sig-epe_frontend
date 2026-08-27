@@ -31,7 +31,7 @@ vi.mock("sonner", () => ({
 }));
 
 vi.mock("@/stores/auth-store", () => ({
-  useAuthStore: () => ({ user: { role: { code: "GIOF_GESTOR" } } }),
+  useAuthStore: () => ({ user: { role: { code: "GIOF_MANAGER" } } }),
 }));
 
 vi.mock("@/components/budget/detail/manual-execution-modal", () => ({

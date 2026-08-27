@@ -26,6 +26,7 @@ import {
 } from "@/components/ui/select";
 import { Plus } from "lucide-react";
 import { getFiscalYearSelectLabel } from "@/lib/ui-labels";
+import { ROLE_CAPABILITY, hasRoleCapability } from "@/lib/role-capabilities";
 
 // -------------------------------------------------------
 // AllocationPage component
@@ -59,7 +60,7 @@ export function AllocationPage() {
   }, [user, router]);
 
   const roleCode = user?.role?.code;
-  const canCreate = roleCode === "GIOF_GESTOR" || roleCode === "ADMIN_SISTEMA";
+  const canCreate = hasRoleCapability(roleCode, ROLE_CAPABILITY.BUDGET_ADMIN);
 
   return (
     <div className="space-y-6">

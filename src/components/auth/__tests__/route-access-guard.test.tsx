@@ -75,39 +75,22 @@ describe("RouteAccessGuard", () => {
     expect(mockReplace).not.toHaveBeenCalled();
   });
 
-  it("blocks GIOF Gestor from Drive management", async () => {
-    mockUsePathname.mockReturnValue("/management");
-    setAuthState(authUser(ROLE_CODE.GIOF_GESTOR));
+  it.each([ROLE_CODE.AUDITOR_DIRECCION, ROLE_CODE.ADMIN_SISTEMA])(
+    "allows readiness issuer role %s to open management",
+    (role) => {
+      mockUsePathname.mockReturnValue("/management");
+      setAuthState(authUser(role));
 
-    render(
-      <RouteAccessGuard>
-        <div>Drive management</div>
-      </RouteAccessGuard>,
-    );
+      render(
+        <RouteAccessGuard>
+          <div>readiness operations</div>
+        </RouteAccessGuard>,
+      );
 
-    expect(screen.queryByText("Drive management")).not.toBeInTheDocument();
-    await waitFor(() => {
-      expect(mockReplace).toHaveBeenCalledWith("/requests");
-    });
-  });
-
-  it.each([
-    ROLE_CODE.GIOF_MANAGER,
-    ROLE_CODE.AUDITOR_DIRECCION,
-    ROLE_CODE.ADMIN_SISTEMA,
-  ])("allows %s to open Drive management", (role) => {
-    mockUsePathname.mockReturnValue("/management");
-    setAuthState(authUser(role));
-
-    render(
-      <RouteAccessGuard>
-        <div>Drive management</div>
-      </RouteAccessGuard>,
-    );
-
-    expect(screen.getByText("Drive management")).toBeInTheDocument();
-    expect(mockReplace).not.toHaveBeenCalled();
-  });
+      expect(screen.getByText("readiness operations")).toBeInTheDocument();
+      expect(mockReplace).not.toHaveBeenCalled();
+    },
+  );
 
   it("does not apply role matrix to authenticated unlisted routes", () => {
     mockUsePathname.mockReturnValue("/profile");

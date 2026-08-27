@@ -34,6 +34,7 @@ import { Badge } from "@/components/ui/badge";
 import { ROUTES } from "@/lib/constants";
 import { isUnclassifiedLabel } from "@/lib/poa-territory-selection";
 import { getPoaTerritorySelectionFeatures } from "@/config/poa-territory-selection";
+import { ROLE_CAPABILITY, hasRoleCapability } from "@/lib/role-capabilities";
 
 interface PlanningLinesTableProps {
   lines: PlanningLine[];
@@ -59,7 +60,7 @@ function formatDate(dateStr: string): string {
 export function PlanningLinesTable({ lines, isLoading, onRefetch }: PlanningLinesTableProps) {
   const router = useRouter();
   const { user } = useAuthStore();
-  const isGiof = user?.role?.code === "GIOF" || user?.role?.code === "GIOF_GESTOR";
+  const isGiof = hasRoleCapability(user?.role?.code, ROLE_CAPABILITY.BUDGET_ADMIN);
   const userId = user?.id;
   const territoryFeatures = getPoaTerritorySelectionFeatures();
 
