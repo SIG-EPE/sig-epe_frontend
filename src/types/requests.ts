@@ -506,6 +506,17 @@ export interface RequestPaymentUserSummary {
   email?: string | null;
 }
 
+export const DRIVE_PAYMENT_PROJECTION_STATUS = {
+  SOURCE_REQUIRED: "SOURCE_REQUIRED",
+  PENDING: "PENDING",
+  PROCESSING: "PROCESSING",
+  SUCCEEDED: "SUCCEEDED",
+  FAILED: "FAILED",
+} as const;
+
+export type DrivePaymentProjectionStatus =
+  (typeof DRIVE_PAYMENT_PROJECTION_STATUS)[keyof typeof DRIVE_PAYMENT_PROJECTION_STATUS];
+
 export interface RequestPayment {
   id: string;
   payment_request_id: string;
@@ -514,6 +525,13 @@ export interface RequestPayment {
   amount_paid: number;
   bank_commission: number | null;
   notes: string | null;
+  drive_projection_status?: DrivePaymentProjectionStatus | null;
+  drive_projection_phase?: string | null;
+  drive_projection_error_code?: string | null;
+  drive_projection_error_message?: string | null;
+  drive_projection_reconciliation_required?: boolean;
+  drive_projection_frozen?: boolean;
+  drive_projection_completed_at?: string | null;
   proof_document_id: string | null;
   proofDocument?: RequestDocument | null;
   proof_pending?: boolean;

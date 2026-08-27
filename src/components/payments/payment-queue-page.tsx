@@ -9,6 +9,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { useDebouncedValue } from "@/hooks/use-debounced-value";
 import { usePaymentQueue, useRetryRexanActivation } from "@/hooks/use-requests";
+import { useDriveProjectionPolling } from "@/hooks/use-drive-projection-polling";
 import { PAYMENT_QUEUE_STATUS, formatRequestCurrency, getApiErrorMessage, getPaymentRexanStatusLabel, getRequestPayableAmount } from "@/lib/requests";
 import { cn } from "@/lib/utils";
 import { REQUEST_STATUS, type PaymentRequest, type RegisterPaymentResponse } from "@/types/requests";
@@ -76,6 +77,18 @@ export function PaymentQueuePage() {
   const pendingTotal = pendingQueue.requests.reduce((total, request) => total + getRequestPayableAmount(request), 0);
   const selectedRequests = displayedRequests.filter((request) => selectedRequestIds.includes(request.id));
   const selectedTotal = selectedRequests.reduce((total, request) => total + getRequestPayableAmount(request), 0);
+  const hasVisiblePendingDriveProjection = displayedRequests.some((request) =>
+    request.payment?.drive_projection_status === "PENDING"
+    || request.payment?.drive_projection_status === "PROCESSING",
+  );
+
+  useDriveProjectionPolling({
+    hasPendingProjection: hasVisiblePendingDriveProjection,
+    refetch: () =>
+      status === PAYMENT_QUEUE_TAB.PENDING_DATA
+        ? Promise.all([pendingDataProofQueue.refetch({ force: true }), pendingDataDetailsQueue.refetch({ force: true })])
+        : activeQueue.refetch({ force: true }),
+  });
 
   async function openRegisterPayment(request: PaymentRequest) {
     if (request.giof_work) {

@@ -5,6 +5,7 @@ import { Fragment } from "react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { DriveProjectionState } from "@/components/requests/drive-projection-state";
 import { StatusBadge } from "@/components/requests/status-badge";
 import { PaymentAllocationProofCoverage } from "@/components/payments/payment-allocation-proof-coverage";
 import { QueueTableRowsSkeleton } from "@/components/performance/route-skeletons";
@@ -143,6 +144,9 @@ export function PaymentQueueTable({ requests, isLoading, onRegisterPayment, sele
                     {getPaymentRexanStatusLabel(request.rexan_activation.status)}
                   </Badge>
                 )}
+                {request.payment?.drive_projection_status ? (
+                  <DriveProjectionState payment={request.payment} compact />
+                ) : null}
                 {getPaymentPendingBadges(request).length > 0 && (
                   <div className="flex flex-wrap gap-1">
                     {getPaymentPendingBadges(request).map((label) => <Badge key={label} variant="outline">{label}</Badge>)}
