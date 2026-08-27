@@ -1,8 +1,9 @@
 import { ApiRequestError } from "@/lib/api-client";
-import { formatBusinessDate, formatBusinessDateTime, getBusinessDateString, getDateOnlyUtcTime } from "@/lib/business-timezone";
+import { formatBusinessDate, formatBusinessDateTime, getBusinessDateString, getDateOnlyUtcTime, parseBusinessDateTimeLocalToIso } from "@/lib/business-timezone";
 import { ROLE_CODE, ROUTES } from "@/lib/constants";
 import { isGiofOperationalRole } from "@/lib/role-capabilities";
 import { getSafeDocumentUrl } from "@/lib/safe-url";
+import { GIOF_WORK_SCOPE, type GiofWorkScope } from "@/types/giof-work";
 import type { Route } from "next";
 import {
   ACCOUNT_TYPE,
@@ -10,6 +11,7 @@ import {
   BANK_NAME_BY_CODE,
   BENEFICIARY_DOCUMENT_TYPE,
   REQUEST_STATUS,
+  REQUEST_CURRENCY,
   REQUEST_DOCUMENT_CATEGORY,
   REQUEST_DOCUMENT_SCOPE_TYPE,
   REQUEST_DOCUMENT_STORAGE_PROVIDER,
@@ -51,6 +53,8 @@ import {
   type RequestDocumentUploadQueueItem,
   type RequestStatus,
   type RequestType,
+  type RequestCurrency,
+  type RequestReviewFilters,
   type RexanOutcome,
   type RenditionNextStepGuidance,
 } from "@/types/requests";
@@ -60,6 +64,253 @@ export const ACTIVE_REVIEW_STATUSES = [
   REQUEST_STATUS.IN_VALIDATION,
   REQUEST_STATUS.OBSERVED,
 ] as const;
+
+export const REQUEST_REVIEW_QUERY_KEY = {
+  PAGE: "page",
+  LIMIT: "limit",
+  WORK_SCOPE: "work_scope",
+  ASSIGNEE_ID: "assignee_id",
+  REQUEST_TYPE: "request_type",
+  STATUS: "status",
+  SUBMITTED_FROM: "submitted_from",
+  SUBMITTED_TO: "submitted_to",
+  ASSIGNED_FROM: "assigned_from",
+  ASSIGNED_TO: "assigned_to",
+  CURRENCY: "currency",
+  AMOUNT_MIN: "amount_min",
+  AMOUNT_MAX: "amount_max",
+  ORG_UNIT_ID: "org_unit_id",
+  SEARCH: "search",
+} as const;
+
+export type RequestReviewQueryKey =
+  (typeof REQUEST_REVIEW_QUERY_KEY)[keyof typeof REQUEST_REVIEW_QUERY_KEY];
+
+const REQUEST_REVIEW_QUERY_KEYS = Object.values(REQUEST_REVIEW_QUERY_KEY);
+const REQUEST_REVIEW_DEFAULT_PAGE = 1;
+const REQUEST_REVIEW_DEFAULT_LIMIT = 20;
+const REQUEST_REVIEW_LOCAL_DATE_TIME_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/;
+const REQUEST_REVIEW_MONEY_PATTERN = /^\d+\.\d{2}$/;
+const REQUEST_REVIEW_UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export interface RequestReviewUrlParseResult {
+  filters: RequestReviewFilters;
+  invalidKeys: RequestReviewQueryKey[];
+  unknownKeys: string[];
+}
+
+function isRequestReviewLocalDateTime(value: string): boolean {
+  if (!REQUEST_REVIEW_LOCAL_DATE_TIME_PATTERN.test(value)) return false;
+  try {
+    parseBusinessDateTimeLocalToIso(value);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function isRequestReviewUuid(value: string): boolean {
+  return REQUEST_REVIEW_UUID_PATTERN.test(value);
+}
+
+function addInvalidKey(
+  invalidKeys: RequestReviewQueryKey[],
+  key: RequestReviewQueryKey,
+): void {
+  if (!invalidKeys.includes(key)) invalidKeys.push(key);
+}
+
+function getUniqueReviewParam(
+  params: URLSearchParams,
+  key: RequestReviewQueryKey,
+  invalidKeys: RequestReviewQueryKey[],
+): string | undefined {
+  const values = params.getAll(key);
+  if (values.length > 1) {
+    addInvalidKey(invalidKeys, key);
+    return undefined;
+  }
+  return values[0];
+}
+
+function parsePositiveInteger(
+  rawValue: string | undefined,
+  maximum?: number,
+): number | undefined {
+  if (!rawValue || !/^\d+$/.test(rawValue)) return undefined;
+  const value = Number(rawValue);
+  if (!Number.isSafeInteger(value) || value < 1 || (maximum && value > maximum)) {
+    return undefined;
+  }
+  return value;
+}
+
+function markIntervalInvalid(
+  invalidKeys: RequestReviewQueryKey[],
+  fromKey: RequestReviewQueryKey,
+  toKey: RequestReviewQueryKey,
+): void {
+  addInvalidKey(invalidKeys, fromKey);
+  addInvalidKey(invalidKeys, toKey);
+}
+
+export function parseRequestReviewUrl(params: URLSearchParams): RequestReviewUrlParseResult {
+  const invalidKeys: RequestReviewQueryKey[] = [];
+  const knownKeys = new Set<string>(REQUEST_REVIEW_QUERY_KEYS);
+  const unknownKeys = [...new Set([...params.keys()].filter((key) => !knownKeys.has(key)))];
+  const raw = Object.fromEntries(REQUEST_REVIEW_QUERY_KEYS.map((key) => [
+    key,
+    getUniqueReviewParam(params, key, invalidKeys),
+  ])) as Record<RequestReviewQueryKey, string | undefined>;
+  const filters: RequestReviewFilters = {
+    page: REQUEST_REVIEW_DEFAULT_PAGE,
+    limit: REQUEST_REVIEW_DEFAULT_LIMIT,
+  };
+
+  if (raw.page !== undefined) {
+    const page = parsePositiveInteger(raw.page);
+    if (page) filters.page = page;
+    else addInvalidKey(invalidKeys, REQUEST_REVIEW_QUERY_KEY.PAGE);
+  }
+  if (raw.limit !== undefined) {
+    const limit = parsePositiveInteger(raw.limit, 100);
+    if (limit) filters.limit = limit;
+    else addInvalidKey(invalidKeys, REQUEST_REVIEW_QUERY_KEY.LIMIT);
+  }
+
+  if (raw.work_scope !== undefined) {
+    if (Object.values(GIOF_WORK_SCOPE).includes(raw.work_scope as GiofWorkScope)) {
+      filters.work_scope = raw.work_scope as GiofWorkScope;
+    } else addInvalidKey(invalidKeys, REQUEST_REVIEW_QUERY_KEY.WORK_SCOPE);
+  }
+  if (raw.assignee_id !== undefined) {
+    if (isRequestReviewUuid(raw.assignee_id)) filters.assignee_id = raw.assignee_id;
+    else addInvalidKey(invalidKeys, REQUEST_REVIEW_QUERY_KEY.ASSIGNEE_ID);
+  }
+  if (filters.work_scope === GIOF_WORK_SCOPE.ASSIGNEE) {
+    if (!filters.assignee_id) {
+      addInvalidKey(invalidKeys, REQUEST_REVIEW_QUERY_KEY.WORK_SCOPE);
+      addInvalidKey(invalidKeys, REQUEST_REVIEW_QUERY_KEY.ASSIGNEE_ID);
+      delete filters.work_scope;
+    }
+  } else if (filters.assignee_id) {
+    addInvalidKey(invalidKeys, REQUEST_REVIEW_QUERY_KEY.ASSIGNEE_ID);
+    delete filters.assignee_id;
+  }
+
+  if (raw.request_type !== undefined) {
+    if (Object.values(REQUEST_TYPE).includes(raw.request_type as RequestType)) {
+      filters.request_type = raw.request_type as RequestType;
+    } else addInvalidKey(invalidKeys, REQUEST_REVIEW_QUERY_KEY.REQUEST_TYPE);
+  }
+  if (raw.status !== undefined) {
+    if (Object.values(REQUEST_STATUS).includes(raw.status as RequestStatus)) {
+      filters.status = raw.status as RequestStatus;
+    } else addInvalidKey(invalidKeys, REQUEST_REVIEW_QUERY_KEY.STATUS);
+  }
+
+  const intervals = [
+    [REQUEST_REVIEW_QUERY_KEY.SUBMITTED_FROM, REQUEST_REVIEW_QUERY_KEY.SUBMITTED_TO],
+    [REQUEST_REVIEW_QUERY_KEY.ASSIGNED_FROM, REQUEST_REVIEW_QUERY_KEY.ASSIGNED_TO],
+  ] as const;
+  for (const [fromKey, toKey] of intervals) {
+    const from = raw[fromKey];
+    const to = raw[toKey];
+    if (from === undefined && to === undefined) continue;
+    if (
+      from !== undefined
+      && to !== undefined
+      && isRequestReviewLocalDateTime(from)
+      && isRequestReviewLocalDateTime(to)
+      && from < to
+    ) {
+      filters[fromKey] = from;
+      filters[toKey] = to;
+    } else markIntervalInvalid(invalidKeys, fromKey, toKey);
+  }
+
+  if (raw.currency !== undefined) {
+    if (Object.values(REQUEST_CURRENCY).includes(raw.currency as RequestCurrency)) {
+      filters.currency = raw.currency as RequestCurrency;
+    } else addInvalidKey(invalidKeys, REQUEST_REVIEW_QUERY_KEY.CURRENCY);
+  }
+  const amountMinValid = raw.amount_min === undefined
+    || REQUEST_REVIEW_MONEY_PATTERN.test(raw.amount_min);
+  const amountMaxValid = raw.amount_max === undefined
+    || REQUEST_REVIEW_MONEY_PATTERN.test(raw.amount_max);
+  const hasAmount = raw.amount_min !== undefined || raw.amount_max !== undefined;
+  const amountOrderValid = amountMinValid && amountMaxValid && (
+    raw.amount_min === undefined
+    || raw.amount_max === undefined
+    || BigInt(raw.amount_min.replace(".", "")) <= BigInt(raw.amount_max.replace(".", ""))
+  );
+  if (hasAmount && filters.currency && amountMinValid && amountMaxValid && amountOrderValid) {
+    filters.amount_min = raw.amount_min;
+    filters.amount_max = raw.amount_max;
+  } else if (hasAmount) {
+    if (raw.amount_min !== undefined) addInvalidKey(invalidKeys, REQUEST_REVIEW_QUERY_KEY.AMOUNT_MIN);
+    if (raw.amount_max !== undefined) addInvalidKey(invalidKeys, REQUEST_REVIEW_QUERY_KEY.AMOUNT_MAX);
+  }
+
+  if (raw.org_unit_id !== undefined) {
+    if (isRequestReviewUuid(raw.org_unit_id)) filters.org_unit_id = raw.org_unit_id;
+    else addInvalidKey(invalidKeys, REQUEST_REVIEW_QUERY_KEY.ORG_UNIT_ID);
+  }
+  if (raw.search !== undefined) {
+    const search = raw.search.trim();
+    if (search.length <= 200) {
+      if (search) filters.search = search;
+    } else addInvalidKey(invalidKeys, REQUEST_REVIEW_QUERY_KEY.SEARCH);
+  }
+
+  return { filters, invalidKeys, unknownKeys };
+}
+
+function appendRequestReviewFilter(
+  params: URLSearchParams,
+  key: RequestReviewQueryKey,
+  value: string | number | undefined,
+): void {
+  if (value !== undefined && value !== "") params.set(key, String(value));
+}
+
+export function normalizeRequestReviewFilters(filters: RequestReviewFilters): RequestReviewFilters {
+  const rawParams = new URLSearchParams();
+  for (const key of REQUEST_REVIEW_QUERY_KEYS) {
+    appendRequestReviewFilter(rawParams, key, filters[key]);
+  }
+  return parseRequestReviewUrl(rawParams).filters;
+}
+
+export function serializeRequestReviewUrl(filters: RequestReviewFilters): URLSearchParams {
+  const normalized = normalizeRequestReviewFilters(filters);
+  const params = new URLSearchParams();
+  for (const key of REQUEST_REVIEW_QUERY_KEYS) {
+    const value = normalized[key];
+    if (key === REQUEST_REVIEW_QUERY_KEY.PAGE && value === REQUEST_REVIEW_DEFAULT_PAGE) continue;
+    if (key === REQUEST_REVIEW_QUERY_KEY.LIMIT && value === REQUEST_REVIEW_DEFAULT_LIMIT) continue;
+    appendRequestReviewFilter(params, key, value);
+  }
+  return params;
+}
+
+export function updateRequestReviewUrl(
+  current: URLSearchParams,
+  patch: Partial<RequestReviewFilters>,
+): URLSearchParams {
+  const currentFilters = parseRequestReviewUrl(current).filters;
+  const changesFilter = Object.keys(patch).some((key) => key !== "page" && key !== "limit");
+  const nextFilters = normalizeRequestReviewFilters({
+    ...currentFilters,
+    ...patch,
+    page: changesFilter ? REQUEST_REVIEW_DEFAULT_PAGE : (patch.page ?? currentFilters.page),
+  });
+  const next = new URLSearchParams();
+  if (current.get("scope") === "review") next.set("scope", "review");
+  serializeRequestReviewUrl(nextFilters).forEach((value, key) => next.set(key, value));
+  return next;
+}
 
 export const PAYMENT_QUEUE_STATUS = {
   PENDING: REQUEST_STATUS.APPROVED,

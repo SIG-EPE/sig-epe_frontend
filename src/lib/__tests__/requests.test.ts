@@ -77,15 +77,18 @@ import {
   isBudgetPreviewBlocking,
   isRequestStateConflict,
   parseRequestListSort,
+  parseRequestReviewUrl,
   parseRequestReviewQueue,
   parseRequestStatusFilter,
   parseRenditionSortDirection,
   parseRenditionSortField,
   parseRenditionStatusFilter,
   REQUEST_EDIT_STEP,
+  serializeRequestReviewUrl,
+  updateRequestReviewUrl,
 } from "@/lib/requests";
 import { ROLE_CODE } from "@/lib/constants";
-import { ACCOUNT_TYPE, BANK_CODE, BENEFICIARY_DOCUMENT_TYPE, RENDITION_SORT_DIRECTION, RENDITION_SORT_FIELD, RENDITION_STATUS, REQUEST_CURRENCY, REQUEST_DOCUMENT_CATEGORY, REQUEST_DOCUMENT_STORAGE_PROVIDER, REQUEST_DOCUMENT_UPLOAD_STATUS, REQUEST_STATUS, REQUEST_TYPE, REXAN_OUTCOME, type PaymentRequest, type RenditionInboxCounts, type RenditionInboxRow, type RequestBudgetPreview, type RequestDocument, type RequestStatusHistoryItem } from "@/types/requests";
+import { ACCOUNT_TYPE, BANK_CODE, BENEFICIARY_DOCUMENT_TYPE, RENDITION_SORT_DIRECTION, RENDITION_SORT_FIELD, RENDITION_STATUS, REQUEST_CURRENCY, REQUEST_DOCUMENT_CATEGORY, REQUEST_DOCUMENT_STORAGE_PROVIDER, REQUEST_DOCUMENT_UPLOAD_STATUS, REQUEST_STATUS, REQUEST_TYPE, REXAN_OUTCOME, type PaymentRequest, type RenditionInboxCounts, type RenditionInboxRow, type RequestBudgetPreview, type RequestDocument, type RequestReviewResponse, type RequestStatusHistoryItem } from "@/types/requests";
 
 const REQUEST_STATE_CONFLICT_BODY = {
   statusCode: 409,
@@ -95,6 +98,67 @@ const REQUEST_STATE_CONFLICT_BODY = {
   timestamp: "2026-07-26T00:00:00.000Z",
   path: "/requests/request-1",
 };
+
+describe("request review URL contract", () => {
+  it("models exact decimal-string summaries from GET /requests/review", () => {
+    const response: RequestReviewResponse = {
+      requests: [],
+      total: 2,
+      page: 1,
+      limit: 20,
+      summary: {
+        count: 2,
+        requested_amount_by_currency: { PEN: "150.50", USD: "20.00" },
+        status_counts: { SUBMITTED: 2 },
+      },
+    };
+
+    expect(response.summary.requested_amount_by_currency.PEN).toBe("150.50");
+  });
+
+  it("round-trips the exact review allowlist in canonical order without sort", () => {
+    const parsed = parseRequestReviewUrl(new URLSearchParams(
+      "search=SOL-2026&org_unit_id=123e4567-e89b-12d3-a456-426614174000&amount_max=2500.50&amount_min=10.00&currency=PEN&assigned_to=2026-08-27T17%3A00&assigned_from=2026-08-27T08%3A00&submitted_to=2026-08-28T00%3A00&submitted_from=2026-08-27T00%3A00&status=SUBMITTED&request_type=ADVANCE&assignee_id=123e4567-e89b-12d3-a456-426614174001&work_scope=assignee&limit=50&page=3",
+    ));
+
+    expect(parsed.invalidKeys).toEqual([]);
+    expect(serializeRequestReviewUrl(parsed.filters).toString()).toBe(
+      "page=3&limit=50&work_scope=assignee&assignee_id=123e4567-e89b-12d3-a456-426614174001&request_type=ADVANCE&status=SUBMITTED&submitted_from=2026-08-27T00%3A00&submitted_to=2026-08-28T00%3A00&assigned_from=2026-08-27T08%3A00&assigned_to=2026-08-27T17%3A00&currency=PEN&amount_min=10.00&amount_max=2500.50&org_unit_id=123e4567-e89b-12d3-a456-426614174000&search=SOL-2026",
+    );
+    expect(serializeRequestReviewUrl(parsed.filters).has("sort")).toBe(false);
+    expect(serializeRequestReviewUrl(parsed.filters).has("direction")).toBe(false);
+  });
+
+  it("keeps valid state while rejecting duplicate, unknown, malformed, and cross-field-invalid values", () => {
+    const parsed = parseRequestReviewUrl(new URLSearchParams(
+      "page=2&page=3&limit=20&status=SUBMITTED&unknown=x&sort=NEWEST_FIRST&submitted_from=2026-08-27T00%3A00&submitted_to=2026-08-27T00%3A00&assigned_from=2026-02-30T08%3A00&assigned_to=2026-03-01T08%3A00&amount_min=20.00&amount_max=10.00&assignee_id=123e4567-e89b-12d3-a456-426614174001&work_scope=mine",
+    ));
+
+    expect(parsed.filters).toEqual({ page: 1, limit: 20, status: REQUEST_STATUS.SUBMITTED, work_scope: "mine" });
+    expect(parsed.invalidKeys).toEqual(expect.arrayContaining([
+      "page",
+      "submitted_from",
+      "submitted_to",
+      "assigned_from",
+      "assigned_to",
+      "amount_min",
+      "amount_max",
+      "assignee_id",
+    ]));
+    expect(parsed.unknownKeys).toEqual(["unknown", "sort"]);
+  });
+
+  it("omits defaults and resets page when a filter changes", () => {
+    expect(serializeRequestReviewUrl({ page: 1, limit: 20 }).toString()).toBe("");
+
+    const updated = updateRequestReviewUrl(
+      new URLSearchParams("scope=review&page=4&limit=20&status=SUBMITTED&sort=OLDEST_FIRST"),
+      { status: REQUEST_STATUS.OBSERVED },
+    );
+
+    expect(updated.toString()).toBe("scope=review&status=OBSERVED");
+  });
+});
 
 describe("isRequestStateConflict", () => {
   it("detecta solo ApiRequestError 409 con el código estable", () => {

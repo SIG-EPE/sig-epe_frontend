@@ -17,6 +17,10 @@ import { useAuthStore } from "@/stores/auth-store";
 import { REQUEST_DOCUMENT_CATEGORY } from "@/types/requests";
 import { GIOF_WORK_POOL, type GiofWorkLease, type GiofWorkScope } from "@/types/giof-work";
 import { isGiofLeaseCurrent } from "@/lib/giof-work-lease-session";
+import {
+  normalizeRequestReviewFilters,
+  serializeRequestReviewUrl,
+} from "@/lib/requests";
 import type {
   AttachPaymentProofInput,
   BudgetPreviewInput,
@@ -44,6 +48,8 @@ import type {
   RequestPlanningLineScope,
   RequestPlanningLineSearchItem,
   RequestPlanningLineSearchResponse,
+  RequestReviewFilters,
+  RequestReviewResponse,
   RequestDocument,
   RequestReceiptReview,
   RequestRenditionReport,
@@ -89,6 +95,7 @@ export interface RequestResourceState<T> {
 export interface UseRequestsOptions {
   keepPreviousData?: boolean;
   cacheMode?: CachedResourceCacheMode;
+  enabled?: boolean;
 }
 
 function upsertById<T extends { id: string }>(items: T[], item: T): T[] {
@@ -128,6 +135,21 @@ export function getRequestsPath(filters?: RequestsListFilters): string {
   appendIfPresent(params, "assignee_id", filters?.assignee_id);
   const query = params.toString();
   return `/requests${query ? `?${query}` : ""}`;
+}
+
+export function getRequestReviewPath(filters: RequestReviewFilters = {}): string {
+  const query = serializeRequestReviewUrl(filters).toString();
+  return `/requests/review${query ? `?${query}` : ""}`;
+}
+
+export function getRequestReviewQueryKey(
+  filters: RequestReviewFilters = {},
+): readonly [typeof QUERY_TAGS.REQUESTS, "review", RequestReviewFilters] {
+  return [
+    QUERY_TAGS.REQUESTS,
+    "review",
+    normalizeRequestReviewFilters(filters),
+  ];
 }
 
 export function getPaymentQueuePath(filters?: PaymentQueueFilters): string {
@@ -251,6 +273,7 @@ export function useRequests(
   const scopeFilter = filters?.scope;
 
   const resource = useCachedResource<RequestsListResponse>({
+    enabled: options?.enabled,
     key: [QUERY_TAGS.REQUESTS, "list", filters ?? {}],
     ttlMs: QUERY_CACHE_TTL_MS.MUTABLE_LIST,
     tags: [QUERY_TAGS.REQUESTS],
@@ -277,6 +300,40 @@ export function useRequests(
     total: data?.total ?? 0,
     page: data?.page ?? pageFilter ?? 1,
     limit: data?.limit ?? limitFilter ?? 20,
+    isLoading: resource.isLoading,
+    isInitialLoading: resource.isInitialLoading,
+    isRefreshing: resource.isRefreshing,
+    error: resource.error,
+    refetch: resource.refetch,
+  };
+}
+
+export function useRequestReview(
+  filters: RequestReviewFilters = {},
+  options?: UseRequestsOptions,
+) {
+  const normalizedFilters = normalizeRequestReviewFilters(filters);
+  const resource = useCachedResource<RequestReviewResponse>({
+    enabled: options?.enabled,
+    key: getRequestReviewQueryKey(normalizedFilters),
+    ttlMs: QUERY_CACHE_TTL_MS.MUTABLE_LIST,
+    tags: [QUERY_TAGS.REQUESTS],
+    keepPreviousData: options?.keepPreviousData,
+    cacheMode: options?.cacheMode,
+    errorMessage: "Error al cargar solicitudes para revisión",
+    queryFn: (signal) =>
+      api.get<RequestReviewResponse>(getRequestReviewPath(normalizedFilters), {
+        signal,
+      }),
+  });
+  const data = resource.data;
+
+  return {
+    requests: data?.requests ?? [],
+    total: data?.total ?? 0,
+    page: data?.page ?? normalizedFilters.page ?? 1,
+    limit: data?.limit ?? normalizedFilters.limit ?? 20,
+    summary: data?.summary ?? null,
     isLoading: resource.isLoading,
     isInitialLoading: resource.isInitialLoading,
     isRefreshing: resource.isRefreshing,

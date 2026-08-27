@@ -1180,6 +1180,34 @@ export interface RequestsListResponse {
   limit: number;
 }
 
+export interface RequestReviewFilters {
+  page?: number;
+  limit?: number;
+  work_scope?: GiofWorkScope;
+  assignee_id?: string;
+  request_type?: RequestType;
+  status?: RequestStatus;
+  submitted_from?: string;
+  submitted_to?: string;
+  assigned_from?: string;
+  assigned_to?: string;
+  currency?: RequestCurrency;
+  amount_min?: string;
+  amount_max?: string;
+  org_unit_id?: string;
+  search?: string;
+}
+
+export interface RequestReviewSummary {
+  count: number;
+  requested_amount_by_currency: Partial<Record<RequestCurrency, string>>;
+  status_counts: Partial<Record<RequestStatus, number>>;
+}
+
+export interface RequestReviewResponse extends RequestsListResponse {
+  summary: RequestReviewSummary;
+}
+
 export interface RequestsListFilters {
   page?: number;
   limit?: number;

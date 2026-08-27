@@ -3,6 +3,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   getPaymentQueuePath,
+  getRequestReviewPath,
+  getRequestReviewQueryKey,
   getRenditionCountsPath,
   getRenditionsPath,
   getRequestsPath,
@@ -14,6 +16,7 @@ import {
   useHydrateRequestPlanningLines,
   useRegisterPayment,
   useRequest,
+  useRequestReview,
   useRequestDocuments,
   useRequestPlanningLineFacets,
   useRequestPlanningLineSearch,
@@ -38,6 +41,8 @@ import {
   type RequestPlanningLineFacetsResponse,
   type RequestPlanningLineHydrateResponse,
   type RequestPlanningLineSearchResponse,
+  type RequestReviewResponse,
+  type RequestStatus,
 } from "@/types/requests";
 
 vi.mock("@/lib/api-client", () => ({
@@ -341,6 +346,76 @@ function makePaymentLease(requestId: string): GiofWorkLease {
 }
 
 describe("request hook URL helpers", () => {
+  it("builds the additive review endpoint and a stable canonical query key", () => {
+    const filters = {
+      search: " SOL-2026 ",
+      status: REQUEST_STATUS.SUBMITTED,
+      page: 1,
+      limit: 20,
+    } as const;
+
+    expect(getRequestReviewPath(filters)).toBe(
+      "/requests/review?status=SUBMITTED&search=SOL-2026",
+    );
+    expect(getRequestReviewQueryKey(filters)).toEqual(
+      getRequestReviewQueryKey({
+        limit: 20,
+        page: 1,
+        status: REQUEST_STATUS.SUBMITTED,
+        search: "SOL-2026",
+      }),
+    );
+  });
+
+  it("uses only GET /requests/review and aborts a stale filter request", async () => {
+    const first = deferred<RequestReviewResponse>();
+    const secondResponse: RequestReviewResponse = {
+      requests: [],
+      total: 0,
+      page: 1,
+      limit: 20,
+      summary: {
+        count: 0,
+        requested_amount_by_currency: {},
+        status_counts: {},
+      },
+    };
+    vi.mocked(api.get)
+      .mockReturnValueOnce(first.promise)
+      .mockResolvedValueOnce(secondResponse);
+    const { result, rerender } = renderHook(
+      ({ status }: { status: RequestStatus }) => useRequestReview({ status }),
+      { initialProps: { status: REQUEST_STATUS.SUBMITTED as RequestStatus } },
+    );
+
+    await waitFor(() => expect(api.get).toHaveBeenCalledTimes(1));
+    const firstSignal = vi.mocked(api.get).mock.calls[0]?.[1]?.signal;
+    rerender({ status: REQUEST_STATUS.OBSERVED });
+
+    await waitFor(() => expect(api.get).toHaveBeenCalledTimes(2));
+    expect(firstSignal?.aborted).toBe(true);
+    expect(vi.mocked(api.get).mock.calls.map(([path]) => path)).toEqual([
+      "/requests/review?status=SUBMITTED",
+      "/requests/review?status=OBSERVED",
+    ]);
+    await waitFor(() => expect(result.current.summary?.count).toBe(0));
+  });
+
+  it("does not retry the review route after a server filter rejection", async () => {
+    vi.mocked(api.get).mockRejectedValueOnce(new Error("invalid review filter"));
+    const { result } = renderHook(() => useRequestReview({
+      work_scope: "assignee",
+      assignee_id: "123e4567-e89b-12d3-a456-426614174001",
+    }));
+
+    await waitFor(() => expect(result.current.error?.message).toBe("invalid review filter"));
+    expect(api.get).toHaveBeenCalledTimes(1);
+    expect(api.get).toHaveBeenCalledWith(
+      "/requests/review?work_scope=assignee&assignee_id=123e4567-e89b-12d3-a456-426614174001",
+      { signal: expect.any(AbortSignal) },
+    );
+  });
+
   it("serializa filtros multiestado para la bandeja de revisión", () => {
     expect(
       getRequestsPath({
