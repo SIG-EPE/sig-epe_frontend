@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { ChevronDown, ChevronUp, Plus, Search, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { QueueFilterReset } from "@/components/queue-filters/queue-filter-reset";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -24,14 +25,13 @@ import {
   getRequestReviewQueueFilter,
   getRequestReviewQueueForStatus,
   parseRequestListSort,
-  parseRequestReviewUrl,
   parseRequestReviewQueue,
   parseRequestStatusFilter,
   sortRequestsForList,
-  updateRequestReviewUrl,
   type RequestListSort,
   type RequestReviewQueue,
 } from "@/lib/requests";
+import { parseRequestReviewUrl, updateRequestReviewUrl } from "@/lib/queue-filters/review";
 import { cn } from "@/lib/utils";
 import { useAuthStore } from "@/stores/auth-store";
 import { DRIVE_SYNC_STATUS, REQUEST_LIST_DATE_FIELD, REQUEST_STATUS, REQUEST_TYPE, type DriveSyncStatus, type RequestListDateField, type RequestReviewFilters as ReviewFilters, type RequestStatus, type RequestType } from "@/types/requests";
@@ -428,14 +428,10 @@ export function RequestsPage() {
       </div>}
 
       {isReviewInbox && hasUnsupportedReviewUrl && (
-        <div className="space-y-3 rounded-md border border-destructive/40 p-4" role="alert">
-          <p className="text-sm text-destructive">
-            No se pudieron aplicar los filtros de la URL. Restablécelos y vuelve a intentarlo.
-          </p>
-          <Button type="button" size="sm" variant="outline" onClick={resetInvalidReviewFilters}>
-            Restablecer filtros
-          </Button>
-        </div>
+        <QueueFilterReset
+          message="No se pudieron aplicar los filtros de la URL. Restablécelos y vuelve a intentarlo."
+          onReset={resetInvalidReviewFilters}
+        />
       )}
 
       {activeQueueFilter?.unsupportedReason && (

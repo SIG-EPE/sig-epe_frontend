@@ -1,14 +1,20 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { ChevronDown, Search, X } from "lucide-react";
+import { ChevronDown, Search } from "lucide-react";
 
 import { GiofWorkScopeFilter } from "@/components/giof-work/giof-work-controls";
+import { QueueFilterChips } from "@/components/queue-filters/queue-filter-chips";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useOrganizationalUnits } from "@/hooks/use-budget";
 import { GIOF_HELP_CONTEXT } from "@/lib/giof-assignment-help";
+import {
+  QUEUE_FILTER_ALL_VALUE,
+  isCompleteOrderedInterval,
+  isValidMoneyRange,
+} from "@/lib/queue-filters/primitives";
 import {
   REQUEST_REVIEW_SELECTOR_STATUSES,
   REQUEST_STATUS_SURFACE,
@@ -23,9 +29,6 @@ import {
   type RequestStatus,
   type RequestType,
 } from "@/types/requests";
-
-const ALL_FILTER_VALUE = "ALL";
-const MONEY_PATTERN = /^\d+\.\d{2}$/;
 
 const REQUEST_TYPE_LABEL: Readonly<Record<RequestType, string>> = {
   [REQUEST_TYPE.ADVANCE]: "Anticipo",
@@ -58,20 +61,6 @@ interface ActiveFilterChip {
   key: string;
   label: string;
   patch: Partial<ReviewFilters>;
-}
-
-function isValidInterval(from: string, to: string): boolean {
-  return (!from && !to) || (Boolean(from) && Boolean(to) && from < to);
-}
-
-function isValidAmountRange(currency: string, minimum: string, maximum: string): boolean {
-  if (!minimum && !maximum) return true;
-  if (!currency) return false;
-  if ((minimum && !MONEY_PATTERN.test(minimum)) || (maximum && !MONEY_PATTERN.test(maximum))) return false;
-  if (minimum && maximum) {
-    return BigInt(minimum.replace(".", "")) <= BigInt(maximum.replace(".", ""));
-  }
-  return true;
 }
 
 function getActiveChips(filters: ReviewFilters, isManager: boolean): ActiveFilterChip[] {
@@ -143,9 +132,9 @@ export function RequestReviewFilters({ filters, isManager, total, summary, isLoa
 
   function applyAdvancedFilters(): void {
     if (
-      !isValidInterval(submittedFrom, submittedTo)
-      || !isValidInterval(assignedFrom, assignedTo)
-      || !isValidAmountRange(currency, amountMin, amountMax)
+      !isCompleteOrderedInterval(submittedFrom, submittedTo)
+      || !isCompleteOrderedInterval(assignedFrom, assignedTo)
+      || !isValidMoneyRange(currency, amountMin, amountMax)
     ) {
       setValidationError("Revisa los intervalos y montos. Cada intervalo requiere un inicio anterior al fin y los montos requieren moneda y dos decimales.");
       firstAdvancedInputRef.current?.focus();
@@ -204,24 +193,24 @@ export function RequestReviewFilters({ filters, isManager, total, summary, isLoa
         </form>
         <div>
           <label className="sr-only" htmlFor="request-review-type">Tipo de solicitud</label>
-          <Select value={filters.request_type ?? ALL_FILTER_VALUE} onValueChange={(value) => onChange({ request_type: value === ALL_FILTER_VALUE ? undefined : value as RequestType })}>
+          <Select value={filters.request_type ?? QUEUE_FILTER_ALL_VALUE} onValueChange={(value) => onChange({ request_type: value === QUEUE_FILTER_ALL_VALUE ? undefined : value as RequestType })}>
             <SelectTrigger id="request-review-type"><SelectValue placeholder="Tipo de solicitud" /></SelectTrigger>
             <SelectContent>
-              <SelectItem value={ALL_FILTER_VALUE}>Todos los tipos</SelectItem>
+              <SelectItem value={QUEUE_FILTER_ALL_VALUE}>Todos los tipos</SelectItem>
               {Object.entries(REQUEST_TYPE_LABEL).map(([value, label]) => <SelectItem key={value} value={value}>{label}</SelectItem>)}
             </SelectContent>
           </Select>
         </div>
         <div>
           <label className="sr-only" htmlFor="request-review-status">Estado de solicitud</label>
-          <Select value={filters.status ?? ALL_FILTER_VALUE} onValueChange={(value) => onChange({ status: value === ALL_FILTER_VALUE ? undefined : value as RequestStatus })}>
+          <Select value={filters.status ?? QUEUE_FILTER_ALL_VALUE} onValueChange={(value) => onChange({ status: value === QUEUE_FILTER_ALL_VALUE ? undefined : value as RequestStatus })}>
             <SelectTrigger id="request-review-status">
               <SelectValue placeholder="Estado de solicitud">
                 {filters.status ? getReviewStatusLabel(filters.status) : undefined}
               </SelectValue>
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value={ALL_FILTER_VALUE}>Todos los estados</SelectItem>
+              <SelectItem value={QUEUE_FILTER_ALL_VALUE}>Todos los estados</SelectItem>
               {REQUEST_STATUS_OPTIONS.map(({ value, label }) => <SelectItem key={value} value={value}>{label}</SelectItem>)}
             </SelectContent>
           </Select>
@@ -244,13 +233,13 @@ export function RequestReviewFilters({ filters, isManager, total, summary, isLoa
           <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
             <div className="space-y-1">
               <label className="text-sm font-medium" htmlFor="review-currency">Moneda solicitada</label>
-              <Select value={currency || ALL_FILTER_VALUE} onValueChange={(value) => setCurrency(value === ALL_FILTER_VALUE ? "" : value)}><SelectTrigger id="review-currency"><SelectValue /></SelectTrigger><SelectContent><SelectItem value={ALL_FILTER_VALUE}>Sin filtro</SelectItem><SelectItem value={REQUEST_CURRENCY.PEN}>PEN</SelectItem><SelectItem value={REQUEST_CURRENCY.USD}>USD</SelectItem></SelectContent></Select>
+              <Select value={currency || QUEUE_FILTER_ALL_VALUE} onValueChange={(value) => setCurrency(value === QUEUE_FILTER_ALL_VALUE ? "" : value)}><SelectTrigger id="review-currency"><SelectValue /></SelectTrigger><SelectContent><SelectItem value={QUEUE_FILTER_ALL_VALUE}>Sin filtro</SelectItem><SelectItem value={REQUEST_CURRENCY.PEN}>PEN</SelectItem><SelectItem value={REQUEST_CURRENCY.USD}>USD</SelectItem></SelectContent></Select>
             </div>
             <div className="space-y-1"><label className="text-sm font-medium" htmlFor="review-amount-min">Monto mínimo solicitado</label><Input id="review-amount-min" inputMode="decimal" value={amountMin} onChange={(event) => setAmountMin(event.target.value)} placeholder="0.00" /></div>
             <div className="space-y-1"><label className="text-sm font-medium" htmlFor="review-amount-max">Monto máximo solicitado</label><Input id="review-amount-max" inputMode="decimal" value={amountMax} onChange={(event) => setAmountMax(event.target.value)} placeholder="0.00" /></div>
             <div className="space-y-1">
               <label className="text-sm font-medium" htmlFor="review-org-unit">Unidad organizacional</label>
-              <Select value={orgUnitId || ALL_FILTER_VALUE} onValueChange={(value) => setOrgUnitId(value === ALL_FILTER_VALUE ? "" : value)} disabled={orgUnitsLoading || Boolean(orgUnitsError)}><SelectTrigger id="review-org-unit"><SelectValue placeholder={orgUnitsLoading ? "Cargando unidades" : "Todas las unidades"} /></SelectTrigger><SelectContent><SelectItem value={ALL_FILTER_VALUE}>Todas las unidades</SelectItem>{(orgUnits ?? []).filter((unit) => unit.is_active).map((unit) => <SelectItem key={unit.id} value={unit.id}>{unit.code ? `${unit.code} · ` : ""}{unit.name}</SelectItem>)}</SelectContent></Select>
+              <Select value={orgUnitId || QUEUE_FILTER_ALL_VALUE} onValueChange={(value) => setOrgUnitId(value === QUEUE_FILTER_ALL_VALUE ? "" : value)} disabled={orgUnitsLoading || Boolean(orgUnitsError)}><SelectTrigger id="review-org-unit"><SelectValue placeholder={orgUnitsLoading ? "Cargando unidades" : "Todas las unidades"} /></SelectTrigger><SelectContent><SelectItem value={QUEUE_FILTER_ALL_VALUE}>Todas las unidades</SelectItem>{(orgUnits ?? []).filter((unit) => unit.is_active).map((unit) => <SelectItem key={unit.id} value={unit.id}>{unit.code ? `${unit.code} · ` : ""}{unit.name}</SelectItem>)}</SelectContent></Select>
             </div>
           </div>
           {orgUnitsError && <p className="text-sm text-destructive">No se pudieron cargar las unidades autorizadas.</p>}
@@ -259,15 +248,14 @@ export function RequestReviewFilters({ filters, isManager, total, summary, isLoa
         </div>
       )}
 
-      <div className="flex flex-wrap items-center gap-2">
-        {chips.map((chip) => (
-          <span key={chip.key} className="inline-flex items-center gap-1 rounded-full bg-primary/10 px-3 py-1 text-xs font-medium text-primary">
-            {chip.label}
-            <button type="button" className="rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" aria-label={`Quitar filtro ${chip.label}`} onClick={() => onChange(chip.patch)}><X aria-hidden="true" className="size-3" /></button>
-          </span>
-        ))}
-        {chips.length > 0 && <Button type="button" variant="ghost" size="sm" onClick={onClear} aria-label="Limpiar todos los filtros">Limpiar todos</Button>}
-      </div>
+      <QueueFilterChips
+        chips={chips.map((chip) => ({
+          key: chip.key,
+          label: chip.label,
+          onRemove: () => onChange(chip.patch),
+        }))}
+        onClear={onClear}
+      />
 
       <p className="text-sm text-muted-foreground" role="status" aria-live="polite" aria-atomic="true">
         {liveMessage}{summary ? " en la lista y el resumen" : ""}.

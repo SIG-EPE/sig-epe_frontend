@@ -603,14 +603,15 @@ describe("requests helpers", () => {
     }))).not.toBe("Sin fecha límite");
   });
 
-  it("aplica al card due-soon solo el reloj canónico activo entre 0 y 15", () => {
+  it("aplica al card due-soon solo OPEN entre 1 y 15 y separa DUE_TODAY", () => {
     const row = (deadlineState: typeof RENDITION_DEADLINE_STATE[keyof typeof RENDITION_DEADLINE_STATE], days: number | null) => makeRenditionRow({
       deadline_date: "2026-05-20",
       deadline_state: deadlineState,
       calendar_days_to_deadline: days,
     });
 
-    expect(isRenditionDueSoon(row(RENDITION_DEADLINE_STATE.DUE_TODAY, 0))).toBe(true);
+    expect(isRenditionDueSoon(row(RENDITION_DEADLINE_STATE.DUE_TODAY, 0))).toBe(false);
+    expect(isRenditionDueSoon(row(RENDITION_DEADLINE_STATE.OPEN, 1))).toBe(true);
     expect(isRenditionDueSoon(row(RENDITION_DEADLINE_STATE.OPEN, 15))).toBe(true);
     expect(isRenditionDueSoon(row(RENDITION_DEADLINE_STATE.OPEN, 16))).toBe(false);
     expect(isRenditionDueSoon(row(RENDITION_DEADLINE_STATE.OVERDUE, -1))).toBe(false);
