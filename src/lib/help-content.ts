@@ -55,7 +55,7 @@ export const FAQ_ITEMS = [
     id: "estados-solicitud",
     category: FAQ_CATEGORIES.REQUESTS,
     question: "¿Qué significa el estado de mi solicitud?",
-    answer: "Borrador significa que aún la estás preparando. En revisión o En validación significa que la están evaluando. Observada indica que debes corregirla. En gestión de pago significa que fue aprobada para pagar. Pagada confirma el pago. Rechazada, Cerrada o Anulada indican que el proceso terminó.",
+    answer: "Borrador significa que aún la estás preparando. Enviada a revisión o En validación significa que la están evaluando. Observada indica que debes corregirla. Aprobada · pendiente de pago significa que fue aprobada para pagar. Pagada confirma el pago. Rechazada, Cerrada o Anulada indican que el proceso terminó.",
     keywords: ["borrador", "aprobada", "pagada", "rechazada", "anulada"],
   },
   {
@@ -104,7 +104,7 @@ export const FAQ_ITEMS = [
     id: "aprobada-para-pago",
     category: FAQ_CATEGORIES.PAYMENTS_AND_RENDITIONS,
     question: "¿Cómo sé si mi solicitud está lista para el pago?",
-    answer: "Cuando una solicitud está aprobada para pagar, su estado cambia a En gestión de pago. Puedes revisarlo en Mis Solicitudes y en el historial del detalle.",
+    answer: "Cuando una solicitud está aprobada para pagar, su estado cambia a Aprobada · pendiente de pago. Puedes revisarlo en Mis Solicitudes y en el historial del detalle.",
     keywords: ["aprobación", "en gestión de pago", "historial", "estado"],
   },
   {

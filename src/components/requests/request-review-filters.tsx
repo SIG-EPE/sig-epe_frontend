@@ -9,10 +9,14 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useOrganizationalUnits } from "@/hooks/use-budget";
 import { GIOF_HELP_CONTEXT } from "@/lib/giof-assignment-help";
+import {
+  REQUEST_REVIEW_SELECTOR_STATUSES,
+  REQUEST_STATUS_SURFACE,
+  formatRequestStatus,
+} from "@/lib/request-status-vocabulary";
 import { GIOF_WORK_SCOPE } from "@/types/giof-work";
 import {
   REQUEST_CURRENCY,
-  REQUEST_STATUS,
   REQUEST_TYPE,
   type RequestReviewFilters as ReviewFilters,
   type RequestReviewSummary,
@@ -30,17 +34,14 @@ const REQUEST_TYPE_LABEL: Readonly<Record<RequestType, string>> = {
   [REQUEST_TYPE.ADVANCE_SETTLEMENT]: "Rendición",
 };
 
-const REQUEST_STATUS_LABEL: Readonly<Record<RequestStatus, string>> = {
-  [REQUEST_STATUS.DRAFT]: "Borrador",
-  [REQUEST_STATUS.SUBMITTED]: "Enviada",
-  [REQUEST_STATUS.OBSERVED]: "Observada",
-  [REQUEST_STATUS.IN_VALIDATION]: "En validación",
-  [REQUEST_STATUS.APPROVED]: "Aprobada",
-  [REQUEST_STATUS.REJECTED]: "Rechazada",
-  [REQUEST_STATUS.PAID]: "Pagada",
-  [REQUEST_STATUS.CLOSED]: "Cerrada",
-  [REQUEST_STATUS.VOIDED]: "Anulada",
-};
+const REQUEST_STATUS_OPTIONS = REQUEST_REVIEW_SELECTOR_STATUSES.map((value) => ({
+  value,
+  label: formatRequestStatus(value, { surface: REQUEST_STATUS_SURFACE.REVIEW }),
+}));
+
+function getReviewStatusLabel(status: RequestStatus): string {
+  return formatRequestStatus(status, { surface: REQUEST_STATUS_SURFACE.REVIEW });
+}
 
 interface RequestReviewFiltersProps {
   filters: ReviewFilters;
@@ -85,7 +86,7 @@ function getActiveChips(filters: ReviewFilters, isManager: boolean): ActiveFilte
   }
   if (filters.search) chips.push({ key: "search", label: `Búsqueda: ${filters.search}`, patch: { search: undefined } });
   if (filters.request_type) chips.push({ key: "request-type", label: `Tipo: ${REQUEST_TYPE_LABEL[filters.request_type]}`, patch: { request_type: undefined } });
-  if (filters.status) chips.push({ key: "status", label: `Estado: ${REQUEST_STATUS_LABEL[filters.status]}`, patch: { status: undefined } });
+  if (filters.status) chips.push({ key: "status", label: `Estado: ${getReviewStatusLabel(filters.status)}`, patch: { status: undefined } });
   if (filters.submitted_from && filters.submitted_to) chips.push({ key: "submitted", label: `Enviada: ${filters.submitted_from} – ${filters.submitted_to}`, patch: { submitted_from: undefined, submitted_to: undefined } });
   if (filters.assigned_from && filters.assigned_to) chips.push({ key: "assigned", label: `Asignada: ${filters.assigned_from} – ${filters.assigned_to}`, patch: { assigned_from: undefined, assigned_to: undefined } });
   if (filters.currency) {
@@ -214,10 +215,14 @@ export function RequestReviewFilters({ filters, isManager, total, summary, isLoa
         <div>
           <label className="sr-only" htmlFor="request-review-status">Estado de solicitud</label>
           <Select value={filters.status ?? ALL_FILTER_VALUE} onValueChange={(value) => onChange({ status: value === ALL_FILTER_VALUE ? undefined : value as RequestStatus })}>
-            <SelectTrigger id="request-review-status"><SelectValue placeholder="Estado de solicitud" /></SelectTrigger>
+            <SelectTrigger id="request-review-status">
+              <SelectValue placeholder="Estado de solicitud">
+                {filters.status ? getReviewStatusLabel(filters.status) : undefined}
+              </SelectValue>
+            </SelectTrigger>
             <SelectContent>
               <SelectItem value={ALL_FILTER_VALUE}>Todos los estados</SelectItem>
-              {Object.entries(REQUEST_STATUS_LABEL).map(([value, label]) => <SelectItem key={value} value={value}>{label}</SelectItem>)}
+              {REQUEST_STATUS_OPTIONS.map(({ value, label }) => <SelectItem key={value} value={value}>{label}</SelectItem>)}
             </SelectContent>
           </Select>
         </div>
@@ -270,7 +275,7 @@ export function RequestReviewFilters({ filters, isManager, total, summary, isLoa
       {summary && (
         <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground" aria-label="Resumen de resultados filtrados">
           {currencySummary.map(([currencyCode, amount]) => <span key={currencyCode}>{currencyCode} {amount}</span>)}
-          {statusSummary.map(([requestStatus, count]) => <span key={requestStatus}>{REQUEST_STATUS_LABEL[requestStatus]}: {count}</span>)}
+          {statusSummary.map(([requestStatus, count]) => <span key={requestStatus}>{getReviewStatusLabel(requestStatus)}: {count}</span>)}
         </div>
       )}
     </section>

@@ -13,9 +13,9 @@ import { ROUTES } from "@/lib/constants";
 import {
   RENDITION_DIRECTION_OPTIONS,
   RENDITION_SORT_OPTIONS,
-  RENDITION_STATUS_FILTER_OPTIONS,
   RENDITION_SUMMARY_CARDS,
   getApiErrorMessage,
+  getRenditionStatusLabel,
   getRenditionSummaryCount,
   parseRenditionSortDirection,
   parseRenditionSortField,
@@ -29,6 +29,7 @@ import { isGiofManagerRole, isGiofOperationalRole } from "@/lib/role-capabilitie
 import { useAuthStore } from "@/stores/auth-store";
 import { GIOF_WORK_POOL, GIOF_WORK_SCOPE, type GiofWorkScope } from "@/types/giof-work";
 import { GIOF_HELP_CONTEXT } from "@/lib/giof-assignment-help";
+import { REQUEST_RENDITION_SELECTOR_STATUSES } from "@/lib/request-status-vocabulary";
 
 const ALL_RENDITIONS_FILTER = "ALL";
 
@@ -160,13 +161,16 @@ export function RenditionsInboxPage() {
           </div>
           <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
             {isGiofOperational && <GiofWorkScopeFilter value={workScope} assigneeId={workAssigneeId} isManager={isGiofManager} onChange={setWorkScope} helpContext={GIOF_HELP_CONTEXT.REXAN} />}
-            <Select value={status ?? ALL_RENDITIONS_FILTER} onValueChange={(value) => setStatusFilter(value === ALL_RENDITIONS_FILTER ? undefined : (value as RenditionStatus))}>
-              <SelectTrigger data-testid="renditions-status-filter"><SelectValue placeholder="Estado" /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value={ALL_RENDITIONS_FILTER}>Ver todo</SelectItem>
-                {RENDITION_STATUS_FILTER_OPTIONS.map((option) => <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>)}
-              </SelectContent>
-            </Select>
+            <div>
+              <label className="sr-only" htmlFor="renditions-status-filter">Estado derivado de rendición</label>
+              <Select value={status ?? ALL_RENDITIONS_FILTER} onValueChange={(value) => setStatusFilter(value === ALL_RENDITIONS_FILTER ? undefined : (value as RenditionStatus))}>
+                <SelectTrigger id="renditions-status-filter" data-testid="renditions-status-filter"><SelectValue placeholder="Estado" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={ALL_RENDITIONS_FILTER}>Ver todo</SelectItem>
+                  {REQUEST_RENDITION_SELECTOR_STATUSES.map((value) => <SelectItem key={value} value={value}>{getRenditionStatusLabel(value)}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
             <Select value={sort} onValueChange={(value) => setSortOption(value as RenditionSortField)}>
               <SelectTrigger data-testid="renditions-sort-field"><SelectValue placeholder="Ordenar por" /></SelectTrigger>
               <SelectContent>

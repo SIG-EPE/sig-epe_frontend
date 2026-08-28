@@ -8,8 +8,9 @@ import {
   formatRequestDateTime,
   getRequestStatusStepperItems,
 } from "@/lib/requests";
+import { REQUEST_STATUS_SURFACE } from "@/lib/request-status-vocabulary";
 import { cn } from "@/lib/utils";
-import { REQUEST_STATUS, type PaymentRequest, type RequestStatus } from "@/types/requests";
+import { REQUEST_STATUS, REQUEST_TYPE, type PaymentRequest, type RequestStatus } from "@/types/requests";
 
 interface RequestStatusStepperProps {
   request: PaymentRequest;
@@ -30,6 +31,9 @@ function getStepIcon(status: RequestStatus, state: string, isBranch: boolean) {
 }
 
 export function RequestStatusStepper({ request }: RequestStatusStepperProps) {
+  const statusSurface = request.request_type === REQUEST_TYPE.ADVANCE_SETTLEMENT
+    ? REQUEST_STATUS_SURFACE.RENDITION_LIFECYCLE
+    : REQUEST_STATUS_SURFACE.DETAIL;
   const steps = getRequestStatusStepperItems(request.status, request.statusHistory, {
     created_at: request.created_at,
     submitted_at: request.submitted_at,
@@ -37,7 +41,7 @@ export function RequestStatusStepper({ request }: RequestStatusStepperProps) {
     approved_at: request.approved_at,
     rejected_at: request.rejected_at,
     paid_at: request.paid_at,
-  }, request);
+  }, request, statusSurface);
 
   return (
     <Card>

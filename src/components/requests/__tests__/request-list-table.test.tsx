@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 
 import { RequestListTable } from "@/components/requests/request-list-table";
 import { ROLE_CODE } from "@/lib/constants";
+import { REQUEST_STATUS_SURFACE } from "@/lib/request-status-vocabulary";
 import { REQUEST_CURRENCY, REQUEST_DOCUMENT_CATEGORY, REQUEST_DOCUMENT_STORAGE_PROVIDER, REQUEST_DOCUMENT_UPLOAD_STATUS, REQUEST_STATUS, REQUEST_TYPE, type PaymentRequest, type RequestAllocation, type RequestDocument } from "@/types/requests";
 
 function makeRequest(overrides: Partial<PaymentRequest> = {}): PaymentRequest {
@@ -150,10 +151,12 @@ describe("RequestListTable", () => {
       giof_work: { pool: "REQUEST", assigneeId: null, assigneeName: null, assignmentVersion: "0", lease: null, canAssign: false, canAcquire: false, canEdit: false, readOnly: true },
     });
 
-    render(<RequestListTable requests={[active, closed]} isLoading={false} roleCode={ROLE_CODE.GIOF_MANAGER} isGiofManager onToggleAssignment={() => undefined} onToggleAllAssignments={() => undefined} />);
+    render(<RequestListTable requests={[active, closed]} isLoading={false} roleCode={ROLE_CODE.GIOF_MANAGER} isGiofManager onToggleAssignment={() => undefined} onToggleAllAssignments={() => undefined} statusSurface={REQUEST_STATUS_SURFACE.REVIEW} />);
 
     expect(screen.getByRole("checkbox", { name: "Seleccionar SOL-ACTIVE para asignar" })).toBeEnabled();
     expect(screen.getByRole("checkbox", { name: "SOL-CLOSED: no asignable en su estado actual" })).toBeDisabled();
+    expect(screen.getByText("Por revisar")).toBeInTheDocument();
+    expect(screen.getByText("Cerrada")).toBeInTheDocument();
   });
 
   it("muestra acciones de fila solo dentro del menú de tres puntos", async () => {

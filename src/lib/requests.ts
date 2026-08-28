@@ -3,6 +3,17 @@ import { formatBusinessDate, formatBusinessDateTime, getDateOnlyUtcTime, parseBu
 import { ROLE_CODE, ROUTES } from "@/lib/constants";
 import { isGiofOperationalRole } from "@/lib/role-capabilities";
 import { getSafeDocumentUrl } from "@/lib/safe-url";
+import {
+  formatRexanActivationStatus,
+  getPaymentCompletenessLabels,
+} from "@/lib/integration-status-vocabulary";
+import {
+  REQUEST_RENDITION_SELECTOR_STATUSES,
+  REQUEST_STATUS_SURFACE,
+  formatRenditionQueueStatus,
+  formatRequestStatus,
+  type RequestStatusSurface,
+} from "@/lib/request-status-vocabulary";
 import { GIOF_WORK_SCOPE, type GiofWorkScope } from "@/types/giof-work";
 import type { Route } from "next";
 import {
@@ -417,15 +428,15 @@ export const REQUEST_TYPE_LABELS: Record<RequestType, string> = {
 };
 
 export const REQUEST_STATUS_LABELS: Record<RequestStatus, string> = {
-  [REQUEST_STATUS.DRAFT]: "Borrador",
-  [REQUEST_STATUS.SUBMITTED]: "En revisión",
-  [REQUEST_STATUS.OBSERVED]: "Observada",
-  [REQUEST_STATUS.IN_VALIDATION]: "En validación",
-  [REQUEST_STATUS.APPROVED]: "En gestión de pago",
-  [REQUEST_STATUS.REJECTED]: "Rechazada",
-  [REQUEST_STATUS.PAID]: "Pagada",
-  [REQUEST_STATUS.CLOSED]: "Cerrada",
-  [REQUEST_STATUS.VOIDED]: "Anulada",
+  [REQUEST_STATUS.DRAFT]: formatRequestStatus(REQUEST_STATUS.DRAFT, { surface: REQUEST_STATUS_SURFACE.DETAIL }),
+  [REQUEST_STATUS.SUBMITTED]: formatRequestStatus(REQUEST_STATUS.SUBMITTED, { surface: REQUEST_STATUS_SURFACE.DETAIL }),
+  [REQUEST_STATUS.OBSERVED]: formatRequestStatus(REQUEST_STATUS.OBSERVED, { surface: REQUEST_STATUS_SURFACE.DETAIL }),
+  [REQUEST_STATUS.IN_VALIDATION]: formatRequestStatus(REQUEST_STATUS.IN_VALIDATION, { surface: REQUEST_STATUS_SURFACE.DETAIL }),
+  [REQUEST_STATUS.APPROVED]: formatRequestStatus(REQUEST_STATUS.APPROVED, { surface: REQUEST_STATUS_SURFACE.DETAIL }),
+  [REQUEST_STATUS.REJECTED]: formatRequestStatus(REQUEST_STATUS.REJECTED, { surface: REQUEST_STATUS_SURFACE.DETAIL }),
+  [REQUEST_STATUS.PAID]: formatRequestStatus(REQUEST_STATUS.PAID, { surface: REQUEST_STATUS_SURFACE.DETAIL }),
+  [REQUEST_STATUS.CLOSED]: formatRequestStatus(REQUEST_STATUS.CLOSED, { surface: REQUEST_STATUS_SURFACE.DETAIL }),
+  [REQUEST_STATUS.VOIDED]: formatRequestStatus(REQUEST_STATUS.VOIDED, { surface: REQUEST_STATUS_SURFACE.DETAIL }),
 };
 
 export const REXAN_OUTCOME_LABELS: Record<RexanOutcome, string> = {
@@ -441,20 +452,17 @@ export const REXAN_OUTCOME_DESCRIPTIONS: Record<RexanOutcome, string> = {
 };
 
 export const RENDITION_STATUS_LABELS: Record<RenditionStatus, string> = {
-  [RENDITION_STATUS.PENDING]: "Pendiente de rendición",
-  [RENDITION_STATUS.OVERDUE]: "Vencida",
-  [RENDITION_STATUS.IN_REVIEW]: "En revisión",
-  [RENDITION_STATUS.OBSERVED]: "Observada",
-  [RENDITION_STATUS.SETTLED]: "Rendida",
+  [RENDITION_STATUS.PENDING]: formatRenditionQueueStatus(RENDITION_STATUS.PENDING),
+  [RENDITION_STATUS.OVERDUE]: formatRenditionQueueStatus(RENDITION_STATUS.OVERDUE),
+  [RENDITION_STATUS.IN_REVIEW]: formatRenditionQueueStatus(RENDITION_STATUS.IN_REVIEW),
+  [RENDITION_STATUS.OBSERVED]: formatRenditionQueueStatus(RENDITION_STATUS.OBSERVED),
+  [RENDITION_STATUS.SETTLED]: formatRenditionQueueStatus(RENDITION_STATUS.SETTLED),
 };
 
-export const RENDITION_STATUS_FILTER_OPTIONS = [
-  { value: RENDITION_STATUS.PENDING, label: "Pendientes" },
-  { value: RENDITION_STATUS.OVERDUE, label: "Vencidas" },
-  { value: RENDITION_STATUS.IN_REVIEW, label: "En revisión" },
-  { value: RENDITION_STATUS.OBSERVED, label: "Observadas" },
-  { value: RENDITION_STATUS.SETTLED, label: "Rendidas" },
-] as const;
+export const RENDITION_STATUS_FILTER_OPTIONS = REQUEST_RENDITION_SELECTOR_STATUSES.map((value) => ({
+  value,
+  label: RENDITION_STATUS_LABELS[value],
+}));
 
 export const RENDITION_SORT_OPTIONS = [
   { value: RENDITION_SORT_FIELD.LAST_ACTIVITY, label: "Última modificación" },
@@ -484,38 +492,28 @@ export const RENDITION_SUMMARY_CARDS: RenditionSummaryCard[] = [
   { key: "settled", label: "Rendidas", description: "Anticipos cerrados con rendición completa.", status: RENDITION_STATUS.SETTLED },
 ];
 
-const REQUEST_STEPPER_LABELS: Record<RequestStatus, string> = {
-  [REQUEST_STATUS.DRAFT]: "Borrador",
-  [REQUEST_STATUS.SUBMITTED]: "En revisión",
-  [REQUEST_STATUS.OBSERVED]: "Observada",
-  [REQUEST_STATUS.IN_VALIDATION]: "En validación",
-  [REQUEST_STATUS.APPROVED]: "En gestión de pago",
-  [REQUEST_STATUS.REJECTED]: "Rechazada",
-  [REQUEST_STATUS.PAID]: "Pagada",
-  [REQUEST_STATUS.CLOSED]: "Cerrada",
-  [REQUEST_STATUS.VOIDED]: "Anulada",
-};
-
 export function getRequestStatusLabel(status: RequestStatus, context?: RequestStatusLabelContext | null): string {
-  if (context?.request_type === REQUEST_TYPE.ADVANCE_SETTLEMENT && status === REQUEST_STATUS.DRAFT) {
-    return "Rendición en preparación";
-  }
-
-  if (status !== REQUEST_STATUS.APPROVED) return REQUEST_STATUS_LABELS[status] ?? "Estado no reconocido";
-
-  if (
-    context?.request_type === REQUEST_TYPE.ADVANCE_SETTLEMENT
-    && (context.rexan_outcome === REXAN_OUTCOME.EXACT || context.rexan_outcome === REXAN_OUTCOME.DEVOLUCION)
-  ) {
-    return "Rendición aprobada";
-  }
-
-  return "En gestión de pago";
+  const surface = context?.request_type === REQUEST_TYPE.ADVANCE_SETTLEMENT
+    ? REQUEST_STATUS_SURFACE.RENDITION_LIFECYCLE
+    : REQUEST_STATUS_SURFACE.DETAIL;
+  return formatRequestStatus(status, {
+    surface,
+    requestType: context?.request_type,
+    rexanOutcome: context?.rexan_outcome,
+  });
 }
 
-function getRequestStepperLabel(status: RequestStatus, context?: RequestStatusLabelContext | null): string {
-  if (status !== REQUEST_STATUS.APPROVED) return REQUEST_STEPPER_LABELS[status];
-  return getRequestStatusLabel(status, context);
+function getRequestStepperLabel(
+  status: RequestStatus,
+  context?: RequestStatusLabelContext | null,
+  surface?: RequestStatusSurface,
+): string {
+  if (!surface) return getRequestStatusLabel(status, context);
+  return formatRequestStatus(status, {
+    surface,
+    requestType: context?.request_type,
+    rexanOutcome: context?.rexan_outcome,
+  });
 }
 
 const REQUEST_APPROVAL_PATH = [
@@ -538,20 +536,20 @@ export const REQUEST_TYPE_OPTIONS = [
 ] as const;
 
 export const REQUEST_STATUS_FILTER_OPTIONS = [
-  { value: REQUEST_STATUS.DRAFT, label: "Borrador" },
-  { value: REQUEST_STATUS.SUBMITTED, label: "En revisión" },
-  { value: REQUEST_STATUS.OBSERVED, label: "Observada" },
-  { value: REQUEST_STATUS.IN_VALIDATION, label: "En validación" },
-  { value: REQUEST_STATUS.APPROVED, label: "En gestión de pago" },
-  { value: REQUEST_STATUS.PAID, label: "Pagada" },
-  { value: REQUEST_STATUS.REJECTED, label: "Rechazada" },
+  { value: REQUEST_STATUS.DRAFT, label: formatRequestStatus(REQUEST_STATUS.DRAFT, { surface: REQUEST_STATUS_SURFACE.DETAIL }) },
+  { value: REQUEST_STATUS.SUBMITTED, label: formatRequestStatus(REQUEST_STATUS.SUBMITTED, { surface: REQUEST_STATUS_SURFACE.DETAIL }) },
+  { value: REQUEST_STATUS.OBSERVED, label: formatRequestStatus(REQUEST_STATUS.OBSERVED, { surface: REQUEST_STATUS_SURFACE.DETAIL }) },
+  { value: REQUEST_STATUS.IN_VALIDATION, label: formatRequestStatus(REQUEST_STATUS.IN_VALIDATION, { surface: REQUEST_STATUS_SURFACE.DETAIL }) },
+  { value: REQUEST_STATUS.APPROVED, label: formatRequestStatus(REQUEST_STATUS.APPROVED, { surface: REQUEST_STATUS_SURFACE.DETAIL }) },
+  { value: REQUEST_STATUS.PAID, label: formatRequestStatus(REQUEST_STATUS.PAID, { surface: REQUEST_STATUS_SURFACE.DETAIL }) },
+  { value: REQUEST_STATUS.REJECTED, label: formatRequestStatus(REQUEST_STATUS.REJECTED, { surface: REQUEST_STATUS_SURFACE.DETAIL }) },
 ] as const;
 
 export const REQUEST_STATUS_SUMMARY_CARDS = [
   { value: REQUEST_STATUS.DRAFT, label: "Borrador" },
-  { value: REQUEST_STATUS.SUBMITTED, label: "Enviadas / Por revisar" },
+  { value: REQUEST_STATUS.SUBMITTED, label: formatRequestStatus(REQUEST_STATUS.SUBMITTED, { surface: REQUEST_STATUS_SURFACE.DASHBOARD }) },
   { value: REQUEST_STATUS.OBSERVED, label: "Observadas" },
-  { value: REQUEST_STATUS.APPROVED, label: "En gestión de pago" },
+  { value: REQUEST_STATUS.APPROVED, label: formatRequestStatus(REQUEST_STATUS.APPROVED, { surface: REQUEST_STATUS_SURFACE.DASHBOARD }) },
   { value: REQUEST_STATUS.REJECTED, label: "Rechazadas" },
 ] as const;
 
@@ -914,8 +912,8 @@ export function parseRenditionSortDirection(value?: string | null): RenditionSor
   return RENDITION_SORT_DIRECTION.DESC;
 }
 
-export function getRenditionStatusLabel(status: RenditionStatus): string {
-  return RENDITION_STATUS_LABELS[status] ?? "Estado no reconocido";
+export function getRenditionStatusLabel(status: string): string {
+  return formatRenditionQueueStatus(status);
 }
 
 export function getRenditionStatusTone(status: RenditionStatus): "default" | "secondary" | "destructive" | "outline" {
@@ -1296,9 +1294,7 @@ export function validatePaymentProofFile(file: File | null): string | null {
 }
 
 export function getPaymentQueueStatusLabel(status: RequestStatus): string {
-  if (status === REQUEST_STATUS.APPROVED) return "En gestión de pago";
-  if (status === REQUEST_STATUS.PAID) return "Pagado";
-  return REQUEST_STATUS_LABELS[status] ?? "Estado no reconocido";
+  return formatRequestStatus(status, { surface: REQUEST_STATUS_SURFACE.PAYMENT });
 }
 
 interface RegisteredPartySource {
@@ -1705,11 +1701,11 @@ export function getAllocationFinanciersLabel(financiers?: RequestAllocationFundi
 }
 
 export function getPaymentPendingBadges(request: Pick<PaymentRequest, "payment_proof_pending" | "proof_pending" | "payment_details_pending" | "details_pending" | "payment">): string[] {
-  const badges: string[] = [];
-  if (hasPaymentProofPending(request)) badges.push("Falta constancia");
-  if (hasPaymentDetailsPending(request)) badges.push("Falta referencia");
-  if (hasPaymentSourcePending(request)) badges.push("Falta cuenta de origen");
-  return badges;
+  return getPaymentCompletenessLabels({
+    proofPending: hasPaymentProofPending(request),
+    referencePending: hasPaymentDetailsPending(request),
+    sourceAccountPending: hasPaymentSourcePending(request),
+  });
 }
 
 export function getBulkPaymentResultLabel(result: Pick<BulkPaymentItemResult, "status" | "error">): string {
@@ -1726,16 +1722,9 @@ export function getPaymentEmailStatusLabel(status?: string | null): string {
   return status;
 }
 
-export function getPaymentRexanStatusLabel(status?: string | null): string {
+export function getPaymentRexanStatusLabel(status?: string | null, preserveLegacyCopy = true): string {
   if (!status) return "REXAN no informado";
-  if (status === "PENDING") return "REXAN en proceso";
-  if (status === "PROCESSING") return "REXAN procesando";
-  if (status === "RETRYING") return "REXAN reintentando";
-  if (status === "CREATED") return "REXAN activada";
-  if (status === "REUSED") return "REXAN reutilizada";
-  if (status === "SKIPPED") return "REXAN no aplica";
-  if (status === "FAILED") return "REXAN requiere atención";
-  return status;
+  return formatRexanActivationStatus(status, preserveLegacyCopy);
 }
 
 export function getBulkPaymentRexanHref(rexan?: BulkPaymentRexanResult | null): string | null {
@@ -1984,6 +1973,7 @@ export function getRequestStatusStepperItems(
   statusHistory?: RequestStatusHistoryItem[],
   dates: RequestStatusStepperDates = {},
   context?: RequestStatusLabelContext | null,
+  surface?: RequestStatusSurface,
 ): RequestStatusStepperItem[] {
   const path = getRequestStepperPath(status, statusHistory, context);
   const currentIndex = path.indexOf(status);
@@ -2000,7 +1990,7 @@ export function getRequestStatusStepperItems(
 
     return {
       status: stepStatus,
-      label: getRequestStepperLabel(stepStatus, context),
+      label: getRequestStepperLabel(stepStatus, context, surface),
       state,
       date: getRequestStepperDate(stepStatus, statusHistory, dates),
       isBranch,

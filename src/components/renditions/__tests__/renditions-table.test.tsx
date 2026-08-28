@@ -71,12 +71,33 @@ describe("RenditionsTable", () => {
     expect(screen.getByText("RUC 20123456789")).toBeInTheDocument();
     expect(screen.getByText("Registrado por: Ana Pérez")).toBeInTheDocument();
     expect(screen.getByText("Vencida")).toBeInTheDocument();
+    expect(screen.getByText("Enviada a revisión")).toHaveAccessibleName("Lifecycle de rendición: Enviada a revisión");
     expect(screen.getByText("Sustentos completos")).toBeInTheDocument();
     expect(screen.getByRole("columnheader", { name: "Plazo" })).toBeInTheDocument();
     expect(screen.queryByRole("columnheader", { name: "Días" })).not.toBeInTheDocument();
     expect(screen.getByRole("cell", { name: /Plazo: .*10 may\. 2026.*Vencida hace 5 días/i })).toBeInTheDocument();
     expect(screen.getByText("Vencida hace 5 días")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Ver REXAN" })).toHaveAttribute("href", "/requests/settlement-1");
+  });
+
+  it("separa el estado derivado del lifecycle de rendición y conserva fallback legacy legible", () => {
+    render(<RenditionsTable renditions={[
+      makeRendition({
+        advance_id: "in-review-draft",
+        rendition_status: RENDITION_STATUS.IN_REVIEW,
+        settlement_status: REQUEST_STATUS.DRAFT,
+      }),
+      makeRendition({
+        advance_id: "legacy-derived",
+        rendition_status: "LEGACY_RENDITION" as RenditionInboxRow["rendition_status"],
+        settlement_status: REQUEST_STATUS.REJECTED,
+      }),
+    ]} isLoading={false} />);
+
+    expect(screen.getByLabelText("Estado derivado de rendición: En revisión")).toBeInTheDocument();
+    expect(screen.getByLabelText("Lifecycle de rendición: En preparación")).toBeInTheDocument();
+    expect(screen.getByLabelText("Lifecycle de rendición: Rendición rechazada")).toBeInTheDocument();
+    expect(screen.getByLabelText("Estado derivado de rendición: Estado no reconocido (LEGACY_RENDITION)")).toBeInTheDocument();
   });
 
   it("muestra fecha y lifecycle presentado o completado mediante texto accesible", () => {

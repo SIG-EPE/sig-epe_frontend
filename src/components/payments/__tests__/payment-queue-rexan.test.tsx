@@ -676,10 +676,10 @@ describe("REXAN payment queue and modal", () => {
   });
 
   it.each([
-    ["PENDING", "REXAN en proceso"],
-    ["RETRYING", "REXAN reintentando"],
-    ["FAILED", "REXAN requiere atención"],
-    ["CREATED", "REXAN activada"],
+    ["PENDING", "REXAN: pendiente"],
+    ["RETRYING", "REXAN: procesando"],
+    ["FAILED", "REXAN: requiere atención"],
+    ["CREATED", "REXAN: activada"],
   ] as const)(
     "muestra estado durable %s después de refrescar",
     (status, label) => {

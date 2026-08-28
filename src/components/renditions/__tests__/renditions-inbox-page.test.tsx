@@ -1,5 +1,6 @@
 import { fireEvent, render, screen } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import userEvent from "@testing-library/user-event";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { RenditionsInboxPage } from "@/components/renditions/renditions-inbox-page";
 import { useRenditionsInbox } from "@/hooks/use-requests";
@@ -20,6 +21,12 @@ vi.mock("@/hooks/use-debounced-value", () => ({
 vi.mock("@/hooks/use-requests", () => ({
   useRenditionsInbox: vi.fn(),
 }));
+
+beforeAll(() => {
+  if (!HTMLElement.prototype.hasPointerCapture) HTMLElement.prototype.hasPointerCapture = vi.fn(() => false);
+  if (!HTMLElement.prototype.releasePointerCapture) HTMLElement.prototype.releasePointerCapture = vi.fn();
+  if (!HTMLElement.prototype.scrollIntoView) HTMLElement.prototype.scrollIntoView = vi.fn();
+});
 
 function makeCounts(overrides: Partial<RenditionInboxCounts> = {}): RenditionInboxCounts {
   return {
@@ -120,5 +127,26 @@ describe("RenditionsInboxPage", () => {
 
     expect(screen.getByTestId("renditions-summary-card-due-soon")).toHaveTextContent("2");
     expect(screen.queryByTestId("renditions-deadline-state-filter")).not.toBeInTheDocument();
+  });
+
+  it("ofrece exactamente la allowlist de estados derivados de Renditions", async () => {
+    const user = userEvent.setup();
+    render(<RenditionsInboxPage />);
+
+    const statusFilter = screen.getByLabelText("Estado derivado de rendición");
+    expect(statusFilter).toBe(screen.getByTestId("renditions-status-filter"));
+    await user.click(statusFilter);
+
+    expect(screen.getAllByRole("option").map((option) => option.textContent)).toEqual([
+      "Ver todo",
+      "Pendiente de rendición",
+      "Vencida",
+      "En revisión",
+      "Observada",
+      "Rendida",
+    ]);
+
+    await user.click(screen.getByRole("option", { name: "En revisión" }));
+    expect(replaceMock).toHaveBeenCalledWith("/renditions?status=IN_REVIEW&page=1");
   });
 });

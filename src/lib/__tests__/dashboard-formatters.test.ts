@@ -27,8 +27,9 @@ describe("dashboard strict formatters", () => {
   });
 
   it("maps technical dashboard keys to business Spanish labels", () => {
-    expect(getRequestStatusDashboardLabel("APPROVED")).toBe("Aprobada, pendiente de pago");
-    expect(getRequestStatusDashboardLabel("PAID")).toBe("Pagada");
+    expect(getRequestStatusDashboardLabel("SUBMITTED")).toBe("Enviadas a revisión");
+    expect(getRequestStatusDashboardLabel("APPROVED")).toBe("Aprobadas · pendientes de pago");
+    expect(getRequestStatusDashboardLabel("PAID")).toBe("Pagadas");
     expect(getGiofExceptionLabel("overdue_renditions")).toBe("Rendiciones vencidas");
     expect(getGiofExceptionLabel("unassigned_requests")).toBe("Solicitudes sin gestor asignado");
   });

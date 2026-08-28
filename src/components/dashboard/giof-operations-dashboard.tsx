@@ -98,10 +98,10 @@ function GiofFilters({
 function SummaryCards({ data }: { data: GiofOperationsDashboard }) {
   const metrics = [
     { title: "Backlog", value: formatNumberStrict(data.summary.backlog_count), description: "Solicitudes abiertas", Icon: FileText },
-    { title: "Pendientes", value: formatNumberStrict(data.summary.pending_review_count), description: "En revisión GIOF", Icon: Clock3 },
-    { title: "Aprobadas sin pago", value: formatNumberStrict(data.summary.approved_pending_payment_count), description: "Requieren acción de pago", Icon: CheckCircle2 },
+    { title: "Por revisar", value: formatNumberStrict(data.summary.pending_review_count), description: "Solicitudes enviadas a revisión", Icon: Clock3 },
+    { title: "Aprobadas · pendientes de pago", value: formatNumberStrict(data.summary.approved_pending_payment_count), description: "Requieren acción de pago", Icon: CheckCircle2 },
     { title: "Vencidas", value: formatNumberStrict(data.summary.overdue_count), description: "Fuera de plazo", Icon: AlertTriangle },
-    { title: "En riesgo", value: formatNumberStrict(data.summary.in_risk_count), description: "Próximas a vencer", Icon: Users },
+    { title: "Sin asignar u observadas", value: formatNumberStrict(data.summary.in_risk_count), description: "Misma métrica operativa", Icon: Users },
   ];
 
   return (
@@ -178,8 +178,8 @@ function PaymentsAndRenditions({ data }: { data: GiofOperationsDashboard }) {
           <CardTitle>Pagos</CardTitle>
         </CardHeader>
         <CardContent className="grid gap-3 sm:grid-cols-2">
-          <KpiCard title="Pendientes" value={formatNumberStrict(data.payments.pending_count)} description={formatMoneyStrict(data.payments.pending_amount)} Icon={Clock3} />
-          <KpiCard title="Pagados" value={formatNumberStrict(data.payments.paid_count)} description={`${formatMoneyStrict(data.payments.paid_amount)} · ${formatPercentStrict(paidRate)}`} Icon={CheckCircle2} />
+          <KpiCard title="Pendiente de pago" value={formatNumberStrict(data.payments.pending_count)} description={formatMoneyStrict(data.payments.pending_amount)} Icon={Clock3} />
+          <KpiCard title="Pagos registrados" value={formatNumberStrict(data.payments.paid_count)} description={`${formatMoneyStrict(data.payments.paid_amount)} · ${formatPercentStrict(paidRate)}`} Icon={CheckCircle2} />
         </CardContent>
       </Card>
       <Card>
@@ -192,7 +192,7 @@ function PaymentsAndRenditions({ data }: { data: GiofOperationsDashboard }) {
             <span>Vencidas: <strong>{formatNumberStrict(data.renditions.overdue)}</strong></span>
             <span>En revisión: <strong>{formatNumberStrict(data.renditions.in_review)}</strong></span>
             <span>Observadas: <strong>{formatNumberStrict(data.renditions.observed)}</strong></span>
-            <span>Regularizadas: <strong>{formatNumberStrict(data.renditions.settled)}</strong></span>
+            <span>Rendidas: <strong>{formatNumberStrict(data.renditions.settled)}</strong></span>
           </div>
         </CardContent>
       </Card>

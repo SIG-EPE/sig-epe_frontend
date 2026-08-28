@@ -15,6 +15,7 @@ import { StatusBadge } from "./status-badge";
 import { DriveProjectionState } from "./drive-projection-state";
 import { GiofWorkStatus } from "@/components/giof-work/giof-work-controls";
 import { canOperateAssignedGiofWork, isGiofOperationalRole } from "@/lib/role-capabilities";
+import { REQUEST_STATUS_SURFACE, type RequestStatusSurface } from "@/lib/request-status-vocabulary";
 
 interface RequestListTableProps {
   requests: PaymentRequest[];
@@ -27,6 +28,7 @@ interface RequestListTableProps {
   selectedAssignmentIds?: string[];
   onToggleAssignment?: (requestId: string, checked: boolean) => void;
   onToggleAllAssignments?: (checked: boolean) => void;
+  statusSurface?: RequestStatusSurface;
 }
 
 interface RequestPoaLineDisplay {
@@ -106,7 +108,7 @@ function RequestPoaTooltip({ poaLines, conceptLabel, currency, children }: Reque
   );
 }
 
-export function RequestListTable({ requests, isLoading, roleCode, currentUserId, showAssignment = false, isGiofManager = false, selectedAssignmentIds = [], onToggleAssignment, onToggleAllAssignments }: RequestListTableProps) {
+export function RequestListTable({ requests, isLoading, roleCode, currentUserId, showAssignment = false, isGiofManager = false, selectedAssignmentIds = [], onToggleAssignment, onToggleAllAssignments, statusSurface = REQUEST_STATUS_SURFACE.DETAIL }: RequestListTableProps) {
   if (isLoading) {
     return <p className="rounded-md border p-6 text-sm text-muted-foreground">Cargando solicitudes...</p>;
   }
@@ -180,7 +182,7 @@ export function RequestListTable({ requests, isLoading, roleCode, currentUserId,
               </TableCell>
               <TableCell>
                 <div className="flex flex-col gap-1">
-                   <StatusBadge status={request.status} context={request} />
+                   <StatusBadge status={request.status} context={request} surface={statusSurface} />
                    {request.payment ? (
                      <DriveProjectionState payment={request.payment} compact />
                    ) : null}

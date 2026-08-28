@@ -1362,7 +1362,8 @@ describe("RequestForm payload helpers", () => {
 
     expect(screen.getByText("Resumen del anticipo original")).toBeInTheDocument();
     expect(screen.queryByText("Documentos del anticipo original")).not.toBeInTheDocument();
-    expect(screen.getByText("Rendición en preparación")).toBeInTheDocument();
+    expect(screen.getByText("En preparación", { exact: true })).toBeInTheDocument();
+    expect(screen.queryByText("Rendición en preparación")).not.toBeInTheDocument();
     expect(screen.getByTestId("request-documents-card")).toHaveAttribute("data-documents-count", "2");
   });
 });

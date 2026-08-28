@@ -19,6 +19,7 @@ import { GiofWorkStatus } from "@/components/giof-work/giof-work-controls";
 import { canOperateAssignedGiofWork } from "@/lib/role-capabilities";
 import { isGiofLeaseCurrent } from "@/lib/giof-work-lease-session";
 import { GIOF_WORK_POOL, type GiofWorkLease } from "@/types/giof-work";
+import { REQUEST_STATUS_SURFACE } from "@/lib/request-status-vocabulary";
 
 interface PaymentQueueTableProps {
   requests: PaymentRequest[];
@@ -133,6 +134,9 @@ export function PaymentQueueTable({ requests, isLoading, onRegisterPayment, sele
           const registeredParty = getRegisteredPartyDisplay(request);
           const registeredPartyDocument = getRegisteredPartyDocumentLabel(request);
           const registeredBy = getRegisteredByDisplayName(request);
+          const paymentCompletenessLabels = request.status === REQUEST_STATUS.PAID
+            ? getPaymentPendingBadges(request)
+            : [];
           const assignmentDisabledReason = request.status === REQUEST_STATUS.PAID
             ? "Trabajo de pago completo: no hay constancia ni referencia pendiente"
             : "No asignable en su estado actual";
@@ -184,18 +188,18 @@ export function PaymentQueueTable({ requests, isLoading, onRegisterPayment, sele
                 ) : (
                   <span className="text-sm">Aprobado: {formatRequestDate(request.approved_at)}</span>
                 )}
-                <StatusBadge status={request.status} context={request} />
+                <StatusBadge status={request.status} context={request} surface={REQUEST_STATUS_SURFACE.PAYMENT} />
                 {request.rexan_activation && (
                   <Badge variant={request.rexan_activation.status === "FAILED" ? "destructive" : "secondary"}>
-                    {getPaymentRexanStatusLabel(request.rexan_activation.status)}
+                    {getPaymentRexanStatusLabel(request.rexan_activation.status, false)}
                   </Badge>
                 )}
                 {request.payment?.drive_projection_status !== "SOURCE_REQUIRED" && request.payment ? (
                   <DriveProjectionState payment={request.payment} compact />
                 ) : null}
-                {getPaymentPendingBadges(request).length > 0 && (
+                {paymentCompletenessLabels.length > 0 && (
                   <div className="flex flex-wrap gap-1">
-                    {getPaymentPendingBadges(request).map((label) => <Badge key={label} variant="outline">{label}</Badge>)}
+                    {paymentCompletenessLabels.map((label) => <Badge key={label} variant="outline">{label}</Badge>)}
                   </div>
                 )}
               </div>

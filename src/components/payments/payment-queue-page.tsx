@@ -24,10 +24,11 @@ import { GIOF_WORK_POOL, GIOF_WORK_SCOPE, type GiofWorkScope } from "@/types/gio
 import type { GiofWorkLease } from "@/types/giof-work";
 import { isGiofLeaseCurrent } from "@/lib/giof-work-lease-session";
 import { GIOF_HELP_CONTEXT } from "@/lib/giof-assignment-help";
+import { REQUEST_PAYMENT_SELECTOR_STATUSES } from "@/lib/request-status-vocabulary";
 
 const PAYMENT_QUEUE_TAB = {
-  PENDING: REQUEST_STATUS.APPROVED,
-  PAID: REQUEST_STATUS.PAID,
+  PENDING: REQUEST_PAYMENT_SELECTOR_STATUSES[0],
+  PAID: REQUEST_PAYMENT_SELECTOR_STATUSES[1],
   PENDING_DATA: "pending-data",
 } as const;
 
@@ -38,7 +39,7 @@ export function getPaymentRegisteredToast(result: RegisterPaymentResponse): {
   description: string;
 } {
   return {
-    title: `Pago registrado. ${getPaymentRexanStatusLabel(result.rexan_activation.status)}.`,
+    title: `Pago registrado. ${getPaymentRexanStatusLabel(result.rexan_activation.status, false)}.`,
     description:
       "La carpeta de la solicitud se organizará en Drive en segundo plano; puede tardar algunos minutos.",
   };
@@ -200,7 +201,7 @@ export function PaymentQueuePage() {
 
       <div className="grid gap-4 md:grid-cols-4">
         <Card>
-          <CardHeader><CardTitle>Pendientes</CardTitle><CardDescription>En gestión de pago</CardDescription></CardHeader>
+          <CardHeader><CardTitle>Pendientes</CardTitle><CardDescription>Pendiente de pago</CardDescription></CardHeader>
           <CardContent><p className="text-3xl font-bold">{pendingQueue.total}</p></CardContent>
         </Card>
         <Card>
@@ -225,7 +226,7 @@ export function PaymentQueuePage() {
           </div>
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
             <GiofWorkScopeFilter value={workScope} assigneeId={workAssigneeId} isManager={isGiofManager} onChange={setWorkScope} helpContext={GIOF_HELP_CONTEXT.PAYMENT} />
-            <div className="inline-flex rounded-md border p-1">
+            <div className="inline-flex rounded-md border p-1" role="group" aria-label="Vista de pagos">
               <Button type="button" variant="ghost" size="sm" onClick={() => setTab(PAYMENT_QUEUE_STATUS.PENDING)} className={cn(status === REQUEST_STATUS.APPROVED && "bg-primary text-primary-foreground hover:bg-primary/90")} data-testid="payment-filter-approved">Pendientes</Button>
               <Button type="button" variant="ghost" size="sm" onClick={() => setTab(PAYMENT_QUEUE_STATUS.PAID)} className={cn(status === REQUEST_STATUS.PAID && "bg-primary text-primary-foreground hover:bg-primary/90")} data-testid="payment-filter-paid">Historial pagado</Button>
               <Button type="button" variant="ghost" size="sm" onClick={() => setTab(PAYMENT_QUEUE_TAB.PENDING_DATA)} className={cn(status === PAYMENT_QUEUE_TAB.PENDING_DATA && "bg-primary text-primary-foreground hover:bg-primary/90")} data-testid="payment-filter-pending-data">Datos pendientes</Button>

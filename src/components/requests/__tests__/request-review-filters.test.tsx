@@ -1,6 +1,6 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 
 import { RequestReviewFilters } from "@/components/requests/request-review-filters";
 import { GIOF_WORK_SCOPE } from "@/types/giof-work";
@@ -21,6 +21,12 @@ vi.mock("@/components/giof-work/giof-work-controls", () => ({
     </div>
   ),
 }));
+
+beforeAll(() => {
+  if (!HTMLElement.prototype.hasPointerCapture) HTMLElement.prototype.hasPointerCapture = vi.fn(() => false);
+  if (!HTMLElement.prototype.releasePointerCapture) HTMLElement.prototype.releasePointerCapture = vi.fn();
+  if (!HTMLElement.prototype.scrollIntoView) HTMLElement.prototype.scrollIntoView = vi.fn();
+});
 
 function renderFilters(filters: ReviewFilters = {}, isManager = true) {
   const onChange = vi.fn();
@@ -132,7 +138,7 @@ describe("RequestReviewFilters", () => {
     expect(screen.getByRole("status")).toHaveAttribute("aria-live", "polite");
     expect(screen.getByRole("status")).toHaveTextContent("7 solicitudes");
     expect(screen.getByLabelText("Resumen de resultados filtrados")).toHaveTextContent("PEN 1250.00");
-    expect(screen.getByLabelText("Resumen de resultados filtrados")).toHaveTextContent("Enviada: 7");
+    expect(screen.getByLabelText("Resumen de resultados filtrados")).toHaveTextContent("Por revisar: 7");
     expect(screen.getByRole("button", { name: "Quitar filtro Trabajo: sin asignar" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Quitar filtro Búsqueda: viático" })).toBeInTheDocument();
 
@@ -141,6 +147,44 @@ describe("RequestReviewFilters", () => {
 
     await user.click(screen.getByRole("button", { name: "Limpiar todos los filtros" }));
     expect(onClear).toHaveBeenCalledOnce();
+  });
+
+  it("ofrece solo la allowlist alcanzable de Review y conserva los mismos tokens", async () => {
+    const user = userEvent.setup();
+    const { onChange } = renderFilters();
+
+    await user.click(screen.getByLabelText("Estado de solicitud"));
+
+    const options = screen.getAllByRole("option").map((option) => option.textContent);
+    expect(options).toEqual([
+      "Todos los estados",
+      "Borrador",
+      "Por revisar",
+      "Observada",
+      "Aprobada · pendiente de pago",
+      "Rechazada",
+      "Pagada",
+    ]);
+    expect(screen.queryByText("En validación")).not.toBeInTheDocument();
+    expect(screen.queryByText("Cerrada")).not.toBeInTheDocument();
+    expect(screen.queryByText("Anulada")).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("option", { name: "Por revisar" }));
+    expect(onChange).toHaveBeenCalledWith({ status: REQUEST_STATUS.SUBMITTED });
+  });
+
+  it("renderiza un filtro legacy reservado sin convertirlo en opción seleccionable", async () => {
+    const user = userEvent.setup();
+    renderFilters({ status: REQUEST_STATUS.IN_VALIDATION });
+
+    expect(screen.getByLabelText("Estado de solicitud")).toHaveTextContent("En validación");
+    expect(screen.getByRole("button", { name: "Quitar filtro Estado: En validación" })).toBeInTheDocument();
+
+    await user.click(screen.getByLabelText("Estado de solicitud"));
+
+    expect(screen.getAllByRole("option").map((option) => option.textContent)).not.toContain("En validación");
+    expect(screen.queryByRole("option", { name: "Cerrada" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: "Anulada" })).not.toBeInTheDocument();
   });
 
   it("no reinicia borradores ni el panel durante un refresh con la misma URL", async () => {

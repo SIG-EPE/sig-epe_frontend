@@ -58,6 +58,7 @@ import { RequestDocumentsCard } from "./request-documents-card";
 import { StructuredRenditionReportCard } from "./structured-rendition-report-card";
 import { StatusBadge } from "./status-badge";
 import { DriveProjectionState } from "./drive-projection-state";
+import { REQUEST_STATUS_SURFACE } from "@/lib/request-status-vocabulary";
 
 function getStructuredReportTotal(report: RequestRenditionReport | null): number | null {
   return normalizeMoneyAmount(report?.totals.total_amount ?? report?.total_amount);
@@ -451,7 +452,7 @@ export function RequestDetailPage() {
           <p className="text-muted-foreground">Detalle y estado de la solicitud.</p>
         </div>
         <div className="flex items-center gap-2">
-          <StatusBadge status={request.status} context={request} />
+          <StatusBadge status={request.status} context={request} surface={REQUEST_STATUS_SURFACE.DETAIL} />
           <GiofWorkStatus requestId={request.id} work={request.giof_work} currentUserId={user?.id} isManager={isGiofManager} />
           {driveFolderUrl && (
             <Button variant="outline" asChild>
@@ -550,7 +551,7 @@ export function RequestDetailPage() {
         <Card data-testid="rexan-activation-state-card">
           <CardHeader><CardTitle>Activación REXAN</CardTitle></CardHeader>
           <CardContent className="grid gap-3 text-sm sm:grid-cols-4">
-            <div><p className="text-xs text-muted-foreground">Estado</p><Badge variant={request.rexan_activation.status === "FAILED" ? "destructive" : "secondary"}>{getPaymentRexanStatusLabel(request.rexan_activation.status)}</Badge></div>
+            <div><p className="text-xs text-muted-foreground">Estado</p><Badge variant={request.rexan_activation.status === "FAILED" ? "destructive" : "secondary"}>{getPaymentRexanStatusLabel(request.rexan_activation.status, false)}</Badge></div>
             <div><p className="text-xs text-muted-foreground">Intentos</p><p className="font-medium">{request.rexan_activation.attempt_count ?? 0}</p></div>
             <div><p className="text-xs text-muted-foreground">Próximo intento</p><p className="font-medium">{formatRequestDate(request.rexan_activation.next_attempt_at)}</p></div>
             <div>

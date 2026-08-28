@@ -159,10 +159,74 @@ describe("payment pending queue action", () => {
         rexan_activation: { status: "CREATED" },
       }),
     ).toEqual({
-      title: "Pago registrado. REXAN activada.",
+      title: "Pago registrado. REXAN: activada.",
       description:
         "La carpeta de la solicitud se organizará en Drive en segundo plano; puede tardar algunos minutos.",
     });
+  });
+
+  it("conserva los tres tabs existentes y sus tokens de lifecycle/completitud", () => {
+    render(<PaymentQueuePage />);
+
+    expect(screen.getByRole("group", { name: "Vista de pagos" })).toBeInTheDocument();
+    expect(screen.getByTestId("payment-filter-approved")).toHaveTextContent("Pendientes");
+    expect(screen.getByTestId("payment-filter-paid")).toHaveTextContent("Historial pagado");
+    expect(screen.getByTestId("payment-filter-pending-data")).toHaveTextContent("Datos pendientes");
+    expect(mocks.usePaymentQueue).toHaveBeenCalledWith(expect.objectContaining({ status: REQUEST_STATUS.APPROVED }));
+    expect(mocks.usePaymentQueue).toHaveBeenCalledWith(expect.objectContaining({ status: REQUEST_STATUS.PAID }));
+    expect(mocks.usePaymentQueue).toHaveBeenCalledWith(expect.objectContaining({ pending_data: true }));
+  });
+
+  it("muestra lifecycle Payment y ejes secundarios sin sustituirlos", () => {
+    render(
+      <PaymentQueueTable
+        requests={[failedRexanRequest(true)]}
+        isLoading={false}
+        onRegisterPayment={vi.fn()}
+        currentUserId="user-1"
+      />,
+    );
+
+    expect(screen.getByText("Pago registrado")).toBeInTheDocument();
+    expect(screen.getByText("REXAN: requiere atención")).toBeInTheDocument();
+    expect(screen.getByText("Falta cuenta de origen")).toBeInTheDocument();
+  });
+
+  it("no presenta completitud de pago antes de que el pago esté registrado", () => {
+    const request = pendingSourceRequest();
+    request.status = REQUEST_STATUS.APPROVED;
+    request.paid_at = null;
+    request.payment_id = undefined;
+    request.payment = undefined;
+
+    render(
+      <PaymentQueueTable
+        requests={[request]}
+        isLoading={false}
+        onRegisterPayment={vi.fn()}
+        currentUserId="user-1"
+      />,
+    );
+
+    expect(screen.getByRole("generic", { name: "Estado de pago: Pendiente de pago" })).toBeInTheDocument();
+    expect(screen.queryByText("Datos de pago completos")).not.toBeInTheDocument();
+  });
+
+  it("muestra la completitud de pago cuando no hay datos pendientes", () => {
+    const request = pendingSourceRequest();
+    request.payment = { ...request.payment!, drive_projection_status: "SUCCEEDED" };
+
+    render(
+      <PaymentQueueTable
+        requests={[request]}
+        isLoading={false}
+        onRegisterPayment={vi.fn()}
+        currentUserId="user-1"
+      />,
+    );
+
+    expect(screen.getByText("Pago registrado")).toBeInTheDocument();
+    expect(screen.getByText("Datos de pago completos")).toBeInTheDocument();
   });
 
   it("shows the source badge and exactly one Completar pago action", () => {

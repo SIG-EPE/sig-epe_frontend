@@ -21,6 +21,7 @@ import {
 import type { RenditionInboxRow } from "@/types/requests";
 import { GiofWorkStatus } from "@/components/giof-work/giof-work-controls";
 import { canOperateAssignedGiofWork } from "@/lib/role-capabilities";
+import { REQUEST_STATUS_SURFACE, formatRequestStatus } from "@/lib/request-status-vocabulary";
 
 interface RenditionsTableProps {
   renditions: RenditionInboxRow[];
@@ -71,6 +72,10 @@ export function RenditionsTable({ renditions, isLoading, currentUserId, isGiofMa
           const deadlineDate = getRenditionDeadlineDate(row);
           const deadlineLabel = getRenditionDueLabel(row);
           const formattedDeadlineDate = deadlineDate ? formatRequestDate(deadlineDate) : null;
+          const derivedStatusLabel = getRenditionStatusLabel(row.rendition_status);
+          const renditionLifecycleLabel = row.settlement_status
+            ? formatRequestStatus(row.settlement_status, { surface: REQUEST_STATUS_SURFACE.RENDITION_LIFECYCLE })
+            : null;
           return (
             <TableRow key={row.advance_id} data-testid="rendition-row">
               {isGiofManager && <TableCell>{row.giof_work?.requestId ? <input type="checkbox" className="size-4" checked={selectedAssignmentIds.includes(row.giof_work.requestId)} disabled={row.giof_work.canAssign !== true} title={row.giof_work.canAssign === true ? "Seleccionar para asignar" : "Rendición finalizada: no tiene seguimiento REXAN pendiente"} onChange={(event) => onToggleAssignment?.(row.giof_work?.requestId as string, event.target.checked)} aria-label={row.giof_work.canAssign === true ? `Seleccionar ${primaryRequestCode} para asignar` : `${primaryRequestCode}: rendición finalizada`} /> : null}</TableCell>}
@@ -105,7 +110,12 @@ export function RenditionsTable({ renditions, isLoading, currentUserId, isGiofMa
               </TableCell>
               <TableCell>
                 <div className="flex flex-col gap-1">
-                  <Badge variant={getRenditionStatusTone(row.rendition_status)}>{getRenditionStatusLabel(row.rendition_status)}</Badge>
+                  <Badge variant={getRenditionStatusTone(row.rendition_status)} aria-label={`Estado derivado de rendición: ${derivedStatusLabel}`}>{derivedStatusLabel}</Badge>
+                  {renditionLifecycleLabel ? (
+                    <Badge variant="outline" aria-label={`Lifecycle de rendición: ${renditionLifecycleLabel}`}>
+                      {renditionLifecycleLabel}
+                    </Badge>
+                  ) : null}
                   {row.settlement_request_id && (
                     <span className="text-xs text-muted-foreground">
                       {row.settlement_documents_complete ? "Sustentos completos" : "Faltan documentos"}

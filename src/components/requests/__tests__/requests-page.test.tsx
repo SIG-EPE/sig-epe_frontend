@@ -312,6 +312,18 @@ describe("RequestsPage", () => {
     expect(screen.getByText("Aún no hay solicitudes registradas.")).toBeInTheDocument();
   });
 
+  it("muestra en Historial el vocabulario lifecycle exacto", () => {
+    currentQuery = "scope=history";
+
+    render(<RequestsPage />);
+
+    expect(screen.getByText("Enviadas a revisión")).toBeInTheDocument();
+    expect(screen.getByText("Aprobadas · pendientes de pago")).toBeInTheDocument();
+    expect(screen.queryByText("Enviadas / Por revisar")).not.toBeInTheDocument();
+    expect(screen.queryByText("En gestión de pago")).not.toBeInTheDocument();
+    expect(screen.getByTestId("requests-status-filter")).toBeInTheDocument();
+  });
+
   it("muestra quién creó un reembolso sin usar el beneficiario como responsable", () => {
     currentQuery = "scope=review";
     useRequestReviewMock.mockReturnValue({

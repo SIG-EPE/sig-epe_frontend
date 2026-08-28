@@ -27,7 +27,7 @@ const work: GiofWorkMetadata = {
 describe("controles GIOF", () => {
   it("muestra estado compacto sin exponer historial a un operador ordinario", () => {
     render(<GiofWorkStatus requestId="request-1" work={work} currentUserId="user-1" />);
-    expect(screen.getByText("Asignado a ti")).toBeInTheDocument();
+    expect(screen.getByText("Asignada a ti")).toBeInTheDocument();
     expect(screen.queryByText("v2")).not.toBeInTheDocument();
     expect(screen.getByText("Solo lectura")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Ver historial de asignación" })).not.toBeInTheDocument();
@@ -35,8 +35,38 @@ describe("controles GIOF", () => {
 
   it("muestra el nombre completo de otra persona sin exponer su identificador", () => {
     render(<GiofWorkStatus requestId="request-1" work={{ ...work, assigneeId: "8e0050b3-0000-4000-8000-000000000000", assigneeName: "María Pérez" }} currentUserId="user-1" />);
-    expect(screen.getByText("Asignado a María Pérez")).toBeInTheDocument();
+    expect(screen.getByText("Asignada a María Pérez")).toBeInTheDocument();
     expect(screen.queryByText(/8e0050b3/)).not.toBeInTheDocument();
+  });
+
+  it("mantiene assignment y lease como badges GIOF independientes y accesibles", () => {
+    const { rerender } = render(
+      <GiofWorkStatus
+        requestId="request-1"
+        work={{ ...work, assigneeId: null, assigneeName: null, readOnly: false }}
+        currentUserId="user-1"
+      />,
+    );
+
+    expect(screen.getByRole("generic", { name: "Asignación GIOF: Sin asignar" })).toHaveTextContent("Sin asignar");
+
+    rerender(
+      <GiofWorkStatus
+        requestId="request-1"
+        work={{
+          ...work,
+          lease: {
+            ownerId: "user-2",
+            heartbeatAt: "2026-08-28T10:00:00.000Z",
+            expiresAt: "2999-08-28T10:05:00.000Z",
+          },
+        }}
+        currentUserId="user-1"
+      />,
+    );
+
+    expect(screen.getByRole("generic", { name: "Asignación GIOF: En uso" })).toHaveTextContent("En uso");
+    expect(screen.getByRole("generic", { name: "Asignación GIOF: Solo lectura" })).toHaveTextContent("Solo lectura");
   });
 
   it("expone selección contextual de asignación solo cuando el padre manager la renderiza", () => {

@@ -1176,6 +1176,13 @@ describe("requests helpers", () => {
       REQUEST_STATUS.APPROVED,
       REQUEST_STATUS.REJECTED,
     ]);
+    expect(REQUEST_STATUS_SUMMARY_CARDS.map((card) => card.label)).toEqual([
+      "Borrador",
+      "Enviadas a revisión",
+      "Observadas",
+      "Aprobadas · pendientes de pago",
+      "Rechazadas",
+    ]);
     expect(REQUEST_LIST_SORT_OPTIONS.map((option) => option.label)).toEqual([
       "Prioridad de revisión",
       "Más antiguas primero",
@@ -1183,10 +1190,10 @@ describe("requests helpers", () => {
     ]);
     expect(REQUEST_STATUS_FILTER_OPTIONS.map((option) => [option.value, option.label])).toEqual([
       [REQUEST_STATUS.DRAFT, "Borrador"],
-      [REQUEST_STATUS.SUBMITTED, "En revisión"],
+      [REQUEST_STATUS.SUBMITTED, "Enviada a revisión"],
       [REQUEST_STATUS.OBSERVED, "Observada"],
       [REQUEST_STATUS.IN_VALIDATION, "En validación"],
-      [REQUEST_STATUS.APPROVED, "En gestión de pago"],
+      [REQUEST_STATUS.APPROVED, "Aprobada · pendiente de pago"],
       [REQUEST_STATUS.PAID, "Pagada"],
       [REQUEST_STATUS.REJECTED, "Rechazada"],
     ]);
@@ -1247,9 +1254,9 @@ describe("requests helpers", () => {
 
     expect(steps.map((step) => step.label)).toEqual([
       "Borrador",
-      "En revisión",
+      "Enviada a revisión",
       "Observada",
-      "En gestión de pago",
+      "Aprobada · pendiente de pago",
       "Pagada",
     ]);
     expect(steps.find((step) => step.status === REQUEST_STATUS.OBSERVED)?.state).toBe("current");
@@ -1286,9 +1293,9 @@ describe("requests helpers", () => {
     ]);
   });
 
-  it("usa copys de estado orientados a proceso para no confundir aprobación con cierre", () => {
-    expect(getRequestStatusLabel(REQUEST_STATUS.SUBMITTED)).toBe("En revisión");
-    expect(getRequestStatusLabel(REQUEST_STATUS.APPROVED, makeRequest({ status: REQUEST_STATUS.APPROVED }))).toBe("En gestión de pago");
+  it("usa el vocabulario de detalle para no confundir revisión, aprobación y pago", () => {
+    expect(getRequestStatusLabel(REQUEST_STATUS.SUBMITTED)).toBe("Enviada a revisión");
+    expect(getRequestStatusLabel(REQUEST_STATUS.APPROVED, makeRequest({ status: REQUEST_STATUS.APPROVED }))).toBe("Aprobada · pendiente de pago");
     expect(getRequestStatusLabel(REQUEST_STATUS.PAID)).toBe("Pagada");
     expect(getRequestStatusLabel(REQUEST_STATUS.CLOSED)).toBe("Cerrada");
   });
@@ -1318,7 +1325,7 @@ describe("requests helpers", () => {
 
     expect(getRequestStatusLabel(REQUEST_STATUS.APPROVED, exactSettlement)).toBe("Rendición aprobada");
     expect(getRequestStatusLabel(REQUEST_STATUS.APPROVED, returnSettlement)).toBe("Rendición aprobada");
-    expect(getRequestStatusLabel(REQUEST_STATUS.APPROVED, excessSettlement)).toBe("En gestión de pago");
+    expect(getRequestStatusLabel(REQUEST_STATUS.APPROVED, excessSettlement)).toBe("Rendición aprobada");
 
     const exactSteps = getRequestStatusStepperItems(REQUEST_STATUS.APPROVED, [], {}, exactSettlement);
     const returnSteps = getRequestStatusStepperItems(REQUEST_STATUS.APPROVED, [], {}, returnSettlement);
@@ -1343,7 +1350,7 @@ describe("requests helpers", () => {
       REQUEST_STATUS.APPROVED,
       REQUEST_STATUS.PAID,
     ]);
-    expect(excessApprovedSteps.find((step) => step.status === REQUEST_STATUS.APPROVED)?.label).toBe("En gestión de pago");
+    expect(excessApprovedSteps.find((step) => step.status === REQUEST_STATUS.APPROVED)?.label).toBe("Rendición aprobada");
     expect(excessApprovedSteps.find((step) => step.status === REQUEST_STATUS.PAID)?.state).toBe("pending");
     expect(excessPaidSteps.find((step) => step.status === REQUEST_STATUS.PAID)?.state).toBe("current");
     expect(normalApprovedSteps.map((step) => step.status)).toContain(REQUEST_STATUS.PAID);
@@ -1397,8 +1404,8 @@ describe("requests helpers", () => {
   });
 
   it("obtiene etiqueta y contraparte para cola de pagos", () => {
-    expect(getPaymentQueueStatusLabel(REQUEST_STATUS.APPROVED)).toBe("En gestión de pago");
-    expect(getPaymentQueueStatusLabel(REQUEST_STATUS.PAID)).toBe("Pagado");
+    expect(getPaymentQueueStatusLabel(REQUEST_STATUS.APPROVED)).toBe("Pendiente de pago");
+    expect(getPaymentQueueStatusLabel(REQUEST_STATUS.PAID)).toBe("Pago registrado");
     expect(getPaymentRequestParty(makeRequest({ registered_party_name: "Proveedor SAC" }))).toBe("Proveedor SAC");
     expect(getRegisteredPartyDisplay(makeRequest({ supplier_name: "Proveedor Base SAC" }))).toBe("Proveedor Base SAC");
     expect(getRegisteredPartyDisplay(makeRequest({ beneficiary_name: "Beneficiario" }))).toBe("Beneficiario");

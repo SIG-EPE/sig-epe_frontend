@@ -316,7 +316,7 @@ describe("RequestDetailPage REXAN approval", () => {
 
     render(<RequestDetailPage />);
 
-    expect(screen.getByText("Asignado a Otra Gestora")).toBeInTheDocument();
+    expect(screen.getByText("Asignada a Otra Gestora")).toBeInTheDocument();
     expect(screen.getByText(/Vista de solo lectura/)).toBeInTheDocument();
     expect(screen.queryByText("Acciones de revisión")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Observar rendición" })).not.toBeInTheDocument();
@@ -398,7 +398,7 @@ describe("RequestDetailPage REXAN approval", () => {
     render(<RequestDetailPage />);
 
     const card = screen.getByTestId("rexan-activation-state-card");
-    expect(within(card).getByText("REXAN reintentando")).toBeInTheDocument();
+    expect(within(card).getByText("REXAN: procesando")).toBeInTheDocument();
     expect(within(card).getByText("2")).toBeInTheDocument();
   });
 

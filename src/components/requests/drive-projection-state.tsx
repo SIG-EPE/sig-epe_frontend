@@ -1,20 +1,9 @@
 import { Badge } from "@/components/ui/badge";
+import { formatDriveProjectionStatus } from "@/lib/integration-status-vocabulary";
 import {
   DRIVE_PAYMENT_PROJECTION_STATUS,
-  type DrivePaymentProjectionStatus,
   type RequestPayment,
 } from "@/types/requests";
-
-const DRIVE_PROJECTION_STATUS_LABEL: Record<
-  DrivePaymentProjectionStatus,
-  string
-> = {
-  [DRIVE_PAYMENT_PROJECTION_STATUS.SOURCE_REQUIRED]: "Falta cuenta de origen",
-  [DRIVE_PAYMENT_PROJECTION_STATUS.PENDING]: "Drive: pendiente de organización",
-  [DRIVE_PAYMENT_PROJECTION_STATUS.PROCESSING]: "Drive: organizando carpeta…",
-  [DRIVE_PAYMENT_PROJECTION_STATUS.SUCCEEDED]: "Drive: carpeta organizada",
-  [DRIVE_PAYMENT_PROJECTION_STATUS.FAILED]: "Drive: requiere atención",
-};
 
 const DRIVE_PROJECTION_FAILED_DETAIL =
   "El pago quedó registrado, pero la carpeta requiere revisión en Drive.";
@@ -44,7 +33,7 @@ export function DriveProjectionState({
   return (
     <div className={compact ? "flex flex-wrap gap-1" : "space-y-1"}>
       <Badge variant={status === "FAILED" ? "destructive" : "outline"}>
-        {DRIVE_PROJECTION_STATUS_LABEL[status]}
+        {formatDriveProjectionStatus(status)}
       </Badge>
       <Badge variant="secondary">
         Fase: {payment.drive_projection_phase ?? "PENDING"}

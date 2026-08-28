@@ -5,9 +5,9 @@ import { DriveProjectionState } from "../drive-projection-state";
 
 describe("DriveProjectionState", () => {
   it.each([
-    ["PENDING", "Drive: pendiente de organización"],
-    ["PROCESSING", "Drive: organizando carpeta…"],
-    ["SUCCEEDED", "Drive: carpeta organizada"],
+    ["PENDING", "Drive: pendiente"],
+    ["PROCESSING", "Drive: procesando"],
+    ["SUCCEEDED", "Drive: completado"],
   ] as const)(
     "localizes the compact %s status",
     (status, label) => {
@@ -64,6 +64,7 @@ describe("DriveProjectionState", () => {
       />,
     );
 
-    expect(screen.getByText("Falta cuenta de origen")).toBeInTheDocument();
+    expect(screen.getByText("Drive: pendiente")).toBeInTheDocument();
+    expect(screen.getByText("Fase: PENDING")).toBeInTheDocument();
   });
 });

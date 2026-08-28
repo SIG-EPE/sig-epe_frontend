@@ -39,6 +39,7 @@ import { RequestListTable } from "./request-list-table";
 import { GiofBulkAssignmentBar } from "@/components/giof-work/giof-work-controls";
 import { RequestReviewFilters } from "./request-review-filters";
 import { ROLE_CAPABILITY, hasRoleCapability, isGiofManagerRole, isGiofOperationalRole } from "@/lib/role-capabilities";
+import { REQUEST_STATUS_SURFACE } from "@/lib/request-status-vocabulary";
 import { GIOF_WORK_POOL, GIOF_WORK_SCOPE, type GiofWorkScope } from "@/types/giof-work";
 
 const ALL_STATUSES_FILTER = "ALL";
@@ -635,7 +636,7 @@ export function RequestsPage() {
               <Button size="sm" variant="outline" onClick={() => void refetch()}>Reintentar</Button>
             </div>
           ) : (
-            <RequestListTable requests={displayedRequests} isLoading={isLoading} roleCode={roleCode} currentUserId={user?.id} showResponsible={isReviewInbox || isHistory} showAssignment={isReviewInbox} isGiofManager={isGiofManager && isReviewInbox} selectedAssignmentIds={selectedAssignmentIds} onToggleAssignment={toggleAssignment} onToggleAllAssignments={(checked) => setSelectedAssignmentIds(checked ? displayedRequests.filter((request) => request.giof_work?.canAssign === true).map((request) => request.id).slice(0, 50) : [])} />
+            <RequestListTable requests={displayedRequests} isLoading={isLoading} roleCode={roleCode} currentUserId={user?.id} showResponsible={isReviewInbox || isHistory} showAssignment={isReviewInbox} isGiofManager={isGiofManager && isReviewInbox} selectedAssignmentIds={selectedAssignmentIds} onToggleAssignment={toggleAssignment} onToggleAllAssignments={(checked) => setSelectedAssignmentIds(checked ? displayedRequests.filter((request) => request.giof_work?.canAssign === true).map((request) => request.id).slice(0, 50) : [])} statusSurface={isReviewInbox ? REQUEST_STATUS_SURFACE.REVIEW : REQUEST_STATUS_SURFACE.DETAIL} />
           )}
         </CardContent>
       </Card>

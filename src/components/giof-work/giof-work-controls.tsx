@@ -134,10 +134,10 @@ export function GiofWorkStatus({ requestId, work, currentUserId, isManager = fal
   const assigneeLabel = work.assigneeId === null
     ? "Sin asignar"
     : work.assigneeId === currentUserId
-      ? "Asignado a ti"
+      ? "Asignada a ti"
       : work.assigneeName
-        ? `Asignado a ${work.assigneeName}`
-        : "Asignado a otro usuario";
+        ? `Asignada a ${work.assigneeName}`
+        : "Asignada a otra persona";
   const activeLease = Boolean(work.lease?.expiresAt && new Date(work.lease.expiresAt) > new Date());
   const pool = work.pool;
 
@@ -153,9 +153,9 @@ export function GiofWorkStatus({ requestId, work, currentUserId, isManager = fal
 
   return (
     <div className="flex flex-wrap items-center gap-1" data-testid="giof-work-status">
-      <Badge variant={work.assigneeId ? "secondary" : "outline"}>{assigneeLabel}</Badge>
-      {activeLease && <Badge variant="outline">En uso</Badge>}
-      {work.readOnly && <Badge variant="outline">Solo lectura</Badge>}
+      <Badge variant={work.assigneeId ? "secondary" : "outline"} aria-label={`Asignación GIOF: ${assigneeLabel}`}>{assigneeLabel}</Badge>
+      {activeLease && <Badge variant="outline" aria-label="Asignación GIOF: En uso">En uso</Badge>}
+      {work.readOnly && <Badge variant="outline" aria-label="Asignación GIOF: Solo lectura">Solo lectura</Badge>}
       {isManager && (
         <Button type="button" variant="ghost" size="icon" className="size-7" onClick={() => void openHistory()} aria-label="Ver historial de asignación" data-testid="giof-history-button">
           <History className="size-4" />

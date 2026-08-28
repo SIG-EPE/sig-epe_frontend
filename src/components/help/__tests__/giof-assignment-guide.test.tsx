@@ -67,7 +67,7 @@ describe("GiofAssignmentGuide", () => {
     const rexan = document.getElementById("rexan");
     expect(rexan).toHaveFocus();
     expect(within(rexan!).getByText(/rendición de anticipo vinculada, no el anticipo de origen/i)).toBeInTheDocument();
-    expect(within(rexan!).getByText(/rendición en preparación, en revisión, en validación u observada/i)).toBeInTheDocument();
+    expect(within(rexan!).getByText(/en preparación, en revisión, en validación u observada/i)).toBeInTheDocument();
     expect(within(rexan!).getByText(/rendida no tiene seguimiento asignable/i)).toBeInTheDocument();
   });
 
@@ -83,9 +83,9 @@ describe("GiofAssignmentGuide", () => {
     setRole(ROLE_CODE.GIOF_GESTOR);
     const { container } = render(<GiofAssignmentGuide />);
 
-    expect(screen.getByText(/en revisión es asignable/i)).toBeInTheDocument();
-    expect(screen.getByText(/pagado con falta constancia o falta referencia/i)).toBeInTheDocument();
-    expect(screen.getByText(/pagado sin datos pendientes no es asignable/i)).toBeInTheDocument();
+    expect(screen.getByText(/por revisar es asignable/i)).toBeInTheDocument();
+    expect(screen.getByText(/pago registrado con falta constancia o falta referencia/i)).toBeInTheDocument();
+    expect(screen.getByText(/pago registrado sin datos pendientes no es asignable/i)).toBeInTheDocument();
     expect(screen.getByText(/observada.*faltan documentos.*seguimiento asignable/i)).toBeInTheDocument();
     expect(container.textContent).not.toMatch(/\b(?:SUBMITTED|ADVANCE_SETTLEMENT|REQUEST|PAYMENT|REXAN|DRAFT|IN_VALIDATION|OBSERVED|PAID)\b/);
   });
