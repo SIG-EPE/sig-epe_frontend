@@ -9,11 +9,13 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { StatusBadge } from "@/components/requests/status-badge";
 import { DriveProjectionState } from "@/components/requests/drive-projection-state";
 import { PaymentAllocationProofCoverage } from "@/components/payments/payment-allocation-proof-coverage";
+import { PaymentCompletenessStatus } from "@/components/payments/payment-completeness-status";
 import { getDriveRouteModelLabel } from "@/components/payments/payment-form-sections";
 import { QueueTableRowsSkeleton } from "@/components/performance/route-skeletons";
 import { ROUTES } from "@/lib/constants";
 import { getSafeDocumentUrl } from "@/lib/safe-url";
-import { REQUEST_TYPE_LABELS, formatRequestCurrency, formatRequestDate, getPaymentId, getPaymentPendingBadges, getPaymentProofDisplayItems, getPaymentRexanStatusLabel, getPlanningLineDisplay, getRegisteredByDisplayName, getRegisteredPartyDisplay, getRegisteredPartyDocumentLabel, getRequestPayableAmount, hasPaymentDetailsPending, hasPaymentProofPending, hasPaymentSourcePending, isRexanExcessRequest } from "@/lib/requests";
+import { REQUEST_TYPE_LABELS, formatRequestCurrency, formatRequestDate, getPaymentId, getPaymentProofDisplayItems, getPaymentRexanStatusLabel, getPlanningLineDisplay, getRegisteredByDisplayName, getRegisteredPartyDisplay, getRegisteredPartyDocumentLabel, getRequestPayableAmount, isRexanExcessRequest } from "@/lib/requests";
+import { getPaymentCompletenessPresentation } from "@/lib/payment-completeness";
 import { REQUEST_STATUS, type PaymentRequest } from "@/types/requests";
 import { GiofWorkStatus } from "@/components/giof-work/giof-work-controls";
 import { canOperateAssignedGiofWork } from "@/lib/role-capabilities";
@@ -38,9 +40,23 @@ interface PaymentQueueTableProps {
   selectedAssignmentIds?: string[];
   onToggleAssignment?: (requestId: string, checked: boolean) => void;
   onToggleAllAssignments?: (checked: boolean) => void;
+  maxSelectedRequests?: number;
 }
 
-export function PaymentQueueTable({ requests, isLoading, onRegisterPayment, selectedRequestIds = [], onToggleRequest, onToggleAll, onCompletePaymentDetails, onRetryRexanActivation, currentUserId, isGiofManager = false, canManagePayments = true, paymentLeases = [], selectedAssignmentIds = [], onToggleAssignment, onToggleAllAssignments }: PaymentQueueTableProps) {
+export function isBulkPaymentSelectable(request: PaymentRequest, currentUserId?: string | null): boolean {
+  const work = request.giof_work;
+  if (request.status !== REQUEST_STATUS.APPROVED || request.payment || request.payment_id || !work || work.pool !== GIOF_WORK_POOL.PAYMENT || !currentUserId) return false;
+  if (work.assigneeId !== null && work.assigneeId !== currentUserId) return false;
+  const foreignLeaseIsActive = Boolean(
+    work.lease?.ownerId
+      && work.lease.ownerId !== currentUserId
+      && work.lease.expiresAt
+      && new Date(work.lease.expiresAt).getTime() > Date.now(),
+  );
+  return !foreignLeaseIsActive;
+}
+
+export function PaymentQueueTable({ requests, isLoading, onRegisterPayment, selectedRequestIds = [], onToggleRequest, onToggleAll, onCompletePaymentDetails, onRetryRexanActivation, currentUserId, isGiofManager = false, canManagePayments = true, paymentLeases = [], selectedAssignmentIds = [], onToggleAssignment, onToggleAllAssignments, maxSelectedRequests = 5 }: PaymentQueueTableProps) {
   if (isLoading) {
     return <QueueTableRowsSkeleton rows={5} columns={7} />;
   }
@@ -49,7 +65,7 @@ export function PaymentQueueTable({ requests, isLoading, onRegisterPayment, sele
     return <p className="rounded-md border p-6 text-sm text-muted-foreground">No hay solicitudes para este filtro.</p>;
   }
 
-  const selectableRequests = requests.filter((request) => request.status === REQUEST_STATUS.APPROVED && canOperateAssignedGiofWork(request.giof_work, currentUserId));
+  const selectableRequests = requests.filter((request) => isBulkPaymentSelectable(request, currentUserId));
   const assignableRequests = requests.filter((request) => request.giof_work?.canAssign === true);
   const allSelectableSelected = selectableRequests.length > 0 && selectableRequests.every((request) => selectedRequestIds.includes(request.id));
   const allAssignableSelected = assignableRequests.length > 0 && assignableRequests.every((request) => selectedAssignmentIds.includes(request.id));
@@ -71,10 +87,10 @@ export function PaymentQueueTable({ requests, isLoading, onRegisterPayment, sele
                     checked={paymentSelectAllState}
                     disabled={!onToggleAll || selectableRequests.length === 0}
                     onCheckedChange={(checked) => onToggleAll?.(checked === true)}
-                    aria-label="Seleccionar todas las solicitudes visibles para pago masivo"
+                    aria-label="Seleccionar solicitudes elegibles de esta página para pago masivo"
                     data-testid="payment-select-all-checkbox"
                   />
-                  <span aria-hidden="true">Todas</span>
+                   <span aria-hidden="true">Máximo {maxSelectedRequests} de esta página</span>
                 </div>
               </div>
             </TableHead>
@@ -134,9 +150,12 @@ export function PaymentQueueTable({ requests, isLoading, onRegisterPayment, sele
           const registeredParty = getRegisteredPartyDisplay(request);
           const registeredPartyDocument = getRegisteredPartyDocumentLabel(request);
           const registeredBy = getRegisteredByDisplayName(request);
-          const paymentCompletenessLabels = request.status === REQUEST_STATUS.PAID
-            ? getPaymentPendingBadges(request)
-            : [];
+          const paymentCompleteness = getPaymentCompletenessPresentation({
+            completeness: request.payment?.completeness,
+            missing_fields: request.payment?.missing_fields,
+            proof_pending: request.payment?.proof_pending ?? request.payment_proof_pending ?? request.proof_pending,
+            details_pending: request.payment?.details_pending ?? request.payment_details_pending ?? request.details_pending,
+          });
           const assignmentDisabledReason = request.status === REQUEST_STATUS.PAID
             ? "Trabajo de pago completo: no hay constancia ni referencia pendiente"
             : "No asignable en su estado actual";
@@ -146,9 +165,11 @@ export function PaymentQueueTable({ requests, isLoading, onRegisterPayment, sele
           <TableRow data-testid="payment-queue-row">
             {onToggleRequest && (
               <TableCell>
-                {request.status === REQUEST_STATUS.APPROVED && canOperate ? (
-                  <Checkbox
-                    checked={selectedRequestIds.includes(request.id)}
+                {isBulkPaymentSelectable(request, currentUserId) ? (
+                   <Checkbox
+                     checked={selectedRequestIds.includes(request.id)}
+                     disabled={!selectedRequestIds.includes(request.id) && selectedRequestIds.length >= maxSelectedRequests}
+                     title={!selectedRequestIds.includes(request.id) && selectedRequestIds.length >= maxSelectedRequests ? `Puedes seleccionar como máximo ${maxSelectedRequests} solicitudes.` : undefined}
                     onCheckedChange={(checked) => onToggleRequest(request.id, checked === true)}
                     aria-label={`Seleccionar ${request.request_code ?? request.sequential_number ?? request.id} para pago masivo`}
                     data-testid="payment-row-checkbox"
@@ -194,14 +215,10 @@ export function PaymentQueueTable({ requests, isLoading, onRegisterPayment, sele
                     {getPaymentRexanStatusLabel(request.rexan_activation.status, false)}
                   </Badge>
                 )}
-                {request.payment?.drive_projection_status !== "SOURCE_REQUIRED" && request.payment ? (
+                {request.payment ? (
                   <DriveProjectionState payment={request.payment} compact />
                 ) : null}
-                {paymentCompletenessLabels.length > 0 && (
-                  <div className="flex flex-wrap gap-1">
-                    {paymentCompletenessLabels.map((label) => <Badge key={label} variant="outline">{label}</Badge>)}
-                  </div>
-                )}
+                {request.status === REQUEST_STATUS.PAID ? <PaymentCompletenessStatus request={request} /> : null}
               </div>
             </TableCell>
             <TableCell>
@@ -225,7 +242,7 @@ export function PaymentQueueTable({ requests, isLoading, onRegisterPayment, sele
                    <Button size="sm" onClick={() => onRegisterPayment(request)} data-testid="register-payment-button">Registrar pago</Button>
                  ) : canManagePayments && request.status === REQUEST_STATUS.APPROVED && canOperate ? (
                    <Button size="sm" onClick={() => onRegisterPayment(request)} data-testid="process-payment-button">Procesar</Button>
-                 ) : canManagePayments && (hasPaymentProofPending(request) || hasPaymentDetailsPending(request) || hasPaymentSourcePending(request)) && getPaymentId(request) && canOperate ? (
+                  ) : canManagePayments && paymentCompleteness.hasPendingDetails && getPaymentId(request) && canOperate ? (
                   <Button size="sm" variant="outline" onClick={() => onCompletePaymentDetails?.(request)} data-testid="complete-payment-details-button">Completar pago</Button>
                  ) : request.status === REQUEST_STATUS.PAID ? (
                    <span className="text-sm text-muted-foreground">Registrado</span>

@@ -598,7 +598,7 @@ export function useBulkMarkPaid() {
     setError(null);
     try {
       const result = await api.post<BulkMarkPaidResponse>(
-        "/requests/bulk/mark-paid",
+        "/requests/bulk/register-payments",
         input,
       );
       invalidateRequestCaches();

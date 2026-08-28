@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -8,6 +8,10 @@ import { REQUEST_CURRENCY, REQUEST_STATUS, REQUEST_TYPE, type PaymentRequest } f
 
 const mocks = vi.hoisted(() => ({
   bulkMarkPaid: vi.fn(),
+  completePaymentDetails: vi.fn(),
+  uploadDocument: vi.fn(),
+  acquireLease: vi.fn(),
+  releaseLease: vi.fn(),
   usePaymentQueue: vi.fn(),
 }));
 let currentQuery = "";
@@ -29,7 +33,12 @@ vi.mock("@/hooks/use-requests", () => ({
     error: null,
   }),
   useCompletePaymentDetails: () => ({
-    completePaymentDetails: vi.fn(),
+    completePaymentDetails: mocks.completePaymentDetails,
+    isLoading: false,
+    error: null,
+  }),
+  useUploadRequestDocument: () => ({
+    uploadDocument: mocks.uploadDocument,
     isLoading: false,
     error: null,
   }),
@@ -54,8 +63,8 @@ vi.mock("next/navigation", () => ({
 vi.mock("@/hooks/use-giof-work", () => ({
   useGiofWorkLeaseSet: () => ({
     leases: [],
-    acquire: vi.fn(),
-    release: vi.fn(),
+    acquire: mocks.acquireLease,
+    release: mocks.releaseLease,
     releaseAll: vi.fn(),
   }),
   fetchGiofAssignees: vi.fn().mockResolvedValue([]),
@@ -126,8 +135,13 @@ function pendingSourceRequest(): PaymentRequest {
       updated_at: "2026-05-14T15:30:00.000Z",
     },
     giof_work: {
+      pool: "PAYMENT",
       assigneeId: "user-1",
+      assignmentVersion: "1",
+      lease: null,
       canAcquire: true,
+      canEdit: true,
+      readOnly: false,
     } as PaymentRequest["giof_work"],
   };
 }
@@ -200,6 +214,40 @@ describe("payment pending queue action", () => {
       status: REQUEST_STATUS.PAID,
       completeness: "any_missing",
     }), expect.anything());
+  });
+
+  it("refresca la cola forzadamente después de completar una referencia", async () => {
+    currentQuery = "tab=pending-data";
+    const incomplete = pendingSourceRequest();
+    incomplete.payment = {
+      ...incomplete.payment!,
+      operation_reference: null,
+      details_pending: true,
+      missing_fields: ["operation_reference"],
+      completeness: "REFERENCE_PENDING",
+    };
+    const refetch = vi.fn().mockResolvedValue(undefined);
+    mocks.usePaymentQueue.mockReturnValue({
+      requests: [incomplete], total: 1, page: 1, limit: 20,
+      summary: { count: 1, payable_amount_by_currency: { PEN: "100.00" }, status_counts: { PAID: 1 } },
+      isLoading: false, isRefreshing: false, error: null, refetch,
+    });
+    mocks.acquireLease.mockResolvedValue({ requestId: incomplete.id });
+    mocks.releaseLease.mockResolvedValue(undefined);
+    mocks.completePaymentDetails.mockResolvedValue(incomplete);
+    const user = userEvent.setup();
+    render(<PaymentQueuePage />);
+
+    await user.click(screen.getByRole("button", { name: "Completar pago" }));
+    const dialog = await screen.findByRole("dialog", { name: "Completar pago" });
+    await user.type(within(dialog).getByLabelText(/Referencia de operación/), "OP-REFRESH");
+    await user.click(within(dialog).getByRole("button", { name: "Completar pago" }));
+
+    expect(mocks.completePaymentDetails).toHaveBeenCalledWith("payment-1", {
+      operation_reference: "OP-REFRESH",
+      proof_document_id: undefined,
+    });
+    expect(refetch).toHaveBeenCalledWith({ force: true });
   });
 
   it("selecciona solo esta página asignable y limpia la selección al cambiar la identidad de vista", async () => {
@@ -276,7 +324,7 @@ describe("payment pending queue action", () => {
     expect(replaceMock).toHaveBeenLastCalledWith("/payments");
   });
 
-  it("muestra lifecycle Payment y ejes secundarios sin sustituirlos", () => {
+  it("muestra lifecycle Payment y completitud backend sin SOURCE_REQUIRED", () => {
     render(
       <PaymentQueueTable
         requests={[failedRexanRequest(true)]}
@@ -288,7 +336,7 @@ describe("payment pending queue action", () => {
 
     expect(screen.getByText("Pago registrado")).toBeInTheDocument();
     expect(screen.getByText("REXAN: requiere atención")).toBeInTheDocument();
-    expect(screen.getByText("Falta cuenta de origen")).toBeInTheDocument();
+    expect(screen.getByText("Pago completo")).toBeInTheDocument();
   });
 
   it("no presenta completitud de pago antes de que el pago esté registrado", () => {
@@ -308,7 +356,7 @@ describe("payment pending queue action", () => {
     );
 
     expect(screen.getByRole("generic", { name: "Estado de pago: Pendiente de pago" })).toBeInTheDocument();
-    expect(screen.queryByText("Datos de pago completos")).not.toBeInTheDocument();
+    expect(screen.queryByText("Pago completo")).not.toBeInTheDocument();
   });
 
   it("muestra la completitud de pago cuando no hay datos pendientes", () => {
@@ -325,13 +373,23 @@ describe("payment pending queue action", () => {
     );
 
     expect(screen.getByText("Pago registrado")).toBeInTheDocument();
-    expect(screen.getByText("Datos de pago completos")).toBeInTheDocument();
+    expect(screen.getByText("Pago completo")).toBeInTheDocument();
   });
 
-  it("shows the source badge and exactly one Completar pago action", () => {
+  it("shows canonical missing badges and exactly one Completar pago action", () => {
+    const incomplete = pendingSourceRequest();
+    incomplete.payment = {
+      ...incomplete.payment!,
+      operation_reference: null,
+      proof_document_id: null,
+      proof_pending: true,
+      details_pending: true,
+      missing_fields: ["operation_reference", "proof"],
+      completeness: "BOTH_PENDING",
+    };
     render(
       <PaymentQueueTable
-        requests={[pendingSourceRequest()]}
+        requests={[incomplete]}
         isLoading={false}
         onRegisterPayment={vi.fn()}
         onCompletePaymentDetails={vi.fn()}
@@ -340,12 +398,49 @@ describe("payment pending queue action", () => {
       />,
     );
 
-    expect(screen.getByText("Falta cuenta de origen")).toBeInTheDocument();
+    expect(screen.getByText("Falta referencia")).toBeInTheDocument();
+    expect(screen.getByText("Falta constancia")).toBeInTheDocument();
     expect(screen.getAllByRole("button", { name: "Completar pago" })).toHaveLength(1);
     expect(screen.queryByRole("button", { name: "Agregar constancia de pago" })).not.toBeInTheDocument();
   });
 
-  it("does not expose bulk payment selection or actions on the payment queue page", () => {
+  it.each(["GIOF_GESTOR", "GIOF_MANAGER"])("permite completar a %s y deja otros roles en lectura", (role) => {
+    const incomplete = pendingSourceRequest();
+    incomplete.payment = {
+      ...incomplete.payment!,
+      operation_reference: null,
+      details_pending: true,
+      missing_fields: ["operation_reference"],
+      completeness: "REFERENCE_PENDING",
+    };
+    const { rerender } = render(
+      <PaymentQueueTable
+        requests={[incomplete]}
+        isLoading={false}
+        onRegisterPayment={vi.fn()}
+        onCompletePaymentDetails={vi.fn()}
+        currentUserId="user-1"
+        canManagePayments={role === "GIOF_GESTOR" || role === "GIOF_MANAGER"}
+      />,
+    );
+    expect(screen.getByRole("button", { name: "Completar pago" })).toBeInTheDocument();
+
+    rerender(
+      <PaymentQueueTable
+        requests={[incomplete]}
+        isLoading={false}
+        onRegisterPayment={vi.fn()}
+        onCompletePaymentDetails={vi.fn()}
+        currentUserId="user-1"
+        canManagePayments={false}
+      />,
+    );
+    expect(screen.queryByRole("button", { name: "Completar pago" })).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Ver solicitud" })).toBeInTheDocument();
+  });
+
+  it.each(["GIOF_GESTOR", "GIOF_MANAGER"])("habilita pago masivo visible para %s", async (role) => {
+    roleCode = role;
     mocks.usePaymentQueue.mockReturnValue({
       requests: [
         {
@@ -366,9 +461,53 @@ describe("payment pending queue action", () => {
 
     render(<PaymentQueuePage />);
 
-    expect(screen.queryByRole("checkbox", { name: /pago masivo/i })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /pago masivo|marcar como pagadas/i })).not.toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: /seleccionar solicitudes elegibles de esta página para pago masivo/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /registrar pagos seleccionados/i })).toBeDisabled();
     expect(mocks.bulkMarkPaid).not.toHaveBeenCalled();
+  });
+
+  it("limita a cinco visibles elegibles y excluye asignación o lease ajenos", () => {
+    const ownRequests = Array.from({ length: 6 }, (_, index) => ({
+      ...pendingSourceRequest(),
+      id: `request-${index + 1}`,
+      request_code: `SOL-${index + 1}`,
+      status: REQUEST_STATUS.APPROVED,
+      payment: undefined,
+      payment_id: undefined,
+    }));
+    const foreignAssignee = {
+      ...ownRequests[0],
+      id: "request-foreign-assignee",
+      request_code: "SOL-FOREIGN-ASSIGNEE",
+      giof_work: { ...ownRequests[0].giof_work!, assigneeId: "user-2" },
+    };
+    const foreignLease = {
+      ...ownRequests[0],
+      id: "request-foreign-lease",
+      request_code: "SOL-FOREIGN-LEASE",
+      giof_work: {
+        ...ownRequests[0].giof_work!,
+        assigneeId: null,
+        lease: { ownerId: "user-2", heartbeatAt: null, expiresAt: "2099-01-01T00:00:00.000Z" },
+      },
+    };
+
+    render(
+      <PaymentQueueTable
+        requests={[...ownRequests, foreignAssignee, foreignLease]}
+        isLoading={false}
+        onRegisterPayment={vi.fn()}
+        currentUserId="user-1"
+        selectedRequestIds={ownRequests.slice(0, 5).map((request) => request.id)}
+        onToggleRequest={vi.fn()}
+        onToggleAll={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole("checkbox", { name: "Seleccionar SOL-6 para pago masivo" })).toBeDisabled();
+    expect(screen.queryByRole("checkbox", { name: /SOL-FOREIGN-ASSIGNEE para pago masivo/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("checkbox", { name: /SOL-FOREIGN-LEASE para pago masivo/ })).not.toBeInTheDocument();
+    expect(screen.getByText("Máximo 5 de esta página")).toBeInTheDocument();
   });
 
   it.each([

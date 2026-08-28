@@ -17,6 +17,12 @@ import type {
   GiofWorkPool,
 } from "@/types/giof-work";
 
+export interface GiofSelfAssignmentResult {
+  requestId: string;
+  assignmentVersion: string;
+  changed: boolean;
+}
+
 const DEFAULT_HEARTBEAT_MS = 60_000;
 
 function toExpectedVersion(version: string): number {
@@ -27,6 +33,19 @@ function toExpectedVersion(version: string): number {
 
 export function getGiofConflictMessage(error: unknown): string {
   if (error instanceof ApiRequestError && error.status === 409) {
+    const code = error.body.code;
+    if (code === "ACTIVE_FOREIGN_LEASE" || code === "GIOF_LEASE_FOREIGN") {
+      return "La solicitud tiene un lease activo de otra persona. No se modificó la asignación ni el pago.";
+    }
+    if (code === "VERSION_MISMATCH" || code === "GIOF_ASSIGNMENT_VERSION_STALE") {
+      return "La versión de asignación cambió. Actualiza la cola antes de reintentar.";
+    }
+    if (code === "ASSIGNEE_MISMATCH") {
+      return "La solicitud está asignada a otra persona y no puede tomarse desde este lote.";
+    }
+    if (code === "INELIGIBLE_LIFECYCLE") {
+      return "La solicitud ya no es elegible para pago. Actualiza la cola.";
+    }
     return "La asignación o sesión de trabajo cambió, venció o pertenece a otra persona. Actualiza la bandeja antes de continuar.";
   }
   return error instanceof Error ? error.message : "No se pudo completar la operación GIOF.";
@@ -234,4 +253,20 @@ export async function bulkAssignGiofWork(input: GiofBulkAssignInput): Promise<Gi
   const result = await api.post<GiofBulkAssignResponse>("/giof-work/assignments/bulk", input);
   invalidateRequestDomain();
   return result;
+}
+
+export async function selfAssignPaymentWork(
+  requestId: string,
+  expectedVersion: number,
+): Promise<GiofSelfAssignmentResult> {
+  try {
+    const result = await api.post<GiofSelfAssignmentResult>(
+      "/giof-work/assignments/self",
+      { requestId, expectedVersion },
+    );
+    invalidateRequestDomain(requestId);
+    return result;
+  } catch (error) {
+    throw new Error(getGiofConflictMessage(error));
+  }
 }

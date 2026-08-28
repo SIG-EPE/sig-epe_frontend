@@ -766,7 +766,7 @@ describe("request hook URL helpers", () => {
     );
   });
 
-  it("ejecuta marcado masivo pagado con contrato JSON confirmado", async () => {
+  it("registra el lote DAILY con el endpoint nuevo y nunca usa el legacy", async () => {
     vi.mocked(api.post).mockResolvedValueOnce({
       batch_id: "batch-1",
       item_count: 2,
@@ -780,20 +780,27 @@ describe("request hook URL helpers", () => {
     await act(async () => {
       await expect(
         result.current.bulkMarkPaid({
-          request_ids: ["req-1", "req-2"],
+          client_batch_id: "00000000-0000-4000-8000-000000000001",
           paid_at: "2026-05-30T10:00:00.000Z",
-          operation_reference: "OP-1",
-          notes: "Pagado por lote",
+          source_account_key: "BCP_PEN",
+          items: [
+            { request_id: "req-1", assignment_version: 1, lease_token: "00000000-0000-4000-8000-000000000011", operation_reference: "OP-1" },
+            { request_id: "req-2", assignment_version: 2, lease_token: "00000000-0000-4000-8000-000000000012" },
+          ],
         }),
       ).resolves.toMatchObject({ batch_id: "batch-1" });
     });
 
-    expect(api.post).toHaveBeenCalledWith("/requests/bulk/mark-paid", {
-      request_ids: ["req-1", "req-2"],
+    expect(api.post).toHaveBeenCalledWith("/requests/bulk/register-payments", {
+      client_batch_id: "00000000-0000-4000-8000-000000000001",
       paid_at: "2026-05-30T10:00:00.000Z",
-      operation_reference: "OP-1",
-      notes: "Pagado por lote",
+      source_account_key: "BCP_PEN",
+      items: [
+        { request_id: "req-1", assignment_version: 1, lease_token: "00000000-0000-4000-8000-000000000011", operation_reference: "OP-1" },
+        { request_id: "req-2", assignment_version: 2, lease_token: "00000000-0000-4000-8000-000000000012" },
+      ],
     });
+    expect(api.post).not.toHaveBeenCalledWith("/requests/bulk/mark-paid", expect.anything());
   });
 
   it("envía paid_at y source_account_key en el pago individual", async () => {
@@ -830,19 +837,14 @@ describe("request hook URL helpers", () => {
     expect(formData.get("source_account_key")).toBe("BBVA_USD");
   });
 
-  it("ejecuta completado de datos de pago como multipart sin monto ni fecha", async () => {
+  it("ejecuta PATCH de detalles con referencia/constancia pre-subida sin monto ni fecha", async () => {
     vi.mocked(api.patchForm).mockResolvedValueOnce({ id: "payment-1" });
     const { result } = renderHook(() => useCompletePaymentDetails());
 
     await act(async () => {
       await result.current.completePaymentDetails("payment-1", {
-        proof: new File(["proof"], "constancia.pdf", {
-          type: "application/pdf",
-        }),
+        proof_document_id: "proof-document-1",
         operation_reference: " OP-2 ",
-        source_account_key: "BCP_PEN",
-        bank_commission: 1.5,
-        notes: "Listo",
       });
     });
 
@@ -854,8 +856,9 @@ describe("request hook URL helpers", () => {
       .mocked(api.patchForm)
       .mock.calls.at(-1)?.[1] as FormData;
     expect(formData.get("operation_reference")).toBe("OP-2");
-    expect(formData.get("source_account_key")).toBe("BCP_PEN");
-    expect(formData.get("bank_commission")).toBe("1.5");
+    expect(formData.get("proof_document_id")).toBe("proof-document-1");
+    expect(formData.has("proof")).toBe(false);
+    expect(formData.has("source_account_key")).toBe(false);
     expect(formData.has("amount_paid")).toBe(false);
     expect(formData.has("paid_at")).toBe(false);
   });

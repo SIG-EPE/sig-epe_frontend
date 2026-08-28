@@ -1,7 +1,7 @@
 import { act, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { useGiofWorkLease } from "@/hooks/use-giof-work";
+import { selfAssignPaymentWork, useGiofWorkLease } from "@/hooks/use-giof-work";
 import { api } from "@/lib/api-client";
 import { getGiofMutationHeaders } from "@/lib/giof-work-lease-session";
 import { GIOF_WORK_POOL, type GiofWorkLease, type GiofWorkMetadata } from "@/types/giof-work";
@@ -70,5 +70,16 @@ describe("useGiofWorkLease", () => {
     await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
 
     expect(api.post).toHaveBeenCalledWith("/giof-work/leases/heartbeat", expect.objectContaining({ requestId: "request-1", token: lease.token }));
+  });
+
+  it("autoasigna PAYMENT con la versión actual antes de adquirir lease", async () => {
+    vi.mocked(api.post).mockResolvedValueOnce({ requestId: "request-1", assignmentVersion: "4", changed: true });
+
+    await expect(selfAssignPaymentWork("request-1", 3)).resolves.toMatchObject({ assignmentVersion: "4" });
+
+    expect(api.post).toHaveBeenCalledWith("/giof-work/assignments/self", {
+      requestId: "request-1",
+      expectedVersion: 3,
+    });
   });
 });

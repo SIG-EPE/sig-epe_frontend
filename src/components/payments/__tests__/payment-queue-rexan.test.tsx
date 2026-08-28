@@ -53,6 +53,11 @@ vi.mock("@/hooks/use-requests", () => ({
     isLoading: false,
     error: null,
   }),
+  useUploadRequestDocument: () => ({
+    uploadDocument: vi.fn(),
+    isLoading: false,
+    error: null,
+  }),
   usePaymentQueue: mocks.usePaymentQueue,
 }));
 
@@ -457,7 +462,7 @@ describe("REXAN payment queue and modal", () => {
     );
 
     const paymentSelectAll = screen.getByRole("checkbox", {
-      name: "Seleccionar todas las solicitudes visibles para pago masivo",
+      name: "Seleccionar solicitudes elegibles de esta página para pago masivo",
     });
     const assignmentSelectAll = screen.getByRole("checkbox", {
       name: "Seleccionar esta página",
@@ -480,7 +485,7 @@ describe("REXAN payment queue and modal", () => {
         .getByRole("checkbox", { name: "Seleccionar SOL-1 para asignar" })
         .closest("td")?.firstElementChild,
     ).toHaveClass("min-w-36", "items-start", "gap-2");
-    expect(within(paymentHeader!).getByText("Todas")).toBeInTheDocument();
+    expect(within(paymentHeader!).getByText("Máximo 5 de esta página")).toBeInTheDocument();
     expect(within(assignmentHeader!).getByText("Seleccionar esta página")).toBeInTheDocument();
     for (const control of screen.getAllByRole("checkbox")) {
       expect(control).toHaveAttribute("data-slot", "checkbox");

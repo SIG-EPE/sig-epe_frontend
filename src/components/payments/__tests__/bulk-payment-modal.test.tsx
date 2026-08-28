@@ -14,9 +14,13 @@ import {
 const mocks = vi.hoisted(() => ({
   bulkMarkPaid: vi.fn(),
   completePaymentDetails: vi.fn(),
+  uploadDocument: vi.fn(),
   retryRexanActivation: vi.fn(),
   push: vi.fn(),
 }));
+
+const LEASE_1 = "00000000-0000-4000-8000-000000000011";
+const LEASE_2 = "00000000-0000-4000-8000-000000000012";
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: mocks.push }),
@@ -30,6 +34,11 @@ vi.mock("@/hooks/use-requests", () => ({
   }),
   useCompletePaymentDetails: () => ({
     completePaymentDetails: mocks.completePaymentDetails,
+    isLoading: false,
+    error: null,
+  }),
+  useUploadRequestDocument: () => ({
+    uploadDocument: mocks.uploadDocument,
     isLoading: false,
     error: null,
   }),
@@ -83,14 +92,52 @@ function makeRequest(overrides: Partial<PaymentRequest> = {}): PaymentRequest {
   };
 }
 
+function makeIncompletePaidRequest(overrides: Partial<PaymentRequest> = {}): PaymentRequest {
+  return makeRequest({
+    status: REQUEST_STATUS.PAID,
+    paid_at: "2026-08-28T10:00:00-05:00",
+    amount_disbursed: 100,
+    payment_id: "payment-1",
+    payment: {
+      id: "payment-1",
+      payment_request_id: "req-1",
+      paid_at: "2026-08-28T10:00:00-05:00",
+      operation_reference: null,
+      amount_paid: 100,
+      bank_commission: null,
+      notes: null,
+      source_account_key: "BCP_PEN",
+      drive_projection_status: "PENDING",
+      proof_document_id: null,
+      proof_pending: true,
+      details_pending: true,
+      missing_fields: ["operation_reference", "proof"],
+      completeness: "BOTH_PENDING",
+      registered_by_id: "user-1",
+      created_at: "2026-08-28T10:00:00-05:00",
+      updated_at: "2026-08-28T10:00:00-05:00",
+    },
+    ...overrides,
+  });
+}
+
 describe("bulk payment modals", () => {
   beforeEach(() => {
     mocks.bulkMarkPaid.mockReset();
     mocks.completePaymentDetails.mockReset();
+    mocks.uploadDocument.mockReset();
     mocks.push.mockReset();
   });
 
-  it("deshabilita el pago masivo porque el destino diario exige cuenta por solicitud", () => {
+  it("muestra preview, exige fecha/cuenta y envía referencia por solicitud", async () => {
+    const user = userEvent.setup();
+    mocks.bulkMarkPaid.mockResolvedValueOnce({
+      batch_id: "batch-1", item_count: 2, success_count: 2, failed_count: 0,
+      total_amount: 150, results: [
+        { request_id: "req-1", status: "SUCCESS" },
+        { request_id: "req-2", status: "ALREADY_PROCESSED" },
+      ], rexan_metrics: {},
+    });
     render(
       <BulkMarkPaidModal
         requests={[
@@ -100,29 +147,81 @@ describe("bulk payment modals", () => {
         open
         onOpenChange={vi.fn()}
         onSuccess={vi.fn()}
+        prepareItems={async () => [
+          { request_id: "req-1", assignment_version: 1, lease_token: LEASE_1 },
+          { request_id: "req-2", assignment_version: 2, lease_token: LEASE_2 },
+        ]}
       />,
     );
 
-    expect(screen.getByText(/pago masivo está deshabilitado con destinos diarios/i)).toBeInTheDocument();
-    expect(screen.getByTestId("bulk-payment-paid-at-input")).toBeDisabled();
-    expect(screen.getByTestId("bulk-payment-reference-input")).toBeDisabled();
-    expect(screen.getByTestId("bulk-payment-notes-input")).toBeDisabled();
-    const submitButton = screen.getByRole("button", { name: "Pago masivo no disponible" });
-    expect(submitButton).toBeDisabled();
-    fireEvent.submit(submitButton.closest("form") as HTMLFormElement);
-    expect(mocks.bulkMarkPaid).not.toHaveBeenCalled();
+    expect(screen.getAllByText("SOL-1")).toHaveLength(2);
+    expect(screen.getAllByTestId("bulk-payment-reference-input")).toHaveLength(2);
+    await user.click(screen.getByRole("button", { name: "Registrar 2 pagos" }));
+    expect(await screen.findByText(/selecciona la cuenta de origen/i)).toBeInTheDocument();
+
+    await user.selectOptions(screen.getByTestId("bulk-payment-source-account-select"), "BCP_PEN");
+    await user.type(screen.getAllByTestId("bulk-payment-reference-input")[0], "OP-UNO");
+    await user.click(screen.getByRole("button", { name: "Registrar 2 pagos" }));
+
+    await waitFor(() => expect(mocks.bulkMarkPaid).toHaveBeenCalledWith(expect.objectContaining({
+      source_account_key: "BCP_PEN",
+      items: [
+        expect.objectContaining({ request_id: "req-1", operation_reference: "OP-UNO" }),
+        expect.objectContaining({ request_id: "req-2", operation_reference: undefined }),
+      ],
+    })));
+    expect(screen.getByText("Procesado correctamente")).toBeInTheDocument();
+    expect(screen.getByText("Ya estaba procesado")).toBeInTheDocument();
   });
 
-  it("completa datos por multipart sin exponer monto ni fecha", async () => {
+  it("conserva resultados y reintenta únicamente fallidos con una nueva intención estable", async () => {
+    const user = userEvent.setup();
+    mocks.bulkMarkPaid
+      .mockResolvedValueOnce({ batch_id: "batch-1", item_count: 2, success_count: 1, failed_count: 1, total_amount: 100, rexan_metrics: {}, results: [
+        { request_id: "req-1", status: "SUCCESS" },
+        { request_id: "req-2", status: "FAILED", error_code: "ASSIGNMENT_VERSION_STALE", error: "La asignación cambió." },
+      ] })
+      .mockResolvedValueOnce({ batch_id: "batch-2", item_count: 1, success_count: 1, failed_count: 0, total_amount: 50, rexan_metrics: {}, results: [
+        { request_id: "req-2", status: "SUCCESS" },
+      ] });
+    const prepareItems = vi.fn(async (requests: PaymentRequest[]) => requests.map((request, index) => ({
+      request_id: request.id, assignment_version: index + 1, lease_token: index === 0 ? LEASE_1 : LEASE_2,
+    })));
+    render(<BulkMarkPaidModal requests={[makeRequest({ id: "req-1" }), makeRequest({ id: "req-2", request_code: "SOL-2" })]} open onOpenChange={vi.fn()} onSuccess={vi.fn()} prepareItems={prepareItems} />);
+    await user.selectOptions(screen.getByTestId("bulk-payment-source-account-select"), "BCP_PEN");
+    await user.click(screen.getByRole("button", { name: "Registrar 2 pagos" }));
+    expect(await screen.findByText("La asignación cambió.")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Reintentar 1 fallido" }));
+    await waitFor(() => expect(mocks.bulkMarkPaid).toHaveBeenCalledTimes(2));
+    expect(mocks.bulkMarkPaid.mock.calls[1][0].items).toHaveLength(1);
+    expect(mocks.bulkMarkPaid.mock.calls[1][0].items[0].request_id).toBe("req-2");
+    expect(mocks.bulkMarkPaid.mock.calls[1][0].client_batch_id).not.toBe(mocks.bulkMarkPaid.mock.calls[0][0].client_batch_id);
+    expect(screen.getAllByText("Procesado correctamente")).toHaveLength(2);
+  });
+
+  it("mantiene client_batch_id al reintentar la misma intención tras un error de transporte", async () => {
+    const user = userEvent.setup();
+    mocks.bulkMarkPaid.mockRejectedValueOnce(new Error("No se pudo conectar")).mockResolvedValueOnce({
+      batch_id: "batch-1", item_count: 1, success_count: 1, failed_count: 0,
+      total_amount: 100, results: [{ request_id: "req-1", status: "SUCCESS" }], rexan_metrics: {},
+    });
+    render(<BulkMarkPaidModal requests={[makeRequest()]} open onOpenChange={vi.fn()} onSuccess={vi.fn()} prepareItems={async () => [{ request_id: "req-1", assignment_version: 1, lease_token: LEASE_1 }]} />);
+    await user.selectOptions(screen.getByTestId("bulk-payment-source-account-select"), "BCP_PEN");
+    await user.click(screen.getByRole("button", { name: "Registrar 1 pago" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("No se pudo conectar");
+    await user.click(screen.getByRole("button", { name: "Registrar 1 pago" }));
+    await waitFor(() => expect(mocks.bulkMarkPaid).toHaveBeenCalledTimes(2));
+    expect(mocks.bulkMarkPaid.mock.calls[1][0].client_batch_id).toBe(mocks.bulkMarkPaid.mock.calls[0][0].client_batch_id);
+  });
+
+  it("sube constancia y completa por PATCH sin exponer monto ni fecha", async () => {
     const user = userEvent.setup();
     mocks.completePaymentDetails.mockResolvedValueOnce({ id: "payment-1" });
+    mocks.uploadDocument.mockResolvedValueOnce({ id: "proof-document-1" });
 
     render(
       <CompletePaymentDetailsModal
-        request={makeRequest({
-          status: REQUEST_STATUS.PAID,
-          payment_id: "payment-1",
-        })}
+        request={makeIncompletePaidRequest()}
         open
         onOpenChange={vi.fn()}
         onSuccess={vi.fn()}
@@ -130,7 +229,7 @@ describe("bulk payment modals", () => {
     );
 
     expect(
-      screen.getByText(/no cambia el monto ni la fecha de pago/),
+      screen.getByText(/fecha, cuenta y monto no se modificarán/),
     ).toBeInTheDocument();
     expect(
       screen.queryByTestId("payment-amount-input"),
@@ -151,13 +250,12 @@ describe("bulk payment modals", () => {
         "payment-1",
         expect.objectContaining({
           operation_reference: "OP-456",
-          proof: expect.any(File),
+          proof_document_id: "proof-document-1",
         }),
       ),
     );
-    expect(
-      mocks.completePaymentDetails.mock.calls[0][1].bank_commission,
-    ).toBeUndefined();
+    expect(mocks.uploadDocument).toHaveBeenCalledBefore(mocks.completePaymentDetails);
+    expect(mocks.completePaymentDetails.mock.calls[0][1].bank_commission).toBeUndefined();
   });
 
   it("mantiene chrome fijo, un solo scroll interno, foco y error asociado en Completar pago", async () => {
@@ -178,9 +276,7 @@ describe("bulk payment modals", () => {
     }));
     render(
       <CompletePaymentDetailsModal
-        request={makeRequest({
-          status: REQUEST_STATUS.PAID,
-          payment_id: "payment-1",
+        request={makeIncompletePaidRequest({
           allocations,
           allocation_count: allocations.length,
         })}

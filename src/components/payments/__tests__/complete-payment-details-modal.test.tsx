@@ -1,17 +1,22 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { CompletePaymentDetailsModal } from "@/components/payments/complete-payment-details-modal";
 import {
-  DRIVE_SOURCE_ACCOUNT,
+  PAYMENT_COMPLETENESS_STATE,
   REQUEST_CURRENCY,
+  REQUEST_DOCUMENT_CATEGORY,
+  REQUEST_DOCUMENT_STORAGE_PROVIDER,
+  REQUEST_DOCUMENT_UPLOAD_STATUS,
   REQUEST_STATUS,
   REQUEST_TYPE,
+  type PaymentCompletenessState,
   type PaymentRequest,
+  type RequestDocument,
 } from "@/types/requests";
 
-const mocks = vi.hoisted(() => ({ complete: vi.fn() }));
+const mocks = vi.hoisted(() => ({ complete: vi.fn(), upload: vi.fn() }));
 
 vi.mock("@/hooks/use-requests", () => ({
   useCompletePaymentDetails: () => ({
@@ -19,9 +24,33 @@ vi.mock("@/hooks/use-requests", () => ({
     isLoading: false,
     error: null,
   }),
+  useUploadRequestDocument: () => ({
+    uploadDocument: mocks.upload,
+    isLoading: false,
+    error: null,
+  }),
 }));
 
-function request(): PaymentRequest {
+function uploadedDocument(): RequestDocument {
+  return {
+    id: "proof-document-1",
+    payment_request_id: "request-1",
+    document_category: REQUEST_DOCUMENT_CATEGORY.PAYMENT_PROOF,
+    safe_filename: "constancia.pdf",
+    original_filename: "constancia.pdf",
+    mime_type: "application/pdf",
+    size_bytes: 5,
+    storage_provider: REQUEST_DOCUMENT_STORAGE_PROVIDER.DRIVE,
+    upload_status: REQUEST_DOCUMENT_UPLOAD_STATUS.PERMANENT,
+    created_at: "2026-08-28T10:00:00.000Z",
+  };
+}
+
+function request(completeness: PaymentCompletenessState): PaymentRequest {
+  const referenceMissing = completeness === PAYMENT_COMPLETENESS_STATE.REFERENCE_PENDING
+    || completeness === PAYMENT_COMPLETENESS_STATE.BOTH_PENDING;
+  const proofMissing = completeness === PAYMENT_COMPLETENESS_STATE.PROOF_PENDING
+    || completeness === PAYMENT_COMPLETENESS_STATE.BOTH_PENDING;
   return {
     id: "request-1",
     request_code: "SOL-1",
@@ -65,22 +94,20 @@ function request(): PaymentRequest {
       id: "payment-1",
       payment_request_id: "request-1",
       paid_at: "2026-05-14T15:30:00.000Z",
-      operation_reference: null,
+      operation_reference: referenceMissing ? null : "OP-123",
       amount_paid: 100,
-      drive_route_model: "DAILY_V1",
-      drive_routing_date: "2026-05-14",
-      drive_route_cutover_at: "2026-05-01T00:00:00.000Z",
       bank_commission: null,
       notes: null,
-      source_account_key: null,
-      payment_cycle_kind: "ADVANCE_OR_REIMBURSEMENT",
-      payment_cycle_date: "2026-05-19",
-      desired_parent_logical_key: null,
-      drive_projection_version: 1,
-      drive_projection_status: "SOURCE_REQUIRED",
-      proof_document_id: null,
-      proof_pending: true,
-      details_pending: true,
+      source_account_key: "BCP_PEN",
+      drive_projection_status: "PENDING",
+      proof_document_id: proofMissing ? null : "proof-1",
+      proof_pending: proofMissing,
+      details_pending: referenceMissing,
+      missing_fields: [
+        ...(referenceMissing ? ["operation_reference" as const] : []),
+        ...(proofMissing ? ["proof" as const] : []),
+      ],
+      completeness,
       registered_by_id: "user-1",
       created_at: "2026-05-14T15:30:00.000Z",
       updated_at: "2026-05-14T15:30:00.000Z",
@@ -88,170 +115,87 @@ function request(): PaymentRequest {
   };
 }
 
-interface MissingPaymentData {
-  source: boolean;
-  reference: boolean;
-  proof: boolean;
-}
-
-function requestWithMissing({ source, reference, proof }: MissingPaymentData): PaymentRequest {
-  const paymentRequest = request();
-  const payment = paymentRequest.payment!;
-  payment.drive_projection_status = source ? "SOURCE_REQUIRED" : "PENDING";
-  payment.source_account_key = source ? null : DRIVE_SOURCE_ACCOUNT.BCP_PEN;
-  payment.operation_reference = reference ? null : "OP-123";
-  payment.proof_document_id = proof ? null : "proof-1";
-  payment.proof_pending = proof;
-  payment.details_pending = source || reference;
-  return paymentRequest;
-}
-
 describe("CompletePaymentDetailsModal", () => {
-  beforeEach(() => mocks.complete.mockReset());
-
-  it("renders canonical payment values as an exact, compact read-only summary", () => {
-    render(
-      <CompletePaymentDetailsModal
-        request={request()}
-        open
-        onOpenChange={vi.fn()}
-        onSuccess={vi.fn()}
-      />,
-    );
-
-    expect(screen.getByRole("dialog", { name: "Completar pago" })).toBeInTheDocument();
-    const summary = screen.getByRole("region", { name: "Resumen del pago" });
-    expect(within(summary).getByText("Fecha de pago")).toBeInTheDocument();
-    expect(within(summary).getByText("Monto")).toBeInTheDocument();
-    expect(within(summary).getByText("Cuenta origen")).toBeInTheDocument();
-    expect(within(summary).getByText("Pendiente")).toBeInTheDocument();
-    expect(within(summary).getByText("Fecha de destino")).toBeInTheDocument();
-    expect(within(summary).getByText("14 de mayo de 2026")).toBeInTheDocument();
-    expect(summary).not.toHaveTextContent(/ciclo asignado/i);
-    expect(summary.querySelector("input, select, textarea")).toBeNull();
-    expect(summary).not.toHaveTextContent(/constancia/i);
-    expect(screen.getByLabelText("Cuenta de origen Enseña Perú")).toBeRequired();
-    expect(screen.getByLabelText(/Referencia de operación/)).toBeRequired();
-    expect(screen.getByLabelText(/Constancia de pago/)).toBeRequired();
-  });
-
-  it("does not present a destination when the V2 route is unavailable", () => {
-    const unavailableRequest = request();
-    unavailableRequest.payment!.drive_route_model = null;
-    unavailableRequest.payment!.drive_routing_date = null;
-
-    render(<CompletePaymentDetailsModal request={unavailableRequest} open onOpenChange={vi.fn()} onSuccess={vi.fn()} />);
-
-    const summary = screen.getByRole("region", { name: "Resumen del pago" });
-    expect(within(summary).getByText("Ruta V2 no disponible")).toBeInTheDocument();
-    expect(within(summary).queryByText("Fecha de destino")).not.toBeInTheDocument();
+  beforeEach(() => {
+    mocks.complete.mockReset();
+    mocks.upload.mockReset();
   });
 
   it.each([
-    {
-      name: "source, reference, and proof",
-      missing: { source: true, reference: true, proof: true },
-      targetLabel: "Cuenta de origen Enseña Perú" as const,
-    },
-    {
-      name: "source and reference",
-      missing: { source: true, reference: true, proof: false },
-      targetLabel: "Cuenta de origen Enseña Perú" as const,
-    },
-    {
-      name: "source and proof",
-      missing: { source: true, reference: false, proof: true },
-      targetLabel: "Cuenta de origen Enseña Perú" as const,
-    },
-    {
-      name: "source only",
-      missing: { source: true, reference: false, proof: false },
-      targetLabel: "Cuenta de origen Enseña Perú" as const,
-    },
-    {
-      name: "reference and proof",
-      missing: { source: false, reference: true, proof: true },
-      targetLabel: /Referencia de operación/,
-    },
-    {
-      name: "reference only",
-      missing: { source: false, reference: true, proof: false },
-      targetLabel: /Referencia de operación/,
-    },
-    {
-      name: "proof only",
-      missing: { source: false, reference: false, proof: true },
-      targetLabel: /Constancia de pago/,
-    },
-  ])("renders only $name controls and focuses the first missing action", async ({ missing, targetLabel }) => {
-    render(
-      <CompletePaymentDetailsModal
-        request={requestWithMissing(missing)}
-        open
-        onOpenChange={vi.fn()}
-        onSuccess={vi.fn()}
-      />,
-    );
+    [PAYMENT_COMPLETENESS_STATE.REFERENCE_PENDING, true, false],
+    [PAYMENT_COMPLETENESS_STATE.PROOF_PENDING, false, true],
+    [PAYMENT_COMPLETENESS_STATE.BOTH_PENDING, true, true],
+  ])("renders only missing fields for %s", (completeness, referenceMissing, proofMissing) => {
+    render(<CompletePaymentDetailsModal request={request(completeness)} open onOpenChange={vi.fn()} onSuccess={vi.fn()} />);
 
-    expect(Boolean(screen.queryByLabelText("Cuenta de origen Enseña Perú"))).toBe(missing.source);
-    expect(Boolean(screen.queryByLabelText(/Referencia de operación/))).toBe(missing.reference);
-    expect(Boolean(screen.queryByLabelText(/Constancia de pago/))).toBe(missing.proof);
-    await waitFor(() => expect(screen.getByLabelText(targetLabel)).toHaveFocus());
-  });
-
-  it("shows the resolved source in the summary and no required controls when nothing is missing", () => {
-    render(
-      <CompletePaymentDetailsModal
-        request={requestWithMissing({ source: false, reference: false, proof: false })}
-        open
-        onOpenChange={vi.fn()}
-        onSuccess={vi.fn()}
-      />,
-    );
-
+    expect(Boolean(screen.queryByLabelText(/Referencia de operación/))).toBe(referenceMissing);
+    expect(Boolean(screen.queryByLabelText(/Constancia de pago/))).toBe(proofMissing);
+    expect(screen.queryByLabelText(/Cuenta de origen/)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/Comisión bancaria/)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/Notas/)).not.toBeInTheDocument();
     const summary = screen.getByRole("region", { name: "Resumen del pago" });
-    expect(within(summary).getByText("BCP-SOLES")).toBeInTheDocument();
-    expect(screen.queryByLabelText("Cuenta de origen Enseña Perú")).not.toBeInTheDocument();
-    expect(screen.queryByLabelText(/Referencia de operación/)).not.toBeInTheDocument();
-    expect(screen.queryByLabelText(/Constancia de pago/)).not.toBeInTheDocument();
+    expect(summary.querySelector("input, select, textarea")).toBeNull();
   });
 
-  it("announces all conditional errors and submits only completion fields", async () => {
+  it("shows COMPLETE as read-only with no pending action", () => {
+    render(<CompletePaymentDetailsModal request={request(PAYMENT_COMPLETENESS_STATE.COMPLETE)} open onOpenChange={vi.fn()} onSuccess={vi.fn()} />);
+
+    expect(screen.getByText("Este pago ya tiene referencia y constancia.")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Completar pago" })).not.toBeInTheDocument();
+  });
+
+  it("uploads the proof first and PATCHes only reference/proof_document_id", async () => {
     const user = userEvent.setup();
-    mocks.complete.mockResolvedValueOnce({ id: "request-1" });
-    render(
-      <CompletePaymentDetailsModal
-        request={request()}
-        open
-        onOpenChange={vi.fn()}
-        onSuccess={vi.fn()}
-      />,
-    );
+    const calls: string[] = [];
+    mocks.upload.mockImplementation(async () => { calls.push("upload"); return uploadedDocument(); });
+    mocks.complete.mockImplementation(async () => { calls.push("patch"); return request(PAYMENT_COMPLETENESS_STATE.COMPLETE); });
+    const onSuccess = vi.fn();
+    render(<CompletePaymentDetailsModal request={request(PAYMENT_COMPLETENESS_STATE.BOTH_PENDING)} open onOpenChange={vi.fn()} onSuccess={onSuccess} />);
 
-    await user.click(screen.getByRole("button", { name: "Completar pago" }));
-    expect(await screen.findByText("Selecciona la cuenta de origen.")).toBeInTheDocument();
-    expect(screen.getByText("Ingresa la referencia de operación.")).toBeInTheDocument();
-    expect(screen.getByText("Adjunta la constancia global de pago.")).toBeInTheDocument();
-
-    await user.selectOptions(
-      screen.getByLabelText("Cuenta de origen Enseña Perú"),
-      DRIVE_SOURCE_ACCOUNT.BCP_PEN,
-    );
-    await user.type(screen.getByLabelText(/Referencia de operación/), "OP-123");
-    await user.upload(
-      screen.getByLabelText(/Constancia de pago/),
-      new File(["proof"], "proof.pdf", { type: "application/pdf" }),
-    );
+    await user.type(screen.getByLabelText(/Referencia de operación/), " OP-456 ");
+    await user.upload(screen.getByLabelText(/Constancia de pago/), new File(["proof"], "constancia.pdf", { type: "application/pdf" }));
     await user.click(screen.getByRole("button", { name: "Completar pago" }));
 
-    await waitFor(() => expect(mocks.complete).toHaveBeenCalled());
-    const payload = mocks.complete.mock.calls[0][1];
-    expect(payload).toMatchObject({
-      source_account_key: DRIVE_SOURCE_ACCOUNT.BCP_PEN,
-      operation_reference: "OP-123",
-      proof: expect.any(File),
+    await waitFor(() => expect(onSuccess).toHaveBeenCalledTimes(1));
+    expect(calls).toEqual(["upload", "patch"]);
+    expect(mocks.upload).toHaveBeenCalledWith("request-1", {
+      file: expect.any(File),
+      document_category: REQUEST_DOCUMENT_CATEGORY.PAYMENT_PROOF,
     });
+    expect(mocks.complete).toHaveBeenCalledWith("payment-1", {
+      operation_reference: "OP-456",
+      proof_document_id: "proof-document-1",
+    });
+    const payload = mocks.complete.mock.calls[0][1];
     expect(payload).not.toHaveProperty("paid_at");
     expect(payload).not.toHaveProperty("amount_paid");
+    expect(payload).not.toHaveProperty("source_account_key");
+  });
+
+  it("keeps the modal open and shows a sanitized upload or PATCH error", async () => {
+    const user = userEvent.setup();
+    mocks.upload.mockRejectedValueOnce(new Error("No se pudo cargar la constancia."));
+    const onOpenChange = vi.fn();
+    render(<CompletePaymentDetailsModal request={request(PAYMENT_COMPLETENESS_STATE.PROOF_PENDING)} open onOpenChange={onOpenChange} onSuccess={vi.fn()} />);
+
+    await user.upload(screen.getByLabelText(/Constancia de pago/), new File(["proof"], "constancia.pdf", { type: "application/pdf" }));
+    await user.click(screen.getByRole("button", { name: "Completar pago" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("No se pudo cargar la constancia.");
+    expect(mocks.complete).not.toHaveBeenCalled();
+    expect(onOpenChange).not.toHaveBeenCalledWith(false);
+  });
+
+  it("keeps the entered reference when PATCH fails", async () => {
+    const user = userEvent.setup();
+    mocks.complete.mockRejectedValueOnce(new Error("No se pudieron guardar los datos pendientes."));
+    render(<CompletePaymentDetailsModal request={request(PAYMENT_COMPLETENESS_STATE.REFERENCE_PENDING)} open onOpenChange={vi.fn()} onSuccess={vi.fn()} />);
+
+    const reference = screen.getByLabelText(/Referencia de operación/);
+    await user.type(reference, "OP-ERROR");
+    await user.click(screen.getByRole("button", { name: "Completar pago" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("No se pudieron guardar los datos pendientes.");
+    expect(reference).toHaveValue("OP-ERROR");
   });
 });

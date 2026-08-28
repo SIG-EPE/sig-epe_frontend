@@ -569,6 +569,24 @@ export type KnownDrivePaymentRouteModel =
 
 export type DrivePaymentRouteModel = KnownDrivePaymentRouteModel;
 
+export const PAYMENT_MISSING_FIELD = {
+  OPERATION_REFERENCE: "operation_reference",
+  PROOF: "proof",
+} as const;
+
+export type PaymentMissingField =
+  (typeof PAYMENT_MISSING_FIELD)[keyof typeof PAYMENT_MISSING_FIELD];
+
+export const PAYMENT_COMPLETENESS_STATE = {
+  REFERENCE_PENDING: "REFERENCE_PENDING",
+  PROOF_PENDING: "PROOF_PENDING",
+  BOTH_PENDING: "BOTH_PENDING",
+  COMPLETE: "COMPLETE",
+} as const;
+
+export type PaymentCompletenessState =
+  (typeof PAYMENT_COMPLETENESS_STATE)[keyof typeof PAYMENT_COMPLETENESS_STATE];
+
 export interface RequestPayment {
   id: string;
   payment_request_id: string;
@@ -603,6 +621,8 @@ export interface RequestPayment {
   proofDocument?: RequestDocument | null;
   proof_pending?: boolean;
   details_pending?: boolean;
+  missing_fields?: PaymentMissingField[];
+  completeness?: PaymentCompletenessState;
   payment_batch_id?: string | null;
   completed_at?: string | null;
   completed_by_id?: string | null;
@@ -1319,6 +1339,7 @@ export interface PaymentQueueResponse extends RequestsListResponse {
 
 export const BULK_PAYMENT_RESULT_STATUS = {
   SUCCESS: "SUCCESS",
+  ALREADY_PROCESSED: "ALREADY_PROCESSED",
   FAILED: "FAILED",
 } as const;
 
@@ -1370,17 +1391,17 @@ export type PaymentRexanStatus =
   (typeof PAYMENT_REXAN_STATUS)[keyof typeof PAYMENT_REXAN_STATUS] | string;
 
 export interface BulkMarkPaidInput {
-  request_ids: string[];
-  giof_items?: BulkPaymentWorkCredential[];
+  client_batch_id: string;
   paid_at: string;
-  operation_reference?: string;
-  notes?: string;
+  source_account_key: DriveSourceAccount;
+  items: BulkRegisterPaymentItemInput[];
 }
 
-export interface BulkPaymentWorkCredential {
+export interface BulkRegisterPaymentItemInput {
   request_id: string;
   assignment_version: number;
   lease_token: string;
+  operation_reference?: string;
 }
 
 export interface BulkPaymentRexanResult {
@@ -1408,23 +1429,27 @@ export interface BulkPaymentItemResult {
   paid_at?: string | null;
   proof_pending?: boolean;
   details_pending?: boolean;
+  missing_fields?: string[];
+  completeness?: string;
   email_status?: PaymentEmailStatus | null;
   rexan_activation?: RexanActivation | null;
+  error_code?: string | null;
   error?: string | null;
-  source_account_key?: null;
+  source_account_key?: DriveSourceAccount | null;
   drive_route_model?: DrivePaymentRouteModel | null;
   drive_routing_date?: string | null;
   drive_route_cutover_at?: string | null;
   readonly drive_route_classified_at?: string | null;
   payment_cycle_kind?: PaymentCycleKind;
   payment_cycle_date?: string;
-  desired_parent_logical_key?: null;
+  desired_parent_logical_key?: string | null;
   drive_projection_version?: number;
-  drive_projection_status?: "SOURCE_REQUIRED";
+  drive_projection_status?: DrivePaymentProjectionStatus;
 }
 
 export interface BulkMarkPaidResponse {
   batch_id: string;
+  status?: "PROCESSING" | "COMPLETED" | "COMPLETED_WITH_ERRORS";
   item_count: number;
   success_count: number;
   failed_count: number;
