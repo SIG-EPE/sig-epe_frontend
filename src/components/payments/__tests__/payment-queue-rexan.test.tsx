@@ -78,6 +78,7 @@ vi.mock("@/hooks/use-giof-work", () => ({
     releaseAll: vi.fn().mockResolvedValue(undefined),
   }),
   fetchGiofAssignees: vi.fn().mockResolvedValue([]),
+  useGiofAssignees: vi.fn(() => ({ data: [], isLoading: false, isInitialLoading: false, isRefreshing: false, error: null, refetch: vi.fn() })),
   fetchGiofHistory: vi.fn().mockResolvedValue([]),
   bulkAssignGiofWork: vi.fn(),
   getGiofConflictMessage: (error: unknown) =>
@@ -204,6 +205,7 @@ describe("REXAN payment queue and modal", () => {
       isLoading: false,
       error: null,
       refetch: vi.fn(),
+      summary: null,
     });
     mocks.roleCode.mockReturnValue("GIOF_GESTOR");
   });
@@ -458,7 +460,7 @@ describe("REXAN payment queue and modal", () => {
       name: "Seleccionar todas las solicitudes visibles para pago masivo",
     });
     const assignmentSelectAll = screen.getByRole("checkbox", {
-      name: "Seleccionar todos los trabajos asignables visibles",
+      name: "Seleccionar esta página",
     });
     const assignmentHeader = screen.getByText("Asignación").closest("th");
     const paymentHeader = screen.getByText("Pago masivo").closest("th");
@@ -479,7 +481,7 @@ describe("REXAN payment queue and modal", () => {
         .closest("td")?.firstElementChild,
     ).toHaveClass("min-w-36", "items-start", "gap-2");
     expect(within(paymentHeader!).getByText("Todas")).toBeInTheDocument();
-    expect(within(assignmentHeader!).getByText("Todas")).toBeInTheDocument();
+    expect(within(assignmentHeader!).getByText("Seleccionar esta página")).toBeInTheDocument();
     for (const control of screen.getAllByRole("checkbox")) {
       expect(control).toHaveAttribute("data-slot", "checkbox");
     }

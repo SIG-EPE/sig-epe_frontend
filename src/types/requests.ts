@@ -89,6 +89,16 @@ export const RENDITION_BUCKET = {
 export type RenditionBucket =
   (typeof RENDITION_BUCKET)[keyof typeof RENDITION_BUCKET];
 
+export const RENDITION_DEADLINE_BUCKET = {
+  NONE: "none",
+  DUE_TODAY: "due_today",
+  DUE_SOON: "due_soon",
+  OVERDUE: "overdue",
+} as const;
+
+export type RenditionDeadlineBucket =
+  (typeof RENDITION_DEADLINE_BUCKET)[keyof typeof RENDITION_DEADLINE_BUCKET];
+
 export const RENDITION_SORT_FIELD = {
   LAST_ACTIVITY: "last_activity",
   DUE_DATE: "due_date",
@@ -1259,6 +1269,52 @@ export interface PaymentQueueFilters {
   search?: string;
   work_scope?: GiofWorkScope;
   assignee_id?: string;
+  approved_from?: string;
+  approved_to?: string;
+  paid_from?: string;
+  paid_to?: string;
+  source_account_key?: DriveSourceAccount;
+  completeness?: PaymentCompleteness;
+  drive_status?: DrivePaymentProjectionStatus;
+  rexan_status?: PaymentQueueRexanStatus;
+  currency?: RequestCurrency;
+  amount_min?: string;
+  amount_max?: string;
+  sort?: PaymentQueueSort;
+}
+
+export const PAYMENT_COMPLETENESS = {
+  COMPLETE: "complete",
+  PROOF_MISSING: "proof_missing",
+  DETAILS_MISSING: "details_missing",
+  SOURCE_MISSING: "source_missing",
+  ANY_MISSING: "any_missing",
+} as const;
+
+export type PaymentCompleteness =
+  (typeof PAYMENT_COMPLETENESS)[keyof typeof PAYMENT_COMPLETENESS];
+
+export const PAYMENT_QUEUE_SORT = {
+  QUEUE_DATE_DESC: "queue_date_desc",
+  QUEUE_DATE_ASC: "queue_date_asc",
+  PAYABLE_AMOUNT_ASC: "payable_amount_asc",
+  PAYABLE_AMOUNT_DESC: "payable_amount_desc",
+} as const;
+
+export type PaymentQueueSort =
+  (typeof PAYMENT_QUEUE_SORT)[keyof typeof PAYMENT_QUEUE_SORT];
+
+export type PaymentQueueRexanStatus =
+  (typeof PAYMENT_REXAN_STATUS)[keyof typeof PAYMENT_REXAN_STATUS];
+
+export interface PaymentQueueSummary {
+  count: number;
+  payable_amount_by_currency: Partial<Record<RequestCurrency, string>>;
+  status_counts: Partial<Record<RequestStatus, number>>;
+}
+
+export interface PaymentQueueResponse extends RequestsListResponse {
+  summary: PaymentQueueSummary;
 }
 
 export const BULK_PAYMENT_RESULT_STATUS = {
@@ -1433,12 +1489,33 @@ export interface RenditionInboxCounts extends Record<RenditionStatus, number> {
   due_soon?: number;
 }
 
+export interface RenditionStatusFacet {
+  excluded_filters: ["status"];
+  counts: Record<RenditionStatus, number>;
+}
+
+export interface RenditionDeadlineBucketFacet {
+  excluded_filters: ["deadline_bucket"];
+  counts: Record<RenditionDeadlineBucket, number>;
+}
+
+export interface RenditionInboxFacets {
+  status: RenditionStatusFacet;
+  deadline_bucket: RenditionDeadlineBucketFacet;
+}
+
+export interface RenditionInboxSummary {
+  count: number;
+}
+
 export interface RenditionsInboxResponse {
   renditions: RenditionInboxRow[];
   total: number;
   page: number;
   limit: number;
   counts: RenditionInboxCounts;
+  summary: RenditionInboxSummary;
+  facets: RenditionInboxFacets;
 }
 
 export interface RenditionsInboxFilters {
@@ -1446,9 +1523,12 @@ export interface RenditionsInboxFilters {
   limit?: number;
   status?: RenditionStatus;
   bucket?: RenditionBucket;
+  deadline_bucket?: RenditionDeadlineBucket;
   search?: string;
   due_from?: string;
   due_to?: string;
+  deadline_from?: string;
+  deadline_to?: string;
   sort?: RenditionSortField;
   direction?: RenditionSortDirection;
   work_scope?: GiofWorkScope;

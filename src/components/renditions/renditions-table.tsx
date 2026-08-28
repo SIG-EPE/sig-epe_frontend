@@ -60,7 +60,7 @@ export function RenditionsTable({ renditions, isLoading, currentUserId, isGiofMa
         </TableRow>
       </TableHeader>
       <TableBody>
-        {isGiofManager && onToggleAllAssignments && assignableRenditions.length > 0 && <TableRow><TableCell colSpan={9}><label className="flex items-center gap-2 text-sm text-muted-foreground"><input type="checkbox" className="size-4" checked={assignableRenditions.every((row) => selectedAssignmentIds.includes(row.giof_work?.requestId as string))} onChange={(event) => onToggleAllAssignments(event.target.checked)} />Seleccionar rendiciones asignables visibles</label></TableCell></TableRow>}
+        {isGiofManager && onToggleAllAssignments && assignableRenditions.length > 0 && <TableRow><TableCell colSpan={9}><label className="flex items-center gap-2 text-sm text-muted-foreground"><input type="checkbox" className="size-4" checked={assignableRenditions.every((row) => selectedAssignmentIds.includes(row.giof_work?.requestId as string))} onChange={(event) => onToggleAllAssignments(event.target.checked)} />Seleccionar esta página</label></TableCell></TableRow>}
         {renditions.map((row) => {
           const action = getRenditionAction(row);
           const primaryRequestCode = row.settlement_request_code ?? row.request_code ?? row.advance_id;

@@ -57,6 +57,7 @@ describe("RenditionsTable", () => {
     />);
 
     expect(screen.getByRole("checkbox", { name: "Seleccionar REXAN-ACTIVE para asignar" })).toBeEnabled();
+    expect(screen.getByRole("checkbox", { name: "Seleccionar esta página" })).toBeInTheDocument();
     await user.click(screen.getByRole("checkbox", { name: "Seleccionar REXAN-OBSERVED para asignar" }));
     expect(onToggleAssignment).toHaveBeenCalledWith("settlement-observed", true);
     expect(screen.getByRole("checkbox", { name: "REXAN-SETTLED: rendición finalizada" })).toBeDisabled();

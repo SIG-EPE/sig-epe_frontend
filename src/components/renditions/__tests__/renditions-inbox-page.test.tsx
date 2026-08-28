@@ -4,7 +4,7 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { RenditionsInboxPage } from "@/components/renditions/renditions-inbox-page";
 import { useRenditionsInbox } from "@/hooks/use-requests";
-import { RENDITION_DEADLINE_STATE, RENDITION_STATUS, type RenditionInboxCounts, type RenditionInboxRow } from "@/types/requests";
+import { RENDITION_DEADLINE_BUCKET, RENDITION_DEADLINE_STATE, RENDITION_STATUS, type RenditionInboxCounts, type RenditionInboxFacets, type RenditionInboxRow } from "@/types/requests";
 
 const replaceMock = vi.fn();
 let searchParams = new URLSearchParams();
@@ -70,6 +70,24 @@ function makeRendition(overrides: Partial<RenditionInboxRow>): RenditionInboxRow
   };
 }
 
+function makeFacets(): RenditionInboxFacets {
+  return {
+    status: {
+      excluded_filters: ["status"],
+      counts: makeCounts({ [RENDITION_STATUS.PENDING]: 8 }),
+    },
+    deadline_bucket: {
+      excluded_filters: ["deadline_bucket"],
+      counts: {
+        [RENDITION_DEADLINE_BUCKET.NONE]: 2,
+        [RENDITION_DEADLINE_BUCKET.DUE_TODAY]: 3,
+        [RENDITION_DEADLINE_BUCKET.DUE_SOON]: 5,
+        [RENDITION_DEADLINE_BUCKET.OVERDUE]: 1,
+      },
+    },
+  };
+}
+
 describe("RenditionsInboxPage", () => {
   beforeEach(() => {
     replaceMock.mockReset();
@@ -80,6 +98,8 @@ describe("RenditionsInboxPage", () => {
       page: 1,
       limit: 20,
       counts: makeCounts(),
+      summary: { count: 0 },
+      facets: makeFacets(),
       isLoading: false,
       isInitialLoading: false,
       isRefreshing: false,
@@ -96,15 +116,15 @@ describe("RenditionsInboxPage", () => {
     expect(screen.getByText("Vencen en los próximos 15 días.")).toBeInTheDocument();
   });
 
-  it("navega próximas a vencer con bucket explícito", () => {
+  it("combina status con deadline bucket canónico sin serializar ALL", () => {
     render(<RenditionsInboxPage />);
 
     fireEvent.click(screen.getByTestId("renditions-summary-card-due-soon"));
 
-    expect(replaceMock).toHaveBeenCalledWith("/renditions?status=ALL&page=1&bucket=due_soon");
+    expect(replaceMock).toHaveBeenCalledWith("/renditions?status=PENDING&deadline_bucket=due_soon");
   });
 
-  it("mantiene paridad local del card due-soon en 0/15/16 sin crear filtros de deadline", () => {
+  it("mantiene fallback local del bucket due-soon en 1–15 y separa vence hoy", () => {
     vi.mocked(useRenditionsInbox).mockReturnValue({
       renditions: [
         makeRendition({ advance_id: "today", deadline_state: RENDITION_DEADLINE_STATE.DUE_TODAY, calendar_days_to_deadline: 0 }),
@@ -116,6 +136,8 @@ describe("RenditionsInboxPage", () => {
       page: 1,
       limit: 20,
       counts: undefined,
+      summary: { count: 4 },
+      facets: null,
       isLoading: false,
       isInitialLoading: false,
       isRefreshing: false,
@@ -125,7 +147,7 @@ describe("RenditionsInboxPage", () => {
 
     render(<RenditionsInboxPage />);
 
-    expect(screen.getByTestId("renditions-summary-card-due-soon")).toHaveTextContent("2");
+    expect(screen.getByTestId("renditions-summary-card-due-soon")).toHaveTextContent("1");
     expect(screen.queryByTestId("renditions-deadline-state-filter")).not.toBeInTheDocument();
   });
 
@@ -147,6 +169,57 @@ describe("RenditionsInboxPage", () => {
     ]);
 
     await user.click(screen.getByRole("option", { name: "En revisión" }));
-    expect(replaceMock).toHaveBeenCalledWith("/renditions?status=IN_REVIEW&page=1");
+    expect(replaceMock).toHaveBeenCalledWith("/renditions?status=IN_REVIEW");
+  });
+
+  it("muestra summary exacto y comunica qué dimensión excluye cada facet", () => {
+    vi.mocked(useRenditionsInbox).mockReturnValue({
+      ...vi.mocked(useRenditionsInbox).mock.results[0]?.value,
+      renditions: [], total: 1, page: 1, limit: 20, counts: makeCounts(),
+      summary: { count: 1 }, facets: makeFacets(), isLoading: false,
+      isInitialLoading: false, isRefreshing: false, error: null, refetch: vi.fn(),
+    });
+
+    render(<RenditionsInboxPage />);
+
+    expect(screen.getByTestId("renditions-summary-card-results")).toHaveTextContent("1");
+    expect(screen.getByTestId("renditions-summary-card-pending")).toHaveTextContent("8");
+    expect(screen.getByTestId("renditions-summary-card-due-soon")).toHaveTextContent("5");
+    expect(screen.getByText("Aplica todos los filtros activos.")).toBeInTheDocument();
+    expect(screen.getAllByText("Facet: ignora solo el filtro de estado.").length).toBeGreaterThan(0);
+    expect(screen.getByText("Facet: ignora solo el filtro de plazo.")).toBeInTheDocument();
+  });
+
+  it("canonicaliza aliases una vez y conserva reload/back sin loops", () => {
+    searchParams = new URLSearchParams("status=ALL&bucket=due_soon&due_from=2026-06-01&page=2");
+
+    const { rerender } = render(<RenditionsInboxPage />);
+    expect(replaceMock).toHaveBeenCalledWith("/renditions?page=2&deadline_from=2026-06-01&deadline_bucket=due_soon");
+
+    replaceMock.mockClear();
+    searchParams = new URLSearchParams("page=2&deadline_from=2026-06-01&deadline_bucket=due_soon");
+    rerender(<RenditionsInboxPage />);
+    expect(replaceMock).not.toHaveBeenCalled();
+  });
+
+  it("expone controles, chips, clear y reset seguro sin filtros REXAN/documentales", async () => {
+    const user = userEvent.setup();
+    searchParams = new URLSearchParams("search=viaje&deadline_from=2026-06-01&deadline_bucket=overdue");
+    render(<RenditionsInboxPage />);
+
+    expect(screen.getByLabelText("Plazo de rendición")).toBeInTheDocument();
+    expect(screen.getByLabelText("Fecha límite desde")).toHaveValue("2026-06-01");
+    expect(screen.getByText("Búsqueda: viaje")).toBeInTheDocument();
+    expect(screen.queryByText(/completitud documental/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/estado REXAN/i)).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Limpiar todos los filtros" }));
+    expect(replaceMock).toHaveBeenCalledWith("/renditions");
+
+    replaceMock.mockClear();
+    searchParams = new URLSearchParams("document_complete=true");
+    render(<RenditionsInboxPage />);
+    await user.click(screen.getByRole("button", { name: "Restablecer filtros" }));
+    expect(replaceMock).toHaveBeenCalledWith("/renditions");
   });
 });

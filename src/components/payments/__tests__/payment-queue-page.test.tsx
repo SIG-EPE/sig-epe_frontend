@@ -1,4 +1,5 @@
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { PaymentQueueTable } from "@/components/payments/payment-queue-table";
@@ -9,6 +10,11 @@ const mocks = vi.hoisted(() => ({
   bulkMarkPaid: vi.fn(),
   usePaymentQueue: vi.fn(),
 }));
+let currentQuery = "";
+let roleCode = "GIOF_GESTOR";
+const replaceMock = vi.fn((href: string) => {
+  currentQuery = href.includes("?") ? href.slice(href.indexOf("?") + 1) : "";
+});
 
 vi.mock("@/hooks/use-requests", () => ({
   usePaymentQueue: mocks.usePaymentQueue,
@@ -37,12 +43,12 @@ vi.mock("@/hooks/use-requests", () => ({
 vi.mock("@/stores/auth-store", () => ({
   useAuthStore: (
     selector: (state: { user: { id: string; role: { code: string } } }) => unknown,
-  ) => selector({ user: { id: "user-1", role: { code: "GIOF_GESTOR" } } }),
+  ) => selector({ user: { id: "user-1", role: { code: roleCode } } }),
 }));
 
 vi.mock("next/navigation", () => ({
-  useRouter: () => ({ replace: vi.fn() }),
-  useSearchParams: () => new URLSearchParams(),
+  useRouter: () => ({ replace: replaceMock }),
+  useSearchParams: () => new URLSearchParams(currentQuery),
 }));
 
 vi.mock("@/hooks/use-giof-work", () => ({
@@ -52,6 +58,11 @@ vi.mock("@/hooks/use-giof-work", () => ({
     release: vi.fn(),
     releaseAll: vi.fn(),
   }),
+  fetchGiofAssignees: vi.fn().mockResolvedValue([]),
+  useGiofAssignees: vi.fn(() => ({ data: [], isLoading: false, isInitialLoading: false, isRefreshing: false, error: null, refetch: vi.fn() })),
+  fetchGiofHistory: vi.fn().mockResolvedValue([]),
+  bulkAssignGiofWork: vi.fn(),
+  getGiofConflictMessage: (error: unknown) => error instanceof Error ? error.message : "Error",
 }));
 
 vi.mock("@/hooks/use-drive-projection-polling", () => ({
@@ -140,6 +151,8 @@ function failedRexanRequest(canAcquire: boolean): PaymentRequest {
 describe("payment pending queue action", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    currentQuery = "";
+    roleCode = "GIOF_GESTOR";
     mocks.usePaymentQueue.mockReturnValue({
       requests: [],
       total: 0,
@@ -148,6 +161,11 @@ describe("payment pending queue action", () => {
       isRefreshing: false,
       error: null,
       refetch: vi.fn(),
+      summary: {
+        count: 0,
+        payable_amount_by_currency: {},
+        status_counts: {},
+      },
     });
   });
 
@@ -165,16 +183,97 @@ describe("payment pending queue action", () => {
     });
   });
 
-  it("conserva los tres tabs existentes y sus tokens de lifecycle/completitud", () => {
-    render(<PaymentQueuePage />);
+  it("conserva los tres tabs y traduce Datos pendientes al contrato canónico", async () => {
+    const user = userEvent.setup();
+    const { rerender } = render(<PaymentQueuePage />);
 
     expect(screen.getByRole("group", { name: "Vista de pagos" })).toBeInTheDocument();
     expect(screen.getByTestId("payment-filter-approved")).toHaveTextContent("Pendientes");
     expect(screen.getByTestId("payment-filter-paid")).toHaveTextContent("Historial pagado");
     expect(screen.getByTestId("payment-filter-pending-data")).toHaveTextContent("Datos pendientes");
-    expect(mocks.usePaymentQueue).toHaveBeenCalledWith(expect.objectContaining({ status: REQUEST_STATUS.APPROVED }));
-    expect(mocks.usePaymentQueue).toHaveBeenCalledWith(expect.objectContaining({ status: REQUEST_STATUS.PAID }));
-    expect(mocks.usePaymentQueue).toHaveBeenCalledWith(expect.objectContaining({ pending_data: true }));
+    expect(mocks.usePaymentQueue).toHaveBeenCalledWith(expect.objectContaining({ status: REQUEST_STATUS.APPROVED }), expect.anything());
+
+    await user.click(screen.getByTestId("payment-filter-pending-data"));
+    expect(replaceMock).toHaveBeenLastCalledWith("/payments?tab=pending-data");
+    rerender(<PaymentQueuePage />);
+    expect(mocks.usePaymentQueue).toHaveBeenLastCalledWith(expect.objectContaining({
+      status: REQUEST_STATUS.PAID,
+      completeness: "any_missing",
+    }), expect.anything());
+  });
+
+  it("selecciona solo esta página asignable y limpia la selección al cambiar la identidad de vista", async () => {
+    roleCode = "GIOF_MANAGER";
+    const request = pendingSourceRequest();
+    request.status = REQUEST_STATUS.APPROVED;
+    request.payment = undefined;
+    request.payment_id = undefined;
+    request.giof_work = {
+      ...request.giof_work!,
+      pool: "PAYMENT",
+      canAssign: true,
+      assigneeId: null,
+    } as PaymentRequest["giof_work"];
+    mocks.usePaymentQueue.mockReturnValue({
+      requests: [request], total: 1, page: 1, limit: 20,
+      summary: { count: 1, payable_amount_by_currency: { PEN: "100.00" }, status_counts: { APPROVED: 1 } },
+      isLoading: false, isRefreshing: false, error: null, refetch: vi.fn(),
+    });
+    const user = userEvent.setup();
+    const { rerender } = render(<PaymentQueuePage />);
+
+    const selectPage = screen.getByRole("checkbox", { name: "Seleccionar esta página" });
+    await user.click(selectPage);
+    expect(screen.getByRole("checkbox", { name: "Seleccionar SOL-1 para asignar" })).toBeChecked();
+
+    await user.click(screen.getByTestId("payment-filter-paid"));
+    rerender(<PaymentQueuePage />);
+    expect(screen.getByRole("checkbox", { name: "Seleccionar SOL-1 para asignar" })).not.toBeChecked();
+    expect(screen.queryByText(/todos los filtrados/i)).not.toBeInTheDocument();
+  });
+
+  it("restaura URL avanzada y presenta summary server-side sin sumar la página", () => {
+    currentQuery = "tab=paid&page=2&search=REXAN&approved_from=2026-08-01&approved_to=2026-08-28&source_account_key=BCP_PEN&completeness=complete&drive_status=SUCCEEDED&rexan_status=CREATED&currency=PEN&amount_min=10.00&amount_max=300.00&sort=payable_amount_desc";
+    mocks.usePaymentQueue.mockReturnValue({
+      requests: [], total: 2, page: 2, limit: 20,
+      summary: { count: 2, payable_amount_by_currency: { PEN: "270.00" }, status_counts: { PAID: 2 } },
+      isLoading: false, isRefreshing: false, error: null, refetch: vi.fn(),
+    });
+
+    render(<PaymentQueuePage />);
+
+    expect(mocks.usePaymentQueue).toHaveBeenCalledWith(expect.objectContaining({
+      status: REQUEST_STATUS.PAID,
+      page: 2,
+      search: "REXAN",
+      approved_from: "2026-08-01",
+      source_account_key: "BCP_PEN",
+      completeness: "complete",
+      drive_status: "SUCCEEDED",
+      rexan_status: "CREATED",
+      amount_min: "10.00",
+      amount_max: "300.00",
+      sort: "payable_amount_desc",
+    }), expect.anything());
+    expect(screen.getByText("270.00")).toBeInTheDocument();
+    expect(screen.getByText("2 resultados filtrados")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Quitar filtro Búsqueda: REXAN" })).toBeInTheDocument();
+  });
+
+  it("reinicia página al cambiar filtros, limpia chips y recupera una URL inválida", async () => {
+    currentQuery = "tab=paid&page=4&search=REXAN";
+    const user = userEvent.setup();
+    const { rerender } = render(<PaymentQueuePage />);
+
+    await user.click(screen.getByRole("button", { name: "Quitar filtro Búsqueda: REXAN" }));
+    expect(replaceMock).toHaveBeenLastCalledWith("/payments?tab=paid");
+
+    currentQuery = "tab=paid&status=VOIDED";
+    rerender(<PaymentQueuePage />);
+    expect(screen.getByRole("alert")).toHaveTextContent("No se pudieron aplicar los filtros de la URL");
+    expect(mocks.usePaymentQueue).toHaveBeenLastCalledWith(expect.anything(), expect.objectContaining({ enabled: false }));
+    await user.click(screen.getByRole("button", { name: "Restablecer filtros" }));
+    expect(replaceMock).toHaveBeenLastCalledWith("/payments");
   });
 
   it("muestra lifecycle Payment y ejes secundarios sin sustituirlos", () => {

@@ -94,10 +94,10 @@ export function PaymentQueueTable({ requests, isLoading, onRegisterPayment, sele
                     checked={assignmentSelectAllState}
                     disabled={assignableRequests.length === 0}
                     onCheckedChange={(checked) => onToggleAllAssignments(checked === true)}
-                    aria-label="Seleccionar todos los trabajos asignables visibles"
+                    aria-label="Seleccionar esta página"
                     data-testid="assignment-select-all-checkbox"
                   />
-                  <span aria-hidden="true">Todas</span>
+                  <span aria-hidden="true">Seleccionar esta página</span>
                 </div>
               ) : null}
             </div>

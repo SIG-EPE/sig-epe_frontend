@@ -33,6 +33,7 @@ import type {
   ObserveRequestDto,
   PaymentRequest,
   PaymentQueueFilters,
+  PaymentQueueResponse,
   RegisterPaymentInput,
   RegisterPaymentResponse,
   RexanActivation,
@@ -163,6 +164,18 @@ export function getPaymentQueuePath(filters?: PaymentQueueFilters): string {
   appendIfPresent(params, "search", filters?.search);
   appendIfPresent(params, "work_scope", filters?.work_scope);
   appendIfPresent(params, "assignee_id", filters?.assignee_id);
+  appendIfPresent(params, "approved_from", filters?.approved_from);
+  appendIfPresent(params, "approved_to", filters?.approved_to);
+  appendIfPresent(params, "paid_from", filters?.paid_from);
+  appendIfPresent(params, "paid_to", filters?.paid_to);
+  appendIfPresent(params, "source_account_key", filters?.source_account_key);
+  appendIfPresent(params, "completeness", filters?.completeness);
+  appendIfPresent(params, "drive_status", filters?.drive_status);
+  appendIfPresent(params, "rexan_status", filters?.rexan_status);
+  appendIfPresent(params, "currency", filters?.currency);
+  appendIfPresent(params, "amount_min", filters?.amount_min);
+  appendIfPresent(params, "amount_max", filters?.amount_max);
+  appendIfPresent(params, "sort", filters?.sort);
   const query = params.toString();
   return `/requests/payment-queue${query ? `?${query}` : ""}`;
 }
@@ -172,10 +185,13 @@ export function getRenditionsPath(filters?: RenditionsInboxFilters): string {
   appendIfPresent(params, "page", filters?.page);
   appendIfPresent(params, "limit", filters?.limit);
   appendIfPresent(params, "status", filters?.status);
-  appendIfPresent(params, "bucket", filters?.bucket);
   appendIfPresent(params, "search", filters?.search);
   appendIfPresent(params, "due_from", filters?.due_from);
   appendIfPresent(params, "due_to", filters?.due_to);
+  appendIfPresent(params, "deadline_from", filters?.deadline_from);
+  appendIfPresent(params, "deadline_to", filters?.deadline_to);
+  appendIfPresent(params, "deadline_bucket", filters?.deadline_bucket);
+  appendIfPresent(params, "bucket", filters?.bucket);
   appendIfPresent(params, "sort", filters?.sort);
   appendIfPresent(params, "direction", filters?.direction);
   appendIfPresent(params, "work_scope", filters?.work_scope);
@@ -194,6 +210,8 @@ export function getRenditionCountsPath(
   appendIfPresent(params, "search", filters?.search);
   appendIfPresent(params, "due_from", filters?.due_from);
   appendIfPresent(params, "due_to", filters?.due_to);
+  appendIfPresent(params, "deadline_from", filters?.deadline_from);
+  appendIfPresent(params, "deadline_to", filters?.deadline_to);
   appendIfPresent(params, "sort", filters?.sort);
   appendIfPresent(params, "direction", filters?.direction);
   appendIfPresent(params, "work_scope", filters?.work_scope);
@@ -342,7 +360,7 @@ export function useRequestReview(
   };
 }
 
-export function usePaymentQueue(filters?: PaymentQueueFilters) {
+export function usePaymentQueue(filters?: PaymentQueueFilters, options?: UseRequestsOptions) {
   const pageFilter = filters?.page;
   const limitFilter = filters?.limit;
   const statusFilter = filters?.status;
@@ -350,21 +368,13 @@ export function usePaymentQueue(filters?: PaymentQueueFilters) {
   const pendingDetailsFilter = filters?.pending_details;
   const searchFilter = filters?.search;
 
-  const resource = useCachedResource<RequestsListResponse>({
+  const resource = useCachedResource<PaymentQueueResponse>({
+    enabled: options?.enabled,
     key: [QUERY_TAGS.PAYMENTS, "queue", filters ?? {}],
     ttlMs: QUERY_CACHE_TTL_MS.MUTABLE_LIST,
     tags: [QUERY_TAGS.PAYMENTS, QUERY_TAGS.REQUESTS, QUERY_TAGS.DASHBOARD],
     errorMessage: "Error al cargar cola de pagos",
-    queryFn: () =>
-      fetchGiofCompatibleQueue(
-        () => api.get<RequestsListResponse>(getPaymentQueuePath(filters)),
-        () =>
-          api.get<RequestsListResponse>(
-            getPaymentQueuePath(
-              filters ? withoutGiofWorkFilters(filters) : filters,
-            ),
-          ),
-      ),
+    queryFn: (signal) => api.get<PaymentQueueResponse>(getPaymentQueuePath(filters), { signal }),
   });
   const data = resource.data;
 
@@ -373,6 +383,7 @@ export function usePaymentQueue(filters?: PaymentQueueFilters) {
     total: data?.total ?? 0,
     page: data?.page ?? pageFilter ?? 1,
     limit: data?.limit ?? limitFilter ?? 20,
+    summary: data?.summary ?? null,
     isLoading: resource.isLoading,
     isInitialLoading: resource.isInitialLoading,
     isRefreshing: resource.isRefreshing,
@@ -381,7 +392,7 @@ export function usePaymentQueue(filters?: PaymentQueueFilters) {
   };
 }
 
-export function useRenditionsInbox(filters?: RenditionsInboxFilters) {
+export function useRenditionsInbox(filters?: RenditionsInboxFilters, options?: UseRequestsOptions) {
   const pageFilter = filters?.page;
   const limitFilter = filters?.limit;
   const statusFilter = filters?.status;
@@ -393,18 +404,20 @@ export function useRenditionsInbox(filters?: RenditionsInboxFilters) {
   const directionFilter = filters?.direction;
 
   const resource = useCachedResource<RenditionsInboxResponse>({
+    enabled: options?.enabled,
     key: [QUERY_TAGS.RENDITIONS, "inbox", filters ?? {}],
     ttlMs: QUERY_CACHE_TTL_MS.MUTABLE_LIST,
     tags: [QUERY_TAGS.RENDITIONS, QUERY_TAGS.REQUESTS, QUERY_TAGS.DASHBOARD],
     errorMessage: "Error al cargar rendiciones",
-    queryFn: () =>
+    queryFn: (signal) =>
       fetchGiofCompatibleQueue(
-        () => api.get<RenditionsInboxResponse>(getRenditionsPath(filters)),
+        () => api.get<RenditionsInboxResponse>(getRenditionsPath(filters), { signal }),
         () =>
           api.get<RenditionsInboxResponse>(
             getRenditionsPath(
               filters ? withoutGiofWorkFilters(filters) : filters,
             ),
+            { signal },
           ),
       ),
   });
@@ -416,6 +429,8 @@ export function useRenditionsInbox(filters?: RenditionsInboxFilters) {
     page: data?.page ?? pageFilter ?? 1,
     limit: data?.limit ?? limitFilter ?? 20,
     counts: data?.counts,
+    summary: data?.summary ?? null,
+    facets: data?.facets ?? null,
     isLoading: resource.isLoading,
     isInitialLoading: resource.isInitialLoading,
     isRefreshing: resource.isRefreshing,

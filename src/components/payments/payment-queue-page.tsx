@@ -6,33 +6,24 @@ import { useRouter, useSearchParams } from "next/navigation";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
-import { useDebouncedValue } from "@/hooks/use-debounced-value";
 import { usePaymentQueue, useRetryRexanActivation } from "@/hooks/use-requests";
-import { PAYMENT_QUEUE_STATUS, formatRequestCurrency, getApiErrorMessage, getPaymentRexanStatusLabel, getRequestPayableAmount } from "@/lib/requests";
+import { PAYMENT_QUEUE_STATUS, getApiErrorMessage, getPaymentRexanStatusLabel } from "@/lib/requests";
 import { cn } from "@/lib/utils";
-import { REQUEST_STATUS, type PaymentRequest, type RegisterPaymentResponse } from "@/types/requests";
+import { PAYMENT_COMPLETENESS, REQUEST_STATUS, type PaymentRequest, type RegisterPaymentResponse } from "@/types/requests";
 import { useAuthStore } from "@/stores/auth-store";
 import { PaymentQueueTable } from "./payment-queue-table";
 import { RegisterPaymentModal } from "./register-payment-modal";
 import { CompletePaymentDetailsModal } from "./complete-payment-details-modal";
-import { GiofBulkAssignmentBar, GiofWorkScopeFilter } from "@/components/giof-work/giof-work-controls";
+import { GiofBulkAssignmentBar } from "@/components/giof-work/giof-work-controls";
 import { useGiofWorkLeaseSet } from "@/hooks/use-giof-work";
 import { useDriveProjectionPolling } from "@/hooks/use-drive-projection-polling";
 import { canOperateAssignedGiofWork, canRetryGiofWork, isGiofManagerRole, isGiofOperationalRole } from "@/lib/role-capabilities";
 import { GIOF_WORK_POOL, GIOF_WORK_SCOPE, type GiofWorkScope } from "@/types/giof-work";
 import type { GiofWorkLease } from "@/types/giof-work";
 import { isGiofLeaseCurrent } from "@/lib/giof-work-lease-session";
-import { GIOF_HELP_CONTEXT } from "@/lib/giof-assignment-help";
-import { REQUEST_PAYMENT_SELECTOR_STATUSES } from "@/lib/request-status-vocabulary";
-
-const PAYMENT_QUEUE_TAB = {
-  PENDING: REQUEST_PAYMENT_SELECTOR_STATUSES[0],
-  PAID: REQUEST_PAYMENT_SELECTOR_STATUSES[1],
-  PENDING_DATA: "pending-data",
-} as const;
-
-type PaymentQueueTab = (typeof PAYMENT_QUEUE_TAB)[keyof typeof PAYMENT_QUEUE_TAB];
+import { parsePaymentQueueUrl, PAYMENT_QUEUE_TAB, serializePaymentQueueUrl, updatePaymentQueueUrl, type PaymentQueueTab, type PaymentQueueUrlFilters } from "@/lib/queue-filters/payment";
+import { QueueFilterReset } from "@/components/queue-filters/queue-filter-reset";
+import { PaymentQueueFilters } from "./payment-queue-filters";
 
 export function getPaymentRegisteredToast(result: RegisterPaymentResponse): {
   title: string;
@@ -55,38 +46,42 @@ export function PaymentQueuePage() {
   const canRetryRexan = canRetryGiofWork(roleCode);
   const leaseSet = useGiofWorkLeaseSet();
   const { retryRexanActivation, isLoading: isRetryingRexan } = useRetryRexanActivation();
-  const [status, setStatus] = useState<PaymentQueueTab>(PAYMENT_QUEUE_STATUS.PENDING);
-  const [search, setSearch] = useState("");
-  const debouncedSearch = useDebouncedValue(search.trim(), 300);
   const [selectedRequest, setSelectedRequest] = useState<PaymentRequest | null>(null);
   const [paymentOperationalContext, setPaymentOperationalContext] = useState<GiofWorkLease | null>(null);
   const [completionRequest, setCompletionRequest] = useState<PaymentRequest | null>(null);
-  const [page, setPage] = useState(1);
   const [selectedAssignmentIds, setSelectedAssignmentIds] = useState<string[]>([]);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isCompletionModalOpen, setIsCompletionModalOpen] = useState(false);
-  const rawWorkScope = searchParams.get("work_scope");
-  const workScope: GiofWorkScope = Object.values(GIOF_WORK_SCOPE).includes(rawWorkScope as GiofWorkScope) ? rawWorkScope as GiofWorkScope : isGiofManager ? GIOF_WORK_SCOPE.ALL : GIOF_WORK_SCOPE.MINE;
-  const workAssigneeId = workScope === GIOF_WORK_SCOPE.ASSIGNEE ? searchParams.get("assignee_id") ?? undefined : undefined;
-  const workFilters = { work_scope: workScope, assignee_id: isGiofManager ? workAssigneeId : undefined };
+  const parsedUrl = parsePaymentQueueUrl(new URLSearchParams(searchParams.toString()));
+  const urlFilters = parsedUrl.filters;
+  const tab = urlFilters.tab ?? PAYMENT_QUEUE_TAB.APPROVED;
+  const roleFilterInvalid = isGiofManager
+    ? false
+    : canManagePayments
+      ? Boolean(urlFilters.assignee_id || (urlFilters.work_scope && urlFilters.work_scope !== GIOF_WORK_SCOPE.MINE))
+      : Boolean(urlFilters.work_scope || urlFilters.assignee_id);
+  const hasInvalidUrl = parsedUrl.invalidKeys.length > 0 || parsedUrl.unknownKeys.length > 0 || roleFilterInvalid;
+  const workScope: GiofWorkScope | undefined = canManagePayments
+    ? isGiofManager ? urlFilters.work_scope ?? GIOF_WORK_SCOPE.ALL : GIOF_WORK_SCOPE.MINE
+    : undefined;
+  const workAssigneeId = isGiofManager && workScope === GIOF_WORK_SCOPE.ASSIGNEE ? urlFilters.assignee_id : undefined;
+  const { tab: _tab, ...paymentUrlFilters } = urlFilters;
   const activeQueue = usePaymentQueue({
-    status: status === PAYMENT_QUEUE_TAB.PENDING_DATA ? PAYMENT_QUEUE_STATUS.PAID : status,
-    search: debouncedSearch || undefined,
-    page,
-    limit: 20,
-    ...workFilters,
-  });
-  const pendingDataQueue = usePaymentQueue({ pending_data: true, search: debouncedSearch || undefined, page, limit: 20, ...workFilters });
-  const pendingQueue = usePaymentQueue({ status: PAYMENT_QUEUE_STATUS.PENDING, page: 1, limit: 100, ...workFilters });
-  const paidQueue = usePaymentQueue({ status: PAYMENT_QUEUE_STATUS.PAID, page: 1, limit: 100, ...workFilters });
-  const displayedRequests = status === PAYMENT_QUEUE_TAB.PENDING_DATA ? pendingDataQueue.requests : activeQueue.requests;
-  const displayedError = status === PAYMENT_QUEUE_TAB.PENDING_DATA ? pendingDataQueue.error : activeQueue.error;
-  const displayedIsLoading = status === PAYMENT_QUEUE_TAB.PENDING_DATA ? pendingDataQueue.isLoading : activeQueue.isLoading;
-  const displayedIsRefreshing = status === PAYMENT_QUEUE_TAB.PENDING_DATA ? pendingDataQueue.isRefreshing : activeQueue.isRefreshing;
-  const pendingTotal = pendingQueue.requests.reduce((total, request) => total + getRequestPayableAmount(request), 0);
-  const displayedTotal = status === PAYMENT_QUEUE_TAB.PENDING_DATA ? pendingDataQueue.total : activeQueue.total;
-  const displayedLimit = (status === PAYMENT_QUEUE_TAB.PENDING_DATA ? pendingDataQueue.limit : activeQueue.limit) || 20;
+    ...paymentUrlFilters,
+    status: tab === PAYMENT_QUEUE_TAB.APPROVED ? PAYMENT_QUEUE_STATUS.PENDING : PAYMENT_QUEUE_STATUS.PAID,
+    completeness: tab === PAYMENT_QUEUE_TAB.PENDING_DATA ? PAYMENT_COMPLETENESS.ANY_MISSING : paymentUrlFilters.completeness,
+    work_scope: workScope,
+    assignee_id: workAssigneeId,
+  }, { enabled: !hasInvalidUrl });
+  const displayedRequests = activeQueue.requests;
+  const displayedError = activeQueue.error;
+  const displayedIsLoading = activeQueue.isLoading;
+  const displayedIsRefreshing = activeQueue.isRefreshing;
+  const displayedTotal = activeQueue.total;
+  const displayedLimit = activeQueue.limit || 20;
+  const page = activeQueue.page;
   const totalPages = Math.max(1, Math.ceil(displayedTotal / displayedLimit));
+  const viewIdentity = serializePaymentQueueUrl({ ...urlFilters, work_scope: workScope, assignee_id: workAssigneeId }).toString();
   const hasVisiblePendingDriveProjection = displayedRequests.some((request) =>
     request.payment?.drive_projection_status === "PENDING"
     || request.payment?.drive_projection_status === "PROCESSING",
@@ -95,14 +90,12 @@ export function PaymentQueuePage() {
   useDriveProjectionPolling({
     hasPendingProjection: hasVisiblePendingDriveProjection,
     refetch: () =>
-      status === PAYMENT_QUEUE_TAB.PENDING_DATA
-        ? pendingDataQueue.refetch({ force: true })
-        : activeQueue.refetch({ force: true }),
+      activeQueue.refetch({ force: true }),
   });
 
   useEffect(() => {
-    setPage(1);
-  }, [debouncedSearch, workScope, workAssigneeId]);
+    setSelectedAssignmentIds([]);
+  }, [viewIdentity]);
 
   async function openRegisterPayment(request: PaymentRequest) {
     const work = request.giof_work;
@@ -141,20 +134,19 @@ export function PaymentQueuePage() {
   async function refreshAfterPayment(result: RegisterPaymentResponse) {
     setPaymentOperationalContext(null);
     await leaseSet.release(result.request.id);
-    await Promise.all([activeQueue.refetch(), pendingQueue.refetch(), paidQueue.refetch(), pendingDataQueue.refetch()]);
+    await activeQueue.refetch();
     const notice = getPaymentRegisteredToast(result);
     toast.success(notice.title, { description: notice.description });
   }
 
   async function refreshAfterCompletion() {
     if (completionRequest) await leaseSet.release(completionRequest.id);
-    await Promise.all([activeQueue.refetch(), pendingQueue.refetch(), paidQueue.refetch(), pendingDataQueue.refetch()]);
+    await activeQueue.refetch();
     toast.success("Pago completado.");
   }
 
   function setTab(nextStatus: PaymentQueueTab) {
-    setStatus(nextStatus);
-    setPage(1);
+    changeFilters({ tab: nextStatus, completeness: undefined });
   }
 
   async function openCompletePaymentDetails(request: PaymentRequest) {
@@ -174,17 +166,22 @@ export function PaymentQueuePage() {
     }
     await retryRexanActivation(request.id);
     await leaseSet.release(request.id);
-    await Promise.all([activeQueue.refetch(), paidQueue.refetch()]);
+    await activeQueue.refetch();
     toast.success("REXAN programada para reintento.");
   }
 
-  function setWorkScope(nextScope: GiofWorkScope, assigneeId?: string) {
-    const params = new URLSearchParams(searchParams.toString());
-    params.set("work_scope", nextScope);
-    if (nextScope === GIOF_WORK_SCOPE.ASSIGNEE && assigneeId) params.set("assignee_id", assigneeId); else params.delete("assignee_id");
-    router.replace(`/payments?${params.toString()}`);
-    setSelectedAssignmentIds([]);
-    void leaseSet.releaseAll();
+  function replacePaymentUrl(params: URLSearchParams): void {
+    const query = params.toString();
+    if (query) router.replace(`/payments?${query}`);
+    else router.replace("/payments");
+  }
+
+  function changeFilters(patch: Partial<PaymentQueueUrlFilters>): void {
+    replacePaymentUrl(updatePaymentQueueUrl(new URLSearchParams(searchParams.toString()), patch));
+  }
+
+  function clearFilters(): void {
+    replacePaymentUrl(serializePaymentQueueUrl({ tab }));
   }
 
   return (
@@ -199,39 +196,35 @@ export function PaymentQueuePage() {
         ) : null}
       </div>
 
-      <div className="grid gap-4 md:grid-cols-4">
+      <div className="grid gap-4 md:grid-cols-2">
         <Card>
-          <CardHeader><CardTitle>Pendientes</CardTitle><CardDescription>Pendiente de pago</CardDescription></CardHeader>
-          <CardContent><p className="text-3xl font-bold">{pendingQueue.total}</p></CardContent>
+          <CardHeader><CardTitle>Resultados</CardTitle><CardDescription>Resumen exacto de todos los filtros aplicados</CardDescription></CardHeader>
+          <CardContent><p className="text-3xl font-bold">{activeQueue.summary?.count ?? displayedTotal}</p></CardContent>
         </Card>
         <Card>
-          <CardHeader><CardTitle>Total pendiente</CardTitle><CardDescription>Monto por transferir</CardDescription></CardHeader>
-          <CardContent><p className="text-3xl font-bold">{formatRequestCurrency(pendingTotal)}</p></CardContent>
-        </Card>
-        <Card>
-          <CardHeader><CardTitle>Pagados</CardTitle><CardDescription>Historial consultable</CardDescription></CardHeader>
-          <CardContent><p className="text-3xl font-bold">{paidQueue.total}</p></CardContent>
-        </Card>
-        <Card>
-          <CardHeader><CardTitle>Datos pendientes</CardTitle><CardDescription>Constancia o referencia por completar</CardDescription></CardHeader>
-          <CardContent><p className="text-3xl font-bold">{pendingDataQueue.total}</p></CardContent>
+          <CardHeader><CardTitle>Monto pagable filtrado</CardTitle><CardDescription>Saldo REXAN elegible o monto normal, agregado por moneda en servidor</CardDescription></CardHeader>
+          <CardContent className="flex flex-wrap gap-4">{Object.entries(activeQueue.summary?.payable_amount_by_currency ?? {}).map(([currency, amount]) => <p key={currency} className="text-2xl font-bold"><span className="text-sm font-medium text-muted-foreground">{currency}</span> {amount}</p>)}{Object.keys(activeQueue.summary?.payable_amount_by_currency ?? {}).length === 0 ? <p className="text-2xl font-bold">—</p> : null}</CardContent>
         </Card>
       </div>
+
+      {hasInvalidUrl ? (
+        <QueueFilterReset message="No se pudieron aplicar los filtros de la URL. Restablécelos para continuar sin exponer parámetros inválidos." onReset={() => replacePaymentUrl(new URLSearchParams())} />
+      ) : (
+        <PaymentQueueFilters filters={{ ...urlFilters, work_scope: workScope, assignee_id: workAssigneeId }} isManager={isGiofManager} summary={activeQueue.summary} total={displayedTotal} isLoading={displayedIsLoading} isRefreshing={displayedIsRefreshing} onChange={changeFilters} onClear={clearFilters} />
+      )}
 
       <Card>
         <CardHeader className="gap-4 md:flex-row md:items-center md:justify-between">
           <div>
             <CardTitle>Solicitudes para pago</CardTitle>
-            <CardDescription>{status === REQUEST_STATUS.APPROVED ? "Solicitudes en gestión de transferencia." : status === PAYMENT_QUEUE_TAB.PENDING_DATA ? "Pagos con constancia o referencia pendiente." : "Pagos registrados."}</CardDescription>
+            <CardDescription>{tab === PAYMENT_QUEUE_TAB.APPROVED ? "Solicitudes en gestión de transferencia." : tab === PAYMENT_QUEUE_TAB.PENDING_DATA ? "Pagos con constancia, referencia o cuenta pendiente." : "Pagos registrados."}</CardDescription>
           </div>
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-            <GiofWorkScopeFilter value={workScope} assigneeId={workAssigneeId} isManager={isGiofManager} onChange={setWorkScope} helpContext={GIOF_HELP_CONTEXT.PAYMENT} />
             <div className="inline-flex rounded-md border p-1" role="group" aria-label="Vista de pagos">
-              <Button type="button" variant="ghost" size="sm" onClick={() => setTab(PAYMENT_QUEUE_STATUS.PENDING)} className={cn(status === REQUEST_STATUS.APPROVED && "bg-primary text-primary-foreground hover:bg-primary/90")} data-testid="payment-filter-approved">Pendientes</Button>
-              <Button type="button" variant="ghost" size="sm" onClick={() => setTab(PAYMENT_QUEUE_STATUS.PAID)} className={cn(status === REQUEST_STATUS.PAID && "bg-primary text-primary-foreground hover:bg-primary/90")} data-testid="payment-filter-paid">Historial pagado</Button>
-              <Button type="button" variant="ghost" size="sm" onClick={() => setTab(PAYMENT_QUEUE_TAB.PENDING_DATA)} className={cn(status === PAYMENT_QUEUE_TAB.PENDING_DATA && "bg-primary text-primary-foreground hover:bg-primary/90")} data-testid="payment-filter-pending-data">Datos pendientes</Button>
+              <Button type="button" variant="ghost" size="sm" onClick={() => setTab(PAYMENT_QUEUE_TAB.APPROVED)} className={cn(tab === PAYMENT_QUEUE_TAB.APPROVED && "bg-primary text-primary-foreground hover:bg-primary/90")} data-testid="payment-filter-approved">Pendientes</Button>
+              <Button type="button" variant="ghost" size="sm" onClick={() => setTab(PAYMENT_QUEUE_TAB.PAID)} className={cn(tab === PAYMENT_QUEUE_TAB.PAID && "bg-primary text-primary-foreground hover:bg-primary/90")} data-testid="payment-filter-paid">Historial pagado</Button>
+              <Button type="button" variant="ghost" size="sm" onClick={() => setTab(PAYMENT_QUEUE_TAB.PENDING_DATA)} className={cn(tab === PAYMENT_QUEUE_TAB.PENDING_DATA && "bg-primary text-primary-foreground hover:bg-primary/90")} data-testid="payment-filter-pending-data">Datos pendientes</Button>
             </div>
-            <Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Buscar por código o concepto..." className="sm:w-72" data-testid="payment-search-input" />
           </div>
         </CardHeader>
         <CardContent>
@@ -244,7 +237,7 @@ export function PaymentQueuePage() {
           {displayedError ? (
             <div className="space-y-3 rounded-md border border-destructive/40 p-4">
               <p className="text-sm text-destructive">{getApiErrorMessage(displayedError)}</p>
-               <Button size="sm" variant="outline" onClick={() => void (status === PAYMENT_QUEUE_TAB.PENDING_DATA ? pendingDataQueue.refetch() : activeQueue.refetch())}>Reintentar</Button>
+               <Button size="sm" variant="outline" onClick={() => void activeQueue.refetch()}>Reintentar</Button>
             </div>
           ) : (
             <PaymentQueueTable
@@ -266,8 +259,8 @@ export function PaymentQueuePage() {
             <div className="mt-4 flex items-center justify-between" aria-label="Paginación de pagos">
               <p className="text-sm text-muted-foreground">Página {page} de {totalPages}. Total: {displayedTotal}</p>
               <div className="flex gap-2">
-                <Button type="button" size="sm" variant="outline" disabled={page <= 1 || displayedIsLoading} onClick={() => setPage((current) => Math.max(1, current - 1))}>Anterior</Button>
-                <Button type="button" size="sm" variant="outline" disabled={page >= totalPages || displayedIsLoading} onClick={() => setPage((current) => Math.min(totalPages, current + 1))}>Siguiente</Button>
+                <Button type="button" size="sm" variant="outline" disabled={page <= 1 || displayedIsLoading} onClick={() => changeFilters({ page: Math.max(1, page - 1) })}>Anterior</Button>
+                <Button type="button" size="sm" variant="outline" disabled={page >= totalPages || displayedIsLoading} onClick={() => changeFilters({ page: Math.min(totalPages, page + 1) })}>Siguiente</Button>
               </div>
             </div>
           ) : null}
