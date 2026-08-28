@@ -10,6 +10,7 @@ vi.mock("@/hooks/use-giof-work", () => ({
   fetchGiofAssignees: vi.fn().mockResolvedValue([]),
   fetchGiofHistory: vi.fn().mockResolvedValue([]),
   getGiofConflictMessage: (error: unknown) => error instanceof Error ? error.message : "Error",
+  useGiofAssignees: vi.fn(() => ({ data: [], isLoading: false, isInitialLoading: false, isRefreshing: false, error: null, refetch: vi.fn() })),
 }));
 
 const work: GiofWorkMetadata = {

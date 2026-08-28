@@ -2,9 +2,11 @@
 
 import { useEffect, useRef, useState } from "react";
 
+import { useCachedResource } from "@/hooks/use-cached-resource";
 import { api, ApiRequestError } from "@/lib/api-client";
 import { bindGiofLeaseCredential, isGiofLeaseCurrent, unbindGiofLeaseCredential } from "@/lib/giof-work-lease-session";
-import { invalidateRequestDomain } from "@/lib/query-tags";
+import { QUERY_CACHE_TTL_MS } from "@/lib/query-cache";
+import { invalidateRequestDomain, QUERY_TAGS } from "@/lib/query-tags";
 import type {
   GiofAssigneeCandidate,
   GiofAssignmentHistoryItem,
@@ -190,10 +192,37 @@ export function useGiofWorkLeaseSet() {
   return { leases, acquire, release, releaseAll };
 }
 
-export async function fetchGiofAssignees(search?: string): Promise<GiofAssigneeCandidate[]> {
+export async function fetchGiofAssignees(search?: string, signal?: AbortSignal): Promise<GiofAssigneeCandidate[]> {
   const params = new URLSearchParams();
   if (search?.trim()) params.set("search", search.trim());
-  return api.get<GiofAssigneeCandidate[]>(`/giof-work/assignees${params.size ? `?${params.toString()}` : ""}`);
+  return api.get<GiofAssigneeCandidate[]>(`/giof-work/assignees${params.size ? `?${params.toString()}` : ""}`, { signal });
+}
+
+interface GiofAssigneesOptions {
+  enabled?: boolean;
+  search?: string;
+}
+
+export function useGiofAssignees({ enabled = true, search }: GiofAssigneesOptions = {}) {
+  const normalizedSearch = search?.trim() ?? "";
+  const resource = useCachedResource<GiofAssigneeCandidate[]>({
+    enabled,
+    key: [QUERY_TAGS.GIOF_WORK, "assignees", { search: normalizedSearch }],
+    ttlMs: QUERY_CACHE_TTL_MS.CATALOG,
+    tags: [QUERY_TAGS.CATALOGS, QUERY_TAGS.USERS],
+    keepPreviousData: false,
+    errorMessage: "No se pudo obtener el catálogo de responsables GIOF.",
+    queryFn: (signal) => fetchGiofAssignees(normalizedSearch || undefined, signal),
+  });
+
+  return {
+    data: resource.data,
+    isLoading: resource.isLoading,
+    isInitialLoading: resource.isInitialLoading,
+    isRefreshing: resource.isRefreshing,
+    error: resource.error,
+    refetch: resource.refetch,
+  };
 }
 
 export async function fetchGiofHistory(requestId: string, pool: GiofWorkPool): Promise<GiofAssignmentHistoryItem[]> {
