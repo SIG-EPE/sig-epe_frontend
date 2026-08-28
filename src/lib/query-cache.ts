@@ -20,6 +20,7 @@ interface QueryCacheEntry<T> {
 interface InFlightQuery<T> {
   promise: Promise<T>;
   controller: AbortController;
+  consumers: Set<symbol>;
   tags: Set<string>;
   keyParts: readonly unknown[];
 }
@@ -103,6 +104,36 @@ function isFresh(entry: QueryCacheEntry<unknown> | undefined, now = Date.now()):
   return Boolean(entry && entry.expiresAt > now);
 }
 
+function abortInFlight(cacheKey: string, entry: InFlightQuery<unknown>): void {
+  if (inFlight.get(cacheKey) === entry) inFlight.delete(cacheKey);
+  entry.controller.abort();
+}
+
+function subscribeToInFlight<T>(cacheKey: string, entry: InFlightQuery<unknown>, signal?: AbortSignal): Promise<T> {
+  const consumer = Symbol(cacheKey);
+  let isSubscribed = true;
+  entry.consumers.add(consumer);
+
+  const unsubscribe = () => {
+    if (!isSubscribed) return;
+    isSubscribed = false;
+    signal?.removeEventListener("abort", unsubscribe);
+    entry.consumers.delete(consumer);
+    if (entry.consumers.size > 0) return;
+
+    queueMicrotask(() => {
+      if (inFlight.get(cacheKey) !== entry || entry.consumers.size > 0) return;
+      abortInFlight(cacheKey, entry);
+    });
+  };
+
+  if (signal?.aborted) unsubscribe();
+  else signal?.addEventListener("abort", unsubscribe, { once: true });
+
+  void entry.promise.then(unsubscribe, unsubscribe);
+  return entry.promise as Promise<T>;
+}
+
 export async function cachedQuery<T>({ key, ttlMs, tags = [], force = false, signal, queryFn }: CachedQueryOptions<T>): Promise<T> {
   const cacheKey = buildScopedKey(key);
   const cached = cache.get(cacheKey);
@@ -114,24 +145,19 @@ export async function cachedQuery<T>({ key, ttlMs, tags = [], force = false, sig
   const currentInFlight = inFlight.get(cacheKey);
   if (!force && currentInFlight) {
     logQueryCacheDebug("dedupe", key);
-    return currentInFlight.promise as Promise<T>;
+    return subscribeToInFlight<T>(cacheKey, currentInFlight, signal);
   }
 
   if (force) {
     logQueryCacheDebug("force", key);
-    inFlight.get(cacheKey)?.controller.abort();
-    inFlight.delete(cacheKey);
+    const forcedEntry = inFlight.get(cacheKey);
+    if (forcedEntry) abortInFlight(cacheKey, forcedEntry);
   }
 
   const startedAt = Date.now();
   logQueryCacheDebug("miss", key);
 
   const controller = new AbortController();
-  if (signal) {
-    if (signal.aborted) controller.abort();
-    else signal.addEventListener("abort", () => controller.abort(), { once: true });
-  }
-
   const tagSet = new Set(tags);
   const promise = queryFn(controller.signal)
     .then((data) => {
@@ -150,8 +176,15 @@ export async function cachedQuery<T>({ key, ttlMs, tags = [], force = false, sig
       if (inFlight.get(cacheKey)?.promise === promise) inFlight.delete(cacheKey);
     });
 
-  inFlight.set(cacheKey, { promise, controller, tags: tagSet, keyParts: key });
-  return promise;
+  const entry: InFlightQuery<unknown> = {
+    promise,
+    controller,
+    consumers: new Set(),
+    tags: tagSet,
+    keyParts: key,
+  };
+  inFlight.set(cacheKey, entry);
+  return subscribeToInFlight<T>(cacheKey, entry, signal);
 }
 
 export function readCachedQuery<T>(key: readonly unknown[]): T | null {
@@ -168,8 +201,7 @@ export function invalidateQueryPrefix(prefix: readonly unknown[]): void {
   }
   for (const [key, entry] of inFlight.entries()) {
     if (prefix.every((part, index) => stableSerialize(entry.keyParts[index]) === stableSerialize(part))) {
-      entry.controller.abort();
-      inFlight.delete(key);
+      abortInFlight(key, entry);
     }
   }
 }
@@ -183,16 +215,16 @@ export function invalidateQueryTag(tag: string): void {
   }
   for (const [key, entry] of inFlight.entries()) {
     if (entry.tags.has(tag)) {
-      entry.controller.abort();
-      inFlight.delete(key);
+      abortInFlight(key, entry);
     }
   }
 }
 
 export function clearQueryCache(): void {
   cache.clear();
-  for (const entry of inFlight.values()) entry.controller.abort();
+  const activeEntries = [...inFlight.values()];
   inFlight.clear();
+  for (const entry of activeEntries) entry.controller.abort();
 }
 
 export type { QueryCacheTtlKey };

@@ -17,17 +17,20 @@ import {
   useRegisterPayment,
   useRequest,
   useRequestReview,
+  usePaymentQueue,
   useRequestDocuments,
   useRequestPlanningLineFacets,
   useRequestPlanningLineSearch,
   useRequestReceiptReviews,
   useRequestRenditionReport,
   useRequestRenditionReportActions,
+  useRenditionsInbox,
   useSettlementContext,
   useStartAdvanceSettlement,
 } from "@/hooks/use-requests";
 import { api } from "@/lib/api-client";
 import { clearQueryCache } from "@/lib/query-cache";
+import { parseRenditionsQueueUrl } from "@/lib/queue-filters/renditions";
 import { GIOF_WORK_POOL, type GiofWorkLease } from "@/types/giof-work";
 import {
   RENDITION_BUCKET,
@@ -38,10 +41,14 @@ import {
   REQUEST_STATUS,
   REQUEST_TYPE,
   type PaymentRequest,
+  type PaymentQueueFilters,
   type RequestPlanningLineFacetsResponse,
   type RequestPlanningLineHydrateResponse,
   type RequestPlanningLineSearchResponse,
   type RequestReviewResponse,
+  type PaymentQueueResponse,
+  type RenditionsInboxResponse,
+  type RenditionStatus,
   type RequestStatus,
 } from "@/types/requests";
 
@@ -64,6 +71,39 @@ function deferred<T>() {
     reject = promiseReject;
   });
   return { promise, resolve, reject };
+}
+
+function makeRenditionsInboxResponse(total: number): RenditionsInboxResponse {
+  return {
+    renditions: [],
+    total,
+    page: 1,
+    limit: 20,
+    counts: {
+      OBSERVED: 0,
+      PENDING: 0,
+      OVERDUE: 0,
+      IN_REVIEW: 0,
+      SETTLED: 0,
+    },
+    summary: { count: total },
+    facets: {
+      status: {
+        excluded_filters: ["status"],
+        counts: {
+          OBSERVED: 0,
+          PENDING: 0,
+          OVERDUE: 0,
+          IN_REVIEW: 0,
+          SETTLED: 0,
+        },
+      },
+      deadline_bucket: {
+        excluded_filters: ["deadline_bucket"],
+        counts: { none: 0, due_today: 0, due_soon: 0, overdue: 0 },
+      },
+    },
+  };
 }
 
 beforeEach(() => {
@@ -452,6 +492,92 @@ describe("request hook URL helpers", () => {
     ).toBe("/requests/payment-queue?page=1&limit=20&status=PAID");
   });
 
+  it("serializa el contrato allowlisted completo de Payment sin perder precisión", () => {
+    expect(getPaymentQueuePath({
+      page: 3,
+      limit: 20,
+      status: REQUEST_STATUS.PAID,
+      search: "REXAN 2026",
+      work_scope: "assignee",
+      assignee_id: "123e4567-e89b-12d3-a456-426614174001",
+      approved_from: "2026-08-01",
+      approved_to: "2026-08-10",
+      paid_from: "2026-08-11",
+      paid_to: "2026-08-28",
+      source_account_key: "BCP_PEN",
+      completeness: "complete",
+      drive_status: "SUCCEEDED",
+      rexan_status: "CREATED",
+      currency: REQUEST_CURRENCY.PEN,
+      amount_min: "10.00",
+      amount_max: "2500.50",
+      sort: "payable_amount_desc",
+    })).toBe(
+      "/requests/payment-queue?page=3&limit=20&status=PAID&search=REXAN+2026&work_scope=assignee&assignee_id=123e4567-e89b-12d3-a456-426614174001&approved_from=2026-08-01&approved_to=2026-08-10&paid_from=2026-08-11&paid_to=2026-08-28&source_account_key=BCP_PEN&completeness=complete&drive_status=SUCCEEDED&rexan_status=CREATED&currency=PEN&amount_min=10.00&amount_max=2500.50&sort=payable_amount_desc",
+    );
+  });
+
+  it("expone el summary exacto devuelto por Payment y no reintenta sin work filters", async () => {
+    const response: PaymentQueueResponse = {
+      requests: [],
+      total: 2,
+      page: 1,
+      limit: 20,
+      summary: {
+        count: 2,
+        payable_amount_by_currency: { PEN: "270.00" },
+        status_counts: { PAID: 2 },
+      },
+    };
+    vi.mocked(api.get).mockResolvedValueOnce(response);
+
+    const { result } = renderHook(() => usePaymentQueue({
+      status: REQUEST_STATUS.PAID,
+      completeness: "complete",
+    }));
+
+    await waitFor(() => expect(result.current.summary?.count).toBe(2));
+    expect(result.current.summary?.payable_amount_by_currency.PEN).toBe("270.00");
+    expect(api.get).toHaveBeenCalledTimes(1);
+  });
+
+  it("resuelve APPROVED al volver rápido desde PAID con api.get sensible al signal", async () => {
+    const approved = deferred<PaymentQueueResponse>();
+    const paid = deferred<PaymentQueueResponse>();
+    const approvedSignals: AbortSignal[] = [];
+    vi.mocked(api.get).mockImplementation((path: string, options?: RequestInit) => {
+      const signal = options?.signal as AbortSignal;
+      const pending = path.includes("status=PAID") ? paid : approved;
+      if (!path.includes("status=PAID")) approvedSignals.push(signal);
+      return new Promise((resolve, reject) => {
+        signal.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), { once: true });
+        pending.promise.then(resolve, reject);
+      });
+    });
+    const { result, rerender } = renderHook(
+      ({ status }: { status: NonNullable<PaymentQueueFilters["status"]> }) => usePaymentQueue({ status }),
+      { initialProps: { status: REQUEST_STATUS.APPROVED as NonNullable<PaymentQueueFilters["status"]> } },
+    );
+
+    rerender({ status: REQUEST_STATUS.PAID });
+    expect(api.get).toHaveBeenCalledTimes(2);
+    rerender({ status: REQUEST_STATUS.APPROVED });
+
+    await act(async () => {
+      approved.resolve({ requests: [], total: 7, page: 1, limit: 20, summary: { count: 7, payable_amount_by_currency: {}, status_counts: {} } });
+      await approved.promise;
+    });
+
+    await waitFor(() => expect(result.current.total).toBe(7));
+    expect(approvedSignals).toHaveLength(1);
+    expect(approvedSignals[0]?.aborted).toBe(false);
+
+    await act(async () => {
+      paid.resolve({ requests: [], total: 3, page: 1, limit: 20, summary: { count: 3, payable_amount_by_currency: {}, status_counts: {} } });
+      await paid.promise;
+    });
+  });
+
   it("serializa filtros de datos pendientes de pago", () => {
     expect(
       getPaymentQueuePath({
@@ -484,21 +610,21 @@ describe("request hook URL helpers", () => {
     );
   });
 
-  it("serializa filtros de bandeja de rendiciones y resumen", () => {
+  it("serializa el contrato canónico S5 de bandeja de rendiciones y aliases compatibles", () => {
     expect(
       getRenditionsPath({
         page: 2,
         limit: 10,
         status: RENDITION_STATUS.OVERDUE,
-        bucket: RENDITION_BUCKET.DUE_SOON,
+        deadline_bucket: RENDITION_BUCKET.DUE_SOON,
         search: "REXAN",
-        due_from: "2026-06-01",
-        due_to: "2026-06-30",
+        deadline_from: "2026-06-01",
+        deadline_to: "2026-06-30",
         sort: RENDITION_SORT_FIELD.PAID_AT,
         direction: RENDITION_SORT_DIRECTION.DESC,
       }),
     ).toBe(
-      "/requests/renditions?page=2&limit=10&status=OVERDUE&bucket=due_soon&search=REXAN&due_from=2026-06-01&due_to=2026-06-30&sort=paid_at&direction=desc",
+      "/requests/renditions?page=2&limit=10&status=OVERDUE&search=REXAN&deadline_from=2026-06-01&deadline_to=2026-06-30&deadline_bucket=due_soon&sort=paid_at&direction=desc",
     );
     expect(
       getRenditionCountsPath({
@@ -506,6 +632,96 @@ describe("request hook URL helpers", () => {
         sort: RENDITION_SORT_FIELD.DUE_DATE,
       }),
     ).toBe("/requests/renditions/counts?search=SOL-2026&sort=due_date");
+    expect(getRenditionsPath({ due_from: "2026-05-01", bucket: RENDITION_BUCKET.DUE_SOON })).toBe(
+      "/requests/renditions?due_from=2026-05-01&bucket=due_soon",
+    );
+  });
+
+  it("expone summary exacto y facets explícitas desde la misma respuesta S5", async () => {
+    vi.mocked(api.get).mockResolvedValueOnce({
+      renditions: [],
+      total: 1,
+      page: 1,
+      limit: 20,
+      counts: {},
+      summary: { count: 1 },
+      facets: {
+        status: { excluded_filters: ["status"], counts: { PENDING: 4 } },
+        deadline_bucket: { excluded_filters: ["deadline_bucket"], counts: { due_soon: 3 } },
+      },
+    });
+
+    const { result } = renderHook(() => useRenditionsInbox({ status: RENDITION_STATUS.PENDING }));
+
+    await waitFor(() => expect(result.current.summary?.count).toBe(1));
+    expect(result.current.facets?.status.excluded_filters).toEqual(["status"]);
+    expect(result.current.facets?.deadline_bucket.counts.due_soon).toBe(3);
+    expect(api.get).toHaveBeenCalledWith("/requests/renditions?status=PENDING", expect.any(Object));
+  });
+
+  it("mantiene la consulta Renditions al reemplazar aliases por la URL canónica equivalente", async () => {
+    const pending = deferred<RenditionsInboxResponse>();
+    let requestSignal: AbortSignal | undefined;
+    vi.mocked(api.get).mockImplementation((_path: string, options?: RequestInit) => {
+      requestSignal = options?.signal as AbortSignal;
+      return new Promise((resolve, reject) => {
+        requestSignal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), { once: true });
+        pending.promise.then(resolve, reject);
+      });
+    });
+    const aliasFilters = parseRenditionsQueueUrl(
+      new URLSearchParams("status=ALL&bucket=due_soon&due_from=2026-06-01&page=2"),
+    ).filters;
+    const canonicalFilters = parseRenditionsQueueUrl(
+      new URLSearchParams("page=2&deadline_from=2026-06-01&deadline_bucket=due_soon"),
+    ).filters;
+    const { result, rerender } = renderHook(
+      ({ filters }) => useRenditionsInbox(filters),
+      { initialProps: { filters: aliasFilters } },
+    );
+
+    rerender({ filters: canonicalFilters });
+    expect(api.get).toHaveBeenCalledTimes(1);
+    expect(requestSignal?.aborted).toBe(false);
+
+    await act(async () => {
+      pending.resolve({ ...makeRenditionsInboxResponse(4), page: 2 });
+      await pending.promise;
+    });
+
+    await waitFor(() => expect(result.current.total).toBe(4));
+  });
+
+  it("resuelve PENDING al volver rápido desde OVERDUE con api.get sensible al signal", async () => {
+    const pending = deferred<RenditionsInboxResponse>();
+    const overdue = deferred<RenditionsInboxResponse>();
+    const pendingSignals: AbortSignal[] = [];
+    vi.mocked(api.get).mockImplementation((path: string, options?: RequestInit) => {
+      const signal = options?.signal as AbortSignal;
+      const request = path.includes("status=OVERDUE") ? overdue : pending;
+      if (!path.includes("status=OVERDUE")) pendingSignals.push(signal);
+      return new Promise((resolve, reject) => {
+        signal.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), { once: true });
+        request.promise.then(resolve, reject);
+      });
+    });
+    const { result, rerender } = renderHook(
+      ({ status }: { status: RenditionStatus }) => useRenditionsInbox({ status }),
+      { initialProps: { status: RENDITION_STATUS.PENDING as RenditionStatus } },
+    );
+
+    rerender({ status: RENDITION_STATUS.OVERDUE });
+    expect(api.get).toHaveBeenCalledTimes(2);
+    rerender({ status: RENDITION_STATUS.PENDING });
+
+    await act(async () => {
+      pending.resolve(makeRenditionsInboxResponse(5));
+      await pending.promise;
+    });
+
+    await waitFor(() => expect(result.current.total).toBe(5));
+    expect(pendingSignals).toHaveLength(1);
+    expect(pendingSignals[0]?.aborted).toBe(false);
   });
 
   it("ejecuta el hook de inicio de rendición contra el endpoint dedicado", async () => {

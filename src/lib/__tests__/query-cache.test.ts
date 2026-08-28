@@ -36,6 +36,70 @@ describe("query-cache", () => {
     await expect(Promise.all([first, second])).resolves.toEqual([{ ok: true }, { ok: true }]);
   });
 
+  it("mantiene viva la solicitud compartida mientras quede otro consumidor", async () => {
+    const pending = deferred<string>();
+    const firstConsumer = new AbortController();
+    const secondConsumer = new AbortController();
+    let sharedSignal: AbortSignal | undefined;
+    const queryFn = vi.fn((signal: AbortSignal) => {
+      sharedSignal = signal;
+      return pending.promise;
+    });
+
+    const first = cachedQuery({
+      key: ["shared", "two-consumers"],
+      ttlMs: QUERY_CACHE_TTL_MS.MUTABLE_LIST,
+      signal: firstConsumer.signal,
+      queryFn,
+    });
+    const second = cachedQuery({
+      key: ["shared", "two-consumers"],
+      ttlMs: QUERY_CACHE_TTL_MS.MUTABLE_LIST,
+      signal: secondConsumer.signal,
+      queryFn,
+    });
+
+    firstConsumer.abort();
+    await Promise.resolve();
+
+    expect(sharedSignal?.aborted).toBe(false);
+    pending.resolve("ok");
+    await expect(Promise.all([first, second])).resolves.toEqual(["ok", "ok"]);
+    expect(queryFn).toHaveBeenCalledTimes(1);
+  });
+
+  it("aborta al salir el último consumidor y no reutiliza el in-flight condenado", async () => {
+    const consumer = new AbortController();
+    const sharedSignals: AbortSignal[] = [];
+    const queryFn = vi.fn((signal: AbortSignal) => {
+      sharedSignals.push(signal);
+      if (queryFn.mock.calls.length > 1) return Promise.resolve("replacement");
+      return new Promise<string>((_resolve, reject) => {
+        signal.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), { once: true });
+      });
+    });
+
+    const abandoned = cachedQuery({
+      key: ["shared", "last-consumer"],
+      ttlMs: QUERY_CACHE_TTL_MS.MUTABLE_LIST,
+      signal: consumer.signal,
+      queryFn,
+    });
+    const abandonedResult = abandoned.catch((error: unknown) => error);
+
+    consumer.abort();
+    await Promise.resolve();
+
+    expect(sharedSignals[0]?.aborted).toBe(true);
+    await expect(cachedQuery({
+      key: ["shared", "last-consumer"],
+      ttlMs: QUERY_CACHE_TTL_MS.MUTABLE_LIST,
+      queryFn,
+    })).resolves.toBe("replacement");
+    expect(queryFn).toHaveBeenCalledTimes(2);
+    await expect(abandonedResult).resolves.toMatchObject({ name: "AbortError" });
+  });
+
   it("reusa datos dentro del TTL e invalida por tag", async () => {
     const queryFn = vi.fn().mockResolvedValueOnce("first").mockResolvedValueOnce("second");
 
