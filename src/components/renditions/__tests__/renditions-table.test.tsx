@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
 import { RenditionsTable } from "@/components/renditions/renditions-table";
-import { RENDITION_STATUS, REQUEST_STATUS, type RenditionInboxRow } from "@/types/requests";
+import { RENDITION_DEADLINE_STATE, RENDITION_STATUS, REQUEST_STATUS, type RenditionInboxRow } from "@/types/requests";
 
 function makeRendition(overrides: Partial<RenditionInboxRow> = {}): RenditionInboxRow {
   return {
@@ -20,6 +20,9 @@ function makeRendition(overrides: Partial<RenditionInboxRow> = {}): RenditionInb
     amount_paid: 500,
     paid_at: "2026-05-01T00:00:00.000Z",
     scheduled_rendition_at: "2026-05-10",
+    deadline_date: "2026-05-10",
+    deadline_state: RENDITION_DEADLINE_STATE.OVERDUE,
+    calendar_days_to_deadline: -5,
     rendition_status: RENDITION_STATUS.OVERDUE,
     days_overdue: 5,
     days_until_due: null,
@@ -69,8 +72,32 @@ describe("RenditionsTable", () => {
     expect(screen.getByText("Registrado por: Ana Pérez")).toBeInTheDocument();
     expect(screen.getByText("Vencida")).toBeInTheDocument();
     expect(screen.getByText("Sustentos completos")).toBeInTheDocument();
-    expect(screen.getByText("5 días vencida")).toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: "Plazo" })).toBeInTheDocument();
+    expect(screen.queryByRole("columnheader", { name: "Días" })).not.toBeInTheDocument();
+    expect(screen.getByRole("cell", { name: /Plazo: .*10 may\. 2026.*Vencida hace 5 días/i })).toBeInTheDocument();
+    expect(screen.getByText("Vencida hace 5 días")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Ver REXAN" })).toHaveAttribute("href", "/requests/settlement-1");
+  });
+
+  it("muestra fecha y lifecycle presentado o completado mediante texto accesible", () => {
+    render(<RenditionsTable renditions={[
+      makeRendition({
+        advance_id: "presented",
+        request_code: "REXAN-PRESENTADA",
+        deadline_state: RENDITION_DEADLINE_STATE.PRESENTED,
+        calendar_days_to_deadline: null,
+      }),
+      makeRendition({
+        advance_id: "completed",
+        request_code: "REXAN-RENDIDA",
+        deadline_state: RENDITION_DEADLINE_STATE.COMPLETED,
+        calendar_days_to_deadline: null,
+      }),
+    ]} isLoading={false} />);
+
+    expect(screen.getByRole("cell", { name: /Plazo: .*Presentada/i })).toBeInTheDocument();
+    expect(screen.getByRole("cell", { name: /Plazo: .*Rendida/i })).toBeInTheDocument();
+    expect(screen.queryByText("Sin fecha límite")).not.toBeInTheDocument();
   });
 
   it("muestra estado vacío business-friendly", () => {

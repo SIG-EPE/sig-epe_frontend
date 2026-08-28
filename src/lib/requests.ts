@@ -1,5 +1,5 @@
 import { ApiRequestError } from "@/lib/api-client";
-import { formatBusinessDate, formatBusinessDateTime, getBusinessDateString, getDateOnlyUtcTime, parseBusinessDateTimeLocalToIso } from "@/lib/business-timezone";
+import { formatBusinessDate, formatBusinessDateTime, getDateOnlyUtcTime, parseBusinessDateTimeLocalToIso } from "@/lib/business-timezone";
 import { ROLE_CODE, ROUTES } from "@/lib/constants";
 import { isGiofOperationalRole } from "@/lib/role-capabilities";
 import { getSafeDocumentUrl } from "@/lib/safe-url";
@@ -19,6 +19,7 @@ import {
   REQUEST_DOCUMENT_UPLOAD_QUEUE_ERROR_KIND,
   REQUEST_DOCUMENT_UPLOAD_QUEUE_STATUS,
   RENDITION_NEXT_STEP_ACTION,
+  RENDITION_DEADLINE_STATE,
   REQUEST_TYPE,
   REXAN_OUTCOME,
   ADVANCE_SETTLEMENT_CTA_STATE,
@@ -34,6 +35,7 @@ import {
   type RenditionSortDirection,
   type RenditionSortField,
   type RenditionStatus,
+  type RenditionDeadlineState,
   type RequestDocument,
   type RequestDocumentCategory,
   type RequestAllocation,
@@ -923,31 +925,113 @@ export function getRenditionStatusTone(status: RenditionStatus): "default" | "se
   return "outline";
 }
 
+type RenditionDeadlineSource = Pick<RenditionInboxRow,
+  | "deadline_date"
+  | "deadline_state"
+  | "calendar_days_to_deadline"
+  | "scheduled_rendition_at"
+  | "days_overdue"
+  | "days_until_due"
+  | "days_remaining"
+  | "rendition_status"
+  | "settlement_status"
+>;
+
 function getDateOnlyTime(value?: string | null): number | null {
   return getDateOnlyUtcTime(value);
 }
 
-export function getRenditionDaysRemaining(row: Pick<RenditionInboxRow, "scheduled_rendition_at" | "days_overdue" | "days_until_due" | "days_remaining" | "rendition_status">, today = new Date()): number | null {
+const PRESENTED_RENDITION_LIFECYCLES = [
+  REQUEST_STATUS.SUBMITTED,
+  REQUEST_STATUS.IN_VALIDATION,
+] as const;
+
+const COMPLETED_RENDITION_LIFECYCLES = [
+  REQUEST_STATUS.APPROVED,
+  REQUEST_STATUS.PAID,
+  REQUEST_STATUS.CLOSED,
+] as const;
+
+function hasCanonicalDeadline(row: RenditionDeadlineSource): boolean {
+  return row.deadline_date !== undefined
+    || row.deadline_state !== undefined
+    || row.calendar_days_to_deadline !== undefined;
+}
+
+function isLifecycleIn(
+  status: RequestStatus | null,
+  lifecycles: readonly RequestStatus[],
+): boolean {
+  return status !== null && lifecycles.includes(status);
+}
+
+export function getRenditionDeadlineDate(row: RenditionDeadlineSource): string | null {
+  return hasCanonicalDeadline(row)
+    ? row.deadline_date ?? null
+    : row.scheduled_rendition_at;
+}
+
+export function getRenditionDaysRemaining(row: RenditionDeadlineSource): number | null {
+  if (hasCanonicalDeadline(row)) return row.calendar_days_to_deadline ?? null;
   if (typeof row.days_remaining === "number") return row.days_remaining;
   if (typeof row.days_until_due === "number") return row.days_until_due;
   if (typeof row.days_overdue === "number") return -Math.abs(row.days_overdue);
-  if (!row.scheduled_rendition_at || row.rendition_status !== RENDITION_STATUS.PENDING) return null;
-  const dueTime = getDateOnlyTime(row.scheduled_rendition_at);
-  const todayTime = getDateOnlyTime(getBusinessDateString(today));
-  if (dueTime === null || todayTime === null) return null;
-  return Math.ceil((dueTime - todayTime) / (24 * 60 * 60 * 1000));
+  return null;
 }
 
-export function getRenditionDueLabel(row: Pick<RenditionInboxRow, "scheduled_rendition_at" | "days_overdue" | "days_until_due" | "days_remaining" | "rendition_status">, today = new Date()): string {
-  const days = getRenditionDaysRemaining(row, today);
-  if (days === null) return "Sin fecha límite";
-  if (days < 0) return `${Math.abs(days)} día${Math.abs(days) === 1 ? "" : "s"} vencida`;
+function formatDeadlineDays(deadlineState: RenditionDeadlineState, days: number | null): string {
+  if (deadlineState === RENDITION_DEADLINE_STATE.NONE) return "Sin fecha límite";
+  if (deadlineState === RENDITION_DEADLINE_STATE.DUE_TODAY) return "Vence hoy";
+  if (deadlineState === RENDITION_DEADLINE_STATE.PRESENTED) return "Presentada";
+  if (deadlineState === RENDITION_DEADLINE_STATE.COMPLETED) return "Rendida";
+  if (deadlineState === RENDITION_DEADLINE_STATE.OVERDUE && days !== null) {
+    const elapsedDays = Math.abs(days);
+    return `Vencida hace ${elapsedDays} día${elapsedDays === 1 ? "" : "s"}`;
+  }
+  if (deadlineState === RENDITION_DEADLINE_STATE.OPEN && days !== null) {
+    return `${days} día${days === 1 ? "" : "s"} para vencer`;
+  }
+  return "Plazo vigente";
+}
+
+export function getRenditionDueLabel(row: RenditionDeadlineSource): string {
+  const deadlineDate = getRenditionDeadlineDate(row);
+  if (hasCanonicalDeadline(row) && row.deadline_state) {
+    const canonicalLabel = formatDeadlineDays(
+      row.deadline_state,
+      row.calendar_days_to_deadline ?? null,
+    );
+    if (deadlineDate || row.deadline_state === RENDITION_DEADLINE_STATE.NONE) {
+      return deadlineDate && canonicalLabel === "Sin fecha límite"
+        ? "Plazo vigente"
+        : canonicalLabel;
+    }
+  }
+
+  if (!deadlineDate) return "Sin fecha límite";
+  if (isLifecycleIn(row.settlement_status, PRESENTED_RENDITION_LIFECYCLES)
+    || row.rendition_status === RENDITION_STATUS.IN_REVIEW) {
+    return "Presentada";
+  }
+  if (isLifecycleIn(row.settlement_status, COMPLETED_RENDITION_LIFECYCLES)
+    || row.rendition_status === RENDITION_STATUS.SETTLED) {
+    return "Rendida";
+  }
+
+  const days = getRenditionDaysRemaining(row);
+  if (days === null) return "Plazo vigente";
+  if (days < 0) return `Vencida hace ${Math.abs(days)} día${Math.abs(days) === 1 ? "" : "s"}`;
   if (days === 0) return "Vence hoy";
-  return `${days} día${days === 1 ? "" : "s"} restante${days === 1 ? "" : "s"}`;
+  return `${days} día${days === 1 ? "" : "s"} para vencer`;
 }
 
-export function isRenditionDueSoon(row: Pick<RenditionInboxRow, "scheduled_rendition_at" | "days_overdue" | "days_until_due" | "days_remaining" | "rendition_status">, today = new Date()): boolean {
-  const days = getRenditionDaysRemaining(row, today);
+export function isRenditionDueSoon(row: RenditionDeadlineSource): boolean {
+  const days = getRenditionDaysRemaining(row);
+  if (hasCanonicalDeadline(row)) {
+    const hasActiveClock = row.deadline_state === RENDITION_DEADLINE_STATE.OPEN
+      || row.deadline_state === RENDITION_DEADLINE_STATE.DUE_TODAY;
+    return hasActiveClock && days !== null && days >= 0 && days <= 15;
+  }
   return row.rendition_status === RENDITION_STATUS.PENDING && days !== null && days >= 0 && days <= 15;
 }
 

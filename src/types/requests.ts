@@ -61,6 +61,27 @@ export const RENDITION_STATUS = {
 export type RenditionStatus =
   (typeof RENDITION_STATUS)[keyof typeof RENDITION_STATUS];
 
+export const RENDITION_DEADLINE_STATE = {
+  NONE: "NONE",
+  OPEN: "OPEN",
+  DUE_TODAY: "DUE_TODAY",
+  OVERDUE: "OVERDUE",
+  PRESENTED: "PRESENTED",
+  COMPLETED: "COMPLETED",
+} as const;
+
+export type RenditionDeadlineState =
+  (typeof RENDITION_DEADLINE_STATE)[keyof typeof RENDITION_DEADLINE_STATE];
+
+export interface RenditionDeadlineFields {
+  /** Canonical Lima calendar date. Optional only during the staggered API rollout. */
+  deadline_date?: string | null;
+  /** Derived deadline metadata; it is not a persisted rendition lifecycle. */
+  deadline_state?: RenditionDeadlineState;
+  /** Signed calendar-day delta for active deadlines. */
+  calendar_days_to_deadline?: number | null;
+}
+
 export const RENDITION_BUCKET = {
   DUE_SOON: "due_soon",
 } as const;
@@ -1374,7 +1395,7 @@ export interface AttachPaymentProofInput {
   notes?: string;
 }
 
-export interface RenditionInboxRow {
+export interface RenditionInboxRow extends RenditionDeadlineFields {
   advance_id: string;
   request_code: string | null;
   advance_request_code?: string | null;
@@ -1391,8 +1412,11 @@ export interface RenditionInboxRow {
   paid_at: string | null;
   scheduled_rendition_at: string | null;
   rendition_status: RenditionStatus;
+  /** @deprecated Use deadline_state and calendar_days_to_deadline. */
   days_overdue: number | null;
+  /** @deprecated Use deadline_state and calendar_days_to_deadline. */
   days_until_due: number | null;
+  /** @deprecated Use deadline_state and calendar_days_to_deadline. */
   days_remaining: number | null;
   settlement_request_id: string | null;
   settlement_status: RequestStatus | null;

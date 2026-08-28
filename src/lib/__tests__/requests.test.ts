@@ -64,6 +64,7 @@ import {
   getRexanOutcomeLabel,
   getPaymentRequestRenditionStatus,
   getRenditionDueLabel,
+  isRenditionDueSoon,
   getRenditionNextStepGuidance,
   getRenditionStatusLabel,
   getRenditionSummaryCount,
@@ -88,7 +89,7 @@ import {
   updateRequestReviewUrl,
 } from "@/lib/requests";
 import { ROLE_CODE } from "@/lib/constants";
-import { ACCOUNT_TYPE, BANK_CODE, BENEFICIARY_DOCUMENT_TYPE, RENDITION_SORT_DIRECTION, RENDITION_SORT_FIELD, RENDITION_STATUS, REQUEST_CURRENCY, REQUEST_DOCUMENT_CATEGORY, REQUEST_DOCUMENT_STORAGE_PROVIDER, REQUEST_DOCUMENT_UPLOAD_STATUS, REQUEST_STATUS, REQUEST_TYPE, REXAN_OUTCOME, type PaymentRequest, type RenditionInboxCounts, type RenditionInboxRow, type RequestBudgetPreview, type RequestDocument, type RequestReviewResponse, type RequestStatusHistoryItem } from "@/types/requests";
+import { ACCOUNT_TYPE, BANK_CODE, BENEFICIARY_DOCUMENT_TYPE, RENDITION_DEADLINE_STATE, RENDITION_SORT_DIRECTION, RENDITION_SORT_FIELD, RENDITION_STATUS, REQUEST_CURRENCY, REQUEST_DOCUMENT_CATEGORY, REQUEST_DOCUMENT_STORAGE_PROVIDER, REQUEST_DOCUMENT_UPLOAD_STATUS, REQUEST_STATUS, REQUEST_TYPE, REXAN_OUTCOME, type PaymentRequest, type RenditionInboxCounts, type RenditionInboxRow, type RequestBudgetPreview, type RequestDocument, type RequestReviewResponse, type RequestStatusHistoryItem } from "@/types/requests";
 
 const REQUEST_STATE_CONFLICT_BODY = {
   statusCode: 409,
@@ -524,9 +525,9 @@ describe("requests helpers", () => {
       expect(parseRenditionSortDirection("desc")).toBe(RENDITION_SORT_DIRECTION.DESC);
       expect(parseRenditionSortDirection(null)).toBe(RENDITION_SORT_DIRECTION.DESC);
       expect(getRenditionStatusLabel(RENDITION_STATUS.IN_REVIEW)).toBe("En revisión");
-      expect(getRenditionDueLabel(overdue, new Date("2026-05-15T00:00:00.000Z"))).toBe("2 días vencida");
+      expect(getRenditionDueLabel(overdue)).toBe("Vencida hace 2 días");
       expect(getRenditionSummaryCount({ key: "due-soon", label: "Próximas a vencer", description: "" }, counts, [pendingDueSoon, overdue])).toBe(1);
-      expect(getRenditionDueLabel(pendingDueSoon, new Date("2026-05-15T00:00:00.000Z"))).toBe("5 días restantes");
+      expect(getRenditionDueLabel(pendingDueSoon)).toBe("5 días para vencer");
       expect(getPaymentRequestRenditionStatus(paidAdvance)).toBe(RENDITION_STATUS.PENDING);
       expect(getPaymentRequestRenditionStatus(makeRequest({ status: REQUEST_STATUS.PAID, advanceSettlements: [observedSettlement] }))).toBe(RENDITION_STATUS.OBSERVED);
       expect(getPaymentRequestRenditionStatus(makeRequest({ status: REQUEST_STATUS.PAID, scheduled_rendition_at: "2026-05-20", advanceSettlements: [rejectedSettlement] }))).toBe(RENDITION_STATUS.PENDING);
@@ -541,7 +542,80 @@ describe("requests helpers", () => {
     expect(formatRequestDateTime("2026-06-01T05:00:00.000Z")).toContain("1 jun");
 
     const pendingDueToday = makeRenditionRow({ scheduled_rendition_at: "2026-05-31", days_until_due: 0, days_remaining: 0 });
-    expect(getRenditionDueLabel(pendingDueToday, new Date("2026-06-01T04:59:59.000Z"))).toBe("Vence hoy");
+    expect(getRenditionDueLabel(pendingDueToday)).toBe("Vence hoy");
+  });
+
+  it("formatea los seis estados canónicos sin convertir una fecha concreta en ausencia de plazo", () => {
+    const cases = [
+      [RENDITION_DEADLINE_STATE.NONE, null, null, "Sin fecha límite"],
+      [RENDITION_DEADLINE_STATE.DUE_TODAY, "2026-05-15", 0, "Vence hoy"],
+      [RENDITION_DEADLINE_STATE.OPEN, "2026-05-20", 5, "5 días para vencer"],
+      [RENDITION_DEADLINE_STATE.OVERDUE, "2026-05-13", -2, "Vencida hace 2 días"],
+      [RENDITION_DEADLINE_STATE.PRESENTED, "2026-05-10", null, "Presentada"],
+      [RENDITION_DEADLINE_STATE.COMPLETED, "2026-05-10", null, "Rendida"],
+    ] as const;
+
+    for (const [deadlineState, deadlineDate, days, expected] of cases) {
+      expect(getRenditionDueLabel(makeRenditionRow({
+        deadline_date: deadlineDate,
+        deadline_state: deadlineState,
+        calendar_days_to_deadline: days,
+      }))).toBe(expected);
+    }
+
+    expect(getRenditionDueLabel(makeRenditionRow({
+      deadline_date: "2026-05-20",
+      deadline_state: RENDITION_DEADLINE_STATE.OPEN,
+      calendar_days_to_deadline: 5,
+      days_remaining: -99,
+    }))).toBe("5 días para vencer");
+  });
+
+  it("mantiene fallback temporal para payloads antiguos y todos los lifecycle existentes", () => {
+    const lifecycleCases = [
+      [REQUEST_STATUS.DRAFT, 5, "5 días para vencer"],
+      [REQUEST_STATUS.SUBMITTED, null, "Presentada"],
+      [REQUEST_STATUS.IN_VALIDATION, null, "Presentada"],
+      [REQUEST_STATUS.OBSERVED, 0, "Vence hoy"],
+      [REQUEST_STATUS.REJECTED, -2, "Vencida hace 2 días"],
+      [REQUEST_STATUS.VOIDED, 5, "5 días para vencer"],
+      [REQUEST_STATUS.APPROVED, null, "Rendida"],
+      [REQUEST_STATUS.PAID, null, "Rendida"],
+      [REQUEST_STATUS.CLOSED, null, "Rendida"],
+    ] as const;
+
+    for (const [settlementStatus, daysRemaining, expected] of lifecycleCases) {
+      const oldPayload = makeRenditionRow({
+        settlement_status: settlementStatus,
+        days_remaining: daysRemaining,
+        days_until_due: null,
+        days_overdue: null,
+      });
+      expect(getRenditionDueLabel(oldPayload)).toBe(expected);
+      expect(getRenditionDueLabel(oldPayload)).not.toBe("Sin fecha límite");
+    }
+
+    expect(getRenditionDueLabel(makeRenditionRow({
+      scheduled_rendition_at: "2026-05-20",
+      days_remaining: null,
+      days_until_due: null,
+      days_overdue: null,
+    }))).not.toBe("Sin fecha límite");
+  });
+
+  it("aplica al card due-soon solo el reloj canónico activo entre 0 y 15", () => {
+    const row = (deadlineState: typeof RENDITION_DEADLINE_STATE[keyof typeof RENDITION_DEADLINE_STATE], days: number | null) => makeRenditionRow({
+      deadline_date: "2026-05-20",
+      deadline_state: deadlineState,
+      calendar_days_to_deadline: days,
+    });
+
+    expect(isRenditionDueSoon(row(RENDITION_DEADLINE_STATE.DUE_TODAY, 0))).toBe(true);
+    expect(isRenditionDueSoon(row(RENDITION_DEADLINE_STATE.OPEN, 15))).toBe(true);
+    expect(isRenditionDueSoon(row(RENDITION_DEADLINE_STATE.OPEN, 16))).toBe(false);
+    expect(isRenditionDueSoon(row(RENDITION_DEADLINE_STATE.OVERDUE, -1))).toBe(false);
+    expect(isRenditionDueSoon(row(RENDITION_DEADLINE_STATE.PRESENTED, null))).toBe(false);
+    expect(isRenditionDueSoon(row(RENDITION_DEADLINE_STATE.COMPLETED, null))).toBe(false);
   });
 
   it("aplica mensaje de bloqueo de nuevo anticipo sin bloquear corrección REXAN", () => {

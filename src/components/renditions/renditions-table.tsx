@@ -10,6 +10,7 @@ import {
   formatRequestCurrency,
   formatRequestDate,
   getRenditionAction,
+  getRenditionDeadlineDate,
   getRenditionDueLabel,
   getRenditionStatusLabel,
   getRenditionStatusTone,
@@ -51,15 +52,14 @@ export function RenditionsTable({ renditions, isLoading, currentUserId, isGiofMa
           <TableHead>A nombre de</TableHead>
           <TableHead className="text-right">Monto</TableHead>
           <TableHead>Fecha de pago</TableHead>
-          <TableHead>Fecha límite</TableHead>
-          <TableHead>Días</TableHead>
+          <TableHead>Plazo</TableHead>
           <TableHead>Estado</TableHead>
           <TableHead>Asignación</TableHead>
           <TableHead className="text-right">REXAN / acción</TableHead>
         </TableRow>
       </TableHeader>
       <TableBody>
-        {isGiofManager && onToggleAllAssignments && assignableRenditions.length > 0 && <TableRow><TableCell colSpan={10}><label className="flex items-center gap-2 text-sm text-muted-foreground"><input type="checkbox" className="size-4" checked={assignableRenditions.every((row) => selectedAssignmentIds.includes(row.giof_work?.requestId as string))} onChange={(event) => onToggleAllAssignments(event.target.checked)} />Seleccionar rendiciones asignables visibles</label></TableCell></TableRow>}
+        {isGiofManager && onToggleAllAssignments && assignableRenditions.length > 0 && <TableRow><TableCell colSpan={9}><label className="flex items-center gap-2 text-sm text-muted-foreground"><input type="checkbox" className="size-4" checked={assignableRenditions.every((row) => selectedAssignmentIds.includes(row.giof_work?.requestId as string))} onChange={(event) => onToggleAllAssignments(event.target.checked)} />Seleccionar rendiciones asignables visibles</label></TableCell></TableRow>}
         {renditions.map((row) => {
           const action = getRenditionAction(row);
           const primaryRequestCode = row.settlement_request_code ?? row.request_code ?? row.advance_id;
@@ -68,6 +68,9 @@ export function RenditionsTable({ renditions, isLoading, currentUserId, isGiofMa
           const registeredPartyDocument = getRegisteredPartyDocumentLabel(row);
           const registeredBy = getRegisteredByDisplayName(row);
           const canOperate = canOperateAssignedGiofWork(row.giof_work, currentUserId);
+          const deadlineDate = getRenditionDeadlineDate(row);
+          const deadlineLabel = getRenditionDueLabel(row);
+          const formattedDeadlineDate = deadlineDate ? formatRequestDate(deadlineDate) : null;
           return (
             <TableRow key={row.advance_id} data-testid="rendition-row">
               {isGiofManager && <TableCell>{row.giof_work?.requestId ? <input type="checkbox" className="size-4" checked={selectedAssignmentIds.includes(row.giof_work.requestId)} disabled={row.giof_work.canAssign !== true} title={row.giof_work.canAssign === true ? "Seleccionar para asignar" : "Rendición finalizada: no tiene seguimiento REXAN pendiente"} onChange={(event) => onToggleAssignment?.(row.giof_work?.requestId as string, event.target.checked)} aria-label={row.giof_work.canAssign === true ? `Seleccionar ${primaryRequestCode} para asignar` : `${primaryRequestCode}: rendición finalizada`} /> : null}</TableCell>}
@@ -89,8 +92,17 @@ export function RenditionsTable({ renditions, isLoading, currentUserId, isGiofMa
               </TableCell>
               <TableCell className="text-right font-medium">{formatRequestCurrency(row.amount_paid ?? row.requested_amount)}</TableCell>
               <TableCell className="whitespace-nowrap">{formatRequestDate(row.paid_at)}</TableCell>
-              <TableCell className="whitespace-nowrap">{formatRequestDate(row.scheduled_rendition_at)}</TableCell>
-              <TableCell className="whitespace-nowrap">{getRenditionDueLabel(row)}</TableCell>
+              <TableCell
+                className="whitespace-nowrap"
+                aria-label={formattedDeadlineDate
+                  ? `Plazo: ${formattedDeadlineDate}. ${deadlineLabel}.`
+                  : `Plazo: ${deadlineLabel}.`}
+              >
+                <div className="flex flex-col gap-1">
+                  {formattedDeadlineDate && <span>{formattedDeadlineDate}</span>}
+                  <span className={formattedDeadlineDate ? "text-xs text-muted-foreground" : undefined}>{deadlineLabel}</span>
+                </div>
+              </TableCell>
               <TableCell>
                 <div className="flex flex-col gap-1">
                   <Badge variant={getRenditionStatusTone(row.rendition_status)}>{getRenditionStatusLabel(row.rendition_status)}</Badge>
