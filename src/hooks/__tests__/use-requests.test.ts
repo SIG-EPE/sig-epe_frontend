@@ -24,6 +24,7 @@ import {
   useRequestReceiptReviews,
   useRequestRenditionReport,
   useRequestRenditionReportActions,
+  RENDITION_ACTION_TIMEOUT_MS,
   useRenditionsInbox,
   useSettlementContext,
   useStartAdvanceSettlement,
@@ -948,6 +949,32 @@ describe("request hook URL helpers", () => {
     expect(result.current.report?.rows).toHaveLength(0);
   });
 
+  it("expone un refetch rechazable para reconciliación sin cambiar el contrato tolerante de refetch", async () => {
+    const initialReport = {
+      rows: [],
+      totals: { missing_allocations: [] },
+      allocation_coverage: [],
+    };
+    const synchronizationError = new Error("No se pudo sincronizar");
+    vi.mocked(api.get)
+      .mockResolvedValueOnce(initialReport)
+      .mockRejectedValueOnce(synchronizationError)
+      .mockRejectedValueOnce(synchronizationError);
+    const { result } = renderHook(() => useRequestRenditionReport("request-1"));
+
+    await waitFor(() => expect(result.current.report).toBe(initialReport));
+
+    await act(async () => {
+      await expect(result.current.refetchOrThrow({ background: true })).rejects.toBe(synchronizationError);
+    });
+    expect(result.current.error).toBe(synchronizationError);
+
+    await act(async () => {
+      await expect(result.current.refetch({ background: true })).resolves.toBeUndefined();
+    });
+    expect(result.current.error).toBe(synchronizationError);
+  });
+
   it("genera informe de rendición con respuesta de informe y documento", async () => {
     vi.mocked(api.post).mockResolvedValueOnce({
       report: { id: "report-1" },
@@ -966,7 +993,87 @@ describe("request hook URL helpers", () => {
 
     expect(api.post).toHaveBeenCalledWith(
       "/requests/settlement-1/rendition-report/generate",
+      undefined,
+      { signal: expect.any(AbortSignal) },
     );
+  });
+
+  it("aborta generate al vencer el timeout y siempre libera loading sin reintento automático", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(AbortSignal, "timeout").mockImplementationOnce((delay) => {
+      const controller = new AbortController();
+      setTimeout(() => controller.abort(new DOMException("Tiempo agotado", "TimeoutError")), delay);
+      return controller.signal;
+    });
+    vi.mocked(api.post).mockImplementationOnce((_path, _body, options) =>
+      new Promise((_resolve, reject) => {
+        options?.signal?.addEventListener("abort", () => reject(options.signal?.reason), { once: true });
+      }),
+    );
+    const { result } = renderHook(() => useRequestRenditionReportActions());
+
+    let request!: Promise<unknown>;
+    act(() => {
+      request = result.current.generateReport("settlement-timeout");
+    });
+    expect(result.current.isLoading).toBe(true);
+    const rejection = expect(request).rejects.toMatchObject({ name: "RenditionActionTimeoutError" });
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(RENDITION_ACTION_TIMEOUT_MS);
+      await rejection;
+    });
+
+    expect(result.current.isLoading).toBe(false);
+    expect(api.post).toHaveBeenCalledTimes(1);
+  });
+
+  it("aplica timeout también a Agregar al informe y conserva el error definitivo", async () => {
+    const normalError = new Error("Conflicto definitivo");
+    vi.mocked(api.post).mockRejectedValueOnce(normalError);
+    const { result } = renderHook(() => useRequestRenditionReportActions());
+
+    await act(async () => {
+      await expect(result.current.addReceiptRow("request-1", "receipt-1", "allocation-1")).rejects.toBe(normalError);
+    });
+
+    expect(api.post).toHaveBeenCalledWith(
+      "/requests/request-1/rendition-report/rows/from-receipt/receipt-1",
+      { request_allocation_id: "allocation-1" },
+      { signal: expect.any(AbortSignal) },
+    );
+    expect(result.current.error).toBe(normalError);
+    expect(result.current.isLoading).toBe(false);
+  });
+
+  it("aborta Agregar al informe al vencer el timeout sin reintentar la mutación", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(AbortSignal, "timeout").mockImplementationOnce((delay) => {
+      const controller = new AbortController();
+      setTimeout(() => controller.abort(new DOMException("Tiempo agotado", "TimeoutError")), delay);
+      return controller.signal;
+    });
+    vi.mocked(api.post).mockImplementationOnce((_path, _body, options) =>
+      new Promise((_resolve, reject) => {
+        options?.signal?.addEventListener("abort", () => reject(options.signal?.reason), { once: true });
+      }),
+    );
+    const { result } = renderHook(() => useRequestRenditionReportActions());
+
+    let request!: Promise<unknown>;
+    act(() => {
+      request = result.current.addReceiptRow("settlement-timeout", "receipt-1", "allocation-1");
+    });
+    expect(result.current.isLoading).toBe(true);
+    const rejection = expect(request).rejects.toMatchObject({ name: "RenditionActionTimeoutError" });
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(RENDITION_ACTION_TIMEOUT_MS);
+      await rejection;
+    });
+
+    expect(result.current.isLoading).toBe(false);
+    expect(api.post).toHaveBeenCalledTimes(1);
   });
 
   it("registra y elimina devolución de línea POA usando endpoints allocation-scoped", async () => {

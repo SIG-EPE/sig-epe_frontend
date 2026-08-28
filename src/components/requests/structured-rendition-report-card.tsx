@@ -122,6 +122,14 @@ const BULK_RECEIPT_ADD_STATUS = {
 
 type BulkReceiptAddStatus = (typeof BULK_RECEIPT_ADD_STATUS)[keyof typeof BULK_RECEIPT_ADD_STATUS];
 
+const MUTATION_RECONCILIATION_STATUS = {
+  IDLE: "idle",
+  RECONCILING: "reconciling",
+  FAILED: "failed",
+} as const;
+
+type MutationReconciliationStatus = (typeof MUTATION_RECONCILIATION_STATUS)[keyof typeof MUTATION_RECONCILIATION_STATUS];
+
 interface BulkReceiptAddResult {
   status: BulkReceiptAddStatus;
   message?: string;
@@ -513,6 +521,7 @@ export function StructuredRenditionReportCard({ request, guidanceAllocations = [
   const [bulkReceiptResults, setBulkReceiptResults] = useState<Record<string, BulkReceiptAddResult>>({});
   const [bulkReceiptProgress, setBulkReceiptProgress] = useState<{ completed: number; total: number; failed: number } | null>(null);
   const [isBulkAddingReceipts, setIsBulkAddingReceipts] = useState(false);
+  const [mutationReconciliationStatus, setMutationReconciliationStatus] = useState<MutationReconciliationStatus>(MUTATION_RECONCILIATION_STATUS.IDLE);
   const [lineReturnForms, setLineReturnForms] = useState<Record<string, LineReturnFormState>>({});
   const [openLineReturnForms, setOpenLineReturnForms] = useState<Set<string>>(() => new Set());
   const [lineReturnProofUploads, setLineReturnProofUploads] = useState<Record<string, LineReturnProofUploadState>>({});
@@ -678,6 +687,8 @@ export function StructuredRenditionReportCard({ request, guidanceAllocations = [
   const addableReceiptIds = addableConfirmedReceipts.map((receiptReview) => receiptReview.receipt.id);
   const selectedAddableReceiptIds = addableReceiptIds.filter((receiptId) => selectedReceiptIds.has(receiptId));
   const areAllAddableReceiptsSelected = addableReceiptIds.length > 0 && selectedAddableReceiptIds.length === addableReceiptIds.length;
+  const hasUnknownMutationResult = mutationReconciliationStatus === MUTATION_RECONCILIATION_STATUS.FAILED;
+  const areMutationActionsBlocked = actions.isLoading || isBulkAddingReceipts || mutationReconciliationStatus !== MUTATION_RECONCILIATION_STATUS.IDLE;
 
   useEffect(() => {
     const readinessNotificationKey = `${derivedReady ? "ready" : "pending"}:${readinessMessagesKey}`;
@@ -891,6 +902,53 @@ export function StructuredRenditionReportCard({ request, guidanceAllocations = [
     setReady(false);
   }
 
+  async function refreshReportForReconciliation(): Promise<void> {
+    await reportState.refetchOrThrow({ background: true });
+    setBlockers([]);
+    setReady(false);
+  }
+
+  function isUncertainMutationError(error: unknown): boolean {
+    return error instanceof Error && error.name === "RenditionActionTimeoutError";
+  }
+
+  async function reconcileUncertainMutation(successMessage: string): Promise<void> {
+    setMutationReconciliationStatus(MUTATION_RECONCILIATION_STATUS.RECONCILING);
+    try {
+      await refreshReportForReconciliation();
+      setMutationReconciliationStatus(MUTATION_RECONCILIATION_STATUS.IDLE);
+      toast.error(successMessage);
+    } catch {
+      setMutationReconciliationStatus(MUTATION_RECONCILIATION_STATUS.FAILED);
+      toast.error("El resultado de la operación sigue siendo desconocido porque no se pudo sincronizar el informe. Reintenta la sincronización antes de realizar otra acción.");
+    }
+  }
+
+  async function reconcileKnownMutation(reconcile: () => Promise<void>, successMessage: string): Promise<void> {
+    setMutationReconciliationStatus(MUTATION_RECONCILIATION_STATUS.RECONCILING);
+    try {
+      await reconcile();
+      setMutationReconciliationStatus(MUTATION_RECONCILIATION_STATUS.IDLE);
+      toast.success(successMessage);
+    } catch {
+      setMutationReconciliationStatus(MUTATION_RECONCILIATION_STATUS.FAILED);
+      toast.error("La operación terminó, pero no se pudo sincronizar el estado actual. Reintenta la sincronización antes de realizar otra acción.");
+    }
+  }
+
+  async function handleRetryMutationSynchronization(): Promise<void> {
+    if (!hasUnknownMutationResult) return;
+    setMutationReconciliationStatus(MUTATION_RECONCILIATION_STATUS.RECONCILING);
+    try {
+      await refreshReportForReconciliation();
+      setMutationReconciliationStatus(MUTATION_RECONCILIATION_STATUS.IDLE);
+      toast.success("Informe sincronizado correctamente");
+    } catch {
+      setMutationReconciliationStatus(MUTATION_RECONCILIATION_STATUS.FAILED);
+      toast.error("No se pudo sincronizar el informe. Las acciones permanecen bloqueadas para evitar duplicados.");
+    }
+  }
+
   async function handleRefreshExportStatus(): Promise<void> {
     try {
       await refreshAll();
@@ -901,7 +959,7 @@ export function StructuredRenditionReportCard({ request, guidanceAllocations = [
   }
 
   async function handleAddReceiptRow(receiptReview: RequestReceiptReview): Promise<void> {
-    if (!isReportEditable || isBulkAddingReceipts) return;
+    if (!isReportEditable || areMutationActionsBlocked) return;
     if (!receiptReview.receipt.confirmed_at) {
       toast.error("Confirma los datos del comprobante antes de agregarlo al informe.");
       return;
@@ -914,10 +972,14 @@ export function StructuredRenditionReportCard({ request, guidanceAllocations = [
     try {
       const row = await actions.addReceiptRow(request.id, receiptReview.receipt.id, allocationId);
       reportState.upsertReportRow?.(row);
-      toast.success("Comprobante agregado al informe");
-      await refreshReportOnly();
+      await reconcileKnownMutation(refreshReportForReconciliation, "Comprobante agregado al informe");
     } catch (error) {
-      toast.error(getApiErrorMessage(error));
+      if (isUncertainMutationError(error)) {
+        await reconcileUncertainMutation("La espera terminó y el resultado es incierto. Sincronizamos el informe; revisa si el comprobante aparece antes de reintentar.");
+      } else {
+        await refreshReportOnly().catch(() => undefined);
+        toast.error(getApiErrorMessage(error));
+      }
     }
   }
 
@@ -947,7 +1009,7 @@ export function StructuredRenditionReportCard({ request, guidanceAllocations = [
   }
 
   async function handleAddSelectedReceiptRows(): Promise<void> {
-    if (!isReportEditable || isBulkAddingReceipts || selectedAddableReceiptIds.length === 0) return;
+    if (!isReportEditable || areMutationActionsBlocked || selectedAddableReceiptIds.length === 0) return;
     const selectedReceipts = addableConfirmedReceipts.filter((receiptReview) => selectedReceiptIds.has(receiptReview.receipt.id));
     setIsBulkAddingReceipts(true);
     setBulkReceiptProgress({ completed: 0, total: selectedReceipts.length, failed: 0 });
@@ -961,6 +1023,7 @@ export function StructuredRenditionReportCard({ request, guidanceAllocations = [
 
     let completed = 0;
     let failed = 0;
+    let uncertainResult = false;
     const failedReceiptIds = new Set<string>();
 
     try {
@@ -984,17 +1047,29 @@ export function StructuredRenditionReportCard({ request, guidanceAllocations = [
         } catch (error) {
           failed += 1;
           failedReceiptIds.add(receiptId);
+          if (isUncertainMutationError(error)) {
+            uncertainResult = true;
+            setBulkReceiptResults((current) => ({ ...current, [receiptId]: { status: BULK_RECEIPT_ADD_STATUS.ERROR, message: "Resultado desconocido; sincroniza el informe antes de continuar." } }));
+            setBulkReceiptProgress({ completed, total: selectedReceipts.length, failed });
+            await reconcileUncertainMutation("La espera terminó y el resultado de un comprobante es incierto. Sincronizamos el informe; revísalo antes de continuar.");
+            break;
+          }
           setBulkReceiptResults((current) => ({ ...current, [receiptId]: { status: BULK_RECEIPT_ADD_STATUS.ERROR, message: getApiErrorMessage(error) } }));
         }
         setBulkReceiptProgress({ completed, total: selectedReceipts.length, failed });
       }
 
-      await refreshReportOnly();
       setSelectedReceiptIds(failedReceiptIds);
-      if (failed > 0) {
-        toast.error(`${failed} de ${selectedReceipts.length} comprobantes no se pudieron agregar. Revisa los resultados y reintenta.`);
-      } else {
-        toast.success(`${completed} comprobante${completed === 1 ? " agregado" : "s agregados"} al informe`);
+      if (!uncertainResult) {
+        await reconcileKnownMutation(
+          refreshReportForReconciliation,
+          failed > 0
+            ? `${completed} de ${selectedReceipts.length} comprobantes se conciliaron con el informe`
+            : `${completed} comprobante${completed === 1 ? " agregado" : "s agregados"} al informe`,
+        );
+        if (failed > 0) {
+          toast.error(`${failed} de ${selectedReceipts.length} comprobantes no se pudieron agregar. Revisa los resultados y reintenta.`);
+        }
       }
     } finally {
       setIsBulkAddingReceipts(false);
@@ -1073,23 +1148,31 @@ export function StructuredRenditionReportCard({ request, guidanceAllocations = [
   }
 
   async function handleGenerate(): Promise<void> {
-    if (!canUseGenerationAction) return;
+    if (!canUseGenerationAction || areMutationActionsBlocked) return;
     try {
       const generated = await actions.generateReport(request.id);
       if (generated.report) reportState.replaceReport?.(generated.report);
       if (generated.document) documentsState.upsertDocument?.(generated.document);
-      toast.success("Informe generado correctamente");
       setReady(true);
       setBlockers([]);
-      await Promise.all([reportState.refetch({ background: true }), documentsState.refetch({ background: true }), onChanged?.()]);
+      await reconcileKnownMutation(
+        async () => {
+          await Promise.all([reportState.refetchOrThrow({ background: true }), documentsState.refetch({ background: true }), onChanged?.()]);
+        },
+        "Informe generado correctamente",
+      );
     } catch (error) {
-      toast.error(getApiErrorMessage(error));
-      await reportState.refetch({ background: true });
+      if (isUncertainMutationError(error)) {
+        await reconcileUncertainMutation("La espera terminó y el resultado es incierto. Sincronizamos el informe; confirma su estado antes de volver a generar.");
+      } else {
+        await refreshReportOnly().catch(() => undefined);
+        toast.error(getApiErrorMessage(error));
+      }
     }
   }
 
   function openGenerateConfirmation(): void {
-    if (!canUseGenerationAction) return;
+    if (!canUseGenerationAction || areMutationActionsBlocked) return;
     setIsGenerateConfirmOpen(true);
   }
 
@@ -1169,7 +1252,7 @@ export function StructuredRenditionReportCard({ request, guidanceAllocations = [
       <CardContent className="space-y-6">
         {reportState.isLoading && !report ? <p className="rounded-md border p-4 text-sm text-muted-foreground">Cargando informe...</p> : null}
         {reportState.isRefreshing ? <p className="rounded-md border bg-muted/40 px-3 py-2 text-sm text-muted-foreground" role="status">Actualizando informe en segundo plano…</p> : null}
-        {reportState.error ? (
+        {reportState.error && !hasUnknownMutationResult ? (
           <Alert variant="destructive"><AlertDescription>No se pudo cargar el informe. Intenta nuevamente.</AlertDescription></Alert>
         ) : null}
 
@@ -1417,6 +1500,17 @@ export function StructuredRenditionReportCard({ request, guidanceAllocations = [
           </Alert>
         ) : null}
 
+        {hasUnknownMutationResult ? (
+          <Alert variant="destructive">
+            <AlertDescription className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <span>No se pudo confirmar el estado actual del informe. Las acciones permanecen bloqueadas para evitar repetir una mutación con resultado desconocido.</span>
+              <Button type="button" variant="outline" onClick={() => void handleRetryMutationSynchronization()}>
+                Reintentar sincronización
+              </Button>
+            </AlertDescription>
+          </Alert>
+        ) : null}
+
         {unconfirmedReceipts.length > 0 && isReportEditable ? (
           <section className="space-y-3">
             <h3 className="text-sm font-semibold">Comprobantes por revisar</h3>
@@ -1465,7 +1559,7 @@ export function StructuredRenditionReportCard({ request, guidanceAllocations = [
                 <span className="text-xs font-normal text-muted-foreground">({selectedAddableReceiptIds.length} de {addableReceiptIds.length} disponibles)</span>
               </label>
               <div className="flex flex-col gap-2 sm:items-end">
-                <Button type="button" onClick={() => void handleAddSelectedReceiptRows()} disabled={isBulkAddingReceipts || actions.isLoading || selectedAddableReceiptIds.length === 0}>
+                <Button type="button" onClick={() => void handleAddSelectedReceiptRows()} disabled={areMutationActionsBlocked || selectedAddableReceiptIds.length === 0}>
                   {isBulkAddingReceipts ? "Agregando seleccionados..." : "Agregar seleccionados al informe"}
                 </Button>
                 {bulkReceiptProgress ? (
@@ -1509,7 +1603,7 @@ export function StructuredRenditionReportCard({ request, guidanceAllocations = [
                   <div className="min-w-0">
                     {selectedAllocationId ? renderAllocationSelect(selectedAllocationId, () => undefined, undefined, true) : <p className="rounded-md border border-dashed p-2 text-xs text-muted-foreground">Línea POA no asignada</p>}
                   </div>
-                  <Button type="button" onClick={() => void handleAddReceiptRow(receiptReview)} disabled={isBulkAddingReceipts || actions.isLoading || allocationOptions.length === 0 || !canAddReceipt}>Agregar al informe</Button>
+                  <Button type="button" onClick={() => void handleAddReceiptRow(receiptReview)} disabled={areMutationActionsBlocked || allocationOptions.length === 0 || !canAddReceipt}>Agregar al informe</Button>
                 </div>
               );
             })}
@@ -1577,7 +1671,7 @@ export function StructuredRenditionReportCard({ request, guidanceAllocations = [
                 {canUseValidationAction ? <Button type="button" variant="outline" onClick={() => void handleValidate()} disabled={actions.isLoading}>Validar informe</Button> : null}
                 {isExportPendingWithoutDocument(report) ? <Button type="button" variant="outline" onClick={() => void handleRefreshExportStatus()} disabled={actions.isLoading || reportState.isRefreshing}>Actualizar estado</Button> : null}
                 {hasPendingValidationItems ? <Button type="button" variant="outline" onClick={focusFirstBlocker}>Ir al primer pendiente</Button> : null}
-                {!exportPendingInProgress ? <Button type="button" onClick={openGenerateConfirmation} disabled={actions.isLoading || !canUseGenerationAction}>{generationButtonLabel}</Button> : null}
+                {!exportPendingInProgress ? <Button type="button" onClick={openGenerateConfirmation} disabled={areMutationActionsBlocked || !canUseGenerationAction}>{generationButtonLabel}</Button> : null}
               </div>
             ) : null}
           </div>
@@ -1626,7 +1720,7 @@ export function StructuredRenditionReportCard({ request, guidanceAllocations = [
             </DialogHeader>
             <DialogFooter>
               <Button type="button" variant="outline" onClick={() => setIsGenerateConfirmOpen(false)} disabled={actions.isLoading}>Cancelar</Button>
-              <Button type="button" onClick={() => void confirmGenerate()} disabled={actions.isLoading || !canUseGenerationAction}>{actions.isLoading ? "Generando..." : `Sí, ${generationButtonLabel.toLowerCase()}`}</Button>
+              <Button type="button" onClick={() => void confirmGenerate()} disabled={areMutationActionsBlocked || !canUseGenerationAction}>{areMutationActionsBlocked ? "Verificando estado..." : `Sí, ${generationButtonLabel.toLowerCase()}`}</Button>
             </DialogFooter>
           </DialogContent>
         </Dialog>

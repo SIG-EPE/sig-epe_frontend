@@ -99,6 +99,15 @@ export interface UseRequestsOptions {
   enabled?: boolean;
 }
 
+export const RENDITION_ACTION_TIMEOUT_MS = 30_000;
+
+export class RenditionActionTimeoutError extends Error {
+  constructor() {
+    super("La operación superó el tiempo de espera y su resultado es incierto.");
+    this.name = "RenditionActionTimeoutError";
+  }
+}
+
 function upsertById<T extends { id: string }>(items: T[], item: T): T[] {
   const existingIndex = items.findIndex(
     (candidate) => candidate.id === item.id,
@@ -1022,8 +1031,8 @@ export function useRequestRenditionReport(requestId?: string, enabled = true) {
   const authIsLoading = useAuthStore((state) => state.isLoading);
   const accessToken = useAuthStore((state) => state.accessToken);
 
-  const refetch = useCallback(
-    async (options?: RequestResourceRefetchOptions) => {
+  const fetchReport = useCallback(
+    async (options?: RequestResourceRefetchOptions, throwOnError = false) => {
       if (!requestId || !enabled || authIsLoading || !accessToken) return;
       const background =
         options?.background === true || hasLoadedReportRef.current;
@@ -1038,17 +1047,27 @@ export function useRequestRenditionReport(requestId?: string, enabled = true) {
         );
         hasLoadedReportRef.current = true;
       } catch (e) {
-        setError(
-          e instanceof Error
-            ? e
-            : new Error("Error al cargar informe de rendición"),
-        );
+        const nextError = e instanceof Error
+          ? e
+          : new Error("Error al cargar informe de rendición");
+        setError(nextError);
+        if (throwOnError) throw nextError;
       } finally {
         setIsInitialLoading(false);
         setIsRefreshing(false);
       }
     },
     [accessToken, authIsLoading, enabled, requestId],
+  );
+
+  const refetch = useCallback(
+    (options?: RequestResourceRefetchOptions) => fetchReport(options),
+    [fetchReport],
+  );
+
+  const refetchOrThrow = useCallback(
+    (options?: RequestResourceRefetchOptions) => fetchReport(options, true),
+    [fetchReport],
   );
 
   useEffect(() => {
@@ -1090,6 +1109,7 @@ export function useRequestRenditionReport(requestId?: string, enabled = true) {
     isLoading: isInitialLoading,
     error,
     refetch,
+    refetchOrThrow,
     replaceReport,
     upsertReportRow,
     removeReportRow,
@@ -1119,6 +1139,23 @@ export function useRequestRenditionReportActions() {
     }
   }
 
+  async function runWithTimeout<T>(
+    fallbackMessage: string,
+    action: (signal: AbortSignal) => Promise<T>,
+  ): Promise<T> {
+    const signal = AbortSignal.timeout(RENDITION_ACTION_TIMEOUT_MS);
+    return run(fallbackMessage, async () => {
+      try {
+        return await action(signal);
+      } catch (error) {
+        if (signal.aborted || (error instanceof DOMException && (error.name === "AbortError" || error.name === "TimeoutError"))) {
+          throw new RenditionActionTimeoutError();
+        }
+        throw error;
+      }
+    });
+  }
+
   return {
     isLoading,
     error,
@@ -1127,12 +1164,13 @@ export function useRequestRenditionReportActions() {
       receiptId: string,
       requestAllocationId?: string,
     ) =>
-      run("Error al agregar comprobante al informe", () =>
+      runWithTimeout("Error al agregar comprobante al informe", (signal) =>
         api.post<RequestRenditionRow>(
           `${getRenditionReportPath(requestId)}/rows/from-receipt/${receiptId}`,
           requestAllocationId
             ? { request_allocation_id: requestAllocationId }
             : {},
+          { signal },
         ),
       ),
     createManualRow: (
@@ -1169,9 +1207,11 @@ export function useRequestRenditionReportActions() {
         ),
       ),
     generateReport: (requestId: string) =>
-      run("Error al generar informe de rendición", () =>
+      runWithTimeout("Error al generar informe de rendición", (signal) =>
         api.post<RequestRenditionGenerateResponse>(
           `${getRenditionReportPath(requestId)}/generate`,
+          undefined,
+          { signal },
         ),
       ),
     upsertLineReturn: (
