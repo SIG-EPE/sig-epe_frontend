@@ -50,7 +50,6 @@ const GESTOR_MENU = [
 ] as const;
 
 const MANAGER_ADMIN_MENU = [
-  "Jerarquía de Drive",
   "Presupuesto",
   "Programado vs Ejecutado",
   "Años Fiscales",
@@ -73,7 +72,7 @@ describe("role permission matrix", () => {
     const managerLabels = ROLE_MENU_MAP[ROLE_CODE.GIOF_MANAGER].map((item) => item.label);
 
     expect(gestorLabels).toEqual(GESTOR_MENU);
-    expect(managerLabels).toEqual([...GESTOR_MENU.slice(0, 3), "Jerarquía de Drive", ...GESTOR_MENU.slice(3, 5), ...MANAGER_ADMIN_MENU.slice(1), "Centro de ayuda"]);
+    expect(managerLabels).toEqual([...GESTOR_MENU.slice(0, 5), ...MANAGER_ADMIN_MENU, "Centro de ayuda"]);
     for (const label of MANAGER_ADMIN_MENU) {
       expect(gestorLabels).not.toContain(label);
       expect(managerLabels).toContain(label);

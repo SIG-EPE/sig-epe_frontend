@@ -9,14 +9,13 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { usePaymentQueue, useRetryRexanActivation } from "@/hooks/use-requests";
 import { PAYMENT_QUEUE_STATUS, getApiErrorMessage, getPaymentRexanStatusLabel } from "@/lib/requests";
 import { cn } from "@/lib/utils";
-import { BULK_PAYMENT_RESULT_STATUS, PAYMENT_COMPLETENESS, REQUEST_STATUS, type BulkMarkPaidResponse, type BulkRegisterPaymentItemInput, type PaymentRequest, type RegisterPaymentResponse } from "@/types/requests";
+import { PAYMENT_COMPLETENESS, REQUEST_STATUS, type PaymentRequest, type RegisterPaymentResponse } from "@/types/requests";
 import { useAuthStore } from "@/stores/auth-store";
-import { isBulkPaymentSelectable, PaymentQueueTable } from "./payment-queue-table";
-import { BulkMarkPaidModal } from "./bulk-mark-paid-modal";
+import { PaymentQueueTable } from "./payment-queue-table";
 import { RegisterPaymentModal } from "./register-payment-modal";
 import { CompletePaymentDetailsModal } from "./complete-payment-details-modal";
 import { GiofBulkAssignmentBar } from "@/components/giof-work/giof-work-controls";
-import { selfAssignPaymentWork, useGiofWorkLeaseSet } from "@/hooks/use-giof-work";
+import { useGiofWorkLeaseSet } from "@/hooks/use-giof-work";
 import { useDriveProjectionPolling } from "@/hooks/use-drive-projection-polling";
 import { canOperateAssignedGiofWork, canRetryGiofWork, isGiofManagerRole, isGiofOperationalRole } from "@/lib/role-capabilities";
 import { GIOF_WORK_POOL, GIOF_WORK_SCOPE, type GiofWorkScope } from "@/types/giof-work";
@@ -51,8 +50,6 @@ export function PaymentQueuePage() {
   const [paymentOperationalContext, setPaymentOperationalContext] = useState<GiofWorkLease | null>(null);
   const [completionRequest, setCompletionRequest] = useState<PaymentRequest | null>(null);
   const [selectedAssignmentIds, setSelectedAssignmentIds] = useState<string[]>([]);
-  const [selectedBulkPaymentIds, setSelectedBulkPaymentIds] = useState<string[]>([]);
-  const [isBulkPaymentModalOpen, setIsBulkPaymentModalOpen] = useState(false);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isCompletionModalOpen, setIsCompletionModalOpen] = useState(false);
   const parsedUrl = parsePaymentQueueUrl(new URLSearchParams(searchParams.toString()));
@@ -98,11 +95,7 @@ export function PaymentQueuePage() {
 
   useEffect(() => {
     setSelectedAssignmentIds([]);
-    setSelectedBulkPaymentIds([]);
-    setIsBulkPaymentModalOpen(false);
   }, [viewIdentity]);
-
-  const selectedBulkPaymentRequests = displayedRequests.filter((request) => selectedBulkPaymentIds.includes(request.id));
 
   async function openRegisterPayment(request: PaymentRequest) {
     const work = request.giof_work;
@@ -183,44 +176,6 @@ export function PaymentQueuePage() {
     else router.replace("/payments");
   }
 
-  async function prepareBulkPaymentItems(requests: PaymentRequest[]): Promise<BulkRegisterPaymentItemInput[]> {
-    if (!user?.id) throw new Error("Tu sesión no permite registrar pagos. Vuelve a iniciar sesión.");
-    const items: BulkRegisterPaymentItemInput[] = [];
-    for (const request of requests) {
-      if (!isBulkPaymentSelectable(request, user.id) || !request.giof_work) {
-        throw new Error(`${request.request_code ?? "La solicitud"} ya no es elegible o tiene una asignación/lease ajeno. Actualiza la cola.`);
-      }
-      const expectedVersion = Number(request.giof_work.assignmentVersion);
-      if (!Number.isSafeInteger(expectedVersion) || expectedVersion < 0) {
-        throw new Error(`${request.request_code ?? "La solicitud"} tiene una versión de asignación desactualizada. Actualiza la cola.`);
-      }
-      const assignment = await selfAssignPaymentWork(request.id, expectedVersion);
-      const assignedWork = {
-        ...request.giof_work,
-        assigneeId: user.id,
-        assignmentVersion: assignment.assignmentVersion,
-        canAcquire: true,
-        readOnly: false,
-      };
-      const lease = await leaseSet.acquire(request.id, assignedWork, [request.payment?.id ?? ""]);
-      items.push({
-        request_id: request.id,
-        assignment_version: Number(lease.assignmentVersion),
-        lease_token: lease.token,
-      });
-    }
-    return items;
-  }
-
-  async function refreshAfterBulkPayment(result: BulkMarkPaidResponse): Promise<void> {
-    const completedIds = result.results
-      .filter((item) => item.status !== BULK_PAYMENT_RESULT_STATUS.FAILED)
-      .map((item) => item.request_id);
-    await Promise.all(completedIds.map((requestId) => leaseSet.release(requestId)));
-    setSelectedBulkPaymentIds((current) => current.filter((requestId) => !completedIds.includes(requestId)));
-    await activeQueue.refetch({ force: true });
-  }
-
   function changeFilters(patch: Partial<PaymentQueueUrlFilters>): void {
     replacePaymentUrl(updatePaymentQueueUrl(new URLSearchParams(searchParams.toString()), patch));
   }
@@ -273,15 +228,6 @@ export function PaymentQueuePage() {
           </div>
         </CardHeader>
         <CardContent>
-          {canManagePayments && tab === PAYMENT_QUEUE_TAB.APPROVED ? (
-            <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-md border bg-muted/30 p-3">
-              <p className="text-sm text-muted-foreground">{selectedBulkPaymentIds.length} de 5 solicitudes elegibles seleccionadas en esta página.</p>
-              <div className="flex gap-2">
-                {selectedBulkPaymentIds.length > 0 ? <Button type="button" size="sm" variant="outline" onClick={() => setSelectedBulkPaymentIds([])}>Limpiar selección</Button> : null}
-                <Button type="button" size="sm" disabled={selectedBulkPaymentIds.length === 0} onClick={() => setIsBulkPaymentModalOpen(true)}>Registrar pagos seleccionados</Button>
-              </div>
-            </div>
-          ) : null}
           {isGiofManager && <GiofBulkAssignmentBar pool={GIOF_WORK_POOL.PAYMENT} items={displayedRequests.filter((request) => selectedAssignmentIds.includes(request.id) && request.giof_work?.canAssign === true).map((request) => ({ requestId: request.id, label: request.request_code ?? "Pago", work: request.giof_work! }))} onClear={() => setSelectedAssignmentIds([])} onSuccess={() => activeQueue.refetch()} />}
           {displayedIsRefreshing && !displayedError && (
             <p className="mb-3 rounded-md border bg-muted/40 px-3 py-2 text-sm text-muted-foreground" role="status">
@@ -304,20 +250,6 @@ export function PaymentQueuePage() {
               isGiofManager={isGiofManager}
               canManagePayments={canManagePayments}
               paymentLeases={leaseSet.leases}
-              selectedRequestIds={selectedBulkPaymentIds}
-              onToggleRequest={canManagePayments && tab === PAYMENT_QUEUE_TAB.APPROVED ? (requestId, checked) => {
-                setSelectedBulkPaymentIds((current) => {
-                  if (!checked) return current.filter((id) => id !== requestId);
-                  if (current.includes(requestId)) return current;
-                  if (current.length >= 5) {
-                    toast.error("Puedes seleccionar como máximo 5 solicitudes de esta página.");
-                    return current;
-                  }
-                  return [...current, requestId];
-                });
-              } : undefined}
-              onToggleAll={canManagePayments && tab === PAYMENT_QUEUE_TAB.APPROVED ? (checked) => setSelectedBulkPaymentIds(checked ? displayedRequests.filter((request) => isBulkPaymentSelectable(request, user?.id)).slice(0, 5).map((request) => request.id) : []) : undefined}
-              maxSelectedRequests={5}
               selectedAssignmentIds={selectedAssignmentIds}
               onToggleAssignment={(requestId, checked) => setSelectedAssignmentIds((current) => checked ? [...new Set([...current, requestId])].slice(0, 50) : current.filter((id) => id !== requestId))}
               onToggleAllAssignments={(checked) => setSelectedAssignmentIds(checked ? displayedRequests.filter((request) => request.giof_work?.canAssign === true).map((request) => request.id).slice(0, 50) : [])}
@@ -350,13 +282,6 @@ export function PaymentQueuePage() {
         onSuccess={refreshAfterPayment}
       />
       <CompletePaymentDetailsModal request={completionRequest} open={isCompletionModalOpen} onOpenChange={(open) => { setIsCompletionModalOpen(open); if (!open && completionRequest) void leaseSet.release(completionRequest.id); }} onSuccess={refreshAfterCompletion} />
-      <BulkMarkPaidModal
-        requests={selectedBulkPaymentRequests}
-        open={isBulkPaymentModalOpen}
-        onOpenChange={setIsBulkPaymentModalOpen}
-        prepareItems={prepareBulkPaymentItems}
-        onSuccess={refreshAfterBulkPayment}
-      />
     </div>
   );
 }

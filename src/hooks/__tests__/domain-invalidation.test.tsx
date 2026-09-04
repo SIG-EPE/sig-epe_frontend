@@ -92,7 +92,6 @@ describe("domain mutation invalidation", () => {
         "request-1",
         {
           paid_at: "2026-06-18T10:00:00.000Z",
-          source_account_key: "BCP_PEN",
           operation_reference: "OP-1",
           amount_paid: 10,
           proof: new File(["proof"], "proof.pdf", { type: "application/pdf" }),

@@ -777,23 +777,7 @@ describe("REXAN payment queue and modal", () => {
     expect(screen.getByText(/No se admiten pagos parciales/)).toBeInTheDocument();
 
     await user.type(screen.getByTestId("payment-reference-input"), "OP-12345");
-    const sourceSelect = screen.getByTestId("payment-source-account-select");
-    expect(
-      within(sourceSelect).getByRole("option", { name: "BCP-SOLES" }),
-    ).toHaveValue("BCP_PEN");
-    expect(
-      within(sourceSelect).getByRole("option", { name: "BCP-DOLARES" }),
-    ).toHaveValue("BCP_USD");
-    expect(
-      within(sourceSelect).getByRole("option", { name: "BCP-ODF" }),
-    ).toHaveValue("BCP_ODF");
-    expect(
-      within(sourceSelect).getByRole("option", { name: "BBVA-SOLES" }),
-    ).toHaveValue("BBVA_PEN");
-    expect(
-      within(sourceSelect).getByRole("option", { name: "BBVA-DOLARES" }),
-    ).toHaveValue("BBVA_USD");
-    await user.selectOptions(sourceSelect, "BCP_PEN");
+    expect(screen.queryByTestId("payment-source-account-select")).not.toBeInTheDocument();
     await user.upload(
       screen.getByTestId("payment-proof-input"),
       new File(["proof"], "constancia.pdf", { type: "application/pdf" }),
@@ -807,13 +791,15 @@ describe("REXAN payment queue and modal", () => {
         "rexan-excess",
         expect.objectContaining({
           operation_reference: "OP-12345",
-          source_account_key: "BCP_PEN",
           amount_paid: 25.55,
           proof: expect.any(File),
         }),
         expect.objectContaining({ token: "lease-token" }),
       );
     });
+    expect(mocks.registerPayment.mock.calls[0][1]).not.toHaveProperty(
+      "source_account_key",
+    );
   });
 
   it("explica que la constancia inicial cubre todas las líneas POA", () => {

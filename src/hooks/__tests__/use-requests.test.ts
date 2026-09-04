@@ -804,7 +804,7 @@ describe("request hook URL helpers", () => {
     expect(api.post).not.toHaveBeenCalledWith("/requests/bulk/mark-paid", expect.anything());
   });
 
-  it("envía paid_at y source_account_key en el pago individual", async () => {
+  it("envía los datos financieros y la constancia sin source_account_key en el pago individual", async () => {
     vi.mocked(api.postForm).mockResolvedValueOnce({ payment_id: "payment-1" });
     const { result } = renderHook(() => useRegisterPayment());
     const paymentLease = makePaymentLease("req-1");
@@ -813,7 +813,6 @@ describe("request hook URL helpers", () => {
         "req-1",
         {
           paid_at: "2026-05-30T10:00:00.001Z",
-          source_account_key: "BBVA_USD",
           operation_reference: "OP-1",
           amount_paid: 100,
           proof: new File(["proof"], "proof.pdf", {
@@ -835,7 +834,10 @@ describe("request hook URL helpers", () => {
     );
     const formData = vi.mocked(api.postForm).mock.calls.at(-1)?.[1] as FormData;
     expect(formData.get("paid_at")).toBe("2026-05-30T10:00:00.001Z");
-    expect(formData.get("source_account_key")).toBe("BBVA_USD");
+    expect(formData.get("operation_reference")).toBe("OP-1");
+    expect(formData.get("amount_paid")).toBe("100");
+    expect(formData.get("proof")).toBeInstanceOf(File);
+    expect(formData.has("source_account_key")).toBe(false);
   });
 
   it("ejecuta PATCH de detalles con referencia/constancia pre-subida sin monto ni fecha", async () => {

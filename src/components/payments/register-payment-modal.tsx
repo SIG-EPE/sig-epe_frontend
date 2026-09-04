@@ -28,10 +28,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { PaymentAllocationProofCoverage } from "@/components/payments/payment-allocation-proof-coverage";
-import {
-  PaymentProofField,
-  PaymentSourceAccountSelect,
-} from "@/components/payments/payment-form-sections";
+import { PaymentProofField } from "@/components/payments/payment-form-sections";
 import { useUploadNavigationGuard } from "@/hooks/use-upload-navigation-guard";
 import { useRegisterPayment } from "@/hooks/use-requests";
 import {
@@ -49,7 +46,6 @@ import {
   validatePaymentProofFile,
 } from "@/lib/requests";
 import {
-  DRIVE_SOURCE_ACCOUNT,
   type PaymentRequest,
   type RegisterPaymentInput,
   type RegisterPaymentResponse,
@@ -81,13 +77,6 @@ const paidAtSchema = z
 
 const registerPaymentSchema = z.object({
   paid_at: paidAtSchema,
-  source_account_key: z.enum([
-    DRIVE_SOURCE_ACCOUNT.BCP_PEN,
-    DRIVE_SOURCE_ACCOUNT.BCP_USD,
-    DRIVE_SOURCE_ACCOUNT.BCP_ODF,
-    DRIVE_SOURCE_ACCOUNT.BBVA_PEN,
-    DRIVE_SOURCE_ACCOUNT.BBVA_USD,
-  ]),
   operation_reference: z
     .string()
     .trim()
@@ -138,7 +127,6 @@ export function RegisterPaymentModal({
     resolver: zodResolver(registerPaymentSchema),
     defaultValues: {
       paid_at: getDefaultPaidAtValue(),
-      source_account_key: undefined,
       operation_reference: "",
       bank_commission: undefined,
       notes: "",
@@ -180,7 +168,6 @@ export function RegisterPaymentModal({
     if (!open || !request) return;
     form.reset({
       paid_at: getDefaultPaidAtValue(),
-      source_account_key: undefined,
       operation_reference: "",
       bank_commission: undefined,
       notes: "",
@@ -210,7 +197,6 @@ export function RegisterPaymentModal({
 
     const input: RegisterPaymentInput = {
       paid_at: parseBusinessDateTimeLocalToIso(values.paid_at),
-      source_account_key: values.source_account_key,
       operation_reference: values.operation_reference.trim(),
       amount_paid: amountPaid,
       bank_commission: values.bank_commission,
@@ -223,7 +209,6 @@ export function RegisterPaymentModal({
       await onSuccess(result);
       form.reset({
         paid_at: getDefaultPaidAtValue(),
-        source_account_key: undefined,
         operation_reference: "",
         bank_commission: undefined,
         notes: "",
@@ -299,25 +284,6 @@ export function RegisterPaymentModal({
                         placeholder="Telecrédito u operación bancaria"
                         {...field}
                         data-testid="payment-reference-input"
-                      />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-              <FormField
-                control={form.control}
-                name="source_account_key"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Cuenta de origen Enseña Perú</FormLabel>
-                    <FormControl>
-                      <PaymentSourceAccountSelect
-                        id="payment-source-account"
-                        value={field.value}
-                        required
-                        testId="payment-source-account-select"
-                        onChange={field.onChange}
                       />
                     </FormControl>
                     <FormMessage />

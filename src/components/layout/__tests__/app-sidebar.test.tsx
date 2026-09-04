@@ -229,7 +229,7 @@ describe("AppSidebar", () => {
 
     expect(screen.getByText("Dashboard GIOF")).toBeInTheDocument();
     expect(screen.getByText("Presupuesto")).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Operaciones Drive readiness" })).toHaveAttribute("href", "/management");
+    expect(screen.queryByRole("link", { name: "Operaciones Drive readiness" })).not.toBeInTheDocument();
   });
 
   it("usa scopes distintos para Mis Solicitudes y Bandeja de Revisión", () => {
@@ -330,9 +330,10 @@ describe("AppSidebar", () => {
     );
     renderSidebar();
 
-    for (const visible of ["Bandeja de Revisión", "Cola de Pagos", "Bandeja de Rendiciones", "Jerarquía de Drive", "Presupuesto", "Años Fiscales", "Plan Operativo (POA)", "Aportes de Socios", "Reportes", "Catálogos", "Usuarios"]) {
+    for (const visible of ["Bandeja de Revisión", "Cola de Pagos", "Bandeja de Rendiciones", "Presupuesto", "Años Fiscales", "Plan Operativo (POA)", "Aportes de Socios", "Reportes", "Catálogos", "Usuarios"]) {
       expect(screen.getByText(visible)).toBeInTheDocument();
     }
+    expect(screen.queryByText("Jerarquía de Drive")).not.toBeInTheDocument();
   });
 
   it("✅ Muestra dashboards y Reportes para AUDITOR_DIRECCION", () => {
@@ -347,7 +348,7 @@ describe("AppSidebar", () => {
     expect(screen.getByText("Presupuesto")).toBeInTheDocument();
     expect(screen.getByText("Reportes")).toBeInTheDocument();
     expect(screen.getByText("Mis Solicitudes")).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Operaciones Drive readiness" })).toHaveAttribute("href", "/management");
+    expect(screen.queryByRole("link", { name: "Operaciones Drive readiness" })).not.toBeInTheDocument();
   });
 
   it.each([

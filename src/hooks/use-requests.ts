@@ -495,7 +495,6 @@ export function useRegisterPayment() {
     try {
       const formData = new FormData();
       formData.append("paid_at", input.paid_at);
-      formData.append("source_account_key", input.source_account_key);
       formData.append("operation_reference", input.operation_reference);
       formData.append("amount_paid", String(input.amount_paid));
       if (input.bank_commission !== undefined) {
@@ -638,8 +637,6 @@ export function useCompletePaymentDetails() {
     try {
       const formData = new FormData();
       if (input.proof) formData.append("proof", input.proof);
-      if (input.source_account_key)
-        formData.append("source_account_key", input.source_account_key);
       if (input.operation_reference?.trim())
         formData.append(
           "operation_reference",

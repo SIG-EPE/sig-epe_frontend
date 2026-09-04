@@ -85,7 +85,6 @@ const GIOF_OPERATIONAL_MENU_ITEMS: MenuItem[] = [
 
 const GIOF_MANAGER_MENU_ITEMS: MenuItem[] = [
   ...GIOF_OPERATIONAL_MENU_ITEMS.slice(0, 3),
-  { label: "Jerarquía de Drive", href: ROUTES.MANAGEMENT, icon: "FolderTree" },
   ...GIOF_OPERATIONAL_MENU_ITEMS.slice(3, 5),
   { label: "Presupuesto", href: ROUTES.BUDGET, icon: "BarChart3" },
   {
@@ -143,11 +142,6 @@ export const ROLE_MENU_MAP: Record<RoleCode, MenuItem[]> = {
       icon: "LayoutDashboard",
     },
     { label: "Reportes", href: ROUTES.REPORTS, icon: "BarChart3" },
-    {
-      label: "Operaciones Drive readiness",
-      href: ROUTES.MANAGEMENT,
-      icon: "FolderTree",
-    },
     { label: "Centro de ayuda", href: ROUTES.HELP, icon: "CircleHelp" },
   ],
   ADMIN_SISTEMA: [
@@ -175,11 +169,6 @@ export const ROLE_MENU_MAP: Record<RoleCode, MenuItem[]> = {
     { label: "Reportes", href: ROUTES.REPORTS, icon: "BarChart3" },
     { label: "Catálogos", href: ROUTES.CATALOGS, icon: "BookOpen" },
     { label: "Usuarios", href: ROUTES.ADMIN_USERS, icon: "Users" },
-    {
-      label: "Operaciones Drive readiness",
-      href: ROUTES.MANAGEMENT,
-      icon: "FolderTree",
-    },
     {
       label: "Log de auditoría",
       href: ROUTES.ADMIN_AUDIT_LOGS,

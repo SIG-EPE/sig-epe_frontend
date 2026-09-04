@@ -1460,7 +1460,6 @@ export interface BulkMarkPaidResponse {
 
 export interface CompletePaymentDetailsInput {
   proof?: File;
-  source_account_key?: DriveSourceAccount;
   operation_reference?: string;
   bank_commission?: number;
   notes?: string;
@@ -1562,7 +1561,6 @@ export interface RenditionsInboxFilters {
 
 export interface RegisterPaymentInput {
   paid_at: string;
-  source_account_key: DriveSourceAccount;
   operation_reference: string;
   amount_paid: number;
   bank_commission?: number;

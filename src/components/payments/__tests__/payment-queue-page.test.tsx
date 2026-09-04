@@ -439,7 +439,7 @@ describe("payment pending queue action", () => {
     expect(screen.getByRole("link", { name: "Ver solicitud" })).toBeInTheDocument();
   });
 
-  it.each(["GIOF_GESTOR", "GIOF_MANAGER"])("habilita pago masivo visible para %s", async (role) => {
+  it.each(["GIOF_GESTOR", "GIOF_MANAGER"])("no expone el pago masivo para %s", (role) => {
     roleCode = role;
     mocks.usePaymentQueue.mockReturnValue({
       requests: [
@@ -461,8 +461,8 @@ describe("payment pending queue action", () => {
 
     render(<PaymentQueuePage />);
 
-    expect(screen.getByRole("checkbox", { name: /seleccionar solicitudes elegibles de esta página para pago masivo/i })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /registrar pagos seleccionados/i })).toBeDisabled();
+    expect(screen.queryByRole("checkbox", { name: /pago masivo/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /registrar pagos seleccionados/i })).not.toBeInTheDocument();
     expect(mocks.bulkMarkPaid).not.toHaveBeenCalled();
   });
 

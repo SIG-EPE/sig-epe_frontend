@@ -1,9 +1,7 @@
-import { DriveHierarchyManagement } from "@/components/drive-hierarchy/drive-hierarchy-management";
+import { redirect } from "next/navigation";
 
-// -------------------------------------------------------
-// Gestión operativa de la jerarquía contable de Drive
-// -------------------------------------------------------
+import { ROUTES } from "@/lib/constants";
 
 export default function ManagementPage() {
-  return <DriveHierarchyManagement />;
+  redirect(ROUTES.DASHBOARD_GIOF);
 }
