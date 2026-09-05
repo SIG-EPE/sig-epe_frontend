@@ -1,26 +1,52 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { BulkMarkPaidModal } from "@/components/payments/bulk-mark-paid-modal";
 import { CompletePaymentDetailsModal } from "@/components/payments/complete-payment-details-modal";
-import { REQUEST_CURRENCY, REQUEST_STATUS, REQUEST_TYPE, type PaymentRequest } from "@/types/requests";
+import {
+  REQUEST_CURRENCY,
+  REQUEST_STATUS,
+  REQUEST_TYPE,
+  type PaymentRequest,
+} from "@/types/requests";
 
 const mocks = vi.hoisted(() => ({
   bulkMarkPaid: vi.fn(),
   completePaymentDetails: vi.fn(),
+  uploadDocument: vi.fn(),
   retryRexanActivation: vi.fn(),
   push: vi.fn(),
 }));
+
+const LEASE_1 = "00000000-0000-4000-8000-000000000011";
+const LEASE_2 = "00000000-0000-4000-8000-000000000012";
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: mocks.push }),
 }));
 
 vi.mock("@/hooks/use-requests", () => ({
-  useBulkMarkPaid: () => ({ bulkMarkPaid: mocks.bulkMarkPaid, isLoading: false, error: null }),
-  useCompletePaymentDetails: () => ({ completePaymentDetails: mocks.completePaymentDetails, isLoading: false, error: null }),
-  useRetryRexanActivation: () => ({ retryRexanActivation: mocks.retryRexanActivation, isLoading: false, error: null }),
+  useBulkMarkPaid: () => ({
+    bulkMarkPaid: mocks.bulkMarkPaid,
+    isLoading: false,
+    error: null,
+  }),
+  useCompletePaymentDetails: () => ({
+    completePaymentDetails: mocks.completePaymentDetails,
+    isLoading: false,
+    error: null,
+  }),
+  useUploadRequestDocument: () => ({
+    uploadDocument: mocks.uploadDocument,
+    isLoading: false,
+    error: null,
+  }),
+  useRetryRexanActivation: () => ({
+    retryRexanActivation: mocks.retryRexanActivation,
+    isLoading: false,
+    error: null,
+  }),
 }));
 
 function makeRequest(overrides: Partial<PaymentRequest> = {}): PaymentRequest {
@@ -66,83 +92,221 @@ function makeRequest(overrides: Partial<PaymentRequest> = {}): PaymentRequest {
   };
 }
 
+function makeIncompletePaidRequest(overrides: Partial<PaymentRequest> = {}): PaymentRequest {
+  return makeRequest({
+    status: REQUEST_STATUS.PAID,
+    paid_at: "2026-08-28T10:00:00-05:00",
+    amount_disbursed: 100,
+    payment_id: "payment-1",
+    payment: {
+      id: "payment-1",
+      payment_request_id: "req-1",
+      paid_at: "2026-08-28T10:00:00-05:00",
+      operation_reference: null,
+      amount_paid: 100,
+      bank_commission: null,
+      notes: null,
+      source_account_key: "BCP_PEN",
+      drive_projection_status: "PENDING",
+      proof_document_id: null,
+      proof_pending: true,
+      details_pending: true,
+      missing_fields: ["operation_reference", "proof"],
+      completeness: "BOTH_PENDING",
+      registered_by_id: "user-1",
+      created_at: "2026-08-28T10:00:00-05:00",
+      updated_at: "2026-08-28T10:00:00-05:00",
+    },
+    ...overrides,
+  });
+}
+
 describe("bulk payment modals", () => {
   beforeEach(() => {
     mocks.bulkMarkPaid.mockReset();
     mocks.completePaymentDetails.mockReset();
+    mocks.uploadDocument.mockReset();
     mocks.push.mockReset();
   });
 
-  it("envía payload masivo sin monto y muestra resumen con pendientes, correo y REXAN", async () => {
+  it("muestra preview, exige fecha/cuenta y envía referencia por solicitud", async () => {
     const user = userEvent.setup();
     mocks.bulkMarkPaid.mockResolvedValueOnce({
-      batch_id: "batch-1",
-      item_count: 2,
-      success_count: 1,
-      failed_count: 1,
-      total_amount: 100,
-      results: [
-        { request_id: "req-1", status: "success", payment_id: "payment-1", proof_pending: true, details_pending: true, email_status: "queued", rexan_activation: { job_id: "job-1", status: "PENDING" } },
-        { request_id: "req-2", status: "failed", error: "Solicitud no elegible" },
-      ],
+      batch_id: "batch-1", item_count: 2, success_count: 2, failed_count: 0,
+      total_amount: 150, results: [
+        { request_id: "req-1", status: "SUCCESS" },
+        { request_id: "req-2", status: "ALREADY_PROCESSED" },
+      ], rexan_metrics: {},
     });
-
     render(
       <BulkMarkPaidModal
-        requests={[makeRequest({ id: "req-1" }), makeRequest({ id: "req-2", requested_amount: 50 })]}
+        requests={[
+          makeRequest({ id: "req-1" }),
+          makeRequest({ id: "req-2", requested_amount: 50 }),
+        ]}
         open
         onOpenChange={vi.fn()}
         onSuccess={vi.fn()}
+        prepareItems={async () => [
+          { request_id: "req-1", assignment_version: 1, lease_token: LEASE_1 },
+          { request_id: "req-2", assignment_version: 2, lease_token: LEASE_2 },
+        ]}
       />,
     );
 
-    await user.clear(screen.getByTestId("bulk-payment-paid-at-input"));
-    await user.type(screen.getByTestId("bulk-payment-paid-at-input"), "2026-05-30T09:30");
-    await user.type(screen.getByTestId("bulk-payment-reference-input"), "OP-123");
-    await user.type(screen.getByTestId("bulk-payment-notes-input"), "Lote banco");
-    await user.click(screen.getByRole("button", { name: "Marcar como pagadas" }));
+    expect(screen.getAllByText("SOL-1")).toHaveLength(2);
+    expect(screen.getAllByTestId("bulk-payment-reference-input")).toHaveLength(2);
+    await user.click(screen.getByRole("button", { name: "Registrar 2 pagos" }));
+    expect(await screen.findByText(/selecciona la cuenta de origen/i)).toBeInTheDocument();
 
-    await waitFor(() => expect(mocks.bulkMarkPaid).toHaveBeenCalled());
-    expect(mocks.bulkMarkPaid).toHaveBeenCalledWith(expect.objectContaining({
-      request_ids: ["req-1", "req-2"],
-      operation_reference: "OP-123",
-      notes: "Lote banco",
-    }));
-    expect(mocks.bulkMarkPaid.mock.calls[0][0]).not.toHaveProperty("amount_paid");
+    await user.selectOptions(screen.getByTestId("bulk-payment-source-account-select"), "BCP_PEN");
+    await user.type(screen.getAllByTestId("bulk-payment-reference-input")[0], "OP-UNO");
+    await user.click(screen.getByRole("button", { name: "Registrar 2 pagos" }));
 
-    const summary = await screen.findByTestId("bulk-payment-result-summary");
-    expect(within(summary).queryByText(/Lote:/)).not.toBeInTheDocument();
-    expect(within(summary).getByText("Falta constancia")).toBeInTheDocument();
-    expect(within(summary).getByText("Falta referencia")).toBeInTheDocument();
-    expect(within(summary).getByText("Correo en cola")).toBeInTheDocument();
-    expect(within(summary).getByText("REXAN en proceso")).toBeInTheDocument();
-    expect(mocks.push).not.toHaveBeenCalled();
+    await waitFor(() => expect(mocks.bulkMarkPaid).toHaveBeenCalledWith(expect.objectContaining({
+      source_account_key: "BCP_PEN",
+      items: [
+        expect.objectContaining({ request_id: "req-1", operation_reference: "OP-UNO" }),
+        expect.objectContaining({ request_id: "req-2", operation_reference: undefined }),
+      ],
+    })));
+    expect(screen.getByText("Procesado correctamente")).toBeInTheDocument();
+    expect(screen.getByText("Ya estaba procesado")).toBeInTheDocument();
   });
 
-  it("completa datos por multipart sin exponer monto ni fecha", async () => {
+  it("conserva resultados y reintenta únicamente fallidos con una nueva intención estable", async () => {
+    const user = userEvent.setup();
+    mocks.bulkMarkPaid
+      .mockResolvedValueOnce({ batch_id: "batch-1", item_count: 2, success_count: 1, failed_count: 1, total_amount: 100, rexan_metrics: {}, results: [
+        { request_id: "req-1", status: "SUCCESS" },
+        { request_id: "req-2", status: "FAILED", error_code: "ASSIGNMENT_VERSION_STALE", error: "La asignación cambió." },
+      ] })
+      .mockResolvedValueOnce({ batch_id: "batch-2", item_count: 1, success_count: 1, failed_count: 0, total_amount: 50, rexan_metrics: {}, results: [
+        { request_id: "req-2", status: "SUCCESS" },
+      ] });
+    const prepareItems = vi.fn(async (requests: PaymentRequest[]) => requests.map((request, index) => ({
+      request_id: request.id, assignment_version: index + 1, lease_token: index === 0 ? LEASE_1 : LEASE_2,
+    })));
+    render(<BulkMarkPaidModal requests={[makeRequest({ id: "req-1" }), makeRequest({ id: "req-2", request_code: "SOL-2" })]} open onOpenChange={vi.fn()} onSuccess={vi.fn()} prepareItems={prepareItems} />);
+    await user.selectOptions(screen.getByTestId("bulk-payment-source-account-select"), "BCP_PEN");
+    await user.click(screen.getByRole("button", { name: "Registrar 2 pagos" }));
+    expect(await screen.findByText("La asignación cambió.")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Reintentar 1 fallido" }));
+    await waitFor(() => expect(mocks.bulkMarkPaid).toHaveBeenCalledTimes(2));
+    expect(mocks.bulkMarkPaid.mock.calls[1][0].items).toHaveLength(1);
+    expect(mocks.bulkMarkPaid.mock.calls[1][0].items[0].request_id).toBe("req-2");
+    expect(mocks.bulkMarkPaid.mock.calls[1][0].client_batch_id).not.toBe(mocks.bulkMarkPaid.mock.calls[0][0].client_batch_id);
+    expect(screen.getAllByText("Procesado correctamente")).toHaveLength(2);
+  });
+
+  it("mantiene client_batch_id al reintentar la misma intención tras un error de transporte", async () => {
+    const user = userEvent.setup();
+    mocks.bulkMarkPaid.mockRejectedValueOnce(new Error("No se pudo conectar")).mockResolvedValueOnce({
+      batch_id: "batch-1", item_count: 1, success_count: 1, failed_count: 0,
+      total_amount: 100, results: [{ request_id: "req-1", status: "SUCCESS" }], rexan_metrics: {},
+    });
+    render(<BulkMarkPaidModal requests={[makeRequest()]} open onOpenChange={vi.fn()} onSuccess={vi.fn()} prepareItems={async () => [{ request_id: "req-1", assignment_version: 1, lease_token: LEASE_1 }]} />);
+    await user.selectOptions(screen.getByTestId("bulk-payment-source-account-select"), "BCP_PEN");
+    await user.click(screen.getByRole("button", { name: "Registrar 1 pago" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("No se pudo conectar");
+    await user.click(screen.getByRole("button", { name: "Registrar 1 pago" }));
+    await waitFor(() => expect(mocks.bulkMarkPaid).toHaveBeenCalledTimes(2));
+    expect(mocks.bulkMarkPaid.mock.calls[1][0].client_batch_id).toBe(mocks.bulkMarkPaid.mock.calls[0][0].client_batch_id);
+  });
+
+  it("sube constancia y completa por PATCH sin exponer monto ni fecha", async () => {
     const user = userEvent.setup();
     mocks.completePaymentDetails.mockResolvedValueOnce({ id: "payment-1" });
+    mocks.uploadDocument.mockResolvedValueOnce({ id: "proof-document-1" });
 
     render(
       <CompletePaymentDetailsModal
-        request={makeRequest({ status: REQUEST_STATUS.PAID, payment_id: "payment-1" })}
+        request={makeIncompletePaidRequest()}
         open
         onOpenChange={vi.fn()}
         onSuccess={vi.fn()}
       />,
     );
 
-    expect(screen.getByText(/no cambia el monto ni la fecha de pago/)).toBeInTheDocument();
-    expect(screen.queryByTestId("payment-amount-input")).not.toBeInTheDocument();
+    expect(
+      screen.getByText(/fecha, cuenta y monto no se modificarán/),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByTestId("payment-amount-input"),
+    ).not.toBeInTheDocument();
 
-    await user.type(screen.getByTestId("complete-payment-reference-input"), "OP-456");
-    await user.upload(screen.getByTestId("complete-payment-proof-input"), new File(["proof"], "constancia.pdf", { type: "application/pdf" }));
-    await user.click(screen.getByRole("button", { name: "Completar datos" }));
+    await user.type(
+      screen.getByTestId("complete-payment-reference-input"),
+      "OP-456",
+    );
+    await user.upload(
+      screen.getByTestId("complete-payment-proof-input"),
+      new File(["proof"], "constancia.pdf", { type: "application/pdf" }),
+    );
+    await user.click(screen.getByRole("button", { name: "Completar pago" }));
 
-    await waitFor(() => expect(mocks.completePaymentDetails).toHaveBeenCalledWith("payment-1", expect.objectContaining({
-      operation_reference: "OP-456",
-      proof: expect.any(File),
-    })));
+    await waitFor(() =>
+      expect(mocks.completePaymentDetails).toHaveBeenCalledWith(
+        "payment-1",
+        expect.objectContaining({
+          operation_reference: "OP-456",
+          proof_document_id: "proof-document-1",
+        }),
+      ),
+    );
+    expect(mocks.uploadDocument).toHaveBeenCalledBefore(mocks.completePaymentDetails);
     expect(mocks.completePaymentDetails.mock.calls[0][1].bank_commission).toBeUndefined();
+  });
+
+  it("mantiene chrome fijo, un solo scroll interno, foco y error asociado en Completar pago", async () => {
+    const allocations = Array.from({ length: 12 }, (_, index) => ({
+      id: `allocation-${index + 1}`,
+      payment_request_id: "req-1",
+      budget_planning_line_id: `line-${index + 1}`,
+      amount: 10,
+      currency: REQUEST_CURRENCY.PEN,
+      budget_month: 1,
+      fiscal_year: 2026,
+      org_unit_id: "org-1",
+      sort_order: index,
+      budgetPlanningLine: null,
+      planning_line: null,
+      org_unit: { id: "org-1", name: "Unidad 1" },
+      payment_execution: null,
+    }));
+    render(
+      <CompletePaymentDetailsModal
+        request={makeIncompletePaidRequest({
+          allocations,
+          allocation_count: allocations.length,
+        })}
+        open
+        onOpenChange={vi.fn()}
+        onSuccess={vi.fn()}
+      />,
+    );
+
+    const dialog = await screen.findByRole("dialog", {
+      name: "Completar pago",
+    });
+    const initialInput = screen.getByTestId("complete-payment-reference-input");
+    const proofInput = screen.getByTestId("complete-payment-proof-input");
+    await waitFor(() => expect(document.activeElement).toBe(initialInput));
+    expect(dialog.querySelectorAll(".overflow-y-auto")).toHaveLength(1);
+    expect(screen.getByRole("heading", { name: "Completar pago" }).parentElement).toHaveClass("shrink-0");
+    expect(screen.getByRole("button", { name: "Completar pago" }).parentElement).toHaveClass("shrink-0");
+
+    fireEvent.change(proofInput, {
+      target: {
+        files: [new File(["invalid"], "constancia.txt", { type: "text/plain" })],
+      },
+    });
+    await waitFor(() =>
+      expect(proofInput).toHaveAttribute(
+        "aria-describedby",
+        "complete-payment-proof-error",
+      ),
+    );
+    expect(document.getElementById("complete-payment-proof-error")).toHaveTextContent(/formato/i);
   });
 });

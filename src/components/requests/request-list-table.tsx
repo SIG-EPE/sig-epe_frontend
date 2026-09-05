@@ -12,8 +12,10 @@ import { REQUEST_TYPE_LABELS, formatRequestCurrency, formatRequestDateTime, getP
 import { getSafeDocumentUrl } from "@/lib/safe-url";
 import { REQUEST_TYPE, type PaymentRequest } from "@/types/requests";
 import { StatusBadge } from "./status-badge";
+import { DriveProjectionState } from "./drive-projection-state";
 import { GiofWorkStatus } from "@/components/giof-work/giof-work-controls";
-import { isGiofOperationalRole } from "@/lib/role-capabilities";
+import { canOperateAssignedGiofWork, isGiofOperationalRole } from "@/lib/role-capabilities";
+import { REQUEST_STATUS_SURFACE, type RequestStatusSurface } from "@/lib/request-status-vocabulary";
 
 interface RequestListTableProps {
   requests: PaymentRequest[];
@@ -21,10 +23,12 @@ interface RequestListTableProps {
   roleCode?: string | null;
   currentUserId?: string | null;
   showResponsible?: boolean;
+  showAssignment?: boolean;
   isGiofManager?: boolean;
   selectedAssignmentIds?: string[];
   onToggleAssignment?: (requestId: string, checked: boolean) => void;
   onToggleAllAssignments?: (checked: boolean) => void;
+  statusSurface?: RequestStatusSurface;
 }
 
 interface RequestPoaLineDisplay {
@@ -104,7 +108,7 @@ function RequestPoaTooltip({ poaLines, conceptLabel, currency, children }: Reque
   );
 }
 
-export function RequestListTable({ requests, isLoading, roleCode, currentUserId, isGiofManager = false, selectedAssignmentIds = [], onToggleAssignment, onToggleAllAssignments }: RequestListTableProps) {
+export function RequestListTable({ requests, isLoading, roleCode, currentUserId, showAssignment = false, isGiofManager = false, selectedAssignmentIds = [], onToggleAssignment, onToggleAllAssignments, statusSurface = REQUEST_STATUS_SURFACE.DETAIL }: RequestListTableProps) {
   if (isLoading) {
     return <p className="rounded-md border p-6 text-sm text-muted-foreground">Cargando solicitudes...</p>;
   }
@@ -126,7 +130,7 @@ export function RequestListTable({ requests, isLoading, roleCode, currentUserId,
             <TableHead className="max-w-48">Registrado por</TableHead>
             <TableHead className="max-w-56">A nombre de</TableHead>
             <TableHead>Estado</TableHead>
-            <TableHead>Asignación</TableHead>
+            {showAssignment && <TableHead>Asignación</TableHead>}
             <TableHead>Línea POA</TableHead>
             <TableHead>Mes</TableHead>
             <TableHead className="text-right">Monto</TableHead>
@@ -140,8 +144,9 @@ export function RequestListTable({ requests, isLoading, roleCode, currentUserId,
           )}
           {requests.map((request) => {
           const defaultActions = getRequestListActions(roleCode, request.status, request.id, request.requester_id, currentUserId);
-          const actions = isGiofOperationalRole(roleCode) && request.giof_work
-            ? [{ kind: "detail" as const, label: request.giof_work.canAcquire ? "Procesar" : "Ver", href: `${ROUTES.REQUESTS}/${request.id}${request.giof_work.canAcquire ? "?mode=process" : ""}` as Route, testId: "request-detail-link" }]
+           const canOperate = canOperateAssignedGiofWork(request.giof_work, currentUserId);
+           const actions = isGiofOperationalRole(roleCode) && request.giof_work
+             ? [{ kind: "detail" as const, label: canOperate ? "Procesar" : "Ver", href: `${ROUTES.REQUESTS}/${request.id}${canOperate ? "?mode=process" : ""}` as Route, testId: "request-detail-link" }]
             : defaultActions;
           const driveFolderUrl = getSafeDocumentUrl(request.drive_folder_url);
           const documentsCount = request.documents_count ?? request.documents?.length ?? 0;
@@ -175,10 +180,12 @@ export function RequestListTable({ requests, isLoading, roleCode, currentUserId,
                   <span className="truncate text-xs text-muted-foreground">{registeredPartyDocument}</span>
                 </div>
               </TableCell>
-              <TableCell><GiofWorkStatus requestId={request.id} work={request.giof_work} currentUserId={currentUserId} isManager={isGiofManager} /></TableCell>
               <TableCell>
                 <div className="flex flex-col gap-1">
-                  <StatusBadge status={request.status} context={request} />
+                   <StatusBadge status={request.status} context={request} surface={statusSurface} />
+                   {request.payment ? (
+                     <DriveProjectionState payment={request.payment} compact />
+                   ) : null}
                   {documentsChecklist && (
                     <span className="text-xs text-muted-foreground">
                       {documentsChecklist.isComplete ? "Sustentos completos" : "Faltan documentos"}
@@ -186,6 +193,7 @@ export function RequestListTable({ requests, isLoading, roleCode, currentUserId,
                   )}
                 </div>
               </TableCell>
+              {showAssignment && <TableCell><GiofWorkStatus requestId={request.id} work={request.giof_work} currentUserId={currentUserId} isManager={isGiofManager} /></TableCell>}
               <TableCell className="min-w-64 max-w-md align-top">
                 <div className="space-y-1 text-sm">
                   {allocationCount > 1 ? (

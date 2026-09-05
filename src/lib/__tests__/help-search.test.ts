@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { FAQ_CATEGORIES, FAQ_ITEMS } from "@/lib/help-content";
 import { filterFaqItems, normalizeFaqSearchText } from "@/lib/help-search";
+import { GIOF_STAGE_GUIDES } from "@/lib/giof-assignment-help";
 
 const EXPECTED_QUESTIONS = [
   "¿Cómo ingreso desde la plataforma de Enseña Perú?",
@@ -55,6 +56,22 @@ describe("FAQ catalog", () => {
       expect(item.keywords.length).toBeGreaterThan(0);
       expect(item.keywords.every((keyword) => keyword.trim().length > 0)).toBe(true);
     }
+  });
+
+  it("usa en la ayuda los labels visibles contextuales vigentes", () => {
+    const faqCopy = FAQ_ITEMS.map((item) => item.answer).join(" ");
+    const giofCopy = GIOF_STAGE_GUIDES
+      .flatMap((guide) => [guide.assignable, guide.notAssignable])
+      .join(" ");
+
+    expect(faqCopy).toContain("Enviada a revisión");
+    expect(faqCopy).toContain("Aprobada · pendiente de pago");
+    expect(faqCopy).not.toMatch(/En gestión de pago|Rendición en preparación/);
+    expect(giofCopy).toContain("Por revisar es asignable");
+    expect(giofCopy).toContain("Pendiente de pago");
+    expect(giofCopy).toContain("Pago registrado");
+    expect(giofCopy).toContain("En preparación");
+    expect(giofCopy).not.toMatch(/En gestión de pago|Rendición en preparación/);
   });
 
 });

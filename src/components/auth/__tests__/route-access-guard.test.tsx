@@ -75,6 +75,23 @@ describe("RouteAccessGuard", () => {
     expect(mockReplace).not.toHaveBeenCalled();
   });
 
+  it.each([ROLE_CODE.AUDITOR_DIRECCION, ROLE_CODE.ADMIN_SISTEMA])(
+    "allows readiness issuer role %s to open management",
+    (role) => {
+      mockUsePathname.mockReturnValue("/management");
+      setAuthState(authUser(role));
+
+      render(
+        <RouteAccessGuard>
+          <div>readiness operations</div>
+        </RouteAccessGuard>,
+      );
+
+      expect(screen.getByText("readiness operations")).toBeInTheDocument();
+      expect(mockReplace).not.toHaveBeenCalled();
+    },
+  );
+
   it("does not apply role matrix to authenticated unlisted routes", () => {
     mockUsePathname.mockReturnValue("/profile");
     setAuthState(authUser(ROLE_CODE.SOLICITANTE_EPE));

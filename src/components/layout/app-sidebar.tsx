@@ -21,6 +21,7 @@ import {
   ListChecks,
   Handshake,
   CircleHelp,
+  FolderTree,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
@@ -67,6 +68,7 @@ const ICON_MAP: Record<string, LucideIcon> = {
   ListChecks,
   Handshake,
   CircleHelp,
+  FolderTree,
 };
 
 const SIDEBAR_EXACT_ACTIVE_ROUTES = new Set<string>([

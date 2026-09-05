@@ -151,6 +151,12 @@ const giofUser: AuthUser = {
   authSource: "LOCAL",
 };
 
+const managerUser: AuthUser = {
+  ...giofUser,
+  id: "5",
+  role: { code: "GIOF_MANAGER", name: "GIOF Manager" },
+};
+
 const auditorUser: AuthUser = {
   id: "4",
   firstName: "Auditor",
@@ -214,7 +220,7 @@ describe("AppSidebar", () => {
     renderSidebar();
 
     expect(screen.getByText("Usuarios")).toBeInTheDocument();
-    expect(screen.getByText("Bandeja de Revisión")).toBeInTheDocument();
+    expect(screen.queryByText("Bandeja de Revisión")).not.toBeInTheDocument();
     expect(screen.getByText("Mis Solicitudes")).toBeInTheDocument();
     expect(screen.getByText("Bandeja de Rendiciones")).toBeInTheDocument();
     expect(screen.getByText("Log de auditoría")).toBeInTheDocument();
@@ -223,12 +229,13 @@ describe("AppSidebar", () => {
 
     expect(screen.getByText("Dashboard GIOF")).toBeInTheDocument();
     expect(screen.getByText("Presupuesto")).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Operaciones Drive readiness" })).not.toBeInTheDocument();
   });
 
   it("usa scopes distintos para Mis Solicitudes y Bandeja de Revisión", () => {
     mockUseAuthStore.mockImplementation(
       (selector: (state: { user: AuthUser }) => unknown) =>
-        selector({ user: adminUser })
+        selector({ user: giofUser })
     );
 
     renderSidebar();
@@ -242,7 +249,7 @@ describe("AppSidebar", () => {
     mockSearchParams = new URLSearchParams("scope=review");
     mockUseAuthStore.mockImplementation(
       (selector: (state: { user: AuthUser }) => unknown) =>
-        selector({ user: adminUser })
+        selector({ user: giofUser })
     );
 
     renderSidebar();
@@ -256,7 +263,7 @@ describe("AppSidebar", () => {
     mockSearchParams = new URLSearchParams("scope=mine");
     mockUseAuthStore.mockImplementation(
       (selector: (state: { user: AuthUser }) => unknown) =>
-        selector({ user: adminUser })
+        selector({ user: giofUser })
     );
 
     renderSidebar();
@@ -269,7 +276,7 @@ describe("AppSidebar", () => {
     mockPathname = "/requests";
     mockUseAuthStore.mockImplementation(
       (selector: (state: { user: AuthUser }) => unknown) =>
-        selector({ user: adminUser })
+        selector({ user: giofUser })
     );
 
     renderSidebar();
@@ -306,14 +313,27 @@ describe("AppSidebar", () => {
     expect(screen.getByText("Cola de Pagos")).toBeInTheDocument();
     expect(screen.queryByText("Resumen de Saldos")).not.toBeInTheDocument();
     expect(screen.getByText("Dashboard GIOF")).toBeInTheDocument();
-    expect(screen.getByText("Presupuesto")).toBeInTheDocument();
-    expect(screen.getByText("Años Fiscales")).toBeInTheDocument();
-    expect(screen.getByText("Plan Operativo (POA)")).toBeInTheDocument();
-    expect(screen.getByText("Aportes de Socios")).toBeInTheDocument();
-    expect(screen.getByText("Reportes")).toBeInTheDocument();
-    expect(screen.getByText("Catálogos")).toBeInTheDocument();
-    expect(screen.getByText("Usuarios")).toBeInTheDocument();
+    expect(screen.queryByText("Presupuesto")).not.toBeInTheDocument();
+    expect(screen.queryByText("Años Fiscales")).not.toBeInTheDocument();
+    expect(screen.queryByText("Plan Operativo (POA)")).not.toBeInTheDocument();
+    expect(screen.queryByText("Aportes de Socios")).not.toBeInTheDocument();
+    expect(screen.queryByText("Reportes")).not.toBeInTheDocument();
+    expect(screen.queryByText("Catálogos")).not.toBeInTheDocument();
+    expect(screen.queryByText("Usuarios")).not.toBeInTheDocument();
+    expect(screen.queryByText("Jerarquía de Drive")).not.toBeInTheDocument();
     expect(screen.queryByText("Bandeja de Gestión")).not.toBeInTheDocument();
+  });
+
+  it("muestra al manager el superset operacional y administrativo", () => {
+    mockUseAuthStore.mockImplementation(
+      (selector: (state: { user: AuthUser }) => unknown) => selector({ user: managerUser }),
+    );
+    renderSidebar();
+
+    for (const visible of ["Bandeja de Revisión", "Cola de Pagos", "Bandeja de Rendiciones", "Presupuesto", "Años Fiscales", "Plan Operativo (POA)", "Aportes de Socios", "Reportes", "Catálogos", "Usuarios"]) {
+      expect(screen.getByText(visible)).toBeInTheDocument();
+    }
+    expect(screen.queryByText("Jerarquía de Drive")).not.toBeInTheDocument();
   });
 
   it("✅ Muestra dashboards y Reportes para AUDITOR_DIRECCION", () => {
@@ -328,6 +348,7 @@ describe("AppSidebar", () => {
     expect(screen.getByText("Presupuesto")).toBeInTheDocument();
     expect(screen.getByText("Reportes")).toBeInTheDocument();
     expect(screen.getByText("Mis Solicitudes")).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Operaciones Drive readiness" })).not.toBeInTheDocument();
   });
 
   it.each([

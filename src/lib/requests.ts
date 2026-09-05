@@ -1,7 +1,19 @@
 import { ApiRequestError } from "@/lib/api-client";
-import { formatBusinessDate, formatBusinessDateTime, getBusinessDateString, getDateOnlyUtcTime } from "@/lib/business-timezone";
+import { formatBusinessDate, formatBusinessDateTime, getDateOnlyUtcTime } from "@/lib/business-timezone";
 import { ROLE_CODE, ROUTES } from "@/lib/constants";
+import { isGiofOperationalRole } from "@/lib/role-capabilities";
 import { getSafeDocumentUrl } from "@/lib/safe-url";
+import {
+  formatRexanActivationStatus,
+  getPaymentCompletenessLabels,
+} from "@/lib/integration-status-vocabulary";
+import {
+  REQUEST_RENDITION_SELECTOR_STATUSES,
+  REQUEST_STATUS_SURFACE,
+  formatRenditionQueueStatus,
+  formatRequestStatus,
+  type RequestStatusSurface,
+} from "@/lib/request-status-vocabulary";
 import type { Route } from "next";
 import {
   ACCOUNT_TYPE,
@@ -9,6 +21,7 @@ import {
   BANK_NAME_BY_CODE,
   BENEFICIARY_DOCUMENT_TYPE,
   REQUEST_STATUS,
+  REQUEST_CURRENCY,
   REQUEST_DOCUMENT_CATEGORY,
   REQUEST_DOCUMENT_SCOPE_TYPE,
   REQUEST_DOCUMENT_STORAGE_PROVIDER,
@@ -16,6 +29,7 @@ import {
   REQUEST_DOCUMENT_UPLOAD_QUEUE_ERROR_KIND,
   REQUEST_DOCUMENT_UPLOAD_QUEUE_STATUS,
   RENDITION_NEXT_STEP_ACTION,
+  RENDITION_DEADLINE_STATE,
   REQUEST_TYPE,
   REXAN_OUTCOME,
   ADVANCE_SETTLEMENT_CTA_STATE,
@@ -31,6 +45,7 @@ import {
   type RenditionSortDirection,
   type RenditionSortField,
   type RenditionStatus,
+  type RenditionDeadlineState,
   type RequestDocument,
   type RequestDocumentCategory,
   type RequestAllocation,
@@ -45,15 +60,25 @@ import {
   type RequestAllocationsBudgetPreview,
   type RequiredDocumentChecklist,
   type RequiredDocumentChecklistItem,
-  type ConditionalDocumentChecklistNote,
   type BulkPaymentItemResult,
   type BulkPaymentRexanResult,
   type RequestDocumentUploadQueueItem,
   type RequestStatus,
   type RequestType,
+  type RequestCurrency,
   type RexanOutcome,
   type RenditionNextStepGuidance,
 } from "@/types/requests";
+
+export {
+  REQUEST_REVIEW_QUERY_KEY,
+  normalizeRequestReviewFilters,
+  parseRequestReviewUrl,
+  serializeRequestReviewUrl,
+  updateRequestReviewUrl,
+  type RequestReviewQueryKey,
+  type RequestReviewUrlParseResult,
+} from "@/lib/queue-filters/review";
 
 export const ACTIVE_REVIEW_STATUSES = [
   REQUEST_STATUS.SUBMITTED,
@@ -164,15 +189,15 @@ export const REQUEST_TYPE_LABELS: Record<RequestType, string> = {
 };
 
 export const REQUEST_STATUS_LABELS: Record<RequestStatus, string> = {
-  [REQUEST_STATUS.DRAFT]: "Borrador",
-  [REQUEST_STATUS.SUBMITTED]: "En revisión",
-  [REQUEST_STATUS.OBSERVED]: "Observada",
-  [REQUEST_STATUS.IN_VALIDATION]: "En validación",
-  [REQUEST_STATUS.APPROVED]: "En gestión de pago",
-  [REQUEST_STATUS.REJECTED]: "Rechazada",
-  [REQUEST_STATUS.PAID]: "Pagada",
-  [REQUEST_STATUS.CLOSED]: "Cerrada",
-  [REQUEST_STATUS.VOIDED]: "Anulada",
+  [REQUEST_STATUS.DRAFT]: formatRequestStatus(REQUEST_STATUS.DRAFT, { surface: REQUEST_STATUS_SURFACE.DETAIL }),
+  [REQUEST_STATUS.SUBMITTED]: formatRequestStatus(REQUEST_STATUS.SUBMITTED, { surface: REQUEST_STATUS_SURFACE.DETAIL }),
+  [REQUEST_STATUS.OBSERVED]: formatRequestStatus(REQUEST_STATUS.OBSERVED, { surface: REQUEST_STATUS_SURFACE.DETAIL }),
+  [REQUEST_STATUS.IN_VALIDATION]: formatRequestStatus(REQUEST_STATUS.IN_VALIDATION, { surface: REQUEST_STATUS_SURFACE.DETAIL }),
+  [REQUEST_STATUS.APPROVED]: formatRequestStatus(REQUEST_STATUS.APPROVED, { surface: REQUEST_STATUS_SURFACE.DETAIL }),
+  [REQUEST_STATUS.REJECTED]: formatRequestStatus(REQUEST_STATUS.REJECTED, { surface: REQUEST_STATUS_SURFACE.DETAIL }),
+  [REQUEST_STATUS.PAID]: formatRequestStatus(REQUEST_STATUS.PAID, { surface: REQUEST_STATUS_SURFACE.DETAIL }),
+  [REQUEST_STATUS.CLOSED]: formatRequestStatus(REQUEST_STATUS.CLOSED, { surface: REQUEST_STATUS_SURFACE.DETAIL }),
+  [REQUEST_STATUS.VOIDED]: formatRequestStatus(REQUEST_STATUS.VOIDED, { surface: REQUEST_STATUS_SURFACE.DETAIL }),
 };
 
 export const REXAN_OUTCOME_LABELS: Record<RexanOutcome, string> = {
@@ -188,20 +213,17 @@ export const REXAN_OUTCOME_DESCRIPTIONS: Record<RexanOutcome, string> = {
 };
 
 export const RENDITION_STATUS_LABELS: Record<RenditionStatus, string> = {
-  [RENDITION_STATUS.PENDING]: "Pendiente de rendición",
-  [RENDITION_STATUS.OVERDUE]: "Vencida",
-  [RENDITION_STATUS.IN_REVIEW]: "En revisión",
-  [RENDITION_STATUS.OBSERVED]: "Observada",
-  [RENDITION_STATUS.SETTLED]: "Rendida",
+  [RENDITION_STATUS.PENDING]: formatRenditionQueueStatus(RENDITION_STATUS.PENDING),
+  [RENDITION_STATUS.OVERDUE]: formatRenditionQueueStatus(RENDITION_STATUS.OVERDUE),
+  [RENDITION_STATUS.IN_REVIEW]: formatRenditionQueueStatus(RENDITION_STATUS.IN_REVIEW),
+  [RENDITION_STATUS.OBSERVED]: formatRenditionQueueStatus(RENDITION_STATUS.OBSERVED),
+  [RENDITION_STATUS.SETTLED]: formatRenditionQueueStatus(RENDITION_STATUS.SETTLED),
 };
 
-export const RENDITION_STATUS_FILTER_OPTIONS = [
-  { value: RENDITION_STATUS.PENDING, label: "Pendientes" },
-  { value: RENDITION_STATUS.OVERDUE, label: "Vencidas" },
-  { value: RENDITION_STATUS.IN_REVIEW, label: "En revisión" },
-  { value: RENDITION_STATUS.OBSERVED, label: "Observadas" },
-  { value: RENDITION_STATUS.SETTLED, label: "Rendidas" },
-] as const;
+export const RENDITION_STATUS_FILTER_OPTIONS = REQUEST_RENDITION_SELECTOR_STATUSES.map((value) => ({
+  value,
+  label: RENDITION_STATUS_LABELS[value],
+}));
 
 export const RENDITION_SORT_OPTIONS = [
   { value: RENDITION_SORT_FIELD.LAST_ACTIVITY, label: "Última modificación" },
@@ -231,38 +253,28 @@ export const RENDITION_SUMMARY_CARDS: RenditionSummaryCard[] = [
   { key: "settled", label: "Rendidas", description: "Anticipos cerrados con rendición completa.", status: RENDITION_STATUS.SETTLED },
 ];
 
-const REQUEST_STEPPER_LABELS: Record<RequestStatus, string> = {
-  [REQUEST_STATUS.DRAFT]: "Borrador",
-  [REQUEST_STATUS.SUBMITTED]: "En revisión",
-  [REQUEST_STATUS.OBSERVED]: "Observada",
-  [REQUEST_STATUS.IN_VALIDATION]: "En validación",
-  [REQUEST_STATUS.APPROVED]: "En gestión de pago",
-  [REQUEST_STATUS.REJECTED]: "Rechazada",
-  [REQUEST_STATUS.PAID]: "Pagada",
-  [REQUEST_STATUS.CLOSED]: "Cerrada",
-  [REQUEST_STATUS.VOIDED]: "Anulada",
-};
-
 export function getRequestStatusLabel(status: RequestStatus, context?: RequestStatusLabelContext | null): string {
-  if (context?.request_type === REQUEST_TYPE.ADVANCE_SETTLEMENT && status === REQUEST_STATUS.DRAFT) {
-    return "Rendición en preparación";
-  }
-
-  if (status !== REQUEST_STATUS.APPROVED) return REQUEST_STATUS_LABELS[status] ?? "Estado no reconocido";
-
-  if (
-    context?.request_type === REQUEST_TYPE.ADVANCE_SETTLEMENT
-    && (context.rexan_outcome === REXAN_OUTCOME.EXACT || context.rexan_outcome === REXAN_OUTCOME.DEVOLUCION)
-  ) {
-    return "Rendición aprobada";
-  }
-
-  return "En gestión de pago";
+  const surface = context?.request_type === REQUEST_TYPE.ADVANCE_SETTLEMENT
+    ? REQUEST_STATUS_SURFACE.RENDITION_LIFECYCLE
+    : REQUEST_STATUS_SURFACE.DETAIL;
+  return formatRequestStatus(status, {
+    surface,
+    requestType: context?.request_type,
+    rexanOutcome: context?.rexan_outcome,
+  });
 }
 
-function getRequestStepperLabel(status: RequestStatus, context?: RequestStatusLabelContext | null): string {
-  if (status !== REQUEST_STATUS.APPROVED) return REQUEST_STEPPER_LABELS[status];
-  return getRequestStatusLabel(status, context);
+function getRequestStepperLabel(
+  status: RequestStatus,
+  context?: RequestStatusLabelContext | null,
+  surface?: RequestStatusSurface,
+): string {
+  if (!surface) return getRequestStatusLabel(status, context);
+  return formatRequestStatus(status, {
+    surface,
+    requestType: context?.request_type,
+    rexanOutcome: context?.rexan_outcome,
+  });
 }
 
 const REQUEST_APPROVAL_PATH = [
@@ -285,20 +297,20 @@ export const REQUEST_TYPE_OPTIONS = [
 ] as const;
 
 export const REQUEST_STATUS_FILTER_OPTIONS = [
-  { value: REQUEST_STATUS.DRAFT, label: "Borrador" },
-  { value: REQUEST_STATUS.SUBMITTED, label: "En revisión" },
-  { value: REQUEST_STATUS.OBSERVED, label: "Observada" },
-  { value: REQUEST_STATUS.IN_VALIDATION, label: "En validación" },
-  { value: REQUEST_STATUS.APPROVED, label: "En gestión de pago" },
-  { value: REQUEST_STATUS.PAID, label: "Pagada" },
-  { value: REQUEST_STATUS.REJECTED, label: "Rechazada" },
+  { value: REQUEST_STATUS.DRAFT, label: formatRequestStatus(REQUEST_STATUS.DRAFT, { surface: REQUEST_STATUS_SURFACE.DETAIL }) },
+  { value: REQUEST_STATUS.SUBMITTED, label: formatRequestStatus(REQUEST_STATUS.SUBMITTED, { surface: REQUEST_STATUS_SURFACE.DETAIL }) },
+  { value: REQUEST_STATUS.OBSERVED, label: formatRequestStatus(REQUEST_STATUS.OBSERVED, { surface: REQUEST_STATUS_SURFACE.DETAIL }) },
+  { value: REQUEST_STATUS.IN_VALIDATION, label: formatRequestStatus(REQUEST_STATUS.IN_VALIDATION, { surface: REQUEST_STATUS_SURFACE.DETAIL }) },
+  { value: REQUEST_STATUS.APPROVED, label: formatRequestStatus(REQUEST_STATUS.APPROVED, { surface: REQUEST_STATUS_SURFACE.DETAIL }) },
+  { value: REQUEST_STATUS.PAID, label: formatRequestStatus(REQUEST_STATUS.PAID, { surface: REQUEST_STATUS_SURFACE.DETAIL }) },
+  { value: REQUEST_STATUS.REJECTED, label: formatRequestStatus(REQUEST_STATUS.REJECTED, { surface: REQUEST_STATUS_SURFACE.DETAIL }) },
 ] as const;
 
 export const REQUEST_STATUS_SUMMARY_CARDS = [
   { value: REQUEST_STATUS.DRAFT, label: "Borrador" },
-  { value: REQUEST_STATUS.SUBMITTED, label: "Enviadas / Por revisar" },
+  { value: REQUEST_STATUS.SUBMITTED, label: formatRequestStatus(REQUEST_STATUS.SUBMITTED, { surface: REQUEST_STATUS_SURFACE.DASHBOARD }) },
   { value: REQUEST_STATUS.OBSERVED, label: "Observadas" },
-  { value: REQUEST_STATUS.APPROVED, label: "En gestión de pago" },
+  { value: REQUEST_STATUS.APPROVED, label: formatRequestStatus(REQUEST_STATUS.APPROVED, { surface: REQUEST_STATUS_SURFACE.DASHBOARD }) },
   { value: REQUEST_STATUS.REJECTED, label: "Rechazadas" },
 ] as const;
 
@@ -661,8 +673,8 @@ export function parseRenditionSortDirection(value?: string | null): RenditionSor
   return RENDITION_SORT_DIRECTION.DESC;
 }
 
-export function getRenditionStatusLabel(status: RenditionStatus): string {
-  return RENDITION_STATUS_LABELS[status] ?? "Estado no reconocido";
+export function getRenditionStatusLabel(status: string): string {
+  return formatRenditionQueueStatus(status);
 }
 
 export function getRenditionStatusTone(status: RenditionStatus): "default" | "secondary" | "destructive" | "outline" {
@@ -672,31 +684,114 @@ export function getRenditionStatusTone(status: RenditionStatus): "default" | "se
   return "outline";
 }
 
+type RenditionDeadlineSource = Pick<RenditionInboxRow,
+  | "deadline_date"
+  | "deadline_state"
+  | "calendar_days_to_deadline"
+  | "scheduled_rendition_at"
+  | "days_overdue"
+  | "days_until_due"
+  | "days_remaining"
+  | "rendition_status"
+  | "settlement_status"
+>;
+
 function getDateOnlyTime(value?: string | null): number | null {
   return getDateOnlyUtcTime(value);
 }
 
-export function getRenditionDaysRemaining(row: Pick<RenditionInboxRow, "scheduled_rendition_at" | "days_overdue" | "days_until_due" | "days_remaining" | "rendition_status">, today = new Date()): number | null {
+const PRESENTED_RENDITION_LIFECYCLES = [
+  REQUEST_STATUS.SUBMITTED,
+  REQUEST_STATUS.IN_VALIDATION,
+] as const;
+
+const COMPLETED_RENDITION_LIFECYCLES = [
+  REQUEST_STATUS.APPROVED,
+  REQUEST_STATUS.PAID,
+  REQUEST_STATUS.CLOSED,
+] as const;
+
+function hasCanonicalDeadline(row: RenditionDeadlineSource): boolean {
+  return row.deadline_date !== undefined
+    || row.deadline_state !== undefined
+    || row.calendar_days_to_deadline !== undefined;
+}
+
+function isLifecycleIn(
+  status: RequestStatus | null,
+  lifecycles: readonly RequestStatus[],
+): boolean {
+  return status !== null && lifecycles.includes(status);
+}
+
+export function getRenditionDeadlineDate(row: RenditionDeadlineSource): string | null {
+  return hasCanonicalDeadline(row)
+    ? row.deadline_date ?? null
+    : row.scheduled_rendition_at;
+}
+
+export function getRenditionDaysRemaining(row: RenditionDeadlineSource): number | null {
+  if (hasCanonicalDeadline(row)) return row.calendar_days_to_deadline ?? null;
   if (typeof row.days_remaining === "number") return row.days_remaining;
   if (typeof row.days_until_due === "number") return row.days_until_due;
   if (typeof row.days_overdue === "number") return -Math.abs(row.days_overdue);
-  if (!row.scheduled_rendition_at || row.rendition_status !== RENDITION_STATUS.PENDING) return null;
-  const dueTime = getDateOnlyTime(row.scheduled_rendition_at);
-  const todayTime = getDateOnlyTime(getBusinessDateString(today));
-  if (dueTime === null || todayTime === null) return null;
-  return Math.ceil((dueTime - todayTime) / (24 * 60 * 60 * 1000));
+  return null;
 }
 
-export function getRenditionDueLabel(row: Pick<RenditionInboxRow, "scheduled_rendition_at" | "days_overdue" | "days_until_due" | "days_remaining" | "rendition_status">, today = new Date()): string {
-  const days = getRenditionDaysRemaining(row, today);
-  if (days === null) return "Sin fecha límite";
-  if (days < 0) return `${Math.abs(days)} día${Math.abs(days) === 1 ? "" : "s"} vencida`;
+function formatDeadlineDays(deadlineState: RenditionDeadlineState, days: number | null): string {
+  if (deadlineState === RENDITION_DEADLINE_STATE.NONE) return "Sin fecha límite";
+  if (deadlineState === RENDITION_DEADLINE_STATE.DUE_TODAY) return "Vence hoy";
+  if (deadlineState === RENDITION_DEADLINE_STATE.PRESENTED) return "Presentada";
+  if (deadlineState === RENDITION_DEADLINE_STATE.COMPLETED) return "Rendida";
+  if (deadlineState === RENDITION_DEADLINE_STATE.OVERDUE && days !== null) {
+    const elapsedDays = Math.abs(days);
+    return `Vencida hace ${elapsedDays} día${elapsedDays === 1 ? "" : "s"}`;
+  }
+  if (deadlineState === RENDITION_DEADLINE_STATE.OPEN && days !== null) {
+    return `${days} día${days === 1 ? "" : "s"} para vencer`;
+  }
+  return "Plazo vigente";
+}
+
+export function getRenditionDueLabel(row: RenditionDeadlineSource): string {
+  const deadlineDate = getRenditionDeadlineDate(row);
+  if (hasCanonicalDeadline(row) && row.deadline_state) {
+    const canonicalLabel = formatDeadlineDays(
+      row.deadline_state,
+      row.calendar_days_to_deadline ?? null,
+    );
+    if (deadlineDate || row.deadline_state === RENDITION_DEADLINE_STATE.NONE) {
+      return deadlineDate && canonicalLabel === "Sin fecha límite"
+        ? "Plazo vigente"
+        : canonicalLabel;
+    }
+  }
+
+  if (!deadlineDate) return "Sin fecha límite";
+  if (isLifecycleIn(row.settlement_status, PRESENTED_RENDITION_LIFECYCLES)
+    || row.rendition_status === RENDITION_STATUS.IN_REVIEW) {
+    return "Presentada";
+  }
+  if (isLifecycleIn(row.settlement_status, COMPLETED_RENDITION_LIFECYCLES)
+    || row.rendition_status === RENDITION_STATUS.SETTLED) {
+    return "Rendida";
+  }
+
+  const days = getRenditionDaysRemaining(row);
+  if (days === null) return "Plazo vigente";
+  if (days < 0) return `Vencida hace ${Math.abs(days)} día${Math.abs(days) === 1 ? "" : "s"}`;
   if (days === 0) return "Vence hoy";
-  return `${days} día${days === 1 ? "" : "s"} restante${days === 1 ? "" : "s"}`;
+  return `${days} día${days === 1 ? "" : "s"} para vencer`;
 }
 
-export function isRenditionDueSoon(row: Pick<RenditionInboxRow, "scheduled_rendition_at" | "days_overdue" | "days_until_due" | "days_remaining" | "rendition_status">, today = new Date()): boolean {
-  const days = getRenditionDaysRemaining(row, today);
+export function isRenditionDueSoon(row: RenditionDeadlineSource): boolean {
+  const days = getRenditionDaysRemaining(row);
+  if (hasCanonicalDeadline(row)) {
+    return row.deadline_state === RENDITION_DEADLINE_STATE.OPEN
+      && days !== null
+      && days >= 1
+      && days <= 15;
+  }
   return row.rendition_status === RENDITION_STATUS.PENDING && days !== null && days >= 0 && days <= 15;
 }
 
@@ -961,9 +1056,7 @@ export function validatePaymentProofFile(file: File | null): string | null {
 }
 
 export function getPaymentQueueStatusLabel(status: RequestStatus): string {
-  if (status === REQUEST_STATUS.APPROVED) return "En gestión de pago";
-  if (status === REQUEST_STATUS.PAID) return "Pagado";
-  return REQUEST_STATUS_LABELS[status] ?? "Estado no reconocido";
+  return formatRequestStatus(status, { surface: REQUEST_STATUS_SURFACE.PAYMENT });
 }
 
 interface RegisteredPartySource {
@@ -1080,7 +1173,7 @@ function canAccessAdvanceSettlementCta(
   request: Pick<PaymentRequest, "requester_id">,
   currentUserId?: string | null,
 ): boolean {
-  if (roleCode === ROLE_CODE.ADMIN_SISTEMA || roleCode === ROLE_CODE.GIOF_GESTOR) return true;
+  if (roleCode === ROLE_CODE.ADMIN_SISTEMA || isGiofOperationalRole(roleCode)) return true;
   return roleCode === ROLE_CODE.SOLICITANTE_EPE && Boolean(currentUserId) && request.requester_id === currentUserId;
 }
 
@@ -1168,7 +1261,7 @@ export function getRenditionNextStepGuidance(
     };
   }
 
-  if (roleCode === ROLE_CODE.GIOF_GESTOR || roleCode === ROLE_CODE.ADMIN_SISTEMA) {
+  if (isGiofOperationalRole(roleCode) || roleCode === ROLE_CODE.ADMIN_SISTEMA) {
     const activeSettlement = getActiveAdvanceSettlement(request);
     return {
       title: "Siguiente paso: espera de rendición del solicitante",
@@ -1262,12 +1355,16 @@ export function hasPaymentDetailsPending(request: Pick<PaymentRequest, "payment_
   return Boolean(request.payment_details_pending ?? request.details_pending ?? request.payment?.details_pending);
 }
 
+export function hasPaymentSourcePending(request: Pick<PaymentRequest, "payment">): boolean {
+  return request.payment?.drive_projection_status === "SOURCE_REQUIRED";
+}
+
 export function getPaymentId(request: Pick<PaymentRequest, "payment_id" | "payment">): string | null {
   return request.payment_id ?? request.payment?.id ?? null;
 }
 
 export function getRequestPaymentProofEntries(payment?: Pick<RequestPayment, "proof_entries" | "proofs"> | null): RequestPaymentProof[] {
-  return payment?.proof_entries ?? payment?.proofs ?? [];
+  return (payment?.proof_entries ?? payment?.proofs ?? []).slice(0, 1);
 }
 
 export function getPaymentProofDocumentName(document?: Pick<RequestDocument, "original_filename" | "safe_filename"> | null): string {
@@ -1303,13 +1400,15 @@ export function getPaymentProofDisplayItems(
     });
   }
 
-  getRequestPaymentProofEntries(payment).forEach((proof, index) => {
+  if (items.length > 0) return items;
+
+  getRequestPaymentProofEntries(payment).forEach((proof) => {
     const key = getPaymentProofDocumentKey(proof.proof_document_id, proof.proof_document) ?? proof.id;
     if (seen.has(key)) return;
     seen.add(key);
     items.push({
       id: key,
-      label: items.length === 0 && index === 0 ? "Constancia de pago" : "Constancia de pago adicional",
+      label: "Constancia de pago",
       document: proof.proof_document ?? null,
       documentId: proof.proof_document_id,
       filename: getPaymentProofDocumentName(proof.proof_document),
@@ -1353,7 +1452,7 @@ export function getAllocationProofCoverageLabel(
   allocation: Pick<RequestAllocation, "id">,
   payment: Pick<RequestPayment, "proof_entries" | "proofs"> | null | undefined,
 ): string {
-  return hasAllocationPaymentProofCoverage(payment, allocation.id) ? "Con comprobante asociado" : "Sin comprobante específico";
+  return hasAllocationPaymentProofCoverage(payment, allocation.id) ? "Cubierta por la constancia global" : "Constancia pendiente";
 }
 
 export function getAllocationFinanciersLabel(financiers?: RequestAllocationFundingSource[] | null): string {
@@ -1364,10 +1463,11 @@ export function getAllocationFinanciersLabel(financiers?: RequestAllocationFundi
 }
 
 export function getPaymentPendingBadges(request: Pick<PaymentRequest, "payment_proof_pending" | "proof_pending" | "payment_details_pending" | "details_pending" | "payment">): string[] {
-  const badges: string[] = [];
-  if (hasPaymentProofPending(request)) badges.push("Falta constancia");
-  if (hasPaymentDetailsPending(request)) badges.push("Falta referencia");
-  return badges;
+  return getPaymentCompletenessLabels({
+    proofPending: hasPaymentProofPending(request),
+    referencePending: hasPaymentDetailsPending(request),
+    sourceAccountPending: hasPaymentSourcePending(request),
+  });
 }
 
 export function getBulkPaymentResultLabel(result: Pick<BulkPaymentItemResult, "status" | "error">): string {
@@ -1384,16 +1484,9 @@ export function getPaymentEmailStatusLabel(status?: string | null): string {
   return status;
 }
 
-export function getPaymentRexanStatusLabel(status?: string | null): string {
+export function getPaymentRexanStatusLabel(status?: string | null, preserveLegacyCopy = true): string {
   if (!status) return "REXAN no informado";
-  if (status === "PENDING") return "REXAN en proceso";
-  if (status === "PROCESSING") return "REXAN procesando";
-  if (status === "RETRYING") return "REXAN reintentando";
-  if (status === "CREATED") return "REXAN activada";
-  if (status === "REUSED") return "REXAN reutilizada";
-  if (status === "SKIPPED") return "REXAN no aplica";
-  if (status === "FAILED") return "REXAN requiere atención";
-  return status;
+  return formatRexanActivationStatus(status, preserveLegacyCopy);
 }
 
 export function getBulkPaymentRexanHref(rexan?: BulkPaymentRexanResult | null): string | null {
@@ -1511,67 +1604,31 @@ export function getRequestReviewNavigationIssues(
   };
 }
 
-const REQUIRED_DOCUMENT_RULES: Record<RequestType, Omit<RequiredDocumentChecklistItem, "satisfied">[]> = {
-  [REQUEST_TYPE.ADVANCE]: [{
-    key: "advance-pxq",
+const REQUEST_PXQ_REQUIRED_RULE: Omit<RequiredDocumentChecklistItem, "satisfied"> = {
+    key: "request-pxq",
     category: REQUEST_DOCUMENT_CATEGORY.PXQ,
-    label: "Excel PxQ",
-    description: "Adjunta la plantilla PxQ en formato XLS o XLSX.",
+    label: "PXQ",
+    description: "Adjunta un PXQ asociado a la solicitud. Puede pertenecer a cualquiera de sus líneas POA.",
     required: true,
-    acceptedFormatsLabel: "XLS o XLSX",
+    acceptedFormatsLabel: "Formato PXQ permitido",
     missingMessage: "Falta adjuntar Excel PxQ.",
-  }],
-  [REQUEST_TYPE.REIMBURSEMENT]: [
-    {
-      key: "reimbursement-settlement-report",
-      category: REQUEST_DOCUMENT_CATEGORY.SETTLEMENT_REPORT,
-      label: "Informe de rendición Excel",
-      description: "Adjunta el informe de rendición en XLS o XLSX.",
-      required: true,
-      acceptedFormatsLabel: "XLS o XLSX",
-      missingMessage: "Falta adjuntar informe de rendición Excel.",
-    },
-    {
-      key: "reimbursement-receipt",
-      category: REQUEST_DOCUMENT_CATEGORY.RECEIPT,
-      label: "Comprobante",
-      description: "Adjunta al menos un comprobante de gasto.",
-      required: true,
-      acceptedFormatsLabel: "PDF, JPG o PNG",
-      missingMessage: "Falta adjuntar comprobante.",
-    },
-  ],
-  [REQUEST_TYPE.SUPPLIER_PAYMENT]: [{
-    key: "supplier-receipt",
-    category: REQUEST_DOCUMENT_CATEGORY.RECEIPT,
-    label: "Comprobante factura/RH",
-    description: "Adjunta la factura o recibo por honorarios del proveedor.",
-    required: true,
-    acceptedFormatsLabel: "PDF, JPG o PNG",
-    missingMessage: "Falta adjuntar comprobante factura/RH.",
-  }],
-  [REQUEST_TYPE.ADVANCE_SETTLEMENT]: [],
 };
 
-const SUPPLIER_PAYMENT_CONDITIONAL_NOTES: ConditionalDocumentChecklistNote[] = [
-  {
-    key: "supplier-rh-support",
-    label: "Suspensión RH o sustento aplicable",
-    description: "Se solicitará cuando correspondan sustentos por recibo por honorarios, monto UIT u otros datos de la solicitud.",
-  },
-  {
-    key: "supplier-contract-deliverables",
-    label: "Contrato y entregables",
-    description: "Se solicitará cuando correspondan contrato, entregables u otros sustentos aplicables.",
-  },
-];
+const REQUIRED_DOCUMENT_RULES: Record<RequestType, Omit<RequiredDocumentChecklistItem, "satisfied">[]> = {
+  [REQUEST_TYPE.ADVANCE]: [REQUEST_PXQ_REQUIRED_RULE],
+  [REQUEST_TYPE.REIMBURSEMENT]: [REQUEST_PXQ_REQUIRED_RULE],
+  [REQUEST_TYPE.SUPPLIER_PAYMENT]: [REQUEST_PXQ_REQUIRED_RULE],
+  [REQUEST_TYPE.ADVANCE_SETTLEMENT]: [],
+};
 
 export function getRequiredDocumentChecklist(requestType: RequestType, documents: RequestDocument[]): RequiredDocumentChecklist {
   const rules = REQUIRED_DOCUMENT_RULES[requestType] ?? [];
   const items = rules.map((rule): RequiredDocumentChecklistItem => {
-    const matchingDocuments = documents.filter((document) => document.document_category === rule.category);
-    const requiresExcel = isExcelDocumentCategory(rule.category);
-    const satisfied = matchingDocuments.some((document) => !requiresExcel || isExcelMimeOrExtension(document.mime_type, document.original_filename || document.safe_filename));
+    const satisfied = documents.some(
+      (document) =>
+        document.document_category === rule.category &&
+        document.upload_status === REQUEST_DOCUMENT_UPLOAD_STATUS.PERMANENT,
+    );
 
     return { ...rule, satisfied };
   });
@@ -1579,7 +1636,7 @@ export function getRequiredDocumentChecklist(requestType: RequestType, documents
 
   return {
     items,
-    conditionalNotes: requestType === REQUEST_TYPE.SUPPLIER_PAYMENT ? SUPPLIER_PAYMENT_CONDITIONAL_NOTES : [],
+    conditionalNotes: [],
     missingMessages,
     isComplete: missingMessages.length === 0,
   };
@@ -1596,14 +1653,20 @@ export function getRequestDocumentPermissionMessage(
   currentUserId?: string | null,
 ): string | null {
   if (canManageRequestDocuments(roleCode, status, request, currentUserId)) return null;
-  if (status !== REQUEST_STATUS.DRAFT && status !== REQUEST_STATUS.OBSERVED) {
-    return "Los documentos solo pueden modificarse en borrador u observación. Puedes revisar los adjuntos disponibles.";
+  if (status === REQUEST_STATUS.REJECTED || status === REQUEST_STATUS.CLOSED || status === REQUEST_STATUS.VOIDED) {
+    return "La solicitud está en un estado final y sus documentos ya no pueden modificarse.";
   }
   if (roleCode === ROLE_CODE.SOLICITANTE_EPE && request.requester_id !== currentUserId) {
     return "Solo el solicitante titular puede modificar documentos en esta solicitud.";
   }
-  if (roleCode === ROLE_CODE.GIOF_GESTOR && request.request_type === REQUEST_TYPE.ADVANCE_SETTLEMENT && status === REQUEST_STATUS.OBSERVED) {
+  if (roleCode === ROLE_CODE.SOLICITANTE_EPE && request.requester_id === currentUserId) {
+    return "Como solicitante titular, solo puedes modificar documentos en borrador u observación.";
+  }
+  if (isGiofOperationalRole(roleCode) && request.request_type === REQUEST_TYPE.ADVANCE_SETTLEMENT && status === REQUEST_STATUS.OBSERVED) {
     return "GIOF solo puede revisar los documentos de una rendición observada; el solicitante titular debe corregirlos.";
+  }
+  if (isGiofOperationalRole(roleCode)) {
+    return "Para cargar o eliminar documentos, debes tener la asignación y el bloqueo de trabajo GIOF vigentes.";
   }
   return "Tu rol no tiene permisos para cargar o eliminar documentos en este estado.";
 }
@@ -1672,6 +1735,7 @@ export function getRequestStatusStepperItems(
   statusHistory?: RequestStatusHistoryItem[],
   dates: RequestStatusStepperDates = {},
   context?: RequestStatusLabelContext | null,
+  surface?: RequestStatusSurface,
 ): RequestStatusStepperItem[] {
   const path = getRequestStepperPath(status, statusHistory, context);
   const currentIndex = path.indexOf(status);
@@ -1688,7 +1752,7 @@ export function getRequestStatusStepperItems(
 
     return {
       status: stepStatus,
-      label: getRequestStepperLabel(stepStatus, context),
+      label: getRequestStepperLabel(stepStatus, context, surface),
       state,
       date: getRequestStepperDate(stepStatus, statusHistory, dates),
       isBranch,
@@ -1742,6 +1806,31 @@ export function getRequestMonthLabel(month?: number | null): string {
 
 export function getApiErrorMessages(error: unknown): string[] {
   if (error instanceof ApiRequestError) {
+    const code = typeof error.body.code === "string" ? error.body.code : null;
+    const paymentErrorMessages: Record<string, string> = {
+      PAYMENT_ALREADY_EXISTS: "Esta solicitud ya tiene un pago registrado. Actualiza la cola para ver su estado.",
+      PAYMENT_PROOF_ALREADY_EXISTS: "Esta solicitud ya tiene una constancia global de pago.",
+      PAYMENT_AMOUNT_MISMATCH: "El pago debe cubrir el importe completo de la solicitud; no se admiten pagos parciales.",
+      REQUEST_STATE_CONFLICT: "La solicitud cambió de estado. Actualiza la cola antes de continuar.",
+      GIOF_WORK_ASSIGNMENT_REQUIRED: "Este pago debe estar asignado a tu usuario antes de procesarlo.",
+      GIOF_WORK_LEASE_REQUIRED: "Tu sesión de trabajo venció o no corresponde. Vuelve a abrir el pago desde la cola.",
+      GIOF_ASSIGNMENT_VERSION_REQUIRED: "Falta el contexto vigente de asignación. Actualiza la cola y vuelve a Procesar el pago.",
+      GIOF_ASSIGNMENT_VERSION_STALE: "La asignación cambió mientras procesabas el pago. Actualiza la cola y vuelve a adquirir la sesión.",
+      GIOF_LEASE_TOKEN_REQUIRED: "Falta la sesión operativa del pago. Cierra esta ventana y vuelve a Procesar desde la cola.",
+      GIOF_LEASE_EXPIRED: "La sesión operativa venció. Actualiza la cola y vuelve a Procesar el pago.",
+      GIOF_LEASE_FOREIGN: "La sesión del pago pertenece a otra persona o a otro proceso. Actualiza la cola antes de continuar.",
+      GIOF_NOT_ASSIGNED_OWNER: "El pago ya no está asignado a tu usuario. Actualiza la cola.",
+      GIOF_OPERATION_FORBIDDEN: "Tu usuario ya no puede ejecutar este pago. Actualiza la cola o solicita una nueva asignación.",
+      GIOF_LIFECYCLE_CONFLICT: "El pago ya no está disponible para edición. Actualiza la cola para ver su estado.",
+      PAYMENT_PAID_AT_IN_FUTURE: "La fecha efectiva del pago supera el máximo permitido por la política vigente. Revisa la fecha y hora de pago.",
+      PAYMENT_ROUTE_POLICY_UNAVAILABLE: "El registro de pagos está temporalmente cerrado porque la política de destino no está disponible. No reintentes hasta que Operaciones confirme la configuración.",
+      PAYMENT_BULK_DAILY_UNAVAILABLE: "El pago masivo no está disponible con destinos diarios. Registra cada pago individualmente con su cuenta de origen y constancia.",
+    };
+    if (code && paymentErrorMessages[code]) return [paymentErrorMessages[code]];
+    if (error.status === 403) return ["No tienes permiso para realizar esta acción o tu asignación ya no está vigente."];
+    if (error.status === 409 && /(?:request-payments|\/payments(?:\/|$))/i.test(error.body.path ?? "")) {
+      return ["El pago cambió mientras lo procesabas. Actualiza la cola y verifica si ya fue registrado."];
+    }
     const message = error.body.message;
     if (Array.isArray(message)) return message.filter((item): item is string => typeof item === "string").map(mapApiValidationMessage);
     if (typeof message === "string") return [mapApiValidationMessage(message)];
@@ -1853,7 +1942,25 @@ export function getPlanningLineDisplay(line: { line_code?: string | null; resour
 }
 
 export function isRequestReviewRole(roleCode?: string | null): boolean {
-  return roleCode === ROLE_CODE.GIOF_GESTOR || roleCode === ROLE_CODE.GIOF_MANAGER;
+  return isGiofOperationalRole(roleCode);
+}
+
+const GIOF_OPERATIONAL_ERROR_CODE = {
+  ASSIGNMENT_VERSION_REQUIRED: "GIOF_ASSIGNMENT_VERSION_REQUIRED",
+  ASSIGNMENT_VERSION_STALE: "GIOF_ASSIGNMENT_VERSION_STALE",
+  LEASE_TOKEN_REQUIRED: "GIOF_LEASE_TOKEN_REQUIRED",
+  LEASE_EXPIRED: "GIOF_LEASE_EXPIRED",
+  LEASE_FOREIGN: "GIOF_LEASE_FOREIGN",
+  NOT_ASSIGNED_OWNER: "GIOF_NOT_ASSIGNED_OWNER",
+  OPERATION_FORBIDDEN: "GIOF_OPERATION_FORBIDDEN",
+  LIFECYCLE_CONFLICT: "GIOF_LIFECYCLE_CONFLICT",
+} as const;
+
+export function isGiofOperationalContextError(error: unknown): boolean {
+  if (!(error instanceof ApiRequestError)) return false;
+  if (error.status === 409) return true;
+  const code = typeof error.body.code === "string" ? error.body.code : "";
+  return Object.values(GIOF_OPERATIONAL_ERROR_CODE).some((candidate) => candidate === code);
 }
 
 export function isRequesterRole(roleCode?: string | null): boolean {
@@ -1879,16 +1986,22 @@ export function canEditRequest(roleCode: string | null | undefined, status: Requ
 export function canManageRequestDocuments(
   roleCode: string | null | undefined,
   status: RequestStatus,
-  request: Pick<PaymentRequest, "requester_id" | "request_type">,
+  request: Pick<PaymentRequest, "requester_id" | "request_type" | "giof_work">,
   currentUserId?: string | null,
 ): boolean {
-  const isEditable = status === REQUEST_STATUS.DRAFT || status === REQUEST_STATUS.OBSERVED;
-  if (!isEditable) return false;
-  if (Boolean(currentUserId) && request.requester_id === currentUserId) return true;
-  if (roleCode === ROLE_CODE.ADMIN_SISTEMA) return true;
-  if (roleCode === ROLE_CODE.GIOF_GESTOR || roleCode === ROLE_CODE.GIOF_MANAGER) {
-    return status === REQUEST_STATUS.OBSERVED && request.request_type !== REQUEST_TYPE.ADVANCE_SETTLEMENT;
-  }
+  const isTerminal = status === REQUEST_STATUS.REJECTED
+    || status === REQUEST_STATUS.CLOSED
+    || status === REQUEST_STATUS.VOIDED;
+  if (isTerminal) return false;
+  const isOwnerEditable = (status === REQUEST_STATUS.DRAFT || status === REQUEST_STATUS.OBSERVED)
+    && Boolean(currentUserId)
+    && request.requester_id === currentUserId;
+  if (isOwnerEditable) return true;
+  if (
+    roleCode === ROLE_CODE.ADMIN_SISTEMA
+    || roleCode === ROLE_CODE.AUDITOR_DIRECCION
+  ) return true;
+  if (isGiofOperationalRole(roleCode)) return Boolean(request.giof_work?.canEdit);
   return false;
 }
 

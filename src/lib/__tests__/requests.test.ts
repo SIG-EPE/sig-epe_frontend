@@ -64,6 +64,7 @@ import {
   getRexanOutcomeLabel,
   getPaymentRequestRenditionStatus,
   getRenditionDueLabel,
+  isRenditionDueSoon,
   getRenditionNextStepGuidance,
   getRenditionStatusLabel,
   getRenditionSummaryCount,
@@ -77,15 +78,18 @@ import {
   isBudgetPreviewBlocking,
   isRequestStateConflict,
   parseRequestListSort,
+  parseRequestReviewUrl,
   parseRequestReviewQueue,
   parseRequestStatusFilter,
   parseRenditionSortDirection,
   parseRenditionSortField,
   parseRenditionStatusFilter,
   REQUEST_EDIT_STEP,
+  serializeRequestReviewUrl,
+  updateRequestReviewUrl,
 } from "@/lib/requests";
 import { ROLE_CODE } from "@/lib/constants";
-import { ACCOUNT_TYPE, BANK_CODE, BENEFICIARY_DOCUMENT_TYPE, RENDITION_SORT_DIRECTION, RENDITION_SORT_FIELD, RENDITION_STATUS, REQUEST_CURRENCY, REQUEST_DOCUMENT_CATEGORY, REQUEST_DOCUMENT_STORAGE_PROVIDER, REQUEST_DOCUMENT_UPLOAD_STATUS, REQUEST_STATUS, REQUEST_TYPE, REXAN_OUTCOME, type PaymentRequest, type RenditionInboxCounts, type RenditionInboxRow, type RequestBudgetPreview, type RequestDocument, type RequestStatusHistoryItem } from "@/types/requests";
+import { ACCOUNT_TYPE, BANK_CODE, BENEFICIARY_DOCUMENT_TYPE, RENDITION_DEADLINE_STATE, RENDITION_SORT_DIRECTION, RENDITION_SORT_FIELD, RENDITION_STATUS, REQUEST_CURRENCY, REQUEST_DOCUMENT_CATEGORY, REQUEST_DOCUMENT_STORAGE_PROVIDER, REQUEST_DOCUMENT_UPLOAD_STATUS, REQUEST_STATUS, REQUEST_TYPE, REXAN_OUTCOME, type PaymentRequest, type RenditionInboxCounts, type RenditionInboxRow, type RequestBudgetPreview, type RequestDocument, type RequestReviewResponse, type RequestStatusHistoryItem } from "@/types/requests";
 
 const REQUEST_STATE_CONFLICT_BODY = {
   statusCode: 409,
@@ -95,6 +99,67 @@ const REQUEST_STATE_CONFLICT_BODY = {
   timestamp: "2026-07-26T00:00:00.000Z",
   path: "/requests/request-1",
 };
+
+describe("request review URL contract", () => {
+  it("models exact decimal-string summaries from GET /requests/review", () => {
+    const response: RequestReviewResponse = {
+      requests: [],
+      total: 2,
+      page: 1,
+      limit: 20,
+      summary: {
+        count: 2,
+        requested_amount_by_currency: { PEN: "150.50", USD: "20.00" },
+        status_counts: { SUBMITTED: 2 },
+      },
+    };
+
+    expect(response.summary.requested_amount_by_currency.PEN).toBe("150.50");
+  });
+
+  it("round-trips the exact review allowlist in canonical order without sort", () => {
+    const parsed = parseRequestReviewUrl(new URLSearchParams(
+      "search=SOL-2026&org_unit_id=123e4567-e89b-12d3-a456-426614174000&amount_max=2500.50&amount_min=10.00&currency=PEN&assigned_to=2026-08-27T17%3A00&assigned_from=2026-08-27T08%3A00&submitted_to=2026-08-28T00%3A00&submitted_from=2026-08-27T00%3A00&status=SUBMITTED&request_type=ADVANCE&assignee_id=123e4567-e89b-12d3-a456-426614174001&work_scope=assignee&limit=50&page=3",
+    ));
+
+    expect(parsed.invalidKeys).toEqual([]);
+    expect(serializeRequestReviewUrl(parsed.filters).toString()).toBe(
+      "page=3&limit=50&work_scope=assignee&assignee_id=123e4567-e89b-12d3-a456-426614174001&request_type=ADVANCE&status=SUBMITTED&submitted_from=2026-08-27T00%3A00&submitted_to=2026-08-28T00%3A00&assigned_from=2026-08-27T08%3A00&assigned_to=2026-08-27T17%3A00&currency=PEN&amount_min=10.00&amount_max=2500.50&org_unit_id=123e4567-e89b-12d3-a456-426614174000&search=SOL-2026",
+    );
+    expect(serializeRequestReviewUrl(parsed.filters).has("sort")).toBe(false);
+    expect(serializeRequestReviewUrl(parsed.filters).has("direction")).toBe(false);
+  });
+
+  it("keeps valid state while rejecting duplicate, unknown, malformed, and cross-field-invalid values", () => {
+    const parsed = parseRequestReviewUrl(new URLSearchParams(
+      "page=2&page=3&limit=20&status=SUBMITTED&unknown=x&sort=NEWEST_FIRST&submitted_from=2026-08-27T00%3A00&submitted_to=2026-08-27T00%3A00&assigned_from=2026-02-30T08%3A00&assigned_to=2026-03-01T08%3A00&amount_min=20.00&amount_max=10.00&assignee_id=123e4567-e89b-12d3-a456-426614174001&work_scope=mine",
+    ));
+
+    expect(parsed.filters).toEqual({ page: 1, limit: 20, status: REQUEST_STATUS.SUBMITTED, work_scope: "mine" });
+    expect(parsed.invalidKeys).toEqual(expect.arrayContaining([
+      "page",
+      "submitted_from",
+      "submitted_to",
+      "assigned_from",
+      "assigned_to",
+      "amount_min",
+      "amount_max",
+      "assignee_id",
+    ]));
+    expect(parsed.unknownKeys).toEqual(["unknown", "sort"]);
+  });
+
+  it("omits defaults and resets page when a filter changes", () => {
+    expect(serializeRequestReviewUrl({ page: 1, limit: 20 }).toString()).toBe("");
+
+    const updated = updateRequestReviewUrl(
+      new URLSearchParams("scope=review&page=4&limit=20&status=SUBMITTED&sort=OLDEST_FIRST"),
+      { status: REQUEST_STATUS.OBSERVED },
+    );
+
+    expect(updated.toString()).toBe("scope=review&status=OBSERVED");
+  });
+});
 
 describe("isRequestStateConflict", () => {
   it("detecta solo ApiRequestError 409 con el código estable", () => {
@@ -279,6 +344,24 @@ describe("requests helpers", () => {
     expect(getApiErrorMessages(error)).toEqual(["Campo requerido", "Monto inválido"]);
   });
 
+  it("traduce duplicados, permisos y conflictos de pago sin exponer códigos internos", () => {
+    expect(getApiErrorMessages(new ApiRequestError(409, {
+      statusCode: 409,
+      code: "PAYMENT_ALREADY_EXISTS",
+      message: "PAYMENT_ALREADY_EXISTS",
+      error: "Conflict",
+      timestamp: "2026-08-21T00:00:00.000Z",
+      path: "/requests/request-1/payments",
+    }))).toEqual(["Esta solicitud ya tiene un pago registrado. Actualiza la cola para ver su estado."]);
+    expect(getApiErrorMessages(new ApiRequestError(403, {
+      statusCode: 403,
+      message: "FORBIDDEN",
+      error: "Forbidden",
+      timestamp: "2026-08-21T00:00:00.000Z",
+      path: "/requests/request-1/payments",
+    }))).toEqual(["No tienes permiso para realizar esta acción o tu asignación ya no está vigente."]);
+  });
+
   it("habilita inicio de rendición solo para anticipos pagados y usuarios autorizados", () => {
     const paidAdvance = makeRequest({ status: REQUEST_STATUS.PAID, requester_id: "user-1" });
     const paidReimbursement = makeRequest({ request_type: REQUEST_TYPE.REIMBURSEMENT, status: REQUEST_STATUS.PAID });
@@ -442,9 +525,9 @@ describe("requests helpers", () => {
       expect(parseRenditionSortDirection("desc")).toBe(RENDITION_SORT_DIRECTION.DESC);
       expect(parseRenditionSortDirection(null)).toBe(RENDITION_SORT_DIRECTION.DESC);
       expect(getRenditionStatusLabel(RENDITION_STATUS.IN_REVIEW)).toBe("En revisión");
-      expect(getRenditionDueLabel(overdue, new Date("2026-05-15T00:00:00.000Z"))).toBe("2 días vencida");
+      expect(getRenditionDueLabel(overdue)).toBe("Vencida hace 2 días");
       expect(getRenditionSummaryCount({ key: "due-soon", label: "Próximas a vencer", description: "" }, counts, [pendingDueSoon, overdue])).toBe(1);
-      expect(getRenditionDueLabel(pendingDueSoon, new Date("2026-05-15T00:00:00.000Z"))).toBe("5 días restantes");
+      expect(getRenditionDueLabel(pendingDueSoon)).toBe("5 días para vencer");
       expect(getPaymentRequestRenditionStatus(paidAdvance)).toBe(RENDITION_STATUS.PENDING);
       expect(getPaymentRequestRenditionStatus(makeRequest({ status: REQUEST_STATUS.PAID, advanceSettlements: [observedSettlement] }))).toBe(RENDITION_STATUS.OBSERVED);
       expect(getPaymentRequestRenditionStatus(makeRequest({ status: REQUEST_STATUS.PAID, scheduled_rendition_at: "2026-05-20", advanceSettlements: [rejectedSettlement] }))).toBe(RENDITION_STATUS.PENDING);
@@ -459,7 +542,81 @@ describe("requests helpers", () => {
     expect(formatRequestDateTime("2026-06-01T05:00:00.000Z")).toContain("1 jun");
 
     const pendingDueToday = makeRenditionRow({ scheduled_rendition_at: "2026-05-31", days_until_due: 0, days_remaining: 0 });
-    expect(getRenditionDueLabel(pendingDueToday, new Date("2026-06-01T04:59:59.000Z"))).toBe("Vence hoy");
+    expect(getRenditionDueLabel(pendingDueToday)).toBe("Vence hoy");
+  });
+
+  it("formatea los seis estados canónicos sin convertir una fecha concreta en ausencia de plazo", () => {
+    const cases = [
+      [RENDITION_DEADLINE_STATE.NONE, null, null, "Sin fecha límite"],
+      [RENDITION_DEADLINE_STATE.DUE_TODAY, "2026-05-15", 0, "Vence hoy"],
+      [RENDITION_DEADLINE_STATE.OPEN, "2026-05-20", 5, "5 días para vencer"],
+      [RENDITION_DEADLINE_STATE.OVERDUE, "2026-05-13", -2, "Vencida hace 2 días"],
+      [RENDITION_DEADLINE_STATE.PRESENTED, "2026-05-10", null, "Presentada"],
+      [RENDITION_DEADLINE_STATE.COMPLETED, "2026-05-10", null, "Rendida"],
+    ] as const;
+
+    for (const [deadlineState, deadlineDate, days, expected] of cases) {
+      expect(getRenditionDueLabel(makeRenditionRow({
+        deadline_date: deadlineDate,
+        deadline_state: deadlineState,
+        calendar_days_to_deadline: days,
+      }))).toBe(expected);
+    }
+
+    expect(getRenditionDueLabel(makeRenditionRow({
+      deadline_date: "2026-05-20",
+      deadline_state: RENDITION_DEADLINE_STATE.OPEN,
+      calendar_days_to_deadline: 5,
+      days_remaining: -99,
+    }))).toBe("5 días para vencer");
+  });
+
+  it("mantiene fallback temporal para payloads antiguos y todos los lifecycle existentes", () => {
+    const lifecycleCases = [
+      [REQUEST_STATUS.DRAFT, 5, "5 días para vencer"],
+      [REQUEST_STATUS.SUBMITTED, null, "Presentada"],
+      [REQUEST_STATUS.IN_VALIDATION, null, "Presentada"],
+      [REQUEST_STATUS.OBSERVED, 0, "Vence hoy"],
+      [REQUEST_STATUS.REJECTED, -2, "Vencida hace 2 días"],
+      [REQUEST_STATUS.VOIDED, 5, "5 días para vencer"],
+      [REQUEST_STATUS.APPROVED, null, "Rendida"],
+      [REQUEST_STATUS.PAID, null, "Rendida"],
+      [REQUEST_STATUS.CLOSED, null, "Rendida"],
+    ] as const;
+
+    for (const [settlementStatus, daysRemaining, expected] of lifecycleCases) {
+      const oldPayload = makeRenditionRow({
+        settlement_status: settlementStatus,
+        days_remaining: daysRemaining,
+        days_until_due: null,
+        days_overdue: null,
+      });
+      expect(getRenditionDueLabel(oldPayload)).toBe(expected);
+      expect(getRenditionDueLabel(oldPayload)).not.toBe("Sin fecha límite");
+    }
+
+    expect(getRenditionDueLabel(makeRenditionRow({
+      scheduled_rendition_at: "2026-05-20",
+      days_remaining: null,
+      days_until_due: null,
+      days_overdue: null,
+    }))).not.toBe("Sin fecha límite");
+  });
+
+  it("aplica al card due-soon solo OPEN entre 1 y 15 y separa DUE_TODAY", () => {
+    const row = (deadlineState: typeof RENDITION_DEADLINE_STATE[keyof typeof RENDITION_DEADLINE_STATE], days: number | null) => makeRenditionRow({
+      deadline_date: "2026-05-20",
+      deadline_state: deadlineState,
+      calendar_days_to_deadline: days,
+    });
+
+    expect(isRenditionDueSoon(row(RENDITION_DEADLINE_STATE.DUE_TODAY, 0))).toBe(false);
+    expect(isRenditionDueSoon(row(RENDITION_DEADLINE_STATE.OPEN, 1))).toBe(true);
+    expect(isRenditionDueSoon(row(RENDITION_DEADLINE_STATE.OPEN, 15))).toBe(true);
+    expect(isRenditionDueSoon(row(RENDITION_DEADLINE_STATE.OPEN, 16))).toBe(false);
+    expect(isRenditionDueSoon(row(RENDITION_DEADLINE_STATE.OVERDUE, -1))).toBe(false);
+    expect(isRenditionDueSoon(row(RENDITION_DEADLINE_STATE.PRESENTED, null))).toBe(false);
+    expect(isRenditionDueSoon(row(RENDITION_DEADLINE_STATE.COMPLETED, null))).toBe(false);
   });
 
   it("aplica mensaje de bloqueo de nuevo anticipo sin bloquear corrección REXAN", () => {
@@ -697,7 +854,7 @@ describe("requests helpers", () => {
     ]));
   });
 
-  it("impide entrar a revisión cuando faltan documentos requeridos", () => {
+  it("impide entrar a revisión cuando falta el PxQ autoritativo", () => {
     const checklist = getRequiredDocumentChecklist(REQUEST_TYPE.REIMBURSEMENT, []);
     const result = getRequestReviewNavigationIssues(makeRequest({
       request_type: REQUEST_TYPE.REIMBURSEMENT,
@@ -714,15 +871,12 @@ describe("requests helpers", () => {
 
     expect(result.canEnterReview).toBe(false);
     expect(result.dataIssues).toEqual([]);
-    expect(result.documentMessages).toEqual([
-      "Falta adjuntar informe de rendición Excel.",
-      "Falta adjuntar comprobante.",
-    ]);
+    expect(result.documentMessages).toEqual(["Falta adjuntar Excel PxQ."]);
   });
 
   it("permite entrar a revisión cuando datos y documentos están completos", () => {
     const checklist = getRequiredDocumentChecklist(REQUEST_TYPE.SUPPLIER_PAYMENT, [
-      makeDocument({ document_category: REQUEST_DOCUMENT_CATEGORY.RECEIPT }),
+      makeDocument({ document_category: REQUEST_DOCUMENT_CATEGORY.PXQ }),
     ]);
     const result = getRequestReviewNavigationIssues(makeRequest({
       request_type: REQUEST_TYPE.SUPPLIER_PAYMENT,
@@ -929,6 +1083,13 @@ describe("requests helpers", () => {
     const advanceMissing = getRequiredDocumentChecklist(REQUEST_TYPE.ADVANCE, []);
     expect(advanceMissing.isComplete).toBe(false);
     expect(advanceMissing.missingMessages).toEqual(["Falta adjuntar Excel PxQ."]);
+    expect(advanceMissing.items).toEqual([
+      expect.objectContaining({
+        category: REQUEST_DOCUMENT_CATEGORY.PXQ,
+        required: true,
+        satisfied: false,
+      }),
+    ]);
 
     const advanceComplete = getRequiredDocumentChecklist(REQUEST_TYPE.ADVANCE, [
       makeDocument({
@@ -941,13 +1102,14 @@ describe("requests helpers", () => {
     expect(advanceComplete.isComplete).toBe(true);
 
     const reimbursement = getRequiredDocumentChecklist(REQUEST_TYPE.REIMBURSEMENT, [
+      makeDocument({ document_category: REQUEST_DOCUMENT_CATEGORY.PXQ }),
       makeDocument({ document_category: REQUEST_DOCUMENT_CATEGORY.RECEIPT }),
     ]);
-    expect(reimbursement.missingMessages).toEqual(["Falta adjuntar informe de rendición Excel."]);
+    expect(reimbursement.missingMessages).toEqual([]);
 
     const supplier = getRequiredDocumentChecklist(REQUEST_TYPE.SUPPLIER_PAYMENT, []);
-    expect(supplier.missingMessages).toEqual(["Falta adjuntar comprobante factura/RH."]);
-    expect(supplier.conditionalNotes.length).toBeGreaterThan(0);
+    expect(supplier.missingMessages).toEqual(["Falta adjuntar Excel PxQ."]);
+    expect(supplier.conditionalNotes).toEqual([]);
 
     const rexanMissing = getRequiredDocumentChecklist(REQUEST_TYPE.ADVANCE_SETTLEMENT, []);
     expect(rexanMissing.items).toEqual([]);
@@ -976,12 +1138,15 @@ describe("requests helpers", () => {
 
     expect(canManageRequestDocuments(ROLE_CODE.SOLICITANTE_EPE, REQUEST_STATUS.DRAFT, draft, "user-1")).toBe(true);
     expect(canManageRequestDocuments(ROLE_CODE.SOLICITANTE_EPE, REQUEST_STATUS.DRAFT, draft, "other-user")).toBe(false);
-    expect(canManageRequestDocuments(ROLE_CODE.AUDITOR_DIRECCION, REQUEST_STATUS.DRAFT, draft, "user-1")).toBe(true);
-    expect(canManageRequestDocuments(ROLE_CODE.GIOF_GESTOR, REQUEST_STATUS.OBSERVED, observed, "giof-1")).toBe(true);
+    expect(canManageRequestDocuments(ROLE_CODE.AUDITOR_DIRECCION, REQUEST_STATUS.DRAFT, draft, "auditor-1")).toBe(true);
+    expect(canManageRequestDocuments(ROLE_CODE.GIOF_GESTOR, REQUEST_STATUS.OBSERVED, { ...observed, giof_work: { canEdit: true } } as PaymentRequest, "giof-1")).toBe(true);
     expect(canManageRequestDocuments(ROLE_CODE.GIOF_GESTOR, REQUEST_STATUS.OBSERVED, observedRexan, "giof-1")).toBe(false);
     expect(canManageRequestDocuments(ROLE_CODE.SOLICITANTE_EPE, REQUEST_STATUS.OBSERVED, observedRexan, "user-1")).toBe(true);
     expect(canManageRequestDocuments(ROLE_CODE.ADMIN_SISTEMA, REQUEST_STATUS.DRAFT, draft, "admin-1")).toBe(true);
-    expect(canManageRequestDocuments(ROLE_CODE.ADMIN_SISTEMA, REQUEST_STATUS.SUBMITTED, submitted, "admin-1")).toBe(false);
+    expect(canManageRequestDocuments(ROLE_CODE.ADMIN_SISTEMA, REQUEST_STATUS.SUBMITTED, submitted, "admin-1")).toBe(true);
+    expect(canManageRequestDocuments(ROLE_CODE.GIOF_MANAGER, REQUEST_STATUS.PAID, draft, "manager-1")).toBe(false);
+    expect(canManageRequestDocuments(ROLE_CODE.GIOF_MANAGER, REQUEST_STATUS.PAID, { ...draft, giof_work: { canEdit: true } } as PaymentRequest, "manager-1")).toBe(true);
+    expect(canManageRequestDocuments(ROLE_CODE.AUDITOR_DIRECCION, REQUEST_STATUS.REJECTED, draft, "auditor-1")).toBe(false);
     expect(getRequestDocumentPermissionMessage(ROLE_CODE.SOLICITANTE_EPE, REQUEST_STATUS.SUBMITTED, submitted, "user-1")).toContain("borrador u observación");
     expect(getRequestDocumentPermissionMessage(ROLE_CODE.SOLICITANTE_EPE, REQUEST_STATUS.DRAFT, draft, "other-user")).toContain("solicitante titular");
   });
@@ -1012,6 +1177,13 @@ describe("requests helpers", () => {
       REQUEST_STATUS.APPROVED,
       REQUEST_STATUS.REJECTED,
     ]);
+    expect(REQUEST_STATUS_SUMMARY_CARDS.map((card) => card.label)).toEqual([
+      "Borrador",
+      "Enviadas a revisión",
+      "Observadas",
+      "Aprobadas · pendientes de pago",
+      "Rechazadas",
+    ]);
     expect(REQUEST_LIST_SORT_OPTIONS.map((option) => option.label)).toEqual([
       "Prioridad de revisión",
       "Más antiguas primero",
@@ -1019,10 +1191,10 @@ describe("requests helpers", () => {
     ]);
     expect(REQUEST_STATUS_FILTER_OPTIONS.map((option) => [option.value, option.label])).toEqual([
       [REQUEST_STATUS.DRAFT, "Borrador"],
-      [REQUEST_STATUS.SUBMITTED, "En revisión"],
+      [REQUEST_STATUS.SUBMITTED, "Enviada a revisión"],
       [REQUEST_STATUS.OBSERVED, "Observada"],
       [REQUEST_STATUS.IN_VALIDATION, "En validación"],
-      [REQUEST_STATUS.APPROVED, "En gestión de pago"],
+      [REQUEST_STATUS.APPROVED, "Aprobada · pendiente de pago"],
       [REQUEST_STATUS.PAID, "Pagada"],
       [REQUEST_STATUS.REJECTED, "Rechazada"],
     ]);
@@ -1083,9 +1255,9 @@ describe("requests helpers", () => {
 
     expect(steps.map((step) => step.label)).toEqual([
       "Borrador",
-      "En revisión",
+      "Enviada a revisión",
       "Observada",
-      "En gestión de pago",
+      "Aprobada · pendiente de pago",
       "Pagada",
     ]);
     expect(steps.find((step) => step.status === REQUEST_STATUS.OBSERVED)?.state).toBe("current");
@@ -1122,9 +1294,9 @@ describe("requests helpers", () => {
     ]);
   });
 
-  it("usa copys de estado orientados a proceso para no confundir aprobación con cierre", () => {
-    expect(getRequestStatusLabel(REQUEST_STATUS.SUBMITTED)).toBe("En revisión");
-    expect(getRequestStatusLabel(REQUEST_STATUS.APPROVED, makeRequest({ status: REQUEST_STATUS.APPROVED }))).toBe("En gestión de pago");
+  it("usa el vocabulario de detalle para no confundir revisión, aprobación y pago", () => {
+    expect(getRequestStatusLabel(REQUEST_STATUS.SUBMITTED)).toBe("Enviada a revisión");
+    expect(getRequestStatusLabel(REQUEST_STATUS.APPROVED, makeRequest({ status: REQUEST_STATUS.APPROVED }))).toBe("Aprobada · pendiente de pago");
     expect(getRequestStatusLabel(REQUEST_STATUS.PAID)).toBe("Pagada");
     expect(getRequestStatusLabel(REQUEST_STATUS.CLOSED)).toBe("Cerrada");
   });
@@ -1154,7 +1326,7 @@ describe("requests helpers", () => {
 
     expect(getRequestStatusLabel(REQUEST_STATUS.APPROVED, exactSettlement)).toBe("Rendición aprobada");
     expect(getRequestStatusLabel(REQUEST_STATUS.APPROVED, returnSettlement)).toBe("Rendición aprobada");
-    expect(getRequestStatusLabel(REQUEST_STATUS.APPROVED, excessSettlement)).toBe("En gestión de pago");
+    expect(getRequestStatusLabel(REQUEST_STATUS.APPROVED, excessSettlement)).toBe("Rendición aprobada");
 
     const exactSteps = getRequestStatusStepperItems(REQUEST_STATUS.APPROVED, [], {}, exactSettlement);
     const returnSteps = getRequestStatusStepperItems(REQUEST_STATUS.APPROVED, [], {}, returnSettlement);
@@ -1179,7 +1351,7 @@ describe("requests helpers", () => {
       REQUEST_STATUS.APPROVED,
       REQUEST_STATUS.PAID,
     ]);
-    expect(excessApprovedSteps.find((step) => step.status === REQUEST_STATUS.APPROVED)?.label).toBe("En gestión de pago");
+    expect(excessApprovedSteps.find((step) => step.status === REQUEST_STATUS.APPROVED)?.label).toBe("Rendición aprobada");
     expect(excessApprovedSteps.find((step) => step.status === REQUEST_STATUS.PAID)?.state).toBe("pending");
     expect(excessPaidSteps.find((step) => step.status === REQUEST_STATUS.PAID)?.state).toBe("current");
     expect(normalApprovedSteps.map((step) => step.status)).toContain(REQUEST_STATUS.PAID);
@@ -1233,8 +1405,8 @@ describe("requests helpers", () => {
   });
 
   it("obtiene etiqueta y contraparte para cola de pagos", () => {
-    expect(getPaymentQueueStatusLabel(REQUEST_STATUS.APPROVED)).toBe("En gestión de pago");
-    expect(getPaymentQueueStatusLabel(REQUEST_STATUS.PAID)).toBe("Pagado");
+    expect(getPaymentQueueStatusLabel(REQUEST_STATUS.APPROVED)).toBe("Pendiente de pago");
+    expect(getPaymentQueueStatusLabel(REQUEST_STATUS.PAID)).toBe("Pago registrado");
     expect(getPaymentRequestParty(makeRequest({ registered_party_name: "Proveedor SAC" }))).toBe("Proveedor SAC");
     expect(getRegisteredPartyDisplay(makeRequest({ supplier_name: "Proveedor Base SAC" }))).toBe("Proveedor Base SAC");
     expect(getRegisteredPartyDisplay(makeRequest({ beneficiary_name: "Beneficiario" }))).toBe("Beneficiario");
@@ -1270,7 +1442,7 @@ describe("requests helpers", () => {
     expect(sanitizeBudgetMessage("budget_ceiling no configurado")).toBe("límite presupuestal no configurado");
   });
 
-  it("habilita acciones de revisión solo para roles operativos GIOF en solicitudes enviadas", () => {
+  it("habilita revisión a gestor y manager en solicitudes enviadas", () => {
     expect(canReviewRequest(ROLE_CODE.GIOF_GESTOR, REQUEST_STATUS.SUBMITTED)).toBe(true);
     expect(canReviewRequest(ROLE_CODE.GIOF_MANAGER, REQUEST_STATUS.SUBMITTED)).toBe(true);
     expect(canReviewRequest(ROLE_CODE.ADMIN_SISTEMA, REQUEST_STATUS.SUBMITTED)).toBe(false);

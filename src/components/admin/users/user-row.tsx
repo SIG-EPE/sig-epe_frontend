@@ -8,6 +8,7 @@ import {
   type UserDto,
 } from "@/hooks/use-users";
 import { ROLE_CODE } from "@/lib/constants";
+import { ROLE_CAPABILITY, hasRoleCapability } from "@/lib/role-capabilities";
 import { useAuthStore } from "@/stores/auth-store";
 import { GiofMembershipModal } from "@/components/admin/users/giof-membership-modal";
 import { Badge } from "@/components/ui/badge";
@@ -71,15 +72,16 @@ export function UserRow({ user, onRefetch, onEdit, onDeactivate, onReactivate }:
 
   // Determinar si el usuario actual puede gestionar al usuario de esta fila
   const targetRoleCode = currentRole?.code ?? "";
-  const canManageThis = myRoleCode ? canManage(myRoleCode, targetRoleCode) : false;
+  const canManageThis = hasRoleCapability(myRoleCode, ROLE_CAPABILITY.USER_ADMIN)
+    && canManage(myRoleCode, targetRoleCode);
   const isOtherUser = Boolean(currentUser?.id && currentUser.id !== user.id);
   const canGrantGiof =
-    myRoleCode === ROLE_CODE.GIOF_GESTOR &&
+    hasRoleCapability(myRoleCode, ROLE_CAPABILITY.GIOF_MEMBERSHIP_MANAGE) &&
     isOtherUser &&
     user.isActive &&
     targetRoleCode === ROLE_CODE.SOLICITANTE_EPE;
   const canRevokeGiof =
-    myRoleCode === ROLE_CODE.GIOF_GESTOR &&
+    hasRoleCapability(myRoleCode, ROLE_CAPABILITY.GIOF_MEMBERSHIP_MANAGE) &&
     isOtherUser &&
     targetRoleCode === ROLE_CODE.GIOF_GESTOR;
 

@@ -35,7 +35,9 @@ const mocks = vi.hoisted(() => ({
   refetchDocuments: vi.fn(),
   refetchReceipts: vi.fn(),
   refetchReport: vi.fn(),
+  refetchReportOrThrow: vi.fn(),
   report: null as RequestRenditionReport | null,
+  reportError: null as Error | null,
   toastError: vi.fn(),
   toastSuccess: vi.fn(),
   toastWarning: vi.fn(),
@@ -56,7 +58,7 @@ vi.mock("sonner", () => ({
 vi.mock("@/hooks/use-requests", () => ({
   useRequestDocuments: () => ({ documents: mocks.documents, error: null, isLoading: false, isRefreshing: false, refetch: mocks.refetchDocuments }),
   useRequestReceiptReviews: () => ({ receipts: mocks.receipts, error: null, isLoading: false, isRefreshing: false, refetch: mocks.refetchReceipts }),
-  useRequestRenditionReport: () => ({ report: mocks.report, error: null, isLoading: false, isRefreshing: false, refetch: mocks.refetchReport, upsertReportRow: vi.fn() }),
+  useRequestRenditionReport: () => ({ report: mocks.report, error: mocks.reportError, isLoading: false, isRefreshing: false, refetch: mocks.refetchReport, refetchOrThrow: mocks.refetchReportOrThrow, upsertReportRow: vi.fn() }),
   useRequestRenditionReportActions: () => ({
     addReceiptRow: mocks.addReceiptRow,
     createManualRow: mocks.createManualRow,
@@ -273,6 +275,16 @@ function makeReport(overrides: Partial<RequestRenditionReport> = {}): RequestRen
   };
 }
 
+function createDeferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((promiseResolve, promiseReject) => {
+    resolve = promiseResolve;
+    reject = promiseReject;
+  });
+  return { promise, reject, resolve };
+}
+
 describe("StructuredRenditionReportCard", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -281,6 +293,7 @@ describe("StructuredRenditionReportCard", () => {
     mocks.documents = [makeDocument()];
     mocks.receipts = [];
     mocks.report = makeReport();
+    mocks.reportError = null;
   });
 
   it("renderiza filas, totales y cobertura por línea POA", () => {
@@ -791,6 +804,22 @@ describe("StructuredRenditionReportCard", () => {
     await waitFor(() => expect(mocks.generateReport).toHaveBeenCalledWith("request-1"));
   });
 
+  it("ante timeout de generación informa resultado incierto, refresca y no reintenta automáticamente", async () => {
+    mocks.report = makeReport({ status: REQUEST_RENDITION_REPORT_STATUS.DRAFT });
+    const timeoutError = Object.assign(new Error("timeout"), { name: "RenditionActionTimeoutError" });
+    mocks.generateReport.mockRejectedValueOnce(timeoutError);
+    const user = userEvent.setup();
+    render(<StructuredRenditionReportCard request={makeRequest()} />);
+
+    await user.click(screen.getByRole("button", { name: "Generar informe" }));
+    await user.click(screen.getByRole("button", { name: "Sí, generar informe" }));
+
+    await waitFor(() => expect(mocks.refetchReportOrThrow).toHaveBeenCalledTimes(1));
+    expect(mocks.generateReport).toHaveBeenCalledTimes(1);
+    expect(mocks.toastError).toHaveBeenCalledWith(expect.stringMatching(/resultado es incierto/i));
+    expect(mocks.refetchReportOrThrow.mock.invocationCallOrder[0]).toBeLessThan(mocks.toastError.mock.invocationCallOrder[0]);
+  });
+
   it("permite agregar al informe solo comprobantes confirmados", async () => {
     mocks.report = makeReport({ status: REQUEST_RENDITION_REPORT_STATUS.DRAFT, rows: [], totals: { total_amount: 0, by_allocation: [], missing_allocations: ["allocation-1"] }, allocation_coverage: [] });
     mocks.receipts = [makeReceiptReview({
@@ -814,6 +843,104 @@ describe("StructuredRenditionReportCard", () => {
     await waitFor(() => {
       expect(mocks.addReceiptRow).toHaveBeenCalledWith("request-1", "receipt-1", "allocation-1");
     });
+  });
+
+  it("ante timeout al agregar refresca antes de recomendar retry y no duplica la acción", async () => {
+    mocks.report = makeReport({ status: REQUEST_RENDITION_REPORT_STATUS.DRAFT, rows: [], totals: { total_amount: 0, by_allocation: [], missing_allocations: ["allocation-1"] }, allocation_coverage: [] });
+    mocks.receipts = [makeReceiptReview({ receipt: { ...makeReceiptReview().receipt, confirmed_by_id: "user-1", confirmed_at: "2026-06-02T12:00:00.000Z" } })];
+    mocks.addReceiptRow.mockRejectedValueOnce(Object.assign(new Error("timeout"), { name: "RenditionActionTimeoutError" }));
+    const user = userEvent.setup();
+    render(<StructuredRenditionReportCard request={makeRequest()} />);
+
+    await user.click(screen.getByRole("button", { name: "Agregar al informe" }));
+
+    await waitFor(() => expect(mocks.refetchReportOrThrow).toHaveBeenCalledTimes(1));
+    expect(mocks.addReceiptRow).toHaveBeenCalledTimes(1);
+    expect(mocks.toastError).toHaveBeenCalledWith(expect.stringMatching(/resultado es incierto/i));
+    expect(mocks.refetchReportOrThrow.mock.invocationCallOrder[0]).toBeLessThan(mocks.toastError.mock.invocationCallOrder[0]);
+    expect(mocks.generateReport).not.toHaveBeenCalled();
+  });
+
+  it("mantiene add individual, add seleccionados y generate bloqueados mientras el refetch está pendiente", async () => {
+    const refetch = createDeferred<void>();
+    mocks.documents = [makeDocument({ id: "document-2", request_allocation_id: "allocation-1" })];
+    mocks.report = makeReport({ status: REQUEST_RENDITION_REPORT_STATUS.DRAFT });
+    mocks.receipts = [makeReceiptReview({ receipt: { ...makeReceiptReview().receipt, id: "receipt-2", document_id: "document-2", confirmed_by_id: "user-1", confirmed_at: "2026-06-02T12:00:00.000Z" } })];
+    mocks.addReceiptRow.mockRejectedValueOnce(Object.assign(new Error("timeout"), { name: "RenditionActionTimeoutError" }));
+    mocks.refetchReportOrThrow.mockReturnValueOnce(refetch.promise);
+    const user = userEvent.setup();
+    render(<StructuredRenditionReportCard request={makeRequest()} />);
+
+    await user.click(screen.getByLabelText(/Seleccionar Proveedor SAC/i));
+    await user.click(screen.getByRole("button", { name: "Agregar al informe" }));
+    await waitFor(() => expect(mocks.refetchReportOrThrow).toHaveBeenCalledTimes(1));
+
+    expect(screen.getByRole("button", { name: "Agregar al informe" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Agregar seleccionados al informe" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Generar informe" })).toBeDisabled();
+
+    refetch.resolve();
+  });
+
+  it("mantiene el bloqueo desconocido si falla el refetch y ofrece solo Reintentar sincronización", async () => {
+    mocks.documents = [makeDocument({ id: "document-2", request_allocation_id: "allocation-1" })];
+    mocks.report = makeReport({ status: REQUEST_RENDITION_REPORT_STATUS.DRAFT });
+    mocks.receipts = [makeReceiptReview({ receipt: { ...makeReceiptReview().receipt, id: "receipt-2", document_id: "document-2", confirmed_by_id: "user-1", confirmed_at: "2026-06-02T12:00:00.000Z" } })];
+    mocks.addReceiptRow.mockRejectedValueOnce(Object.assign(new Error("timeout"), { name: "RenditionActionTimeoutError" }));
+    const synchronizationError = new Error("refetch failed");
+    mocks.refetchReportOrThrow.mockImplementationOnce(async () => {
+      mocks.reportError = synchronizationError;
+      throw synchronizationError;
+    });
+    const user = userEvent.setup();
+    render(<StructuredRenditionReportCard request={makeRequest()} />);
+
+    await user.click(screen.getByLabelText(/Seleccionar Proveedor SAC/i));
+    await user.click(screen.getByRole("button", { name: "Agregar al informe" }));
+
+    const retrySync = await screen.findByRole("button", { name: "Reintentar sincronización" });
+    expect(retrySync).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Agregar al informe" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Agregar seleccionados al informe" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Generar informe" })).toBeDisabled();
+    expect(mocks.addReceiptRow).toHaveBeenCalledTimes(1);
+    expect(mocks.toastError).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText("No se pudo cargar el informe. Intenta nuevamente.")).not.toBeInTheDocument();
+  });
+
+  it("libera el bloqueo solo cuando Reintentar sincronización completa el refetch", async () => {
+    mocks.documents = [makeDocument({ id: "document-2", request_allocation_id: "allocation-1" })];
+    mocks.report = makeReport({ status: REQUEST_RENDITION_REPORT_STATUS.DRAFT });
+    mocks.receipts = [makeReceiptReview({ receipt: { ...makeReceiptReview().receipt, id: "receipt-2", document_id: "document-2", confirmed_by_id: "user-1", confirmed_at: "2026-06-02T12:00:00.000Z" } })];
+    mocks.addReceiptRow.mockRejectedValueOnce(Object.assign(new Error("timeout"), { name: "RenditionActionTimeoutError" }));
+    mocks.refetchReportOrThrow.mockRejectedValueOnce(new Error("refetch failed")).mockResolvedValueOnce(undefined);
+    const user = userEvent.setup();
+    render(<StructuredRenditionReportCard request={makeRequest()} />);
+
+    await user.click(screen.getByLabelText(/Seleccionar Proveedor SAC/i));
+    await user.click(screen.getByRole("button", { name: "Agregar al informe" }));
+    await user.click(await screen.findByRole("button", { name: "Reintentar sincronización" }));
+
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Reintentar sincronización" })).not.toBeInTheDocument());
+    expect(mocks.refetchReportOrThrow).toHaveBeenCalledTimes(2);
+    expect(mocks.addReceiptRow).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("button", { name: "Agregar al informe" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Agregar seleccionados al informe" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Generar informe" })).toBeEnabled();
+  });
+
+  it("muestra el error definitivo de agregar después del refetch autoritativo", async () => {
+    mocks.report = makeReport({ status: REQUEST_RENDITION_REPORT_STATUS.DRAFT, rows: [], totals: { total_amount: 0, by_allocation: [], missing_allocations: ["allocation-1"] }, allocation_coverage: [] });
+    mocks.receipts = [makeReceiptReview({ receipt: { ...makeReceiptReview().receipt, confirmed_by_id: "user-1", confirmed_at: "2026-06-02T12:00:00.000Z" } })];
+    mocks.addReceiptRow.mockRejectedValueOnce(new Error("Comprobante rechazado"));
+    const user = userEvent.setup();
+    render(<StructuredRenditionReportCard request={makeRequest()} />);
+
+    await user.click(screen.getByRole("button", { name: "Agregar al informe" }));
+
+    await waitFor(() => expect(mocks.refetchReport).toHaveBeenCalledTimes(1));
+    expect(mocks.toastError).toHaveBeenCalledWith("Comprobante rechazado");
+    expect(mocks.addReceiptRow).toHaveBeenCalledTimes(1);
   });
 
   it("selecciona todos los comprobantes agregables y los agrega secuencialmente", async () => {
@@ -850,7 +977,7 @@ describe("StructuredRenditionReportCard", () => {
       ["request-1", "receipt-2", "allocation-2"],
     ]);
     expect(await screen.findByText("2 de 2 comprobantes agregados")).toBeInTheDocument();
-    expect(mocks.refetchReport).toHaveBeenCalledTimes(1);
+    expect(mocks.refetchReportOrThrow).toHaveBeenCalledTimes(1);
   });
 
   it("mantiene resultados por comprobante cuando el agregado masivo tiene fallas parciales", async () => {
@@ -876,7 +1003,7 @@ describe("StructuredRenditionReportCard", () => {
     expect(await screen.findByText("1 de 2 comprobantes agregados · 1 con error")).toBeInTheDocument();
     expect(screen.getByText("Backend temporalmente no disponible")).toBeInTheDocument();
     expect(mocks.toastError).toHaveBeenCalledWith("1 de 2 comprobantes no se pudieron agregar. Revisa los resultados y reintenta.");
-    expect(mocks.refetchReport).toHaveBeenCalledTimes(1);
+    expect(mocks.refetchReportOrThrow).toHaveBeenCalledTimes(1);
   });
 
   it("preselecciona la línea del comprobante confirmado y muestra la fila después de refrescar", async () => {

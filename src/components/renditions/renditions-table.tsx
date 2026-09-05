@@ -10,6 +10,7 @@ import {
   formatRequestCurrency,
   formatRequestDate,
   getRenditionAction,
+  getRenditionDeadlineDate,
   getRenditionDueLabel,
   getRenditionStatusLabel,
   getRenditionStatusTone,
@@ -19,6 +20,8 @@ import {
 } from "@/lib/requests";
 import type { RenditionInboxRow } from "@/types/requests";
 import { GiofWorkStatus } from "@/components/giof-work/giof-work-controls";
+import { canOperateAssignedGiofWork } from "@/lib/role-capabilities";
+import { REQUEST_STATUS_SURFACE, formatRequestStatus } from "@/lib/request-status-vocabulary";
 
 interface RenditionsTableProps {
   renditions: RenditionInboxRow[];
@@ -50,26 +53,38 @@ export function RenditionsTable({ renditions, isLoading, currentUserId, isGiofMa
           <TableHead>A nombre de</TableHead>
           <TableHead className="text-right">Monto</TableHead>
           <TableHead>Fecha de pago</TableHead>
-          <TableHead>Fecha límite</TableHead>
-          <TableHead>Días</TableHead>
+          <TableHead>Plazo</TableHead>
           <TableHead>Estado</TableHead>
           <TableHead>Asignación</TableHead>
           <TableHead className="text-right">REXAN / acción</TableHead>
         </TableRow>
       </TableHeader>
       <TableBody>
-        {isGiofManager && onToggleAllAssignments && assignableRenditions.length > 0 && <TableRow><TableCell colSpan={10}><label className="flex items-center gap-2 text-sm text-muted-foreground"><input type="checkbox" className="size-4" checked={assignableRenditions.every((row) => selectedAssignmentIds.includes(row.giof_work?.requestId as string))} onChange={(event) => onToggleAllAssignments(event.target.checked)} />Seleccionar rendiciones asignables visibles</label></TableCell></TableRow>}
+        {isGiofManager && onToggleAllAssignments && assignableRenditions.length > 0 && <TableRow><TableCell colSpan={9}><label className="flex items-center gap-2 text-sm text-muted-foreground"><input type="checkbox" className="size-4" checked={assignableRenditions.every((row) => selectedAssignmentIds.includes(row.giof_work?.requestId as string))} onChange={(event) => onToggleAllAssignments(event.target.checked)} />Seleccionar esta página</label></TableCell></TableRow>}
         {renditions.map((row) => {
           const action = getRenditionAction(row);
+          const primaryRequestCode = row.settlement_request_code ?? row.request_code ?? row.advance_id;
+          const originRequestCode = row.advance_request_code ?? row.request_code;
           const registeredParty = getRegisteredPartyDisplay(row);
           const registeredPartyDocument = getRegisteredPartyDocumentLabel(row);
           const registeredBy = getRegisteredByDisplayName(row);
+          const canOperate = canOperateAssignedGiofWork(row.giof_work, currentUserId);
+          const deadlineDate = getRenditionDeadlineDate(row);
+          const deadlineLabel = getRenditionDueLabel(row);
+          const formattedDeadlineDate = deadlineDate ? formatRequestDate(deadlineDate) : null;
+          const derivedStatusLabel = getRenditionStatusLabel(row.rendition_status);
+          const renditionLifecycleLabel = row.settlement_status
+            ? formatRequestStatus(row.settlement_status, { surface: REQUEST_STATUS_SURFACE.RENDITION_LIFECYCLE })
+            : null;
           return (
             <TableRow key={row.advance_id} data-testid="rendition-row">
-              {isGiofManager && <TableCell>{row.giof_work?.requestId ? <input type="checkbox" className="size-4" checked={selectedAssignmentIds.includes(row.giof_work.requestId)} disabled={row.giof_work.canAssign !== true} title={row.giof_work.canAssign === true ? "Seleccionar para asignar" : "Rendición finalizada: no tiene seguimiento REXAN pendiente"} onChange={(event) => onToggleAssignment?.(row.giof_work?.requestId as string, event.target.checked)} aria-label={row.giof_work.canAssign === true ? `Seleccionar ${row.request_code ?? "rendición"} para asignar` : `${row.request_code ?? "Rendición"}: rendición finalizada`} /> : null}</TableCell>}
+              {isGiofManager && <TableCell>{row.giof_work?.requestId ? <input type="checkbox" className="size-4" checked={selectedAssignmentIds.includes(row.giof_work.requestId)} disabled={row.giof_work.canAssign !== true} title={row.giof_work.canAssign === true ? "Seleccionar para asignar" : "Rendición finalizada: no tiene seguimiento REXAN pendiente"} onChange={(event) => onToggleAssignment?.(row.giof_work?.requestId as string, event.target.checked)} aria-label={row.giof_work.canAssign === true ? `Seleccionar ${primaryRequestCode} para asignar` : `${primaryRequestCode}: rendición finalizada`} /> : null}</TableCell>}
               <TableCell className="font-medium whitespace-nowrap">
                 <div className="flex flex-col">
-                  <span>{row.request_code ?? row.advance_id}</span>
+                  <span>{primaryRequestCode}</span>
+                  {originRequestCode && originRequestCode !== primaryRequestCode && (
+                    <span className="text-xs text-muted-foreground">Origen / anticipo: {originRequestCode}</span>
+                  )}
                   <span className="text-xs text-muted-foreground">{row.concept}</span>
                 </div>
               </TableCell>
@@ -82,11 +97,25 @@ export function RenditionsTable({ renditions, isLoading, currentUserId, isGiofMa
               </TableCell>
               <TableCell className="text-right font-medium">{formatRequestCurrency(row.amount_paid ?? row.requested_amount)}</TableCell>
               <TableCell className="whitespace-nowrap">{formatRequestDate(row.paid_at)}</TableCell>
-              <TableCell className="whitespace-nowrap">{formatRequestDate(row.scheduled_rendition_at)}</TableCell>
-              <TableCell className="whitespace-nowrap">{getRenditionDueLabel(row)}</TableCell>
+              <TableCell
+                className="whitespace-nowrap"
+                aria-label={formattedDeadlineDate
+                  ? `Plazo: ${formattedDeadlineDate}. ${deadlineLabel}.`
+                  : `Plazo: ${deadlineLabel}.`}
+              >
+                <div className="flex flex-col gap-1">
+                  {formattedDeadlineDate && <span>{formattedDeadlineDate}</span>}
+                  <span className={formattedDeadlineDate ? "text-xs text-muted-foreground" : undefined}>{deadlineLabel}</span>
+                </div>
+              </TableCell>
               <TableCell>
                 <div className="flex flex-col gap-1">
-                  <Badge variant={getRenditionStatusTone(row.rendition_status)}>{getRenditionStatusLabel(row.rendition_status)}</Badge>
+                  <Badge variant={getRenditionStatusTone(row.rendition_status)} aria-label={`Estado derivado de rendición: ${derivedStatusLabel}`}>{derivedStatusLabel}</Badge>
+                  {renditionLifecycleLabel ? (
+                    <Badge variant="outline" aria-label={`Lifecycle de rendición: ${renditionLifecycleLabel}`}>
+                      {renditionLifecycleLabel}
+                    </Badge>
+                  ) : null}
                   {row.settlement_request_id && (
                     <span className="text-xs text-muted-foreground">
                       {row.settlement_documents_complete ? "Sustentos completos" : "Faltan documentos"}
@@ -97,7 +126,7 @@ export function RenditionsTable({ renditions, isLoading, currentUserId, isGiofMa
               <TableCell>{row.giof_work?.requestId && <GiofWorkStatus requestId={row.giof_work.requestId} work={row.giof_work} currentUserId={currentUserId} isManager={isGiofManager} />}</TableCell>
               <TableCell className="text-right">
                 <Button asChild size="sm" variant={row.settlement_request_id ? "default" : "outline"}>
-                  <Link href={row.settlement_request_id && row.giof_work?.canAcquire ? `${action.href}?mode=process` : action.href}>{row.settlement_request_id && row.giof_work && !row.giof_work.canAcquire ? "Ver" : action.label}</Link>
+                  <Link href={row.settlement_request_id && canOperate ? `${action.href}?mode=process` : action.href}>{row.settlement_request_id && row.giof_work && !canOperate ? "Ver" : action.label}</Link>
                 </Button>
               </TableCell>
             </TableRow>

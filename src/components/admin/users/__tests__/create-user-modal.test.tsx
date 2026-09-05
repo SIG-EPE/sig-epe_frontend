@@ -45,14 +45,22 @@ describe("CreateUserModal role options", () => {
     expect(screen.getByRole("option", { name: /admin sistema/i })).toBeInTheDocument();
   });
 
-  it("limita a GIOF_GESTOR a roles de menor nivel", () => {
-    actorRoleCode = ROLE_CODE.GIOF_GESTOR;
+  it("limita a GIOF_MANAGER a roles de menor nivel", () => {
+    actorRoleCode = ROLE_CODE.GIOF_MANAGER;
     renderModal();
 
     expect(screen.getByRole("option", { name: /solicitante epe/i })).toBeInTheDocument();
     expect(screen.getByRole("option", { name: /auditor dirección/i })).toBeInTheDocument();
-    expect(screen.queryByRole("option", { name: /giof gestor/i })).not.toBeInTheDocument();
+    expect(screen.getByRole("option", { name: /giof gestor/i })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: /giof manager/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("option", { name: /admin sistema/i })).not.toBeInTheDocument();
+  });
+
+  it("no ofrece creación administrativa a GIOF_GESTOR", () => {
+    actorRoleCode = ROLE_CODE.GIOF_GESTOR;
+    renderModal();
+
+    expect(screen.queryAllByRole("option")).toHaveLength(0);
   });
 
   it("sanitiza DNI pegado y limita a 8 dígitos", async () => {

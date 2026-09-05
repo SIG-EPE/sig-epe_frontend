@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, useContext, useEffect, useId, useState, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { X } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -10,6 +10,7 @@ interface DialogContextValue {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   titleId?: string;
+  descriptionId?: string;
 }
 
 const DialogContext = createContext<DialogContextValue | null>(null);
@@ -66,19 +67,60 @@ export function DialogContent({ children, className, closeDisabled = false }: Di
   const { open, onOpenChange } = useDialogContext();
   const [mounted, setMounted] = useState(false);
   const titleId = useId();
+  const descriptionId = useId();
+  const contentRef = useRef<HTMLDivElement | null>(null);
+  const onOpenChangeRef = useRef(onOpenChange);
+  onOpenChangeRef.current = onOpenChange;
 
   useEffect(() => {
     setMounted(true);
   }, []);
 
   useEffect(() => {
-    if (!open) return;
-    const handleEscape = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onOpenChange(false);
+    if (!open || !mounted) return;
+    const previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const content = contentRef.current;
+    const focusableSelector = [
+      "button:not([disabled])",
+      "[href]",
+      "input:not([disabled])",
+      "select:not([disabled])",
+      "textarea:not([disabled])",
+      "[tabindex]:not([tabindex='-1'])",
+    ].join(",");
+    const focusables = () => Array.from(content?.querySelectorAll<HTMLElement>(focusableSelector) ?? []);
+    const initialTarget = content?.querySelector<HTMLElement>("[data-autofocus]") ?? focusables()[0] ?? content;
+    initialTarget?.focus();
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        if (!closeDisabled) onOpenChangeRef.current(false);
+        event.preventDefault();
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const targets = focusables();
+      if (targets.length === 0) {
+        event.preventDefault();
+        content?.focus();
+        return;
+      }
+      const first = targets[0];
+      const last = targets[targets.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
     };
-    document.addEventListener("keydown", handleEscape);
-    return () => document.removeEventListener("keydown", handleEscape);
-  }, [open, onOpenChange]);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("keydown", handleKeyDown);
+      previouslyFocused?.focus();
+    };
+  }, [closeDisabled, mounted, open]);
 
   if (!open || !mounted) return null;
 
@@ -87,22 +129,27 @@ export function DialogContent({ children, className, closeDisabled = false }: Di
       {/* Backdrop */}
       <div
         className="fixed inset-0 min-h-dvh w-screen bg-black/50"
-        onClick={() => onOpenChange(false)}
+        onClick={() => {
+          if (!closeDisabled) onOpenChange(false);
+        }}
         aria-hidden="true"
       />
       {/* Content */}
       <div
+        ref={contentRef}
         className={cn(
           "relative z-10 w-full max-w-lg",
           "rounded-lg border bg-background p-6 shadow-lg",
-          "flex max-h-[calc(100dvh-2rem)] flex-col gap-4 overflow-y-auto",
+          "flex max-h-[calc(100dvh-2rem)] flex-col gap-4 overflow-hidden",
           className,
         )}
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
+        aria-describedby={descriptionId}
+        tabIndex={-1}
       >
-        <DialogContext.Provider value={{ open, onOpenChange, titleId }}>
+        <DialogContext.Provider value={{ open, onOpenChange, titleId, descriptionId }}>
           {children}
           <button
             type="button"
@@ -136,7 +183,7 @@ interface DialogHeaderProps {
 
 export function DialogHeader({ children, className }: DialogHeaderProps) {
   return (
-    <div className={cn("flex flex-col gap-1.5 text-center sm:text-left", className)}>
+    <div className={cn("shrink-0 flex flex-col gap-1.5 text-center sm:text-left", className)}>
       {children}
     </div>
   );
@@ -171,10 +218,24 @@ interface DialogDescriptionProps {
 }
 
 export function DialogDescription({ children, className }: DialogDescriptionProps) {
+  const { descriptionId } = useDialogContext();
   return (
-    <p className={cn("text-sm text-muted-foreground", className)}>
+    <p id={descriptionId} className={cn("text-sm text-muted-foreground", className)}>
       {children}
     </p>
+  );
+}
+
+interface DialogBodyProps {
+  children: ReactNode;
+  className?: string;
+}
+
+export function DialogBody({ children, className }: DialogBodyProps) {
+  return (
+    <div className={cn("min-h-0 flex-1 overflow-y-auto", className)}>
+      {children}
+    </div>
   );
 }
 
@@ -191,7 +252,7 @@ export function DialogFooter({ children, className }: DialogFooterProps) {
   return (
     <div
       className={cn(
-        "flex flex-col-reverse sm:flex-row sm:justify-end sm:gap-2",
+        "shrink-0 flex flex-col-reverse sm:flex-row sm:justify-end sm:gap-2",
         className,
       )}
     >

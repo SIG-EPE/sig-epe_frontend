@@ -2,6 +2,8 @@
 // Dashboard formatters — strict null vs zero semantics
 // -------------------------------------------------------
 
+import { REQUEST_STATUS_SURFACE, formatRequestStatus } from "@/lib/request-status-vocabulary";
+
 const PEN_FORMAT = new Intl.NumberFormat("es-PE", {
   style: "currency",
   currency: "PEN",
@@ -69,18 +71,6 @@ const BUDGET_DASHBOARD_ALERT_LABELS: Record<string, string> = {
   UNDER_EXECUTION: "Subejecución presupuestal",
 };
 
-const REQUEST_STATUS_DASHBOARD_LABELS: Record<string, string> = {
-  DRAFT: "Borrador",
-  SUBMITTED: "En revisión",
-  OBSERVED: "Observada",
-  IN_VALIDATION: "En validación",
-  APPROVED: "Aprobada, pendiente de pago",
-  REJECTED: "Rechazada",
-  PAID: "Pagada",
-  CLOSED: "Cerrada",
-  VOIDED: "Anulada",
-};
-
 const GIOF_EXCEPTION_LABELS: Record<string, string> = {
   overdue_renditions: "Rendiciones vencidas",
   unassigned_requests: "Solicitudes sin gestor asignado",
@@ -89,7 +79,7 @@ const GIOF_EXCEPTION_LABELS: Record<string, string> = {
 };
 
 export function getRequestStatusDashboardLabel(status: string): string {
-  return REQUEST_STATUS_DASHBOARD_LABELS[status] ?? status;
+  return formatRequestStatus(status, { surface: REQUEST_STATUS_SURFACE.DASHBOARD });
 }
 
 export function getGiofExceptionLabel(type: string): string {

@@ -30,6 +30,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { useAuthStore } from "@/stores/auth-store";
+import { ROLE_CAPABILITY, hasRoleCapability } from "@/lib/role-capabilities";
 
 // -------------------------------------------------------
 // ConfirmarActivacion — sub-componente con hooks
@@ -156,7 +157,7 @@ export function FiscalYearTable({ onRefetch }: FiscalYearTableProps) {
   const user = useAuthStore((s) => s.user);
 
   const roleCode = user?.role?.code;
-  const canManage = roleCode === "GIOF_GESTOR" || roleCode === "ADMIN_SISTEMA";
+  const canManage = hasRoleCapability(roleCode, ROLE_CAPABILITY.BUDGET_ADMIN);
 
   // Estado para dialogos de confirmacion
   const [confirmActivacion, setConfirmActivacion] = useState<FiscalYear | null>(null);

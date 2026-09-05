@@ -48,7 +48,6 @@ import {
   REQUEST_TYPE,
   type PaymentRequest,
   type RequestAllocation,
-  type RequestAllocationRequiredDocumentItem,
   type RequestDocument,
   type RequestDocumentCategory,
   type RequiredDocumentChecklistItem,
@@ -109,13 +108,6 @@ interface UploadScopeOptions {
   scope_type?: typeof REQUEST_DOCUMENT_SCOPE_TYPE.ALLOCATION;
   request_allocation_id?: string;
 }
-
-const EMPTY_CHECKLIST = {
-  items: [],
-  conditionalNotes: [],
-  missingMessages: [],
-  isComplete: true,
-};
 
 function ChecklistAttachButton({ item, disabled, isUploading, onAttach }: ChecklistAttachButtonProps) {
   const inputRef = useRef<HTMLInputElement>(null);
@@ -222,50 +214,8 @@ function getAllocationSummary(allocation: RequestAllocation): string {
   return parts.join(" · ");
 }
 
-function normalizeBackendChecklistItem(item: RequestAllocationRequiredDocumentItem, index: number): RequiredDocumentChecklistItem | null {
-  const category = (item.category ?? item.document_type) as RequestDocumentCategory | undefined;
-  if (!category || !Object.values(REQUEST_DOCUMENT_CATEGORY).includes(category)) return null;
-
-  return {
-    key: item.key ?? `${category}-${index}`,
-    category,
-    label: item.label ?? getRequestDocumentCategoryLabel(category),
-    description: item.description ?? (category === REQUEST_DOCUMENT_CATEGORY.PXQ ? "Adjunta la plantilla PxQ correspondiente a esta línea POA." : "Adjunta el documento requerido para esta línea POA."),
-    required: item.required ?? true,
-    satisfied: item.satisfied ?? false,
-    acceptedFormatsLabel: item.acceptedFormatsLabel ?? item.accepted_formats_label ?? getRequestDocumentAcceptedFormatsLabel(category),
-    missingMessage: item.missingMessage ?? item.missing_message ?? `Falta adjuntar ${getRequestDocumentCategoryLabel(category)} para esta línea POA.`,
-  };
-}
-
-function mergeBackendChecklistWithLocalDocuments(items: RequiredDocumentChecklistItem[], allocationDocuments: RequestDocument[]): RequiredDocumentChecklistItem[] {
-  const localChecklist = getRequiredDocumentChecklist(REQUEST_TYPE.ADVANCE, allocationDocuments);
-
-  return items.map((item) => {
-    const localItem = localChecklist.items.find((candidate) => candidate.category === item.category);
-
-    return {
-      ...item,
-      satisfied: item.satisfied || Boolean(localItem?.satisfied),
-    };
-  });
-}
-
-function getAllocationChecklist(allocation: RequestAllocation, allocationDocuments: RequestDocument[]) {
-  const backendItems = allocation.document_checklist?.required_documents ?? allocation.document_checklist?.items ?? [];
-  if (backendItems.length > 0) {
-    const normalizedItems = backendItems
-      .map(normalizeBackendChecklistItem)
-      .filter((item): item is RequiredDocumentChecklistItem => item !== null);
-    const items = mergeBackendChecklistWithLocalDocuments(normalizedItems, allocationDocuments);
-    const missingMessages = items.filter((item) => item.required && !item.satisfied).map((item) => item.missingMessage);
-    const backendIsComplete = allocation.document_checklist?.complete ?? allocation.document_checklist?.is_complete ?? allocation.document_checklist?.isComplete;
-    const isComplete = missingMessages.length === 0 || Boolean(backendIsComplete);
-
-    return { items, conditionalNotes: [], missingMessages, isComplete };
-  }
-
-  return getRequiredDocumentChecklist(REQUEST_TYPE.ADVANCE, allocationDocuments);
+function getAllocationChecklist(): ReturnType<typeof getRequiredDocumentChecklist> {
+  return { items: [], conditionalNotes: [], missingMessages: [], isComplete: true };
 }
 
 function getReceiptStatusLabel(receiptReview?: RequestReceiptReview): string {
@@ -416,9 +366,7 @@ export function RequestDocumentsCard({
     genericExcludedCategories.add(REQUEST_DOCUMENT_CATEGORY.RETURN_PROOF);
     genericExcludedCategories.add(REQUEST_DOCUMENT_CATEGORY.SETTLEMENT_REPORT);
   }
-  const baseChecklist = hasAllocationGroups && request.request_type === REQUEST_TYPE.ADVANCE
-    ? EMPTY_CHECKLIST
-    : getGeneralChecklist(request, requestLevelDocuments);
+  const baseChecklist = getGeneralChecklist(request, documents);
   const checklist = restrictGenericReturnProof
     ? {
       ...baseChecklist,
@@ -427,7 +375,7 @@ export function RequestDocumentsCard({
       isComplete: baseChecklist.items.some((item) => item.category === REQUEST_DOCUMENT_CATEGORY.RETURN_PROOF) ? baseChecklist.items.filter((item) => item.category !== REQUEST_DOCUMENT_CATEGORY.RETURN_PROOF).every((item) => !item.required || item.satisfied) : baseChecklist.isComplete,
     }
     : baseChecklist;
-  const optionalCategoryOptions = getGenericDocumentCategoryOptions(checklist.items, genericExcludedCategories).filter((option) => !hasAllocationGroups || option.value !== REQUEST_DOCUMENT_CATEGORY.PXQ);
+  const optionalCategoryOptions = getGenericDocumentCategoryOptions(checklist.items, genericExcludedCategories);
   const hasOptionalCategoryOptions = optionalCategoryOptions.length > 0;
   const acceptedFormatsLabel = category ? getRequestDocumentAcceptedFormatsLabel(category) : "selecciona una categoría";
   const uploadActionsDisabled = uploading || activeUploadAction !== null || uploadQueue.isRunning;
@@ -760,12 +708,12 @@ export function RequestDocumentsCard({
     return (
       <section className="space-y-3" data-testid="allocation-documents-groups">
         <div className="space-y-1">
-          <h3 className="text-sm font-semibold">Documentos por línea POA</h3>
-          <p className="text-xs text-muted-foreground">Cada línea POA debe completar su propio Excel PxQ. Un archivo de una línea no completa otra línea.</p>
+          <h3 className="text-sm font-semibold">Documentos asociados por línea POA</h3>
+          <p className="text-xs text-muted-foreground">Los documentos por línea son opcionales en esta etapa. Un único PXQ activo asociado a la solicitud, en cualquier línea o a nivel general, satisface el requisito.</p>
         </div>
         {allocationGroups.map((allocation, index) => {
           const allocationDocuments = getAllocationDocuments(allocation, documents);
-          const allocationChecklist = getAllocationChecklist(allocation, allocationDocuments);
+          const allocationChecklist = getAllocationChecklist();
           const allocationId = allocation.id;
 
           return (
@@ -780,22 +728,22 @@ export function RequestDocumentsCard({
               {!allocationId && canManageActions && (
                 <Alert>
                   <Info className="h-4 w-4" />
-                  <AlertDescription>Guarda el borrador y continúa para adjuntar el Excel PxQ de esta línea POA.</AlertDescription>
+                  <AlertDescription>Guarda el borrador para adjuntar documentos opcionales a esta línea POA.</AlertDescription>
                 </Alert>
               )}
               <div className="space-y-3">
                 {allocationChecklist.items.map((item) => (
                   <div key={item.key} className="flex flex-col gap-3 rounded-md border p-3 sm:flex-row sm:items-center sm:justify-between">
                     <div className="flex gap-3">
-                      {item.satisfied ? <CheckCircle2 className="mt-0.5 size-5 text-emerald-600" /> : <XCircle className="mt-0.5 size-5 text-destructive" />}
+                      {item.satisfied ? <CheckCircle2 className="mt-0.5 size-5 text-emerald-600" /> : item.required ? <XCircle className="mt-0.5 size-5 text-destructive" /> : <Info className="mt-0.5 size-5 text-muted-foreground" />}
                       <div className="space-y-1">
                         <div className="flex flex-wrap items-center gap-2">
                           <p className="text-sm font-medium">{item.label}</p>
-                          <Badge variant={item.satisfied ? "secondary" : "destructive"}>{item.satisfied ? "Adjunto" : "Pendiente"}</Badge>
+                          <Badge variant={item.satisfied ? "secondary" : item.required ? "destructive" : "outline"}>{item.satisfied ? "Adjunto" : item.required ? "Pendiente" : "Opcional"}</Badge>
                         </div>
                         <p className="text-xs text-muted-foreground">{item.description}</p>
                         <p className="text-xs text-muted-foreground">Formatos esperados: {item.acceptedFormatsLabel}.</p>
-                        {!item.satisfied && <p className="text-xs text-muted-foreground">{item.missingMessage}</p>}
+                        {item.required && !item.satisfied && <p className="text-xs text-muted-foreground">{item.missingMessage}</p>}
                       </div>
                     </div>
                     {!item.satisfied && canManageActions && allocationId && (
@@ -933,7 +881,7 @@ export function RequestDocumentsCard({
           <Alert>
             <Info className="h-4 w-4" />
             <AlertDescription>
-              Esta solicitud tiene líneas POA. Adjunta el Excel PxQ dentro del bloque correspondiente y usa documentos generales solo para sustentos de la solicitud.
+              Esta solicitud requiere un único PXQ activo. Puede estar asociado a cualquier línea POA o a la solicitud general; no se requiere uno por línea.
             </AlertDescription>
           </Alert>
         )}
@@ -948,26 +896,22 @@ export function RequestDocumentsCard({
                 ? "Estado de los documentos requeridos para esta solicitud. Esta vista no permite adjuntar ni eliminar archivos."
                 : isAdvanceSettlement && hasAllocationGroups
                   ? "No hay un comprobante general obligatorio. Los comprobantes se gestionan por línea POA y luego se agregan al Informe de rendición."
-                : hasAllocationDocumentGroups
-                  ? "Completa aquí solo los documentos requeridos a nivel general. Los Excel PxQ se adjuntan en cada línea POA."
-                  : "Completa los documentos requeridos para continuar con el envío. La validación final se realizará al enviar la solicitud."}
+                : "Completa el único documento requerido para continuar. Los demás sustentos son opcionales en esta etapa."}
             </p>
           </div>
           <div className="mt-3 space-y-3">
             {checklist.items.length === 0 ? (
               <p className="text-sm text-muted-foreground">
-                {request.request_type === REQUEST_TYPE.ADVANCE && hasAllocationGroups
-                  ? "No se requieren documentos generales adicionales para este anticipo. El Excel PxQ se valida en cada línea POA."
-                  : "No hay documentos obligatorios generales configurados para este tipo de solicitud."}
+                No hay documentos obligatorios generales configurados para este tipo de solicitud.
               </p>
             ) : checklist.items.map((item) => (
               <div key={item.key} className="flex flex-col gap-3 rounded-md border p-3 sm:flex-row sm:items-center sm:justify-between">
                 <div className="flex gap-3">
-                  {item.satisfied ? <CheckCircle2 className="mt-0.5 size-5 text-emerald-600" /> : <XCircle className="mt-0.5 size-5 text-destructive" />}
+                  {item.satisfied ? <CheckCircle2 className="mt-0.5 size-5 text-emerald-600" /> : item.required ? <XCircle className="mt-0.5 size-5 text-destructive" /> : <Info className="mt-0.5 size-5 text-muted-foreground" />}
                   <div className="space-y-1">
                     <div className="flex flex-wrap items-center gap-2">
                       <p className="text-sm font-medium">{item.label}</p>
-                      <Badge variant={item.satisfied ? "secondary" : "destructive"}>{item.satisfied ? "Adjunto" : "Pendiente"}</Badge>
+                      <Badge variant={item.satisfied ? "secondary" : item.required ? "destructive" : "outline"}>{item.satisfied ? "Adjunto" : item.required ? "Pendiente" : "Opcional"}</Badge>
                     </div>
                     <p className="text-xs text-muted-foreground">{item.description}</p>
                     <p className="text-xs text-muted-foreground">Formatos esperados: {item.acceptedFormatsLabel}.</p>

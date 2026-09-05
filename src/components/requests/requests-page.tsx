@@ -5,12 +5,13 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { ChevronDown, ChevronUp, Plus, Search, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { QueueFilterReset } from "@/components/queue-filters/queue-filter-reset";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { CACHED_RESOURCE_CACHE_MODE } from "@/hooks/use-cached-resource";
 import { useDebouncedValue } from "@/hooks/use-debounced-value";
-import { useRequests } from "@/hooks/use-requests";
+import { useRequestReview, useRequests } from "@/hooks/use-requests";
 import { ApiRequestError } from "@/lib/api-client";
 import { ROLE_CODE, ROUTES } from "@/lib/constants";
 import {
@@ -23,7 +24,6 @@ import {
   getRequestReviewQueueCount,
   getRequestReviewQueueFilter,
   getRequestReviewQueueForStatus,
-  isRequestReviewRole,
   parseRequestListSort,
   parseRequestReviewQueue,
   parseRequestStatusFilter,
@@ -31,14 +31,16 @@ import {
   type RequestListSort,
   type RequestReviewQueue,
 } from "@/lib/requests";
+import { parseRequestReviewUrl, updateRequestReviewUrl } from "@/lib/queue-filters/review";
 import { cn } from "@/lib/utils";
 import { useAuthStore } from "@/stores/auth-store";
-import { DRIVE_SYNC_STATUS, REQUEST_LIST_DATE_FIELD, REQUEST_STATUS, REQUEST_TYPE, type DriveSyncStatus, type RequestListDateField, type RequestStatus, type RequestType } from "@/types/requests";
+import { DRIVE_SYNC_STATUS, REQUEST_LIST_DATE_FIELD, REQUEST_STATUS, REQUEST_TYPE, type DriveSyncStatus, type RequestListDateField, type RequestReviewFilters as ReviewFilters, type RequestStatus, type RequestType } from "@/types/requests";
 import { RequestListTable } from "./request-list-table";
-import { GiofBulkAssignmentBar, GiofWorkScopeFilter } from "@/components/giof-work/giof-work-controls";
-import { isGiofManagerRole, isGiofOperationalRole } from "@/lib/role-capabilities";
+import { GiofBulkAssignmentBar } from "@/components/giof-work/giof-work-controls";
+import { RequestReviewFilters } from "./request-review-filters";
+import { ROLE_CAPABILITY, hasRoleCapability, isGiofManagerRole, isGiofOperationalRole } from "@/lib/role-capabilities";
+import { REQUEST_STATUS_SURFACE } from "@/lib/request-status-vocabulary";
 import { GIOF_WORK_POOL, GIOF_WORK_SCOPE, type GiofWorkScope } from "@/types/giof-work";
-import { GIOF_HELP_CONTEXT } from "@/lib/giof-assignment-help";
 
 const ALL_STATUSES_FILTER = "ALL";
 const REQUEST_SEARCH_DEBOUNCE_MS = 500;
@@ -63,9 +65,10 @@ function getServerSearchValue(value: string): string | undefined {
   return trimmedValue.length >= REQUEST_SEARCH_MIN_LENGTH ? trimmedValue : undefined;
 }
 
-function getRequestsListErrorMessage(error: Error): string {
+function getRequestsListErrorMessage(error: Error, useSafeReviewMessage = false): string {
   if (error instanceof ApiRequestError && error.status === 429) return REQUESTS_RATE_LIMIT_MESSAGE;
   if (/throttlerexception|too many requests/i.test(error.message)) return REQUESTS_RATE_LIMIT_MESSAGE;
+  if (useSafeReviewMessage) return "No se pudieron cargar las solicitudes para revisión. Reintenta en unos segundos.";
   return error.message;
 }
 
@@ -142,11 +145,11 @@ export function RequestsPage() {
   const isGiofOperational = isGiofOperationalRole(roleCode);
   const isGiofManager = isGiofManagerRole(roleCode);
   const isRolePending = roleCode === undefined;
-  const canUseHistory = roleCode === ROLE_CODE.GIOF_GESTOR || roleCode === ROLE_CODE.GIOF_MANAGER || roleCode === ROLE_CODE.ADMIN_SISTEMA || roleCode === ROLE_CODE.AUDITOR_DIRECCION;
+  const canUseHistory = hasRoleCapability(roleCode, ROLE_CAPABILITY.REQUEST_HISTORY);
   const rawScope = searchParams.get("scope");
   const requestScope: RequestScope = rawScope === REQUEST_SCOPE.HISTORY && (canUseHistory || isRolePending)
     ? REQUEST_SCOPE.HISTORY
-    : rawScope === REQUEST_SCOPE.REVIEW && (isRequestReviewRole(roleCode) || isRolePending)
+    : rawScope === REQUEST_SCOPE.REVIEW && (isGiofOperational || isRolePending)
       ? REQUEST_SCOPE.REVIEW
       : REQUEST_SCOPE.MINE;
   const isReviewInbox = requestScope === "review";
@@ -155,14 +158,30 @@ export function RequestsPage() {
   const rawWorkScope = searchParams.get("work_scope");
   const workScope: GiofWorkScope = isGiofOperational && Object.values(GIOF_WORK_SCOPE).includes(rawWorkScope as GiofWorkScope)
     ? rawWorkScope as GiofWorkScope
-    : GIOF_WORK_SCOPE.MINE;
+    : isGiofManager
+      ? GIOF_WORK_SCOPE.ALL
+      : GIOF_WORK_SCOPE.MINE;
   const workAssigneeId = workScope === GIOF_WORK_SCOPE.ASSIGNEE ? searchParams.get("assignee_id") ?? undefined : undefined;
   const activeQueueFilter = activeQueue ? getRequestReviewQueueFilter(activeQueue) : undefined;
   const isUnsupportedQueue = Boolean(activeQueueFilter?.unsupportedReason);
   const defaultReviewStatuses = isReviewInbox && !status && !activeQueue && !isExplicitAllStatuses
     ? [...ACTIVE_REVIEW_STATUSES]
     : undefined;
-  const { requests, total, isLoading, isRefreshing, error, refetch } = useRequests({
+  const reviewUrlParams = new URLSearchParams(searchParams.toString());
+  reviewUrlParams.delete("scope");
+  const parsedReviewUrl = parseRequestReviewUrl(reviewUrlParams);
+  const hasUnsupportedReviewUrl = parsedReviewUrl.invalidKeys.length > 0
+    || parsedReviewUrl.unknownKeys.length > 0
+    || (roleCode === ROLE_CODE.GIOF_GESTOR && (
+      parsedReviewUrl.filters.work_scope !== undefined
+      && parsedReviewUrl.filters.work_scope !== GIOF_WORK_SCOPE.MINE
+    ));
+  const reviewFilters: ReviewFilters = {
+    ...parsedReviewUrl.filters,
+    work_scope: parsedReviewUrl.filters.work_scope
+      ?? (isGiofManager ? GIOF_WORK_SCOPE.ALL : GIOF_WORK_SCOPE.MINE),
+  };
+  const legacyResource = useRequests({
     page,
     limit,
     search: serverSearch,
@@ -183,6 +202,7 @@ export function RequestsPage() {
   }, {
     keepPreviousData: false,
     cacheMode: CACHED_RESOURCE_CACHE_MODE.NO_STORE,
+    enabled: !isReviewInbox,
   });
   const { requests: summaryRequests } = useRequests({
     page: 1,
@@ -194,10 +214,21 @@ export function RequestsPage() {
   }, {
     keepPreviousData: false,
     cacheMode: CACHED_RESOURCE_CACHE_MODE.NO_STORE,
+    enabled: !isReviewInbox,
   });
-  const sortedRequests = sortRequestsForList(requests, sort);
-  const displayedRequests = isUnsupportedQueue ? [] : sortedRequests;
-  const displayedTotal = isUnsupportedQueue ? 0 : total;
+  const reviewResource = useRequestReview(reviewFilters, {
+    keepPreviousData: false,
+    cacheMode: CACHED_RESOURCE_CACHE_MODE.NO_STORE,
+    enabled: isReviewInbox && isGiofOperational && !hasUnsupportedReviewUrl,
+  });
+  const requests = isReviewInbox && !isRolePending ? reviewResource.requests : isReviewInbox ? [] : legacyResource.requests;
+  const total = isReviewInbox && !isRolePending ? reviewResource.total : isReviewInbox ? 0 : legacyResource.total;
+  const isLoading = isReviewInbox ? isRolePending || reviewResource.isLoading : legacyResource.isLoading;
+  const isRefreshing = isReviewInbox ? reviewResource.isRefreshing : legacyResource.isRefreshing;
+  const error = isReviewInbox ? reviewResource.error : legacyResource.error;
+  const refetch = isReviewInbox ? reviewResource.refetch : legacyResource.refetch;
+  const displayedRequests = isReviewInbox ? requests : sortRequestsForList(requests, sort);
+  const displayedTotal = total;
 
   function replaceQuery(nextValues: Record<string, string | number | undefined>) {
     const nextParams = new URLSearchParams(searchParams.toString());
@@ -226,6 +257,10 @@ export function RequestsPage() {
     replaceQuery({ sort: value, page: 1 });
   }
 
+  function resetInvalidReviewFilters() {
+    router.replace(`${ROUTES.REQUESTS}?scope=review`);
+  }
+
   function setReviewQueueFilter(queue: RequestReviewQueue) {
     const filter = getRequestReviewQueueFilter(queue);
     setActiveQueue(queue);
@@ -245,9 +280,15 @@ export function RequestsPage() {
     replaceQuery({ scope, status: undefined, queue: undefined, page: 1 });
   }
 
-  function setWorkScopeFilter(nextScope: GiofWorkScope, assigneeId?: string) {
+  function updateReviewFilters(patch: Partial<ReviewFilters>) {
     setSelectedAssignmentIds([]);
-    replaceQuery({ work_scope: nextScope, assignee_id: nextScope === GIOF_WORK_SCOPE.ASSIGNEE ? assigneeId : undefined, page: 1 });
+    const nextParams = updateRequestReviewUrl(new URLSearchParams(searchParams.toString()), patch);
+    router.replace(`${ROUTES.REQUESTS}?${nextParams.toString()}`);
+  }
+
+  function clearReviewFilters() {
+    setSelectedAssignmentIds([]);
+    router.replace(`${ROUTES.REQUESTS}?scope=review`);
   }
 
   function toggleAssignment(requestId: string, checked: boolean) {
@@ -331,19 +372,19 @@ export function RequestsPage() {
             {isHistory ? "Consulta solicitudes históricas con filtros avanzados." : isReviewInbox ? "Abre una solicitud enviada para observar, aprobar o rechazar." : "Consulta y crea solicitudes de pago."}
           </p>
         </div>
-        <Button onClick={() => router.push(ROUTES.REQUESTS_NEW)} data-testid="new-request-button">
+        {requestScope === REQUEST_SCOPE.MINE && <Button onClick={() => router.push(ROUTES.REQUESTS_NEW)} data-testid="new-request-button">
           <Plus className="h-4 w-4" />
           Nueva solicitud
-        </Button>
+        </Button>}
       </div>
 
       <div className="flex flex-wrap gap-2" data-testid="requests-scope-tabs">
         <Button variant={requestScope === "mine" ? "default" : "outline"} onClick={() => setScopeFilter("mine")}>Mis solicitudes</Button>
-        {isRequestReviewRole(roleCode) && <Button variant={requestScope === "review" ? "default" : "outline"} onClick={() => setScopeFilter("review")}>Bandeja</Button>}
+        {isGiofOperational && <Button variant={requestScope === "review" ? "default" : "outline"} onClick={() => setScopeFilter("review")}>Bandeja</Button>}
         {canUseHistory && <Button variant={requestScope === "history" ? "default" : "outline"} onClick={() => setScopeFilter("history")}>Historial</Button>}
       </div>
 
-      <div className={cn("grid gap-3 sm:grid-cols-2", isGiofReviewInbox ? "lg:grid-cols-3" : "lg:grid-cols-5")} data-testid="requests-status-summary">
+      {requestScope !== REQUEST_SCOPE.MINE && !isReviewInbox && <div className={cn("grid gap-3 sm:grid-cols-2", isGiofReviewInbox ? "lg:grid-cols-3" : "lg:grid-cols-5")} data-testid="requests-status-summary">
         {isGiofReviewInbox ? REQUEST_REVIEW_QUEUE_CARDS.map((card) => {
           const isActive = activeQueue === card.value;
 
@@ -384,7 +425,14 @@ export function RequestsPage() {
             </button>
           );
         })}
-      </div>
+      </div>}
+
+      {isReviewInbox && hasUnsupportedReviewUrl && (
+        <QueueFilterReset
+          message="No se pudieron aplicar los filtros de la URL. Restablécelos y vuelve a intentarlo."
+          onReset={resetInvalidReviewFilters}
+        />
+      )}
 
       {activeQueueFilter?.unsupportedReason && (
         <p className="rounded-md border border-dashed p-3 text-sm text-muted-foreground" data-testid="requests-review-queue-note">
@@ -402,8 +450,7 @@ export function RequestsPage() {
               </CardDescription>
               {isReviewInbox && <p className="text-sm text-muted-foreground">Total: {displayedTotal}</p>}
             </div>
-              <div className="flex w-full flex-col gap-2 lg:max-w-3xl">
-              {isReviewInbox && isGiofOperational && <GiofWorkScopeFilter value={workScope} assigneeId={workAssigneeId} isManager={isGiofManager} onChange={setWorkScopeFilter} helpContext={GIOF_HELP_CONTEXT.REQUEST} />}
+              {!isReviewInbox && <div className="flex w-full flex-col gap-2 lg:max-w-3xl">
               <div className="relative">
                 <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                 <Input
@@ -415,7 +462,7 @@ export function RequestsPage() {
                 />
               </div>
               <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-end">
-                <Select
+                {requestScope !== REQUEST_SCOPE.MINE && <Select
                   value={isExplicitAllStatuses ? ALL_STATUSES_FILTER : (status ?? ALL_STATUSES_FILTER)}
                   onValueChange={(value) => setStatusFilter(value === ALL_STATUSES_FILTER ? undefined : (value as RequestStatus))}
                 >
@@ -428,8 +475,8 @@ export function RequestsPage() {
                       <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
                     ))}
                   </SelectContent>
-                </Select>
-                <Select
+                </Select>}
+                {!isReviewInbox && <Select
                   value={sort}
                   onValueChange={(value) => setSortOption(value as RequestListSort)}
                 >
@@ -441,7 +488,7 @@ export function RequestsPage() {
                       <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
                     ))}
                   </SelectContent>
-                </Select>
+                </Select>}
                 {isHistory && activeHistoryFiltersCount > 0 && (
                   <Button type="button" variant="ghost" size="sm" onClick={clearHistoryFilters} data-testid="requests-clear-history-filters">
                     <X className="h-4 w-4" />
@@ -449,8 +496,21 @@ export function RequestsPage() {
                   </Button>
                 )}
               </div>
-            </div>
+            </div>}
           </div>
+
+          {isReviewInbox && isGiofOperational && !hasUnsupportedReviewUrl && (
+            <RequestReviewFilters
+              filters={reviewFilters}
+              isManager={isGiofManager}
+              total={reviewResource.total}
+              summary={reviewResource.summary}
+              isLoading={reviewResource.isLoading}
+              isRefreshing={reviewResource.isRefreshing}
+              onChange={updateReviewFilters}
+              onClear={clearReviewFilters}
+            />
+          )}
 
           {isHistory && (
             <div className="space-y-4 rounded-xl border bg-muted/20 p-4" data-testid="requests-history-filters">
@@ -560,19 +620,19 @@ export function RequestsPage() {
           )}
         </CardHeader>
         <CardContent>
-          {isGiofManager && isReviewInbox && <GiofBulkAssignmentBar pool={GIOF_WORK_POOL.REQUEST} items={displayedRequests.filter((request) => selectedAssignmentIds.includes(request.id) && request.giof_work?.canAssign === true).map((request) => ({ requestId: request.id, label: request.request_code ?? "Solicitud", work: request.giof_work! }))} onClear={() => setSelectedAssignmentIds([])} onSuccess={() => refetch()} />}
+          {isGiofManager && isReviewInbox && !hasUnsupportedReviewUrl && <GiofBulkAssignmentBar pool={GIOF_WORK_POOL.REQUEST} items={displayedRequests.filter((request) => selectedAssignmentIds.includes(request.id) && request.giof_work?.canAssign === true).map((request) => ({ requestId: request.id, label: request.request_code ?? "Solicitud", work: request.giof_work! }))} onClear={() => setSelectedAssignmentIds([])} onSuccess={() => refetch()} />}
           {isRefreshing && !error && (
             <p className="mb-3 rounded-md border bg-muted/40 px-3 py-2 text-sm text-muted-foreground" role="status">
               Actualizando solicitudes...
             </p>
           )}
-          {error ? (
-            <div className="space-y-3 rounded-md border border-destructive/40 p-4">
-              <p className="text-sm text-destructive">{getRequestsListErrorMessage(error)}</p>
+          {hasUnsupportedReviewUrl ? null : error ? (
+            <div className="space-y-3 rounded-md border border-destructive/40 p-4" role="alert">
+              <p className="text-sm text-destructive">{getRequestsListErrorMessage(error, isReviewInbox)}</p>
               <Button size="sm" variant="outline" onClick={() => void refetch()}>Reintentar</Button>
             </div>
           ) : (
-            <RequestListTable requests={displayedRequests} isLoading={isUnsupportedQueue ? false : isLoading} roleCode={roleCode} currentUserId={user?.id} showResponsible={isReviewInbox || isHistory} isGiofManager={isGiofManager && isReviewInbox} selectedAssignmentIds={selectedAssignmentIds} onToggleAssignment={toggleAssignment} onToggleAllAssignments={(checked) => setSelectedAssignmentIds(checked ? displayedRequests.filter((request) => request.giof_work?.canAssign === true).map((request) => request.id).slice(0, 50) : [])} />
+            <RequestListTable requests={displayedRequests} isLoading={isLoading} roleCode={roleCode} currentUserId={user?.id} showResponsible={isReviewInbox || isHistory} showAssignment={isReviewInbox} isGiofManager={isGiofManager && isReviewInbox} selectedAssignmentIds={selectedAssignmentIds} onToggleAssignment={toggleAssignment} onToggleAllAssignments={(checked) => setSelectedAssignmentIds(checked ? displayedRequests.filter((request) => request.giof_work?.canAssign === true).map((request) => request.id).slice(0, 50) : [])} statusSurface={isReviewInbox ? REQUEST_STATUS_SURFACE.REVIEW : REQUEST_STATUS_SURFACE.DETAIL} />
           )}
         </CardContent>
       </Card>

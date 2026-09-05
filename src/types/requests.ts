@@ -25,7 +25,8 @@ export const REQUEST_STATUS = {
   VOIDED: "VOIDED",
 } as const;
 
-export type RequestStatus = (typeof REQUEST_STATUS)[keyof typeof REQUEST_STATUS];
+export type RequestStatus =
+  (typeof REQUEST_STATUS)[keyof typeof REQUEST_STATUS];
 
 export const DRIVE_SYNC_STATUS = {
   NOT_CONFIGURED: "NOT_CONFIGURED",
@@ -35,7 +36,8 @@ export const DRIVE_SYNC_STATUS = {
   BLOCKED: "BLOCKED",
 } as const;
 
-export type DriveSyncStatus = (typeof DRIVE_SYNC_STATUS)[keyof typeof DRIVE_SYNC_STATUS];
+export type DriveSyncStatus =
+  (typeof DRIVE_SYNC_STATUS)[keyof typeof DRIVE_SYNC_STATUS];
 
 export const REQUEST_LIST_DATE_FIELD = {
   CREATED_AT: "created_at",
@@ -45,7 +47,8 @@ export const REQUEST_LIST_DATE_FIELD = {
   UPDATED_AT: "updated_at",
 } as const;
 
-export type RequestListDateField = (typeof REQUEST_LIST_DATE_FIELD)[keyof typeof REQUEST_LIST_DATE_FIELD];
+export type RequestListDateField =
+  (typeof REQUEST_LIST_DATE_FIELD)[keyof typeof REQUEST_LIST_DATE_FIELD];
 
 export const RENDITION_STATUS = {
   PENDING: "PENDING",
@@ -55,13 +58,46 @@ export const RENDITION_STATUS = {
   SETTLED: "SETTLED",
 } as const;
 
-export type RenditionStatus = (typeof RENDITION_STATUS)[keyof typeof RENDITION_STATUS];
+export type RenditionStatus =
+  (typeof RENDITION_STATUS)[keyof typeof RENDITION_STATUS];
+
+export const RENDITION_DEADLINE_STATE = {
+  NONE: "NONE",
+  OPEN: "OPEN",
+  DUE_TODAY: "DUE_TODAY",
+  OVERDUE: "OVERDUE",
+  PRESENTED: "PRESENTED",
+  COMPLETED: "COMPLETED",
+} as const;
+
+export type RenditionDeadlineState =
+  (typeof RENDITION_DEADLINE_STATE)[keyof typeof RENDITION_DEADLINE_STATE];
+
+export interface RenditionDeadlineFields {
+  /** Canonical Lima calendar date. Optional only during the staggered API rollout. */
+  deadline_date?: string | null;
+  /** Derived deadline metadata; it is not a persisted rendition lifecycle. */
+  deadline_state?: RenditionDeadlineState;
+  /** Signed calendar-day delta for active deadlines. */
+  calendar_days_to_deadline?: number | null;
+}
 
 export const RENDITION_BUCKET = {
   DUE_SOON: "due_soon",
 } as const;
 
-export type RenditionBucket = (typeof RENDITION_BUCKET)[keyof typeof RENDITION_BUCKET];
+export type RenditionBucket =
+  (typeof RENDITION_BUCKET)[keyof typeof RENDITION_BUCKET];
+
+export const RENDITION_DEADLINE_BUCKET = {
+  NONE: "none",
+  DUE_TODAY: "due_today",
+  DUE_SOON: "due_soon",
+  OVERDUE: "overdue",
+} as const;
+
+export type RenditionDeadlineBucket =
+  (typeof RENDITION_DEADLINE_BUCKET)[keyof typeof RENDITION_DEADLINE_BUCKET];
 
 export const RENDITION_SORT_FIELD = {
   LAST_ACTIVITY: "last_activity",
@@ -69,21 +105,24 @@ export const RENDITION_SORT_FIELD = {
   PAID_AT: "paid_at",
 } as const;
 
-export type RenditionSortField = (typeof RENDITION_SORT_FIELD)[keyof typeof RENDITION_SORT_FIELD];
+export type RenditionSortField =
+  (typeof RENDITION_SORT_FIELD)[keyof typeof RENDITION_SORT_FIELD];
 
 export const RENDITION_SORT_DIRECTION = {
   ASC: "asc",
   DESC: "desc",
 } as const;
 
-export type RenditionSortDirection = (typeof RENDITION_SORT_DIRECTION)[keyof typeof RENDITION_SORT_DIRECTION];
+export type RenditionSortDirection =
+  (typeof RENDITION_SORT_DIRECTION)[keyof typeof RENDITION_SORT_DIRECTION];
 
 export const REQUEST_CURRENCY = {
   PEN: "PEN",
   USD: "USD",
 } as const;
 
-export type RequestCurrency = (typeof REQUEST_CURRENCY)[keyof typeof REQUEST_CURRENCY];
+export type RequestCurrency =
+  (typeof REQUEST_CURRENCY)[keyof typeof REQUEST_CURRENCY];
 
 export const REQUEST_DOCUMENT_CATEGORY = {
   PXQ: "PXQ",
@@ -96,7 +135,8 @@ export const REQUEST_DOCUMENT_CATEGORY = {
   OTHER: "OTHER",
 } as const;
 
-export type RequestDocumentCategory = (typeof REQUEST_DOCUMENT_CATEGORY)[keyof typeof REQUEST_DOCUMENT_CATEGORY];
+export type RequestDocumentCategory =
+  (typeof REQUEST_DOCUMENT_CATEGORY)[keyof typeof REQUEST_DOCUMENT_CATEGORY];
 
 export const REQUEST_DOCUMENT_STORAGE_PROVIDER = {
   LOCAL: "LOCAL",
@@ -105,7 +145,8 @@ export const REQUEST_DOCUMENT_STORAGE_PROVIDER = {
   AZURE_BLOB: "AZURE_BLOB",
 } as const;
 
-export type RequestDocumentStorageProvider = (typeof REQUEST_DOCUMENT_STORAGE_PROVIDER)[keyof typeof REQUEST_DOCUMENT_STORAGE_PROVIDER];
+export type RequestDocumentStorageProvider =
+  (typeof REQUEST_DOCUMENT_STORAGE_PROVIDER)[keyof typeof REQUEST_DOCUMENT_STORAGE_PROVIDER];
 
 export const REQUEST_DOCUMENT_UPLOAD_STATUS = {
   TEMPORARY: "TEMPORARY",
@@ -115,14 +156,16 @@ export const REQUEST_DOCUMENT_UPLOAD_STATUS = {
   FAILED: "FAILED",
 } as const;
 
-export type RequestDocumentUploadStatus = (typeof REQUEST_DOCUMENT_UPLOAD_STATUS)[keyof typeof REQUEST_DOCUMENT_UPLOAD_STATUS];
+export type RequestDocumentUploadStatus =
+  (typeof REQUEST_DOCUMENT_UPLOAD_STATUS)[keyof typeof REQUEST_DOCUMENT_UPLOAD_STATUS];
 
 export const REQUEST_DOCUMENT_SCOPE_TYPE = {
   REQUEST: "REQUEST",
   ALLOCATION: "ALLOCATION",
 } as const;
 
-export type RequestDocumentScopeType = (typeof REQUEST_DOCUMENT_SCOPE_TYPE)[keyof typeof REQUEST_DOCUMENT_SCOPE_TYPE];
+export type RequestDocumentScopeType =
+  (typeof REQUEST_DOCUMENT_SCOPE_TYPE)[keyof typeof REQUEST_DOCUMENT_SCOPE_TYPE];
 
 export const REQUEST_RECEIPT_OCR_STATUS = {
   MANUAL: "MANUAL",
@@ -133,7 +176,8 @@ export const REQUEST_RECEIPT_OCR_STATUS = {
   REQUIRES_REVIEW: "REQUIRES_REVIEW",
 } as const;
 
-export type RequestReceiptOcrStatus = (typeof REQUEST_RECEIPT_OCR_STATUS)[keyof typeof REQUEST_RECEIPT_OCR_STATUS];
+export type RequestReceiptOcrStatus =
+  (typeof REQUEST_RECEIPT_OCR_STATUS)[keyof typeof REQUEST_RECEIPT_OCR_STATUS];
 
 export const REQUEST_RECEIPT_DUPLICATE_STATUS = {
   UNIQUE: "UNIQUE",
@@ -142,7 +186,8 @@ export const REQUEST_RECEIPT_DUPLICATE_STATUS = {
   IGNORED: "IGNORED",
 } as const;
 
-export type RequestReceiptDuplicateStatus = (typeof REQUEST_RECEIPT_DUPLICATE_STATUS)[keyof typeof REQUEST_RECEIPT_DUPLICATE_STATUS];
+export type RequestReceiptDuplicateStatus =
+  (typeof REQUEST_RECEIPT_DUPLICATE_STATUS)[keyof typeof REQUEST_RECEIPT_DUPLICATE_STATUS];
 
 export const REQUEST_RECEIPT_TYPE = {
   INVOICE: "INVOICE",
@@ -152,7 +197,8 @@ export const REQUEST_RECEIPT_TYPE = {
   OTHER: "OTHER",
 } as const;
 
-export type RequestReceiptType = (typeof REQUEST_RECEIPT_TYPE)[keyof typeof REQUEST_RECEIPT_TYPE];
+export type RequestReceiptType =
+  (typeof REQUEST_RECEIPT_TYPE)[keyof typeof REQUEST_RECEIPT_TYPE];
 
 export const REQUEST_RENDITION_REPORT_STATUS = {
   DRAFT: "DRAFT",
@@ -164,21 +210,24 @@ export const REQUEST_RENDITION_REPORT_STATUS = {
   OBSERVED: "OBSERVED",
 } as const;
 
-export type RequestRenditionReportStatus = (typeof REQUEST_RENDITION_REPORT_STATUS)[keyof typeof REQUEST_RENDITION_REPORT_STATUS];
+export type RequestRenditionReportStatus =
+  (typeof REQUEST_RENDITION_REPORT_STATUS)[keyof typeof REQUEST_RENDITION_REPORT_STATUS];
 
 export const REQUEST_RENDITION_EXPORT_PENDING_STATE = {
   IN_PROGRESS: "IN_PROGRESS",
   STALE_RETRY_AVAILABLE: "STALE_RETRY_AVAILABLE",
 } as const;
 
-export type RequestRenditionExportPendingState = (typeof REQUEST_RENDITION_EXPORT_PENDING_STATE)[keyof typeof REQUEST_RENDITION_EXPORT_PENDING_STATE];
+export type RequestRenditionExportPendingState =
+  (typeof REQUEST_RENDITION_EXPORT_PENDING_STATE)[keyof typeof REQUEST_RENDITION_EXPORT_PENDING_STATE];
 
 export const REQUEST_RENDITION_ROW_TYPE = {
   OCR_RECEIPT: "OCR_RECEIPT",
   MANUAL_EXTRA: "MANUAL_EXTRA",
 } as const;
 
-export type RequestRenditionRowType = (typeof REQUEST_RENDITION_ROW_TYPE)[keyof typeof REQUEST_RENDITION_ROW_TYPE];
+export type RequestRenditionRowType =
+  (typeof REQUEST_RENDITION_ROW_TYPE)[keyof typeof REQUEST_RENDITION_ROW_TYPE];
 
 export const REQUEST_RENDITION_ROW_REVIEW_STATUS = {
   DRAFT: "DRAFT",
@@ -186,7 +235,8 @@ export const REQUEST_RENDITION_ROW_REVIEW_STATUS = {
   SUBMIT_READY: "SUBMIT_READY",
 } as const;
 
-export type RequestRenditionRowReviewStatus = (typeof REQUEST_RENDITION_ROW_REVIEW_STATUS)[keyof typeof REQUEST_RENDITION_ROW_REVIEW_STATUS];
+export type RequestRenditionRowReviewStatus =
+  (typeof REQUEST_RENDITION_ROW_REVIEW_STATUS)[keyof typeof REQUEST_RENDITION_ROW_REVIEW_STATUS];
 
 export const REQUEST_RENDITION_LINE_RETURN_STATUS = {
   DRAFT: "DRAFT",
@@ -195,7 +245,8 @@ export const REQUEST_RENDITION_LINE_RETURN_STATUS = {
   OBSERVED: "OBSERVED",
 } as const;
 
-export type RequestRenditionLineReturnStatus = (typeof REQUEST_RENDITION_LINE_RETURN_STATUS)[keyof typeof REQUEST_RENDITION_LINE_RETURN_STATUS];
+export type RequestRenditionLineReturnStatus =
+  (typeof REQUEST_RENDITION_LINE_RETURN_STATUS)[keyof typeof REQUEST_RENDITION_LINE_RETURN_STATUS];
 
 export const LINE_RETURN_VALIDATION_STATUS = {
   NOT_REQUIRED: "NOT_REQUIRED",
@@ -208,7 +259,8 @@ export const LINE_RETURN_VALIDATION_STATUS = {
   MISSING_EXECUTION: "MISSING_EXECUTION",
 } as const;
 
-export type LineReturnValidationStatus = (typeof LINE_RETURN_VALIDATION_STATUS)[keyof typeof LINE_RETURN_VALIDATION_STATUS];
+export type LineReturnValidationStatus =
+  (typeof LINE_RETURN_VALIDATION_STATUS)[keyof typeof LINE_RETURN_VALIDATION_STATUS];
 
 export const REXAN_OUTCOME = {
   EXACT: "EXACT",
@@ -224,7 +276,8 @@ export const BENEFICIARY_DOCUMENT_TYPE = {
   RUC: "RUC",
 } as const;
 
-export type BeneficiaryDocumentType = (typeof BENEFICIARY_DOCUMENT_TYPE)[keyof typeof BENEFICIARY_DOCUMENT_TYPE];
+export type BeneficiaryDocumentType =
+  (typeof BENEFICIARY_DOCUMENT_TYPE)[keyof typeof BENEFICIARY_DOCUMENT_TYPE];
 
 export const BANK_CODE = {
   BCP: "BCP",
@@ -496,6 +549,7 @@ export interface RequestStatusHistoryItem {
   actor_role: string | null;
   reason: string | null;
   comment: string | null;
+  metadata?: Readonly<Record<string, unknown>> | null;
   created_at: string;
 }
 
@@ -506,18 +560,69 @@ export interface RequestPaymentUserSummary {
   email?: string | null;
 }
 
+export const DRIVE_PAYMENT_ROUTE_MODEL = {
+  DAILY_V1: "DAILY_V1",
+} as const;
+
+export type KnownDrivePaymentRouteModel =
+  (typeof DRIVE_PAYMENT_ROUTE_MODEL)[keyof typeof DRIVE_PAYMENT_ROUTE_MODEL];
+
+export type DrivePaymentRouteModel = KnownDrivePaymentRouteModel;
+
+export const PAYMENT_MISSING_FIELD = {
+  OPERATION_REFERENCE: "operation_reference",
+  PROOF: "proof",
+} as const;
+
+export type PaymentMissingField =
+  (typeof PAYMENT_MISSING_FIELD)[keyof typeof PAYMENT_MISSING_FIELD];
+
+export const PAYMENT_COMPLETENESS_STATE = {
+  REFERENCE_PENDING: "REFERENCE_PENDING",
+  PROOF_PENDING: "PROOF_PENDING",
+  BOTH_PENDING: "BOTH_PENDING",
+  COMPLETE: "COMPLETE",
+} as const;
+
+export type PaymentCompletenessState =
+  (typeof PAYMENT_COMPLETENESS_STATE)[keyof typeof PAYMENT_COMPLETENESS_STATE];
+
 export interface RequestPayment {
   id: string;
   payment_request_id: string;
   paid_at: string;
   operation_reference: string | null;
   amount_paid: number;
+  drive_route_model?: DrivePaymentRouteModel | null;
+  drive_routing_date?: string | null;
+  drive_route_cutover_at?: string | null;
+  readonly drive_route_classified_at?: string | null;
   bank_commission: number | null;
   notes: string | null;
+  source_account_key?: DriveSourceAccount | null;
+  payment_cycle_kind?: PaymentCycleKind | null;
+  payment_cycle_date?: string | null;
+  desired_parent_logical_key?: string | null;
+  drive_projection_version?: number | null;
+  drive_projection_status?: DrivePaymentProjectionStatus | null;
+  drive_projection_eligible?: boolean | null;
+  drive_projection_attempt_count?: number;
+  drive_projection_max_attempts?: number;
+  drive_projection_next_attempt_at?: string | null;
+  drive_projection_completed_at?: string | null;
+  drive_projection_error_code?: string | null;
+  drive_projection_error_message?: string | null;
+  drive_projection_phase?: string | null;
+  drive_projection_reconciliation_required?: boolean;
+  drive_projection_frozen?: boolean;
+  readonly drive_projection_destination_id?: string | null;
+  readonly drive_projection_topology_evidence?: Readonly<Record<string, unknown>> | null;
   proof_document_id: string | null;
   proofDocument?: RequestDocument | null;
   proof_pending?: boolean;
   details_pending?: boolean;
+  missing_fields?: PaymentMissingField[];
+  completeness?: PaymentCompletenessState;
   payment_batch_id?: string | null;
   completed_at?: string | null;
   completed_by_id?: string | null;
@@ -782,14 +887,16 @@ export const ADVANCE_SETTLEMENT_CTA_STATE = {
   COMPLETED: "completed",
 } as const;
 
-export type AdvanceSettlementCtaState = (typeof ADVANCE_SETTLEMENT_CTA_STATE)[keyof typeof ADVANCE_SETTLEMENT_CTA_STATE];
+export type AdvanceSettlementCtaState =
+  (typeof ADVANCE_SETTLEMENT_CTA_STATE)[keyof typeof ADVANCE_SETTLEMENT_CTA_STATE];
 
 export const RENDITION_NEXT_STEP_ACTION = {
   START: "start",
   NAVIGATE: "navigate",
 } as const;
 
-export type RenditionNextStepAction = (typeof RENDITION_NEXT_STEP_ACTION)[keyof typeof RENDITION_NEXT_STEP_ACTION];
+export type RenditionNextStepAction =
+  (typeof RENDITION_NEXT_STEP_ACTION)[keyof typeof RENDITION_NEXT_STEP_ACTION];
 
 export interface AdvanceSettlementCta {
   state: AdvanceSettlementCtaState;
@@ -1093,7 +1200,8 @@ export const REQUEST_DOCUMENT_UPLOAD_QUEUE_STATUS = {
   REMOVED: "removed",
 } as const;
 
-export type RequestDocumentUploadQueueStatus = (typeof REQUEST_DOCUMENT_UPLOAD_QUEUE_STATUS)[keyof typeof REQUEST_DOCUMENT_UPLOAD_QUEUE_STATUS];
+export type RequestDocumentUploadQueueStatus =
+  (typeof REQUEST_DOCUMENT_UPLOAD_QUEUE_STATUS)[keyof typeof REQUEST_DOCUMENT_UPLOAD_QUEUE_STATUS];
 
 export const REQUEST_DOCUMENT_UPLOAD_QUEUE_ERROR_KIND = {
   VALIDATION: "validation",
@@ -1101,7 +1209,8 @@ export const REQUEST_DOCUMENT_UPLOAD_QUEUE_ERROR_KIND = {
   BACKEND: "backend",
 } as const;
 
-export type RequestDocumentUploadQueueErrorKind = (typeof REQUEST_DOCUMENT_UPLOAD_QUEUE_ERROR_KIND)[keyof typeof REQUEST_DOCUMENT_UPLOAD_QUEUE_ERROR_KIND];
+export type RequestDocumentUploadQueueErrorKind =
+  (typeof REQUEST_DOCUMENT_UPLOAD_QUEUE_ERROR_KIND)[keyof typeof REQUEST_DOCUMENT_UPLOAD_QUEUE_ERROR_KIND];
 
 export interface RequestDocumentUploadQueueItem {
   id: string;
@@ -1120,6 +1229,34 @@ export interface RequestsListResponse {
   total: number;
   page: number;
   limit: number;
+}
+
+export interface RequestReviewFilters {
+  page?: number;
+  limit?: number;
+  work_scope?: GiofWorkScope;
+  assignee_id?: string;
+  request_type?: RequestType;
+  status?: RequestStatus;
+  submitted_from?: string;
+  submitted_to?: string;
+  assigned_from?: string;
+  assigned_to?: string;
+  currency?: RequestCurrency;
+  amount_min?: string;
+  amount_max?: string;
+  org_unit_id?: string;
+  search?: string;
+}
+
+export interface RequestReviewSummary {
+  count: number;
+  requested_amount_by_currency: Partial<Record<RequestCurrency, string>>;
+  status_counts: Partial<Record<RequestStatus, number>>;
+}
+
+export interface RequestReviewResponse extends RequestsListResponse {
+  summary: RequestReviewSummary;
 }
 
 export interface RequestsListFilters {
@@ -1148,17 +1285,87 @@ export interface PaymentQueueFilters {
   status?: typeof REQUEST_STATUS.APPROVED | typeof REQUEST_STATUS.PAID;
   pending_proof?: boolean;
   pending_details?: boolean;
+  pending_data?: boolean;
   search?: string;
   work_scope?: GiofWorkScope;
   assignee_id?: string;
+  approved_from?: string;
+  approved_to?: string;
+  paid_from?: string;
+  paid_to?: string;
+  source_account_key?: DriveSourceAccount;
+  completeness?: PaymentCompleteness;
+  drive_status?: DrivePaymentProjectionStatus;
+  rexan_status?: PaymentQueueRexanStatus;
+  currency?: RequestCurrency;
+  amount_min?: string;
+  amount_max?: string;
+  sort?: PaymentQueueSort;
+}
+
+export const PAYMENT_COMPLETENESS = {
+  COMPLETE: "complete",
+  PROOF_MISSING: "proof_missing",
+  DETAILS_MISSING: "details_missing",
+  SOURCE_MISSING: "source_missing",
+  ANY_MISSING: "any_missing",
+} as const;
+
+export type PaymentCompleteness =
+  (typeof PAYMENT_COMPLETENESS)[keyof typeof PAYMENT_COMPLETENESS];
+
+export const PAYMENT_QUEUE_SORT = {
+  QUEUE_DATE_DESC: "queue_date_desc",
+  QUEUE_DATE_ASC: "queue_date_asc",
+  PAYABLE_AMOUNT_ASC: "payable_amount_asc",
+  PAYABLE_AMOUNT_DESC: "payable_amount_desc",
+} as const;
+
+export type PaymentQueueSort =
+  (typeof PAYMENT_QUEUE_SORT)[keyof typeof PAYMENT_QUEUE_SORT];
+
+export type PaymentQueueRexanStatus =
+  (typeof PAYMENT_REXAN_STATUS)[keyof typeof PAYMENT_REXAN_STATUS];
+
+export interface PaymentQueueSummary {
+  count: number;
+  payable_amount_by_currency: Partial<Record<RequestCurrency, string>>;
+  status_counts: Partial<Record<RequestStatus, number>>;
+}
+
+export interface PaymentQueueResponse extends RequestsListResponse {
+  summary: PaymentQueueSummary;
 }
 
 export const BULK_PAYMENT_RESULT_STATUS = {
   SUCCESS: "SUCCESS",
+  ALREADY_PROCESSED: "ALREADY_PROCESSED",
   FAILED: "FAILED",
 } as const;
 
-export type BulkPaymentResultStatus = (typeof BULK_PAYMENT_RESULT_STATUS)[keyof typeof BULK_PAYMENT_RESULT_STATUS];
+export type BulkPaymentResultStatus =
+  (typeof BULK_PAYMENT_RESULT_STATUS)[keyof typeof BULK_PAYMENT_RESULT_STATUS];
+
+export const DRIVE_SOURCE_ACCOUNT = {
+  BCP_PEN: "BCP_PEN",
+  BCP_USD: "BCP_USD",
+  BCP_ODF: "BCP_ODF",
+  BBVA_PEN: "BBVA_PEN",
+  BBVA_USD: "BBVA_USD",
+} as const;
+export type DriveSourceAccount =
+  (typeof DRIVE_SOURCE_ACCOUNT)[keyof typeof DRIVE_SOURCE_ACCOUNT];
+export type PaymentCycleKind = "ADVANCE_OR_REIMBURSEMENT" | "SUPPLIER";
+export const DRIVE_PAYMENT_PROJECTION_STATUS = {
+  SOURCE_REQUIRED: "SOURCE_REQUIRED",
+  PENDING: "PENDING",
+  PROCESSING: "PROCESSING",
+  SUCCEEDED: "SUCCEEDED",
+  FAILED: "FAILED",
+} as const;
+
+export type DrivePaymentProjectionStatus =
+  (typeof DRIVE_PAYMENT_PROJECTION_STATUS)[keyof typeof DRIVE_PAYMENT_PROJECTION_STATUS];
 
 export const PAYMENT_EMAIL_STATUS = {
   QUEUED: "QUEUED",
@@ -1167,7 +1374,8 @@ export const PAYMENT_EMAIL_STATUS = {
   SKIPPED: "SKIPPED",
 } as const;
 
-export type PaymentEmailStatus = (typeof PAYMENT_EMAIL_STATUS)[keyof typeof PAYMENT_EMAIL_STATUS] | string;
+export type PaymentEmailStatus =
+  (typeof PAYMENT_EMAIL_STATUS)[keyof typeof PAYMENT_EMAIL_STATUS] | string;
 
 export const PAYMENT_REXAN_STATUS = {
   PENDING: "PENDING",
@@ -1179,20 +1387,21 @@ export const PAYMENT_REXAN_STATUS = {
   FAILED: "FAILED",
 } as const;
 
-export type PaymentRexanStatus = (typeof PAYMENT_REXAN_STATUS)[keyof typeof PAYMENT_REXAN_STATUS] | string;
+export type PaymentRexanStatus =
+  (typeof PAYMENT_REXAN_STATUS)[keyof typeof PAYMENT_REXAN_STATUS] | string;
 
 export interface BulkMarkPaidInput {
-  request_ids: string[];
-  giof_items?: BulkPaymentWorkCredential[];
-  paid_at?: string;
-  operation_reference?: string;
-  notes?: string;
+  client_batch_id: string;
+  paid_at: string;
+  source_account_key: DriveSourceAccount;
+  items: BulkRegisterPaymentItemInput[];
 }
 
-export interface BulkPaymentWorkCredential {
+export interface BulkRegisterPaymentItemInput {
   request_id: string;
   assignment_version: number;
   lease_token: string;
+  operation_reference?: string;
 }
 
 export interface BulkPaymentRexanResult {
@@ -1220,13 +1429,27 @@ export interface BulkPaymentItemResult {
   paid_at?: string | null;
   proof_pending?: boolean;
   details_pending?: boolean;
+  missing_fields?: string[];
+  completeness?: string;
   email_status?: PaymentEmailStatus | null;
   rexan_activation?: RexanActivation | null;
+  error_code?: string | null;
   error?: string | null;
+  source_account_key?: DriveSourceAccount | null;
+  drive_route_model?: DrivePaymentRouteModel | null;
+  drive_routing_date?: string | null;
+  drive_route_cutover_at?: string | null;
+  readonly drive_route_classified_at?: string | null;
+  payment_cycle_kind?: PaymentCycleKind;
+  payment_cycle_date?: string;
+  desired_parent_logical_key?: string | null;
+  drive_projection_version?: number;
+  drive_projection_status?: DrivePaymentProjectionStatus;
 }
 
 export interface BulkMarkPaidResponse {
   batch_id: string;
+  status?: "PROCESSING" | "COMPLETED" | "COMPLETED_WITH_ERRORS";
   item_count: number;
   success_count: number;
   failed_count: number;
@@ -1243,25 +1466,20 @@ export interface CompletePaymentDetailsInput {
   proof_document_id?: string;
 }
 
-export interface AttachPaymentProofAllocationInput {
-  request_allocation_id: string;
-  amount_covered?: number;
-}
-
 export interface AttachPaymentProofInput {
   proof?: File;
   proof_document_id?: string;
-  request_allocation_ids?: string[];
-  allocations?: AttachPaymentProofAllocationInput[];
   operation_reference?: string;
   paid_at?: string;
   amount_paid?: number;
   notes?: string;
 }
 
-export interface RenditionInboxRow {
+export interface RenditionInboxRow extends RenditionDeadlineFields {
   advance_id: string;
   request_code: string | null;
+  advance_request_code?: string | null;
+  settlement_request_code?: string | null;
   requester: string | null;
   registered_by?: string | null;
   registered_party_name?: string | null;
@@ -1274,8 +1492,11 @@ export interface RenditionInboxRow {
   paid_at: string | null;
   scheduled_rendition_at: string | null;
   rendition_status: RenditionStatus;
+  /** @deprecated Use deadline_state and calendar_days_to_deadline. */
   days_overdue: number | null;
+  /** @deprecated Use deadline_state and calendar_days_to_deadline. */
   days_until_due: number | null;
+  /** @deprecated Use deadline_state and calendar_days_to_deadline. */
   days_remaining: number | null;
   settlement_request_id: string | null;
   settlement_status: RequestStatus | null;
@@ -1292,12 +1513,33 @@ export interface RenditionInboxCounts extends Record<RenditionStatus, number> {
   due_soon?: number;
 }
 
+export interface RenditionStatusFacet {
+  excluded_filters: ["status"];
+  counts: Record<RenditionStatus, number>;
+}
+
+export interface RenditionDeadlineBucketFacet {
+  excluded_filters: ["deadline_bucket"];
+  counts: Record<RenditionDeadlineBucket, number>;
+}
+
+export interface RenditionInboxFacets {
+  status: RenditionStatusFacet;
+  deadline_bucket: RenditionDeadlineBucketFacet;
+}
+
+export interface RenditionInboxSummary {
+  count: number;
+}
+
 export interface RenditionsInboxResponse {
   renditions: RenditionInboxRow[];
   total: number;
   page: number;
   limit: number;
   counts: RenditionInboxCounts;
+  summary: RenditionInboxSummary;
+  facets: RenditionInboxFacets;
 }
 
 export interface RenditionsInboxFilters {
@@ -1305,9 +1547,12 @@ export interface RenditionsInboxFilters {
   limit?: number;
   status?: RenditionStatus;
   bucket?: RenditionBucket;
+  deadline_bucket?: RenditionDeadlineBucket;
   search?: string;
   due_from?: string;
   due_to?: string;
+  deadline_from?: string;
+  deadline_to?: string;
   sort?: RenditionSortField;
   direction?: RenditionSortDirection;
   work_scope?: GiofWorkScope;

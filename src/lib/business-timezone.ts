@@ -63,6 +63,26 @@ export function parseBusinessDateTimeLocalToIso(value: string): string {
   }
 
   const [, year, month, day, hour, minute, second = "00"] = match;
+  const wallClock = new Date(
+    Date.UTC(
+      Number(year),
+      Number(month) - 1,
+      Number(day),
+      Number(hour),
+      Number(minute),
+      Number(second),
+    ),
+  );
+  if (
+    wallClock.getUTCFullYear() !== Number(year)
+    || wallClock.getUTCMonth() !== Number(month) - 1
+    || wallClock.getUTCDate() !== Number(day)
+    || wallClock.getUTCHours() !== Number(hour)
+    || wallClock.getUTCMinutes() !== Number(minute)
+    || wallClock.getUTCSeconds() !== Number(second)
+  ) {
+    throw new Error("Invalid Lima business datetime-local value");
+  }
   const utcTime = Date.UTC(
     Number(year),
     Number(month) - 1,
@@ -73,6 +93,20 @@ export function parseBusinessDateTimeLocalToIso(value: string): string {
   );
 
   return new Date(utcTime).toISOString();
+}
+
+export function formatBusinessDateShortDot(value?: string | null): string {
+  if (!value) return "—";
+  const date = getDateOnlyBusinessInstant(value) ?? new Date(value);
+  if (Number.isNaN(date.getTime())) return "—";
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    day: "2-digit",
+    month: "2-digit",
+    timeZone: BUSINESS_TIME_ZONE,
+    year: "2-digit",
+  }).formatToParts(date);
+  const byType = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${byType.day}.${byType.month}.${byType.year}`;
 }
 
 export function getDateOnlyUtcTime(value?: string | null): number | null {

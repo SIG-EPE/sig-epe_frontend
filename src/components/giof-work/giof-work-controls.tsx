@@ -11,7 +11,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-import { bulkAssignGiofWork, fetchGiofAssignees, fetchGiofHistory, getGiofConflictMessage } from "@/hooks/use-giof-work";
+import { bulkAssignGiofWork, fetchGiofHistory, getGiofConflictMessage, useGiofAssignees } from "@/hooks/use-giof-work";
 import { ApiRequestError } from "@/lib/api-client";
 import { ROUTES } from "@/lib/constants";
 import type { GiofHelpContext } from "@/lib/giof-assignment-help";
@@ -74,12 +74,8 @@ function readBlockers(error: unknown): GiofAssignmentBlocker[] {
 }
 
 export function GiofWorkScopeFilter({ value, assigneeId, isManager, onChange, helpContext }: GiofWorkScopeFilterProps) {
-  const [candidates, setCandidates] = useState<GiofAssigneeCandidate[]>([]);
-
-  useEffect(() => {
-    if (!isManager) return;
-    void fetchGiofAssignees().then(setCandidates).catch(() => setCandidates([]));
-  }, [isManager]);
+  const assignees = useGiofAssignees({ enabled: isManager });
+  const candidates = assignees.data ?? [];
 
   return (
     <div className="flex flex-col gap-2 sm:flex-row sm:items-center" aria-label="Filtro de asignación GIOF">
@@ -134,10 +130,10 @@ export function GiofWorkStatus({ requestId, work, currentUserId, isManager = fal
   const assigneeLabel = work.assigneeId === null
     ? "Sin asignar"
     : work.assigneeId === currentUserId
-      ? "Asignado a ti"
+      ? "Asignada a ti"
       : work.assigneeName
-        ? `Asignado a ${work.assigneeName}`
-        : "Asignado a otro usuario";
+        ? `Asignada a ${work.assigneeName}`
+        : "Asignada a otra persona";
   const activeLease = Boolean(work.lease?.expiresAt && new Date(work.lease.expiresAt) > new Date());
   const pool = work.pool;
 
@@ -153,9 +149,9 @@ export function GiofWorkStatus({ requestId, work, currentUserId, isManager = fal
 
   return (
     <div className="flex flex-wrap items-center gap-1" data-testid="giof-work-status">
-      <Badge variant={work.assigneeId ? "secondary" : "outline"}>{assigneeLabel}</Badge>
-      {activeLease && <Badge variant="outline">En uso</Badge>}
-      {work.readOnly && <Badge variant="outline">Solo lectura</Badge>}
+      <Badge variant={work.assigneeId ? "secondary" : "outline"} aria-label={`Asignación GIOF: ${assigneeLabel}`}>{assigneeLabel}</Badge>
+      {activeLease && <Badge variant="outline" aria-label="Asignación GIOF: En uso">En uso</Badge>}
+      {work.readOnly && <Badge variant="outline" aria-label="Asignación GIOF: Solo lectura">Solo lectura</Badge>}
       {isManager && (
         <Button type="button" variant="ghost" size="icon" className="size-7" onClick={() => void openHistory()} aria-label="Ver historial de asignación" data-testid="giof-history-button">
           <History className="size-4" />
@@ -192,17 +188,21 @@ export function GiofBulkAssignmentBar({ pool, items, onClear, onSuccess }: GiofB
   const [open, setOpen] = useState(false);
   const [targetId, setTargetId] = useState("");
   const [note, setNote] = useState("");
-  const [candidates, setCandidates] = useState<GiofAssigneeCandidate[]>([]);
   const [blockers, setBlockers] = useState<GiofAssignmentBlocker[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const assignees = useGiofAssignees({ enabled: open });
+  const candidates = assignees.data ?? [];
 
   useEffect(() => {
     if (!open) return;
     setBlockers([]);
     setError(null);
-    void fetchGiofAssignees().then(setCandidates).catch((reason: unknown) => setError(getGiofConflictMessage(reason)));
   }, [open]);
+
+  useEffect(() => {
+    if (open && assignees.error) setError(getGiofConflictMessage(assignees.error));
+  }, [open, assignees.error]);
 
   if (items.length === 0) return null;
 

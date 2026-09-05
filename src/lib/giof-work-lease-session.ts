@@ -1,6 +1,27 @@
-import type { GiofWorkLease } from "@/types/giof-work";
+import type { GiofWorkLease, GiofWorkPool } from "@/types/giof-work";
 
 const credentialsByTarget = new Map<string, GiofWorkLease>();
+
+interface GiofLeaseRequirement {
+  requestId: string;
+  pool: GiofWorkPool;
+  assignmentVersion: string;
+  ownerId?: string | null;
+}
+
+export function isGiofLeaseCurrent(
+  lease: GiofWorkLease | null | undefined,
+  requirement: GiofLeaseRequirement,
+): lease is GiofWorkLease {
+  if (!lease?.token.trim()) return false;
+  const expiresAt = Date.parse(lease.expiresAt ?? "");
+  return lease.requestId === requirement.requestId
+    && lease.pool === requirement.pool
+    && lease.assignmentVersion === requirement.assignmentVersion
+    && (!requirement.ownerId || lease.ownerId === requirement.ownerId)
+    && Number.isFinite(expiresAt)
+    && expiresAt > Date.now();
+}
 
 export function bindGiofLeaseCredential(lease: GiofWorkLease, aliases: readonly string[] = []): void {
   credentialsByTarget.set(lease.requestId, lease);

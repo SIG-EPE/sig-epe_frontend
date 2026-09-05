@@ -23,6 +23,7 @@ import {
   resolvePoaTerritorySelectionRead,
 } from "@/config/poa-territory-selection";
 import { isUnclassifiedLabel } from "@/lib/poa-territory-selection";
+import { ROLE_CAPABILITY, hasRoleCapability } from "@/lib/role-capabilities";
 
 function formatCurrency(amount: number): string {
   return new Intl.NumberFormat("es-PE", {
@@ -97,8 +98,7 @@ export function LineDetailPage() {
     measureAuthority: sourceMonthsEnabled ? "source" : "operational",
   });
   const { user } = useAuthStore();
-  const isGiof =
-    user?.role?.code === "GIOF" || user?.role?.code === "GIOF_GESTOR";
+  const isGiof = hasRoleCapability(user?.role?.code, ROLE_CAPABILITY.BUDGET_ADMIN);
 
   if (isLoading) {
     return (

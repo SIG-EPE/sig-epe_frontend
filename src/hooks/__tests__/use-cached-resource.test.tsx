@@ -1,4 +1,5 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
+import { StrictMode, type ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { CACHED_RESOURCE_CACHE_MODE, useCachedResource } from "@/hooks/use-cached-resource";
@@ -70,22 +71,90 @@ describe("useCachedResource", () => {
     expect(result.current.isLoading).toBe(false);
   });
 
-  it("deduplica consumidores con la misma clave", async () => {
+  it("no aborta la solicitud deduplicada al desmontar uno de dos consumidores", async () => {
     const pending = deferred<{ value: string }>();
-    const queryFn = vi.fn(() => pending.promise);
+    let sharedSignal: AbortSignal | undefined;
+    const queryFn = vi.fn((signal: AbortSignal) => {
+      sharedSignal = signal;
+      return new Promise<{ value: string }>((resolve, reject) => {
+        signal.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), { once: true });
+        pending.promise.then(resolve, reject);
+      });
+    });
 
     const first = renderHook(() => useCachedResource<{ value: string }>({ key: ["requests", "list"], ttlMs: QUERY_CACHE_TTL_MS.MUTABLE_LIST, queryFn }));
     const second = renderHook(() => useCachedResource<{ value: string }>({ key: ["requests", "list"], ttlMs: QUERY_CACHE_TTL_MS.MUTABLE_LIST, queryFn }));
 
     expect(queryFn).toHaveBeenCalledTimes(1);
+    first.unmount();
+    await act(async () => Promise.resolve());
+    expect(sharedSignal?.aborted).toBe(false);
 
     await act(async () => {
       pending.resolve({ value: "ok" });
       await pending.promise;
     });
 
-    await waitFor(() => expect(first.result.current.data?.value).toBe("ok"));
-    expect(second.result.current.data?.value).toBe("ok");
+    await waitFor(() => expect(second.result.current.data?.value).toBe("ok"));
+  });
+
+  it("resuelve con abort real durante el replay de StrictMode", async () => {
+    const pending = deferred<{ value: string }>();
+    const queryFn = vi.fn((signal: AbortSignal) => new Promise<{ value: string }>((resolve, reject) => {
+      signal.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), { once: true });
+      pending.promise.then(resolve, reject);
+    }));
+    const wrapper = ({ children }: { children: ReactNode }) => <StrictMode>{children}</StrictMode>;
+
+    const { result } = renderHook(() => useCachedResource<{ value: string }>({
+      key: ["requests", "strict-mode"],
+      ttlMs: QUERY_CACHE_TTL_MS.MUTABLE_LIST,
+      queryFn,
+    }), { wrapper });
+
+    await act(async () => {
+      pending.resolve({ value: "vigente" });
+      await pending.promise;
+    });
+
+    await waitFor(() => expect(result.current.data?.value).toBe("vigente"));
+    expect(queryFn).toHaveBeenCalledTimes(1);
+  });
+
+  it("conserva o relanza A al cambiar A a B y volver a A rápidamente", async () => {
+    const requestA = deferred<{ value: string }>();
+    const requestB = deferred<{ value: string }>();
+    const signals = new Map<string, AbortSignal>();
+    const queryFn = vi.fn((signal: AbortSignal, key: string) => {
+      signals.set(key, signal);
+      const pending = key === "A" ? requestA : requestB;
+      return new Promise<{ value: string }>((resolve, reject) => {
+        signal.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), { once: true });
+        pending.promise.then(resolve, reject);
+      });
+    });
+    const { result, rerender } = renderHook(
+      ({ keyPart }: { keyPart: string }) => useCachedResource<{ value: string }>({
+        key: ["requests", keyPart],
+        ttlMs: QUERY_CACHE_TTL_MS.MUTABLE_LIST,
+        keepPreviousData: false,
+        queryFn: (signal) => queryFn(signal, keyPart),
+      }),
+      { initialProps: { keyPart: "A" } },
+    );
+
+    rerender({ keyPart: "B" });
+    expect(queryFn.mock.calls.some(([, key]) => key === "B")).toBe(true);
+    rerender({ keyPart: "A" });
+
+    await act(async () => {
+      requestA.resolve({ value: "A vigente" });
+      await requestA.promise;
+    });
+
+    await waitFor(() => expect(result.current.data?.value).toBe("A vigente"));
+    expect(signals.get("A")?.aborted).toBe(false);
+    expect(queryFn.mock.calls.filter(([, key]) => key === "A")).toHaveLength(1);
   });
 
   it("mantiene datos previos durante refetch e ignora respuesta obsoleta", async () => {

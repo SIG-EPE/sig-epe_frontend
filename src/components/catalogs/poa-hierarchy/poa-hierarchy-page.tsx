@@ -16,7 +16,7 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { isPoaCatalogCodeModelEnabled } from "@/config/features";
 import { usePoaHierarchy } from "@/hooks/use-poa-hierarchy";
-import { ROLE_CODE } from "@/lib/constants";
+import { ROLE_CAPABILITY, hasRoleCapability } from "@/lib/role-capabilities";
 import { useAuthStore } from "@/stores/auth-store";
 import { filterPoaHierarchy, POA_STATUS_FILTER, type PoaStatusFilter } from "./poa-hierarchy-filter";
 import { PoaHierarchyTree, type PoaHierarchyUiAction } from "./poa-hierarchy-tree";
@@ -29,7 +29,7 @@ export function PoaHierarchyPage() {
   const [programId, setProgramId] = useState("all");
   const [status, setStatus] = useState<PoaStatusFilter>(POA_STATUS_FILTER.ALL);
   const [action, setAction] = useState<PoaHierarchyUiAction | null>(null);
-  const canManage = roleCode === ROLE_CODE.GIOF_GESTOR || roleCode === ROLE_CODE.ADMIN_SISTEMA;
+  const canManage = hasRoleCapability(roleCode, ROLE_CAPABILITY.CATALOG_ADMIN);
 
   if (!isPoaCatalogCodeModelEnabled()) {
     return (

@@ -16,6 +16,7 @@ export const GIOF_WORK_SCOPE = {
 export type GiofWorkScope = (typeof GIOF_WORK_SCOPE)[keyof typeof GIOF_WORK_SCOPE];
 
 export interface GiofWorkLeaseSummary {
+  pool?: GiofWorkPool;
   ownerId: string | null;
   heartbeatAt: string | null;
   expiresAt: string | null;

@@ -20,7 +20,8 @@ import {
   usePlanningLineStats,
 } from "@/hooks/use-budget";
 import { api } from "@/lib/api-client";
-import { ROLE_CODE, ROUTES } from "@/lib/constants";
+import { ROUTES } from "@/lib/constants";
+import { ROLE_CAPABILITY, hasRoleCapability } from "@/lib/role-capabilities";
 import { useAuthStore } from "@/stores/auth-store";
 import { Plus, FileText, Send, CheckCircle2, Download } from "lucide-react";
 import { toast } from "sonner";
@@ -61,7 +62,7 @@ export function PlanningLinesPage() {
 
   const [page, setPage] = useState(1);
   const [isExporting, setIsExporting] = useState(false);
-  const canExport = user?.role?.code === ROLE_CODE.GIOF_GESTOR;
+  const canExport = hasRoleCapability(user?.role?.code, ROLE_CAPABILITY.BUDGET_ADMIN);
 
   // Stats para KPI cards
   const { data: stats, isLoading: statsLoading } = usePlanningLineStats(

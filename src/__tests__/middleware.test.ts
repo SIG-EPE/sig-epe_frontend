@@ -141,9 +141,19 @@ describe("middleware session hint continuity", () => {
     expect(response.headers.get("location")).toBe("http://localhost:3000/requests");
   });
 
-  it("allows authorized users to open the Programado vs Ejecutado route", async () => {
+  it("redirects GIOF Gestor users away from the Programado vs Ejecutado route", async () => {
     mockJwtVerify.mockResolvedValue({
       payload: { sub: "user-1", role: "GIOF_GESTOR", scope: "full", iat: 1, exp: 2 },
+    });
+
+    const response = await middleware(requestFor("/budget/org-unit-execution", { access_token: "token" }));
+
+    expect(response.headers.get("location")).toBe("http://localhost:3000/requests");
+  });
+
+  it("allows GIOF Manager users to open the Programado vs Ejecutado route", async () => {
+    mockJwtVerify.mockResolvedValue({
+      payload: { sub: "user-1", role: "GIOF_MANAGER", scope: "full", iat: 1, exp: 2 },
     });
 
     const response = await middleware(requestFor("/budget/org-unit-execution", { access_token: "token" }));

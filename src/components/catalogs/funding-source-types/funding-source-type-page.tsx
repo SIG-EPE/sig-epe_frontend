@@ -6,12 +6,12 @@ import { Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { useAuthStore } from "@/stores/auth-store";
-import { ROLE_CODE } from "@/lib/constants";
+import { ROLE_CAPABILITY, hasRoleCapability } from "@/lib/role-capabilities";
 import { FundingSourceTypeForm } from "./funding-source-type-form";
 import { FundingSourceTypeTable } from "./funding-source-type-table";
 
 function canManageFundingSourceTypes(roleCode: string | undefined): boolean {
-  return roleCode === ROLE_CODE.GIOF_GESTOR || roleCode === ROLE_CODE.ADMIN_SISTEMA;
+  return hasRoleCapability(roleCode, ROLE_CAPABILITY.CATALOG_ADMIN);
 }
 
 export function FundingSourceTypePage() {

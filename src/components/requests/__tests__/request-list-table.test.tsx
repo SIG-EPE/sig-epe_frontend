@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 
 import { RequestListTable } from "@/components/requests/request-list-table";
 import { ROLE_CODE } from "@/lib/constants";
+import { REQUEST_STATUS_SURFACE } from "@/lib/request-status-vocabulary";
 import { REQUEST_CURRENCY, REQUEST_DOCUMENT_CATEGORY, REQUEST_DOCUMENT_STORAGE_PROVIDER, REQUEST_DOCUMENT_UPLOAD_STATUS, REQUEST_STATUS, REQUEST_TYPE, type PaymentRequest, type RequestAllocation, type RequestDocument } from "@/types/requests";
 
 function makeRequest(overrides: Partial<PaymentRequest> = {}): PaymentRequest {
@@ -100,6 +101,42 @@ function makeAllocation(overrides: Partial<RequestAllocation> = {}): RequestAllo
 }
 
 describe("RequestListTable", () => {
+  it("shows persisted projection phase and reconciliation state in the request row", () => {
+    render(
+      <RequestListTable
+        requests={[
+          makeRequest({
+            payment: {
+              id: "payment-1",
+              payment_request_id: "req-1",
+              paid_at: "2026-08-25T10:00:00.000Z",
+              operation_reference: null,
+              amount_paid: 100,
+              bank_commission: null,
+              notes: null,
+              drive_projection_status: "FAILED",
+              drive_projection_phase: "MOVED_UNVERIFIED",
+              drive_projection_error_code: "MOVE_RECONCILIATION_REQUIRED",
+              drive_projection_error_message: "Parent evidence contradicted",
+              drive_projection_reconciliation_required: true,
+              drive_projection_frozen: true,
+              proof_document_id: null,
+              registered_by_id: "user-1",
+              created_at: "2026-08-25T10:00:00.000Z",
+              updated_at: "2026-08-25T10:00:00.000Z",
+            },
+          }),
+        ]}
+        isLoading={false}
+        roleCode={ROLE_CODE.GIOF_GESTOR}
+      />,
+    );
+
+    expect(screen.getByText("Drive: requiere atención")).toBeInTheDocument();
+    expect(screen.getByText(/Fase: MOVED_UNVERIFIED/)).toBeInTheDocument();
+    expect(screen.getByText(/reconciliación/i)).toBeInTheDocument();
+  });
+
   it("permite seleccionar SUBMITTED y bloquea filas terminales para asignación", () => {
     const active = makeRequest({
       id: "active",
@@ -114,10 +151,12 @@ describe("RequestListTable", () => {
       giof_work: { pool: "REQUEST", assigneeId: null, assigneeName: null, assignmentVersion: "0", lease: null, canAssign: false, canAcquire: false, canEdit: false, readOnly: true },
     });
 
-    render(<RequestListTable requests={[active, closed]} isLoading={false} roleCode={ROLE_CODE.GIOF_MANAGER} isGiofManager onToggleAssignment={() => undefined} onToggleAllAssignments={() => undefined} />);
+    render(<RequestListTable requests={[active, closed]} isLoading={false} roleCode={ROLE_CODE.GIOF_MANAGER} isGiofManager onToggleAssignment={() => undefined} onToggleAllAssignments={() => undefined} statusSurface={REQUEST_STATUS_SURFACE.REVIEW} />);
 
     expect(screen.getByRole("checkbox", { name: "Seleccionar SOL-ACTIVE para asignar" })).toBeEnabled();
     expect(screen.getByRole("checkbox", { name: "SOL-CLOSED: no asignable en su estado actual" })).toBeDisabled();
+    expect(screen.getByText("Por revisar")).toBeInTheDocument();
+    expect(screen.getByText("Cerrada")).toBeInTheDocument();
   });
 
   it("muestra acciones de fila solo dentro del menú de tres puntos", async () => {
