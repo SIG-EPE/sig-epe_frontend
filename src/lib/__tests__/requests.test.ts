@@ -26,6 +26,7 @@ import {
   getBeneficiaryDocumentInputMode,
   getBeneficiaryDocumentMaxLength,
   getBeneficiaryDocumentPlaceholder,
+  getApiErrorMessage,
   getApiErrorMessages,
   getRequestErrorStep,
   getMissingDocumentMessagesFromError,
@@ -615,6 +616,54 @@ describe("requests helpers", () => {
     ).toEqual([
       "No tienes permiso para realizar esta acción o tu asignación ya no está vigente.",
     ]);
+  });
+
+  it("usa lenguaje genérico para asignación GIOF y conserva errores específicos de pago", () => {
+    const makeApiError = (code: string, message = "Backend message") =>
+      new ApiRequestError(409, {
+        statusCode: 409,
+        code,
+        message,
+        error: "Conflict",
+        timestamp: "2026-09-16T00:00:00.000Z",
+        path: "/requests/request-1/rendition-report/rows",
+      });
+
+    expect(getApiErrorMessage(makeApiError("GIOF_NOT_ASSIGNED_OWNER"))).toBe(
+      "Este trabajo no está asignado a tu usuario o cambió de responsable. Actualiza la bandeja.",
+    );
+    expect(getApiErrorMessage(makeApiError("UNKNOWN_CONFLICT"))).toBe(
+      "Backend message",
+    );
+    expect(getApiErrorMessage(makeApiError("PAYMENT_ALREADY_EXISTS"))).toBe(
+      "Esta solicitud ya tiene un pago registrado. Actualiza la cola para ver su estado.",
+    );
+  });
+
+  it.each([
+    "GIOF_WORK_ASSIGNMENT_REQUIRED",
+    "GIOF_WORK_LEASE_REQUIRED",
+    "GIOF_ASSIGNMENT_VERSION_REQUIRED",
+    "GIOF_ASSIGNMENT_VERSION_STALE",
+    "GIOF_LEASE_TOKEN_REQUIRED",
+    "GIOF_LEASE_EXPIRED",
+    "GIOF_LEASE_FOREIGN",
+    "GIOF_OPERATION_FORBIDDEN",
+    "GIOF_LIFECYCLE_CONFLICT",
+  ])("mantiene el conflicto GIOF %s preciso y neutral al pool", (code) => {
+    const message = getApiErrorMessage(
+      new ApiRequestError(409, {
+        statusCode: 409,
+        code,
+        message: "Conflict",
+        error: "Conflict",
+        timestamp: "2026-09-16T00:00:00.000Z",
+        path: "/requests/request-1/rendition-report",
+      }),
+    );
+
+    expect(message).toMatch(/trabajo|asignación|sesión/);
+    expect(message).not.toMatch(/pago/i);
   });
 
   it("habilita inicio de rendición solo para anticipos pagados y usuarios autorizados", () => {

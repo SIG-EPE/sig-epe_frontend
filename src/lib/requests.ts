@@ -3003,25 +3003,25 @@ export function getApiErrorMessages(error: unknown): string[] {
       REQUEST_STATE_CONFLICT:
         "La solicitud cambió de estado. Actualiza la cola antes de continuar.",
       GIOF_WORK_ASSIGNMENT_REQUIRED:
-        "Este pago debe estar asignado a tu usuario antes de procesarlo.",
+        "Este trabajo debe estar asignado a tu usuario antes de procesarlo.",
       GIOF_WORK_LEASE_REQUIRED:
-        "Tu sesión de trabajo venció o no corresponde. Vuelve a abrir el pago desde la cola.",
+        "Tu sesión de trabajo venció o no corresponde. Vuelve a abrir este trabajo desde la bandeja.",
       GIOF_ASSIGNMENT_VERSION_REQUIRED:
-        "Falta el contexto vigente de asignación. Actualiza la cola y vuelve a Procesar el pago.",
+        "Falta el contexto vigente de asignación. Actualiza la bandeja y vuelve a abrir este trabajo.",
       GIOF_ASSIGNMENT_VERSION_STALE:
-        "La asignación cambió mientras procesabas el pago. Actualiza la cola y vuelve a adquirir la sesión.",
+        "La asignación cambió mientras procesabas este trabajo. Actualiza la bandeja y vuelve a adquirir la sesión.",
       GIOF_LEASE_TOKEN_REQUIRED:
-        "Falta la sesión operativa del pago. Cierra esta ventana y vuelve a Procesar desde la cola.",
+        "Falta la sesión operativa de este trabajo. Vuelve a abrirlo desde la bandeja.",
       GIOF_LEASE_EXPIRED:
-        "La sesión operativa venció. Actualiza la cola y vuelve a Procesar el pago.",
+        "La sesión operativa venció. Actualiza la bandeja y vuelve a abrir este trabajo.",
       GIOF_LEASE_FOREIGN:
-        "La sesión del pago pertenece a otra persona o a otro proceso. Actualiza la cola antes de continuar.",
+        "La sesión de este trabajo pertenece a otra persona o a otro proceso. Actualiza la bandeja antes de continuar.",
       GIOF_NOT_ASSIGNED_OWNER:
-        "El pago ya no está asignado a tu usuario. Actualiza la cola.",
+        "Este trabajo no está asignado a tu usuario o cambió de responsable. Actualiza la bandeja.",
       GIOF_OPERATION_FORBIDDEN:
-        "Tu usuario ya no puede ejecutar este pago. Actualiza la cola o solicita una nueva asignación.",
+        "Tu usuario no puede ejecutar este trabajo. Actualiza la bandeja o solicita una nueva asignación.",
       GIOF_LIFECYCLE_CONFLICT:
-        "El pago ya no está disponible para edición. Actualiza la cola para ver su estado.",
+        "Este trabajo no está disponible para edición en su estado actual. Actualiza la bandeja.",
       PAYMENT_PAID_AT_IN_FUTURE:
         "La fecha efectiva del pago supera el máximo permitido por la política vigente. Revisa la fecha y hora de pago.",
       PAYMENT_ROUTE_POLICY_UNAVAILABLE:

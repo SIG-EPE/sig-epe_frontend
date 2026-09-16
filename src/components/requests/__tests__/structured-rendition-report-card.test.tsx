@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { StructuredRenditionReportCard } from "@/components/requests/structured-rendition-report-card";
+import { ApiRequestError } from "@/lib/api-client";
 import {
   REQUEST_CURRENCY,
   REQUEST_DOCUMENT_CATEGORY,
@@ -941,6 +942,51 @@ describe("StructuredRenditionReportCard", () => {
     await waitFor(() => expect(mocks.refetchReport).toHaveBeenCalledTimes(1));
     expect(mocks.toastError).toHaveBeenCalledWith("Comprobante rechazado");
     expect(mocks.addReceiptRow).toHaveBeenCalledTimes(1);
+  });
+
+  it("muestra un conflicto de asignación contextual al trabajo de rendición", async () => {
+    mocks.report = makeReport({
+      status: REQUEST_RENDITION_REPORT_STATUS.DRAFT,
+      rows: [],
+      totals: {
+        total_amount: 0,
+        by_allocation: [],
+        missing_allocations: ["allocation-1"],
+      },
+      allocation_coverage: [],
+    });
+    mocks.receipts = [
+      makeReceiptReview({
+        receipt: {
+          ...makeReceiptReview().receipt,
+          confirmed_by_id: "user-1",
+          confirmed_at: "2026-06-02T12:00:00.000Z",
+        },
+      }),
+    ];
+    mocks.addReceiptRow.mockRejectedValueOnce(
+      new ApiRequestError(403, {
+        statusCode: 403,
+        code: "GIOF_NOT_ASSIGNED_OWNER",
+        message: "Forbidden",
+        error: "Forbidden",
+        timestamp: "2026-09-16T00:00:00.000Z",
+        path: "/requests/request-1/rendition-report/rows/from-receipt",
+      }),
+    );
+    const user = userEvent.setup();
+    render(<StructuredRenditionReportCard request={makeRequest()} />);
+
+    await user.click(screen.getByRole("button", { name: "Agregar al informe" }));
+
+    await waitFor(() =>
+      expect(mocks.toastError).toHaveBeenCalledWith(
+        "Este trabajo no está asignado a tu usuario o cambió de responsable. Actualiza la bandeja.",
+      ),
+    );
+    expect(mocks.toastError).not.toHaveBeenCalledWith(
+      expect.stringMatching(/pago/i),
+    );
   });
 
   it("selecciona todos los comprobantes agregables y los agrega secuencialmente", async () => {
