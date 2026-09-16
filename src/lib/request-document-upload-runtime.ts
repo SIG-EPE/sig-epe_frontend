@@ -8,8 +8,17 @@ import {
   REQUEST_DOCUMENT_CATEGORY,
   REQUEST_RECEIPT_OCR_STATUS,
   type RequestDocument,
+  type RequestDocumentCategory,
   type RequestReceiptReview,
 } from "@/types/requests";
+
+const OCR_DOCUMENT_CATEGORIES = new Set<RequestDocumentCategory>([
+  REQUEST_DOCUMENT_CATEGORY.RECEIPT,
+  REQUEST_DOCUMENT_CATEGORY.INVOICE,
+  REQUEST_DOCUMENT_CATEGORY.PROFESSIONAL_FEE_RECEIPT,
+  REQUEST_DOCUMENT_CATEGORY.SALES_RECEIPT,
+  REQUEST_DOCUMENT_CATEGORY.CASH_RECEIPT,
+]);
 
 function parseRetryAfterHeader(value: string | null): number {
   if (!value) return 0;
@@ -35,7 +44,7 @@ export function getReconciledRequestDocumentUploadFileState(
   if (!item.persistedDocumentId) return null;
   const document = documents.find((candidate) => candidate.id === item.persistedDocumentId);
   if (!document) return null;
-  if (item.documentCategory !== REQUEST_DOCUMENT_CATEGORY.RECEIPT) return REQUEST_DOCUMENT_UPLOAD_FILE_STATE.SAVED;
+  if (!OCR_DOCUMENT_CATEGORIES.has(item.documentCategory)) return REQUEST_DOCUMENT_UPLOAD_FILE_STATE.SAVED;
   const receipt = receipts.find((candidate) => candidate.receipt.document_id === document.id);
   if (!receipt || receipt.receipt.confirmed_at) return REQUEST_DOCUMENT_UPLOAD_FILE_STATE.SAVED;
   if (

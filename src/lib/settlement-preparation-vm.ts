@@ -83,7 +83,7 @@ export interface SettlementPreparationTotals {
   allocatedAmount: number;
   reportedAmount: number;
   differenceAmount: number;
-  currency: string;
+  currency: string | null;
 }
 
 export interface SettlementPreparationLocks {

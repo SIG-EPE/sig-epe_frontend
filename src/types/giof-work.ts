@@ -1,3 +1,5 @@
+import type { RequestStatus, RequestType } from "@/types/requests";
+
 export const GIOF_WORK_POOL = {
   REQUEST: "REQUEST",
   PAYMENT: "PAYMENT",
@@ -6,6 +8,57 @@ export const GIOF_WORK_POOL = {
 
 export type GiofWorkPool = (typeof GIOF_WORK_POOL)[keyof typeof GIOF_WORK_POOL];
 
+export const GIOF_CLAIMABLE_ASSIGNMENT_STATE = {
+  OWN: "OWN",
+  UNASSIGNED: "UNASSIGNED",
+  TAKEOVER: "TAKEOVER",
+} as const;
+
+export type GiofClaimableAssignmentState =
+  (typeof GIOF_CLAIMABLE_ASSIGNMENT_STATE)[keyof typeof GIOF_CLAIMABLE_ASSIGNMENT_STATE];
+
+export const GIOF_CLAIMABLE_LEASE_STATE = {
+  NONE: "NONE",
+  OWN_ACTIVE: "OWN_ACTIVE",
+  EXPIRED: "EXPIRED",
+  STALE: "STALE",
+} as const;
+
+export type GiofClaimableLeaseState =
+  (typeof GIOF_CLAIMABLE_LEASE_STATE)[keyof typeof GIOF_CLAIMABLE_LEASE_STATE];
+
+export interface GiofSelfClaimCommand {
+  pool: GiofWorkPool;
+  requestId: string;
+  expectedVersion: number;
+}
+
+export interface GiofSelfClaimResult {
+  requestId: string;
+  pool: GiofWorkPool;
+  assignmentVersion: string;
+  changed: boolean;
+}
+
+export interface GiofClaimableWorkItem {
+  requestId: string;
+  requestCode: string | null;
+  pool: GiofWorkPool;
+  requestType: RequestType;
+  status: RequestStatus;
+  queueDate: string;
+  assignmentVersion: string;
+  assignmentState: GiofClaimableAssignmentState;
+  leaseState: GiofClaimableLeaseState;
+}
+
+export interface GiofClaimableWorkPage {
+  items: GiofClaimableWorkItem[];
+  total: number;
+  page: number;
+  limit: number;
+}
+
 export const GIOF_WORK_SCOPE = {
   MINE: "mine",
   ALL: "all",
@@ -13,7 +66,8 @@ export const GIOF_WORK_SCOPE = {
   ASSIGNEE: "assignee",
 } as const;
 
-export type GiofWorkScope = (typeof GIOF_WORK_SCOPE)[keyof typeof GIOF_WORK_SCOPE];
+export type GiofWorkScope =
+  (typeof GIOF_WORK_SCOPE)[keyof typeof GIOF_WORK_SCOPE];
 
 export interface GiofWorkLeaseSummary {
   pool?: GiofWorkPool;

@@ -5,6 +5,7 @@ import userEvent from "@testing-library/user-event";
 import { RequestDocumentsCard } from "@/components/requests/request-documents-card";
 import { api, ApiRequestError } from "@/lib/api-client";
 import { ROLE_CODE } from "@/lib/constants";
+import { clearQueryCache, setQueryCacheAuthNamespace } from "@/lib/query-cache";
 import { useAuthStore } from "@/stores/auth-store";
 import { REQUEST_CURRENCY, REQUEST_DOCUMENT_CATEGORY, REQUEST_DOCUMENT_SCOPE_TYPE, REQUEST_RECEIPT_DUPLICATE_STATUS, REQUEST_RECEIPT_OCR_STATUS, REQUEST_STATUS, REQUEST_TYPE, REXAN_OUTCOME, type PaymentRequest, type RequestAllocation, type RequestDocument, type RequestReceiptReview } from "@/types/requests";
 
@@ -187,8 +188,119 @@ function makeUploadError(status: number, message: string, code?: string): ApiReq
 }
 
 describe("RequestDocumentsCard", () => {
+  let queryCacheSession = 0;
+  it.each([
+    { requestType: REQUEST_TYPE.ADVANCE, readOnly: false },
+    { requestType: REQUEST_TYPE.ADVANCE, readOnly: true },
+    { requestType: REQUEST_TYPE.SUPPLIER_PAYMENT, readOnly: false },
+    { requestType: REQUEST_TYPE.SUPPLIER_PAYMENT, readOnly: true },
+    { requestType: REQUEST_TYPE.REIMBURSEMENT, readOnly: false },
+    { requestType: REQUEST_TYPE.REIMBURSEMENT, readOnly: true },
+  ])("uses the $requestType allocation document wording in readOnly=$readOnly", async ({ requestType, readOnly }) => {
+    vi.mocked(api.get).mockResolvedValue([]);
+    const documents = requestType === REQUEST_TYPE.SUPPLIER_PAYMENT
+      ? [makeDocument({ document_category: REQUEST_DOCUMENT_CATEGORY.INVOICE })]
+      : [];
+
+    render(<RequestDocumentsCard
+      request={makeRequest({
+        request_type: requestType,
+        allocations: [makeAllocation()],
+        uit_year_applied: 2026,
+        uit_amount_applied: "5500.00",
+      })}
+      documents={documents}
+      readOnly={readOnly}
+    />);
+
+    expect(await screen.findByTestId("allocation-documents-groups")).toBeInTheDocument();
+    if (requestType === REQUEST_TYPE.ADVANCE) {
+      expect(screen.getByText(/Esta solicitud requiere un único PXQ activo/)).toBeInTheDocument();
+      expect(screen.getByText(/Un único PXQ activo asociado a la solicitud/)).toBeInTheDocument();
+      expect(screen.getByText("PXQ")).toBeInTheDocument();
+      return;
+    }
+
+    expect(screen.getByText("Los documentos asociados a cada línea POA son opcionales en esta etapa.")).toBeInTheDocument();
+    expect(screen.queryByText(/Esta solicitud requiere un único PXQ activo/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Un único PXQ activo asociado a la solicitud/)).not.toBeInTheDocument();
+    if (requestType === REQUEST_TYPE.SUPPLIER_PAYMENT) {
+      expect(screen.getByText("Comprobante primario del proveedor")).toBeInTheDocument();
+      expect(screen.getByText("Contrato / convenio")).toBeInTheDocument();
+    } else {
+      expect(screen.getByText("Comprobante real vinculado")).toBeInTheDocument();
+      expect(screen.getByText(/No requiere PXQ ni éxito de OCR/)).toBeInTheDocument();
+      expect(screen.queryByText("PXQ")).not.toBeInTheDocument();
+    }
+  });
+
+  it.each([false, true])("keeps ADVANCE_SETTLEMENT structured allocation guidance in readOnly=%s", async (readOnly) => {
+    vi.mocked(api.get).mockResolvedValue([]);
+
+    render(<RequestDocumentsCard
+      request={makeRequest({ request_type: REQUEST_TYPE.ADVANCE_SETTLEMENT, allocations: [makeAllocation()] })}
+      documents={[]}
+      readOnly={readOnly}
+    />);
+
+    expect(await screen.findByText(/En esta rendición no debes volver a adjuntar los Excel PxQ del anticipo/)).toBeInTheDocument();
+    expect(screen.getByText("Comprobantes por línea POA")).toBeInTheDocument();
+    expect(screen.getByText("Constancias de devolución por línea POA")).toBeInTheDocument();
+    expect(screen.queryByTestId("allocation-documents-groups")).not.toBeInTheDocument();
+  });
+
+  it.each(["PEN", "USD"] as const)("shows supplier contract rules in %s with independent primary evidence", async (currency) => {
+    vi.mocked(api.get).mockImplementation(async (path) => path === "/requests/lookups/fx-reference" ? { reference: null, direction: "PEN/USD", fallback: "UNAVAILABLE", last_refresh_failure: "PROVIDER_DISABLED" } : []);
+    render(<RequestDocumentsCard request={makeRequest({ request_type: REQUEST_TYPE.SUPPLIER_PAYMENT, currency, requested_amount: 2500.01, uit_year_applied: 2026, uit_amount_applied: "5000.00", declares_rus: false, declares_casa_de_retiro: null })} documents={[makeDocument({ document_category: "INVOICE" })]} />);
+    expect(screen.queryByText("Falta un documento primario elegible del proveedor.")).not.toBeInTheDocument();
+    expect(screen.getByText(/RUS: No.*Casa de Retiro: Sin declarar/)).toBeInTheDocument();
+    if (currency === "USD") {
+      expect(screen.getByText("Opcional para solicitudes en dólares. El umbral de ½ UIT solo se aplica a solicitudes en soles.")).toBeInTheDocument();
+      expect(screen.queryByText("El total en soles supera media UIT y requiere contrato/convenio PDF.")).not.toBeInTheDocument();
+      expect(await screen.findByText(/Referencia cambiaria no disponible: PROVIDER_DISABLED/)).toBeInTheDocument();
+    } else {
+      expect(screen.getByText("El total en soles supera media UIT y requiere contrato/convenio PDF.")).toBeInTheDocument();
+    }
+  });
+  it("keeps missing PEN UIT blocking even with contract and primary PDFs", async () => {
+    vi.mocked(api.get).mockImplementation(async (path) => path === "/requests/lookups/annual-uit/2026" ? { year: 2026, annual_uit: null } : []);
+    render(<RequestDocumentsCard request={makeRequest({ request_type: REQUEST_TYPE.SUPPLIER_PAYMENT })} documents={[makeDocument({ document_category: "INVOICE" }), makeDocument({ id: "c", document_category: "CONTRACT" })]} />);
+    expect(await screen.findByText(/UIT no configurada para el año de la solicitud/)).toBeInTheDocument();
+  });
+  it("shows an actionable lookup error without reporting UIT as not configured", async () => {
+    vi.mocked(api.get).mockImplementation(async (path) => {
+      if (path === "/requests/lookups/annual-uit/2026") throw makeUploadError(403, "Forbidden");
+      return [];
+    });
+    render(<RequestDocumentsCard request={makeRequest({ request_type: REQUEST_TYPE.SUPPLIER_PAYMENT })} documents={[makeDocument({ document_category: "INVOICE" })]} />);
+    expect(await screen.findByText(/No se pudo consultar el Valor UIT/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Volver a consultar UIT" })).toBeInTheDocument();
+    expect(screen.queryByText(/UIT no configurada para el año de la solicitud/)).not.toBeInTheDocument();
+  });
+  it("shows lookup loading without reporting UIT as not configured", async () => {
+    vi.mocked(api.get).mockImplementation(async (path) => {
+      if (path === "/requests/lookups/annual-uit/2026") {
+        return new Promise(() => undefined);
+      }
+      return [];
+    });
+    render(<RequestDocumentsCard request={makeRequest({ request_type: REQUEST_TYPE.SUPPLIER_PAYMENT })} documents={[makeDocument({ document_category: "INVOICE" })]} />);
+    expect(await screen.findByText(/Consultando el Valor UIT/)).toBeInTheDocument();
+    expect(screen.queryByText(/UIT no configurada para el año de la solicitud/)).not.toBeInTheDocument();
+  });
+  it("allows a linked reimbursement receipt without OCR success or confirmation and without PXQ", async () => {
+    const receipt = makeReceiptReview();
+    receipt.receipt.ocr_status = "FAILED";
+    vi.mocked(api.get).mockImplementation(async (path) => path === "/requests/req-1/receipts" ? [receipt] : []);
+    render(<RequestDocumentsCard request={makeRequest({ request_type: REQUEST_TYPE.REIMBURSEMENT })} documents={[makeDocument({ document_category: "RECEIPT" })]} />);
+    await waitFor(() => expect(screen.queryByRole("button", { name: /adjuntar comprobante real vinculado/i })).not.toBeInTheDocument());
+    expect(screen.queryByLabelText(/seleccionar pxq/i)).not.toBeInTheDocument();
+  });
   beforeEach(() => {
     vi.clearAllMocks();
+    clearQueryCache();
+    queryCacheSession += 1;
+    setQueryCacheAuthNamespace(`request-documents-${queryCacheSession}`);
     Object.defineProperty(HTMLElement.prototype, "hasPointerCapture", { value: vi.fn(), configurable: true });
     Object.defineProperty(HTMLElement.prototype, "scrollIntoView", { value: vi.fn(), configurable: true });
     useAuthStore.setState({
@@ -208,7 +320,7 @@ describe("RequestDocumentsCard", () => {
   });
 
   it("renderiza documentos existentes y permite eliminarlos cuando la solicitud es editable", async () => {
-    vi.mocked(api.get).mockResolvedValue([makeDocument()]);
+    vi.mocked(api.get).mockImplementation(async (path) => path === "/requests/req-1/documents" ? [makeDocument()] : []);
     vi.mocked(api.delete).mockResolvedValue(undefined);
 
     render(<RequestDocumentsCard request={makeRequest({ request_type: REQUEST_TYPE.SUPPLIER_PAYMENT })} />);
@@ -362,7 +474,7 @@ describe("RequestDocumentsCard", () => {
   });
 
   it("muestra una indicación no intrusiva cuando el documento no tiene enlace", async () => {
-    vi.mocked(api.get).mockResolvedValue([makeDocument({ drive_web_url: null })]);
+    vi.mocked(api.get).mockImplementation(async (path) => path === "/requests/req-1/documents" ? [makeDocument({ drive_web_url: null })] : []);
 
     render(<RequestDocumentsCard request={makeRequest({ request_type: REQUEST_TYPE.SUPPLIER_PAYMENT })} />);
 
@@ -382,7 +494,13 @@ describe("RequestDocumentsCard", () => {
     await user.click(screen.getByRole("button", { name: /^adjuntar$/i }));
 
     await waitFor(() => {
-      expect(api.postForm).toHaveBeenCalledWith("/requests/req-1/documents", expect.any(FormData));
+      expect(api.postForm).toHaveBeenCalledWith(
+        "/requests/req-1/documents",
+        expect.any(FormData),
+        expect.objectContaining({
+          headers: expect.objectContaining({ "Idempotency-Key": expect.any(String) }),
+        }),
+      );
     });
     const formData = vi.mocked(api.postForm).mock.calls[0][1] as FormData;
     expect(formData.get("file")).toBe(file);
@@ -524,7 +642,13 @@ describe("RequestDocumentsCard", () => {
     fireEvent.change(screen.getByLabelText(/seleccionar pxq/i), { target: { files: [file] } });
 
     await waitFor(() => {
-      expect(api.postForm).toHaveBeenCalledWith("/requests/req-1/documents", expect.any(FormData));
+      expect(api.postForm).toHaveBeenCalledWith(
+        "/requests/req-1/documents",
+        expect.any(FormData),
+        expect.objectContaining({
+          headers: expect.objectContaining({ "Idempotency-Key": expect.any(String) }),
+        }),
+      );
     });
     const formData = vi.mocked(api.postForm).mock.calls[0][1] as FormData;
     expect(formData.get("file")).toBe(file);
@@ -693,7 +817,13 @@ describe("RequestDocumentsCard", () => {
     await user.click(screen.getByRole("button", { name: /^adjuntar$/i }));
 
     await waitFor(() => {
-      expect(api.postForm).toHaveBeenCalledWith("/requests/req-1/documents", expect.any(FormData));
+      expect(api.postForm).toHaveBeenCalledWith(
+        "/requests/req-1/documents",
+        expect.any(FormData),
+        expect.objectContaining({
+          headers: expect.objectContaining({ "Idempotency-Key": expect.any(String) }),
+        }),
+      );
     });
     const formData = vi.mocked(api.postForm).mock.calls[0][1] as FormData;
     expect(formData.get("document_category")).toBe(REQUEST_DOCUMENT_CATEGORY.RECEIPT);
@@ -729,7 +859,13 @@ describe("RequestDocumentsCard", () => {
     await user.click(screen.getByRole("button", { name: /^adjuntar$/i }));
 
     await waitFor(() => {
-      expect(api.postForm).toHaveBeenCalledWith("/requests/req-1/documents", expect.any(FormData));
+      expect(api.postForm).toHaveBeenCalledWith(
+        "/requests/req-1/documents",
+        expect.any(FormData),
+        expect.objectContaining({
+          headers: expect.objectContaining({ "Idempotency-Key": expect.any(String) }),
+        }),
+      );
     });
     const formData = vi.mocked(api.postForm).mock.calls[0][1] as FormData;
     expect(formData.get("request_allocation_id")).toBe("alloc-1");
@@ -830,7 +966,13 @@ describe("RequestDocumentsCard", () => {
     await user.click(screen.getByRole("button", { name: /^adjuntar$/i }));
 
     await waitFor(() => {
-      expect(api.postForm).toHaveBeenCalledWith("/requests/req-1/documents", expect.any(FormData));
+      expect(api.postForm).toHaveBeenCalledWith(
+        "/requests/req-1/documents",
+        expect.any(FormData),
+        expect.objectContaining({
+          headers: expect.objectContaining({ "Idempotency-Key": expect.any(String) }),
+        }),
+      );
     });
     const formData = vi.mocked(api.postForm).mock.calls[0][1] as FormData;
     expect(formData.get("document_category")).toBe(REQUEST_DOCUMENT_CATEGORY.PAYMENT_PROOF);
@@ -976,6 +1118,35 @@ describe("RequestDocumentsCard", () => {
     });
   });
 
+  it("mantiene una moneda de comprobante no resuelta hasta que el usuario la selecciona", async () => {
+    const unresolvedReceipt = makeReceiptReview({
+      receipt: { ...makeReceiptReview().receipt, currency: null },
+    });
+    vi.mocked(api.get).mockImplementation(async (path) => {
+      if (path === "/requests/req-1/receipts") return [unresolvedReceipt];
+      return [makeDocument({ document_category: REQUEST_DOCUMENT_CATEGORY.RECEIPT, original_filename: "Factura.pdf" })];
+    });
+    vi.mocked(api.patch).mockResolvedValue({
+      ...unresolvedReceipt,
+      receipt: { ...unresolvedReceipt.receipt, currency: REQUEST_CURRENCY.USD },
+    });
+
+    const user = userEvent.setup();
+    render(<RequestDocumentsCard request={makeRequest({ request_type: REQUEST_TYPE.SUPPLIER_PAYMENT })} />);
+
+    expect(await screen.findByText(/150.5 · Moneda pendiente de resolución/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /confirmar datos/i })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /revisar datos/i }));
+    expect(screen.getByRole("button", { name: /guardar corrección/i })).toBeDisabled();
+    await user.click(screen.getByRole("combobox", { name: /moneda/i }));
+    await user.click(await screen.findByRole("option", { name: "Dólares (USD)" }));
+    await user.click(screen.getByRole("button", { name: /guardar corrección/i }));
+
+    await waitFor(() => {
+      expect(api.patch).toHaveBeenCalledWith("/requests/req-1/receipts/receipt-1", expect.objectContaining({ currency: REQUEST_CURRENCY.USD }));
+    });
+  });
+
   it("confirma datos detectados del comprobante y no muestra reintento de lectura", async () => {
     vi.mocked(api.get).mockImplementation(async (path) => {
       if (path === "/requests/req-1/receipts") return [makeReceiptReview()];
@@ -1046,7 +1217,13 @@ describe("RequestDocumentsCard", () => {
     fireEvent.change(screen.getByLabelText(/seleccionar pxq/i), { target: { files: [file] } });
 
     await waitFor(() => {
-      expect(api.postForm).toHaveBeenCalledWith("/requests/req-1/documents", expect.any(FormData));
+      expect(api.postForm).toHaveBeenCalledWith(
+        "/requests/req-1/documents",
+        expect.any(FormData),
+        expect.objectContaining({
+          headers: expect.objectContaining({ "Idempotency-Key": expect.any(String) }),
+        }),
+      );
     });
     const formData = vi.mocked(api.postForm).mock.calls[0][1] as FormData;
     expect(formData.get("document_category")).toBe(REQUEST_DOCUMENT_CATEGORY.PXQ);
@@ -1069,28 +1246,40 @@ describe("RequestDocumentsCard", () => {
     await user.click(screen.getByRole("button", { name: /^adjuntar$/i }));
 
     await waitFor(() => {
-      expect(api.postForm).toHaveBeenCalledWith("/requests/req-1/documents", expect.any(FormData));
+      expect(api.postForm).toHaveBeenCalledWith(
+        "/requests/req-1/documents",
+        expect.any(FormData),
+        expect.objectContaining({
+          headers: expect.objectContaining({ "Idempotency-Key": expect.any(String) }),
+        }),
+      );
     });
     const formData = vi.mocked(api.postForm).mock.calls[0][1] as FormData;
     expect(formData.get("document_category")).toBe(REQUEST_DOCUMENT_CATEGORY.REQUEST_SUPPORT);
   });
 
-  it("sube directamente el PxQ desde el checklist requerido", async () => {
+  it("sube directamente el comprobante de reembolso desde el checklist requerido", async () => {
     vi.mocked(api.get).mockResolvedValue([]);
     vi.mocked(api.postForm).mockResolvedValue(makeDocument({ id: "doc-2", original_filename: "comprobante.pdf" }));
 
     render(<RequestDocumentsCard request={makeRequest({ request_type: REQUEST_TYPE.REIMBURSEMENT })} />);
 
-    const file = new File(["contenido"], "pxq.xlsx", { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
-    const checklistInput = await screen.findByLabelText(/seleccionar pxq/i);
-    expect(checklistInput).toHaveAttribute("accept", expect.stringContaining(".xlsx"));
+    const file = new File(["contenido"], "comprobante.pdf", { type: "application/pdf" });
+    const checklistInput = await screen.findByLabelText(/seleccionar comprobante real vinculado/i);
+    expect(checklistInput).toHaveAttribute("accept", expect.stringContaining(".pdf"));
     fireEvent.change(checklistInput, { target: { files: [file] } });
 
     await waitFor(() => {
-      expect(api.postForm).toHaveBeenCalledWith("/requests/req-1/documents", expect.any(FormData));
+      expect(api.postForm).toHaveBeenCalledWith(
+        "/requests/req-1/documents",
+        expect.any(FormData),
+        expect.objectContaining({
+          headers: expect.objectContaining({ "Idempotency-Key": expect.any(String) }),
+        }),
+      );
     });
     const formData = vi.mocked(api.postForm).mock.calls[0][1] as FormData;
-    expect(formData.get("document_category")).toBe(REQUEST_DOCUMENT_CATEGORY.PXQ);
+    expect(formData.get("document_category")).toBe(REQUEST_DOCUMENT_CATEGORY.RECEIPT);
   });
 
   it("muestra Subiendo solo en la fila requerida que está cargando", async () => {
@@ -1100,8 +1289,8 @@ describe("RequestDocumentsCard", () => {
 
     render(<RequestDocumentsCard request={makeRequest({ request_type: REQUEST_TYPE.REIMBURSEMENT })} />);
 
-    const file = new File(["contenido"], "pxq.xlsx", { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
-    fireEvent.change(await screen.findByLabelText(/seleccionar pxq/i), { target: { files: [file] } });
+    const file = new File(["contenido"], "comprobante.pdf", { type: "application/pdf" });
+    fireEvent.change(await screen.findByLabelText(/seleccionar comprobante real vinculado/i), { target: { files: [file] } });
 
     expect(await screen.findByRole("button", { name: /^subiendo/i })).toBeDisabled();
     expect(screen.getByRole("button", { name: /^adjuntar$/i })).toBeDisabled();
@@ -1118,15 +1307,15 @@ describe("RequestDocumentsCard", () => {
     const user = userEvent.setup();
     render(<RequestDocumentsCard request={makeRequest({ request_type: REQUEST_TYPE.REIMBURSEMENT })} />);
 
-    expect(await screen.findByText("PXQ")).toBeInTheDocument();
+    expect(await screen.findByText("Comprobante real vinculado")).toBeInTheDocument();
 
     const file = new File(["contenido"], "sustento.pdf", { type: "application/pdf" });
     fireEvent.change(screen.getByLabelText(/archivo/i), { target: { files: [file] } });
     await user.click(screen.getByRole("button", { name: /^adjuntar$/i }));
 
     expect(await screen.findByRole("button", { name: /^adjuntando/i })).toBeDisabled();
-    expect(screen.getByRole("button", { name: /adjuntar pxq/i })).toBeDisabled();
-    expect(screen.queryByRole("button", { name: /subiendo.*pxq/i })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /adjuntar comprobante real vinculado/i })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: /subiendo.*comprobante/i })).not.toBeInTheDocument();
     expect(screen.getAllByRole("button", { name: /^adjuntando/i })).toHaveLength(1);
 
     deferredUpload.resolve(makeDocument({ id: "doc-2", document_category: REQUEST_DOCUMENT_CATEGORY.REQUEST_SUPPORT }));
@@ -1140,8 +1329,8 @@ describe("RequestDocumentsCard", () => {
 
     render(<RequestDocumentsCard request={makeRequest({ request_type: REQUEST_TYPE.REIMBURSEMENT })} />);
 
-    expect(await screen.findByText("PXQ")).toBeInTheDocument();
-    expect(screen.getByLabelText(/seleccionar pxq/i)).toHaveAttribute("accept", expect.stringContaining(".xlsx"));
+    expect(await screen.findByText("Comprobante real vinculado")).toBeInTheDocument();
+    expect(screen.getByLabelText(/seleccionar comprobante real vinculado/i)).toHaveAttribute("accept", expect.stringContaining(".pdf"));
   });
 
   it("aclara que el cargador genérico acepta hasta 20 archivos por tanda", async () => {

@@ -13,7 +13,7 @@ interface SettlementPendingPanelProps {
   onGoToTask: (item: SettlementPendingItem) => void;
 }
 
-function TotalItem({ label, value, currency }: { label: string; value: number; currency: string }) {
+function TotalItem({ label, value, currency }: { label: string; value: number; currency: string | null }) {
   return (
     <div className="min-w-0 rounded-md bg-muted/50 p-3">
       <p className="text-xs text-muted-foreground">{label}</p>

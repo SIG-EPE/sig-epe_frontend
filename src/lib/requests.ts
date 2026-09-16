@@ -1,5 +1,19 @@
-import { ApiRequestError } from "@/lib/api-client";
-import { formatBusinessDate, formatBusinessDateTime, getDateOnlyUtcTime } from "@/lib/business-timezone";
+import { api, ApiRequestError } from "@/lib/api-client";
+import {
+  resolveSupplierIdentity,
+  type SupplierIdentitySource,
+} from "@/lib/request-supplier-policy";
+import { USD_CONTRACT_NOTICE } from "@/lib/request-supplier-policy";
+import {
+  evaluateRequestEvidence,
+  type RequestEvidenceContext,
+  type EvidenceReceipt,
+} from "@/lib/request-document-policy";
+import {
+  formatBusinessDate,
+  formatBusinessDateTime,
+  getDateOnlyUtcTime,
+} from "@/lib/business-timezone";
 import { ROLE_CODE, ROUTES } from "@/lib/constants";
 import { isGiofOperationalRole } from "@/lib/role-capabilities";
 import { getSafeDocumentUrl } from "@/lib/safe-url";
@@ -68,6 +82,10 @@ import {
   type RequestCurrency,
   type RexanOutcome,
   type RenditionNextStepGuidance,
+  type RejectApprovedPaymentDto,
+  type RejectApprovedPaymentLease,
+  type RejectApprovedPaymentResponse,
+  type PaymentRejectionProjection,
 } from "@/types/requests";
 
 export {
@@ -89,7 +107,78 @@ export const ACTIVE_REVIEW_STATUSES = [
 export const PAYMENT_QUEUE_STATUS = {
   PENDING: REQUEST_STATUS.APPROVED,
   PAID: REQUEST_STATUS.PAID,
+  REJECTED: REQUEST_STATUS.REJECTED,
 } as const;
+
+export const PAYMENT_REJECTION_REASON_MAX_LENGTH = 1000;
+
+function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
+  return typeof value === "object" && value !== null;
+}
+
+export function parsePaymentRejectionProjection(
+  value: unknown,
+): PaymentRejectionProjection | null {
+  if (!isRecord(value)) return null;
+  if (value.reason !== null && typeof value.reason !== "string") return null;
+  if (typeof value.rejected_at !== "string" || !value.rejected_at.trim()) {
+    return null;
+  }
+
+  let actor: PaymentRejectionProjection["actor"] = null;
+  if (value.actor !== null) {
+    if (!isRecord(value.actor) || typeof value.actor.id !== "string")
+      return null;
+    if (
+      value.actor.first_name !== null &&
+      typeof value.actor.first_name !== "string"
+    )
+      return null;
+    if (
+      value.actor.last_name !== null &&
+      typeof value.actor.last_name !== "string"
+    )
+      return null;
+    actor = {
+      id: value.actor.id,
+      first_name: value.actor.first_name,
+      last_name: value.actor.last_name,
+    };
+  }
+
+  return {
+    reason: value.reason,
+    rejected_at: value.rejected_at,
+    actor,
+  };
+}
+
+export async function rejectApprovedPayment(
+  requestId: string,
+  input: RejectApprovedPaymentDto,
+  lease: RejectApprovedPaymentLease,
+): Promise<RejectApprovedPaymentResponse> {
+  const reason = input.reason.trim();
+  if (!reason) {
+    throw new Error("Ingresa el motivo del rechazo del pago.");
+  }
+  if (reason.length > PAYMENT_REJECTION_REASON_MAX_LENGTH) {
+    throw new Error(
+      `El motivo no puede superar ${PAYMENT_REJECTION_REASON_MAX_LENGTH} caracteres.`,
+    );
+  }
+
+  return api.post<RejectApprovedPaymentResponse>(
+    `/requests/${requestId}/reject-payment`,
+    { reason },
+    {
+      headers: {
+        "x-giof-assignment-version": String(lease.assignmentVersion),
+        "x-giof-lease-token": lease.token,
+      },
+    },
+  );
+}
 
 export const REQUEST_STEPPER_STATE = {
   COMPLETED: "completed",
@@ -97,7 +186,8 @@ export const REQUEST_STEPPER_STATE = {
   PENDING: "pending",
 } as const;
 
-export type RequestStepperState = (typeof REQUEST_STEPPER_STATE)[keyof typeof REQUEST_STEPPER_STATE];
+export type RequestStepperState =
+  (typeof REQUEST_STEPPER_STATE)[keyof typeof REQUEST_STEPPER_STATE];
 
 export const REXAN_OUTCOME_BADGE_TONE = {
   DEFAULT: "default",
@@ -106,7 +196,8 @@ export const REXAN_OUTCOME_BADGE_TONE = {
   OUTLINE: "outline",
 } as const;
 
-export type RexanOutcomeBadgeTone = (typeof REXAN_OUTCOME_BADGE_TONE)[keyof typeof REXAN_OUTCOME_BADGE_TONE];
+export type RexanOutcomeBadgeTone =
+  (typeof REXAN_OUTCOME_BADGE_TONE)[keyof typeof REXAN_OUTCOME_BADGE_TONE];
 
 export const REQUEST_EDIT_STEP = {
   DATA: "data",
@@ -116,13 +207,18 @@ export const REQUEST_EDIT_STEP = {
 
 export const REQUEST_STATE_CONFLICT_CODE = "REQUEST_STATE_CONFLICT";
 
-export function isRequestStateConflict(error: unknown): error is ApiRequestError {
-  return error instanceof ApiRequestError
-    && error.status === 409
-    && error.body.code === REQUEST_STATE_CONFLICT_CODE;
+export function isRequestStateConflict(
+  error: unknown,
+): error is ApiRequestError {
+  return (
+    error instanceof ApiRequestError &&
+    error.status === 409 &&
+    error.body.code === REQUEST_STATE_CONFLICT_CODE
+  );
 }
 
-export type RequestEditStep = (typeof REQUEST_EDIT_STEP)[keyof typeof REQUEST_EDIT_STEP];
+export type RequestEditStep =
+  (typeof REQUEST_EDIT_STEP)[keyof typeof REQUEST_EDIT_STEP];
 
 export interface RequestEditStepperItem {
   step: RequestEditStep;
@@ -136,10 +232,10 @@ export interface RequestEditStepperOptions {
   requestType?: RequestType | null;
 }
 
-export type RequestSubmitData = Pick<PaymentRequest,
+export type RequestSubmitData = Pick<
+  PaymentRequest,
   | "request_type"
   | "budget_planning_line_id"
-  | "requested_amount"
   | "concept"
   | "beneficiary_name"
   | "beneficiary_document_type"
@@ -149,16 +245,18 @@ export type RequestSubmitData = Pick<PaymentRequest,
   | "account_type"
   | "bank_account"
   | "bank_cci"
->;
+> & { requested_amount: string | number };
 
 export interface RequestAllocationSubmitData {
   budget_planning_line_id: string;
-  amount: number;
+  amount: string | number;
 }
 
-export type RequestSubmitDataWithAllocations = RequestSubmitData & {
-  allocations?: RequestAllocationSubmitData[];
-};
+export type RequestSubmitDataWithAllocations = RequestSubmitData &
+  SupplierIdentitySource & {
+    currency?: string | null;
+    allocations?: RequestAllocationSubmitData[];
+  };
 
 export interface RequestStatusStepperItem {
   status: RequestStatus;
@@ -179,7 +277,10 @@ export interface RequestStatusStepperDates {
   voided_at?: string | null;
 }
 
-export type RequestStatusLabelContext = Pick<PaymentRequest, "request_type" | "rexan_outcome">;
+export type RequestStatusLabelContext = Pick<
+  PaymentRequest,
+  "request_type" | "rexan_outcome"
+>;
 
 export const REQUEST_TYPE_LABELS: Record<RequestType, string> = {
   [REQUEST_TYPE.ADVANCE]: "Anticipo",
@@ -189,15 +290,34 @@ export const REQUEST_TYPE_LABELS: Record<RequestType, string> = {
 };
 
 export const REQUEST_STATUS_LABELS: Record<RequestStatus, string> = {
-  [REQUEST_STATUS.DRAFT]: formatRequestStatus(REQUEST_STATUS.DRAFT, { surface: REQUEST_STATUS_SURFACE.DETAIL }),
-  [REQUEST_STATUS.SUBMITTED]: formatRequestStatus(REQUEST_STATUS.SUBMITTED, { surface: REQUEST_STATUS_SURFACE.DETAIL }),
-  [REQUEST_STATUS.OBSERVED]: formatRequestStatus(REQUEST_STATUS.OBSERVED, { surface: REQUEST_STATUS_SURFACE.DETAIL }),
-  [REQUEST_STATUS.IN_VALIDATION]: formatRequestStatus(REQUEST_STATUS.IN_VALIDATION, { surface: REQUEST_STATUS_SURFACE.DETAIL }),
-  [REQUEST_STATUS.APPROVED]: formatRequestStatus(REQUEST_STATUS.APPROVED, { surface: REQUEST_STATUS_SURFACE.DETAIL }),
-  [REQUEST_STATUS.REJECTED]: formatRequestStatus(REQUEST_STATUS.REJECTED, { surface: REQUEST_STATUS_SURFACE.DETAIL }),
-  [REQUEST_STATUS.PAID]: formatRequestStatus(REQUEST_STATUS.PAID, { surface: REQUEST_STATUS_SURFACE.DETAIL }),
-  [REQUEST_STATUS.CLOSED]: formatRequestStatus(REQUEST_STATUS.CLOSED, { surface: REQUEST_STATUS_SURFACE.DETAIL }),
-  [REQUEST_STATUS.VOIDED]: formatRequestStatus(REQUEST_STATUS.VOIDED, { surface: REQUEST_STATUS_SURFACE.DETAIL }),
+  [REQUEST_STATUS.DRAFT]: formatRequestStatus(REQUEST_STATUS.DRAFT, {
+    surface: REQUEST_STATUS_SURFACE.DETAIL,
+  }),
+  [REQUEST_STATUS.SUBMITTED]: formatRequestStatus(REQUEST_STATUS.SUBMITTED, {
+    surface: REQUEST_STATUS_SURFACE.DETAIL,
+  }),
+  [REQUEST_STATUS.OBSERVED]: formatRequestStatus(REQUEST_STATUS.OBSERVED, {
+    surface: REQUEST_STATUS_SURFACE.DETAIL,
+  }),
+  [REQUEST_STATUS.IN_VALIDATION]: formatRequestStatus(
+    REQUEST_STATUS.IN_VALIDATION,
+    { surface: REQUEST_STATUS_SURFACE.DETAIL },
+  ),
+  [REQUEST_STATUS.APPROVED]: formatRequestStatus(REQUEST_STATUS.APPROVED, {
+    surface: REQUEST_STATUS_SURFACE.DETAIL,
+  }),
+  [REQUEST_STATUS.REJECTED]: formatRequestStatus(REQUEST_STATUS.REJECTED, {
+    surface: REQUEST_STATUS_SURFACE.DETAIL,
+  }),
+  [REQUEST_STATUS.PAID]: formatRequestStatus(REQUEST_STATUS.PAID, {
+    surface: REQUEST_STATUS_SURFACE.DETAIL,
+  }),
+  [REQUEST_STATUS.CLOSED]: formatRequestStatus(REQUEST_STATUS.CLOSED, {
+    surface: REQUEST_STATUS_SURFACE.DETAIL,
+  }),
+  [REQUEST_STATUS.VOIDED]: formatRequestStatus(REQUEST_STATUS.VOIDED, {
+    surface: REQUEST_STATUS_SURFACE.DETAIL,
+  }),
 };
 
 export const REXAN_OUTCOME_LABELS: Record<RexanOutcome, string> = {
@@ -208,22 +328,35 @@ export const REXAN_OUTCOME_LABELS: Record<RexanOutcome, string> = {
 
 export const REXAN_OUTCOME_DESCRIPTIONS: Record<RexanOutcome, string> = {
   [REXAN_OUTCOME.EXACT]: "El gasto validado coincide con el anticipo recibido.",
-  [REXAN_OUTCOME.DEVOLUCION]: "El gasto validado es menor al anticipo y requiere constancia de devolución.",
-  [REXAN_OUTCOME.EXCESS]: "El gasto validado supera el anticipo y genera un saldo para pago.",
+  [REXAN_OUTCOME.DEVOLUCION]:
+    "El gasto validado es menor al anticipo y requiere constancia de devolución.",
+  [REXAN_OUTCOME.EXCESS]:
+    "El gasto validado supera el anticipo y genera un saldo para pago.",
 };
 
 export const RENDITION_STATUS_LABELS: Record<RenditionStatus, string> = {
-  [RENDITION_STATUS.PENDING]: formatRenditionQueueStatus(RENDITION_STATUS.PENDING),
-  [RENDITION_STATUS.OVERDUE]: formatRenditionQueueStatus(RENDITION_STATUS.OVERDUE),
-  [RENDITION_STATUS.IN_REVIEW]: formatRenditionQueueStatus(RENDITION_STATUS.IN_REVIEW),
-  [RENDITION_STATUS.OBSERVED]: formatRenditionQueueStatus(RENDITION_STATUS.OBSERVED),
-  [RENDITION_STATUS.SETTLED]: formatRenditionQueueStatus(RENDITION_STATUS.SETTLED),
+  [RENDITION_STATUS.PENDING]: formatRenditionQueueStatus(
+    RENDITION_STATUS.PENDING,
+  ),
+  [RENDITION_STATUS.OVERDUE]: formatRenditionQueueStatus(
+    RENDITION_STATUS.OVERDUE,
+  ),
+  [RENDITION_STATUS.IN_REVIEW]: formatRenditionQueueStatus(
+    RENDITION_STATUS.IN_REVIEW,
+  ),
+  [RENDITION_STATUS.OBSERVED]: formatRenditionQueueStatus(
+    RENDITION_STATUS.OBSERVED,
+  ),
+  [RENDITION_STATUS.SETTLED]: formatRenditionQueueStatus(
+    RENDITION_STATUS.SETTLED,
+  ),
 };
 
-export const RENDITION_STATUS_FILTER_OPTIONS = REQUEST_RENDITION_SELECTOR_STATUSES.map((value) => ({
-  value,
-  label: RENDITION_STATUS_LABELS[value],
-}));
+export const RENDITION_STATUS_FILTER_OPTIONS =
+  REQUEST_RENDITION_SELECTOR_STATUSES.map((value) => ({
+    value,
+    label: RENDITION_STATUS_LABELS[value],
+  }));
 
 export const RENDITION_SORT_OPTIONS = [
   { value: RENDITION_SORT_FIELD.LAST_ACTIVITY, label: "Última modificación" },
@@ -237,7 +370,8 @@ export const RENDITION_DIRECTION_OPTIONS = [
 ] as const;
 
 export interface RenditionSummaryCard {
-  key: "pending" | "due-soon" | "overdue" | "in-review" | "observed" | "settled";
+  key:
+    "pending" | "due-soon" | "overdue" | "in-review" | "observed" | "settled";
   label: string;
   description: string;
   status?: RenditionStatus;
@@ -245,18 +379,52 @@ export interface RenditionSummaryCard {
 }
 
 export const RENDITION_SUMMARY_CARDS: RenditionSummaryCard[] = [
-  { key: "pending", label: "Pendientes de rendición", description: "Anticipos pagados aún sin rendición.", status: RENDITION_STATUS.PENDING },
-  { key: "due-soon", label: "Próximas a vencer", description: "Vencen en los próximos 15 días.", bucket: RENDITION_BUCKET.DUE_SOON },
-  { key: "overdue", label: "Vencidas", description: "Anticipos que superaron la fecha límite.", status: RENDITION_STATUS.OVERDUE },
-  { key: "in-review", label: "En revisión", description: "Rendiciones enviadas para validación.", status: RENDITION_STATUS.IN_REVIEW },
-  { key: "observed", label: "Observadas", description: "Rendiciones devueltas con comentarios.", status: RENDITION_STATUS.OBSERVED },
-  { key: "settled", label: "Rendidas", description: "Anticipos cerrados con rendición completa.", status: RENDITION_STATUS.SETTLED },
+  {
+    key: "pending",
+    label: "Pendientes de rendición",
+    description: "Anticipos pagados aún sin rendición.",
+    status: RENDITION_STATUS.PENDING,
+  },
+  {
+    key: "due-soon",
+    label: "Próximas a vencer",
+    description: "Vencen en los próximos 15 días.",
+    bucket: RENDITION_BUCKET.DUE_SOON,
+  },
+  {
+    key: "overdue",
+    label: "Vencidas",
+    description: "Anticipos que superaron la fecha límite.",
+    status: RENDITION_STATUS.OVERDUE,
+  },
+  {
+    key: "in-review",
+    label: "En revisión",
+    description: "Rendiciones enviadas para validación.",
+    status: RENDITION_STATUS.IN_REVIEW,
+  },
+  {
+    key: "observed",
+    label: "Observadas",
+    description: "Rendiciones devueltas con comentarios.",
+    status: RENDITION_STATUS.OBSERVED,
+  },
+  {
+    key: "settled",
+    label: "Rendidas",
+    description: "Anticipos cerrados con rendición completa.",
+    status: RENDITION_STATUS.SETTLED,
+  },
 ];
 
-export function getRequestStatusLabel(status: RequestStatus, context?: RequestStatusLabelContext | null): string {
-  const surface = context?.request_type === REQUEST_TYPE.ADVANCE_SETTLEMENT
-    ? REQUEST_STATUS_SURFACE.RENDITION_LIFECYCLE
-    : REQUEST_STATUS_SURFACE.DETAIL;
+export function getRequestStatusLabel(
+  status: RequestStatus,
+  context?: RequestStatusLabelContext | null,
+): string {
+  const surface =
+    context?.request_type === REQUEST_TYPE.ADVANCE_SETTLEMENT
+      ? REQUEST_STATUS_SURFACE.RENDITION_LIFECYCLE
+      : REQUEST_STATUS_SURFACE.DETAIL;
   return formatRequestStatus(status, {
     surface,
     requestType: context?.request_type,
@@ -291,33 +459,98 @@ const REQUEST_BRANCH_STATUS = {
 } as const;
 
 export const REQUEST_TYPE_OPTIONS = [
-  { value: REQUEST_TYPE.ADVANCE, label: REQUEST_TYPE_LABELS[REQUEST_TYPE.ADVANCE] },
-  { value: REQUEST_TYPE.SUPPLIER_PAYMENT, label: REQUEST_TYPE_LABELS[REQUEST_TYPE.SUPPLIER_PAYMENT] },
-  { value: REQUEST_TYPE.REIMBURSEMENT, label: REQUEST_TYPE_LABELS[REQUEST_TYPE.REIMBURSEMENT] },
+  {
+    value: REQUEST_TYPE.ADVANCE,
+    label: REQUEST_TYPE_LABELS[REQUEST_TYPE.ADVANCE],
+  },
+  {
+    value: REQUEST_TYPE.SUPPLIER_PAYMENT,
+    label: REQUEST_TYPE_LABELS[REQUEST_TYPE.SUPPLIER_PAYMENT],
+  },
+  {
+    value: REQUEST_TYPE.REIMBURSEMENT,
+    label: REQUEST_TYPE_LABELS[REQUEST_TYPE.REIMBURSEMENT],
+  },
 ] as const;
 
 export const REQUEST_STATUS_FILTER_OPTIONS = [
-  { value: REQUEST_STATUS.DRAFT, label: formatRequestStatus(REQUEST_STATUS.DRAFT, { surface: REQUEST_STATUS_SURFACE.DETAIL }) },
-  { value: REQUEST_STATUS.SUBMITTED, label: formatRequestStatus(REQUEST_STATUS.SUBMITTED, { surface: REQUEST_STATUS_SURFACE.DETAIL }) },
-  { value: REQUEST_STATUS.OBSERVED, label: formatRequestStatus(REQUEST_STATUS.OBSERVED, { surface: REQUEST_STATUS_SURFACE.DETAIL }) },
-  { value: REQUEST_STATUS.IN_VALIDATION, label: formatRequestStatus(REQUEST_STATUS.IN_VALIDATION, { surface: REQUEST_STATUS_SURFACE.DETAIL }) },
-  { value: REQUEST_STATUS.APPROVED, label: formatRequestStatus(REQUEST_STATUS.APPROVED, { surface: REQUEST_STATUS_SURFACE.DETAIL }) },
-  { value: REQUEST_STATUS.PAID, label: formatRequestStatus(REQUEST_STATUS.PAID, { surface: REQUEST_STATUS_SURFACE.DETAIL }) },
-  { value: REQUEST_STATUS.REJECTED, label: formatRequestStatus(REQUEST_STATUS.REJECTED, { surface: REQUEST_STATUS_SURFACE.DETAIL }) },
+  {
+    value: REQUEST_STATUS.DRAFT,
+    label: formatRequestStatus(REQUEST_STATUS.DRAFT, {
+      surface: REQUEST_STATUS_SURFACE.DETAIL,
+    }),
+  },
+  {
+    value: REQUEST_STATUS.SUBMITTED,
+    label: formatRequestStatus(REQUEST_STATUS.SUBMITTED, {
+      surface: REQUEST_STATUS_SURFACE.DETAIL,
+    }),
+  },
+  {
+    value: REQUEST_STATUS.OBSERVED,
+    label: formatRequestStatus(REQUEST_STATUS.OBSERVED, {
+      surface: REQUEST_STATUS_SURFACE.DETAIL,
+    }),
+  },
+  {
+    value: REQUEST_STATUS.IN_VALIDATION,
+    label: formatRequestStatus(REQUEST_STATUS.IN_VALIDATION, {
+      surface: REQUEST_STATUS_SURFACE.DETAIL,
+    }),
+  },
+  {
+    value: REQUEST_STATUS.APPROVED,
+    label: formatRequestStatus(REQUEST_STATUS.APPROVED, {
+      surface: REQUEST_STATUS_SURFACE.DETAIL,
+    }),
+  },
+  {
+    value: REQUEST_STATUS.PAID,
+    label: formatRequestStatus(REQUEST_STATUS.PAID, {
+      surface: REQUEST_STATUS_SURFACE.DETAIL,
+    }),
+  },
+  {
+    value: REQUEST_STATUS.REJECTED,
+    label: formatRequestStatus(REQUEST_STATUS.REJECTED, {
+      surface: REQUEST_STATUS_SURFACE.DETAIL,
+    }),
+  },
 ] as const;
 
 export const REQUEST_STATUS_SUMMARY_CARDS = [
   { value: REQUEST_STATUS.DRAFT, label: "Borrador" },
-  { value: REQUEST_STATUS.SUBMITTED, label: formatRequestStatus(REQUEST_STATUS.SUBMITTED, { surface: REQUEST_STATUS_SURFACE.DASHBOARD }) },
+  {
+    value: REQUEST_STATUS.SUBMITTED,
+    label: formatRequestStatus(REQUEST_STATUS.SUBMITTED, {
+      surface: REQUEST_STATUS_SURFACE.DASHBOARD,
+    }),
+  },
   { value: REQUEST_STATUS.OBSERVED, label: "Observadas" },
-  { value: REQUEST_STATUS.APPROVED, label: formatRequestStatus(REQUEST_STATUS.APPROVED, { surface: REQUEST_STATUS_SURFACE.DASHBOARD }) },
+  {
+    value: REQUEST_STATUS.APPROVED,
+    label: formatRequestStatus(REQUEST_STATUS.APPROVED, {
+      surface: REQUEST_STATUS_SURFACE.DASHBOARD,
+    }),
+  },
   { value: REQUEST_STATUS.REJECTED, label: "Rechazadas" },
 ] as const;
 
-export const REQUEST_DOCUMENT_CATEGORY_LABELS: Record<RequestDocumentCategory, string> = {
+export const REQUEST_DOCUMENT_CATEGORY_LABELS: Record<
+  RequestDocumentCategory,
+  string
+> = {
   [REQUEST_DOCUMENT_CATEGORY.PXQ]: "PXQ",
   [REQUEST_DOCUMENT_CATEGORY.REQUEST_SUPPORT]: "Sustento de solicitud",
   [REQUEST_DOCUMENT_CATEGORY.RECEIPT]: "Comprobante",
+  [REQUEST_DOCUMENT_CATEGORY.INVOICE]: "Factura",
+  [REQUEST_DOCUMENT_CATEGORY.PROFESSIONAL_FEE_RECEIPT]: "Recibo por honorarios",
+  [REQUEST_DOCUMENT_CATEGORY.SALES_RECEIPT]: "Boleta de venta",
+  [REQUEST_DOCUMENT_CATEGORY.CASH_RECEIPT]: "Recibo de caja",
+  [REQUEST_DOCUMENT_CATEGORY.QUOTATION]: "Cotización",
+  [REQUEST_DOCUMENT_CATEGORY.EVIDENCE]: "Sustento",
+  [REQUEST_DOCUMENT_CATEGORY.FOURTH_CATEGORY_SUSPENSION]:
+    "Suspensión de cuarta categoría",
   [REQUEST_DOCUMENT_CATEGORY.CONTRACT]: "Contrato",
   [REQUEST_DOCUMENT_CATEGORY.SETTLEMENT_REPORT]: "Informe de rendición",
   [REQUEST_DOCUMENT_CATEGORY.RETURN_PROOF]: "Constancia de devolución",
@@ -325,7 +558,9 @@ export const REQUEST_DOCUMENT_CATEGORY_LABELS: Record<RequestDocumentCategory, s
   [REQUEST_DOCUMENT_CATEGORY.OTHER]: "Otro documento",
 };
 
-export const REQUEST_DOCUMENT_CATEGORY_OPTIONS = Object.values(REQUEST_DOCUMENT_CATEGORY).map((value) => ({
+export const REQUEST_DOCUMENT_CATEGORY_OPTIONS = Object.values(
+  REQUEST_DOCUMENT_CATEGORY,
+).map((value) => ({
   value,
   label: REQUEST_DOCUMENT_CATEGORY_LABELS[value],
 }));
@@ -336,6 +571,11 @@ export const REQUEST_DOCUMENT_ALLOWED_MIME_TYPES = {
   PNG: "image/png",
   XLS: "application/vnd.ms-excel",
   XLSX: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  DOCX: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  RAR: "application/vnd.rar",
+  RAR_COMPRESSED: "application/x-rar-compressed",
+  ZIP: "application/zip",
+  ZIP_COMPRESSED: "application/x-zip-compressed",
 } as const;
 
 export const PAYMENT_PROOF_ACCEPT = [
@@ -383,10 +623,11 @@ export const REQUEST_DOCUMENT_UPLOAD_STATUS_LABELS: Record<string, string> = {
   [REQUEST_DOCUMENT_UPLOAD_STATUS.FAILED]: "Con incidencia de almacenamiento",
 };
 
-export const REQUEST_DOCUMENT_STORAGE_PROVIDER_LABELS: Record<string, string> = {
-  [REQUEST_DOCUMENT_STORAGE_PROVIDER.LOCAL]: "Almacenamiento local",
-  [REQUEST_DOCUMENT_STORAGE_PROVIDER.NOOP]: "Almacenamiento simulado",
-  [REQUEST_DOCUMENT_STORAGE_PROVIDER.DRIVE]: "Google Drive",
+export const REQUEST_DOCUMENT_STORAGE_PROVIDER_LABELS: Record<string, string> =
+  {
+    [REQUEST_DOCUMENT_STORAGE_PROVIDER.LOCAL]: "Almacenamiento local",
+    [REQUEST_DOCUMENT_STORAGE_PROVIDER.NOOP]: "Almacenamiento simulado",
+    [REQUEST_DOCUMENT_STORAGE_PROVIDER.DRIVE]: "Google Drive",
   [REQUEST_DOCUMENT_STORAGE_PROVIDER.AZURE_BLOB]: "Azure Blob Storage",
 };
 
@@ -396,7 +637,8 @@ export const REQUEST_LIST_SORT = {
   NEWEST_FIRST: "NEWEST_FIRST",
 } as const;
 
-export type RequestListSort = (typeof REQUEST_LIST_SORT)[keyof typeof REQUEST_LIST_SORT];
+export type RequestListSort =
+  (typeof REQUEST_LIST_SORT)[keyof typeof REQUEST_LIST_SORT];
 
 export const REQUEST_LIST_SORT_OPTIONS = [
   { value: REQUEST_LIST_SORT.REVIEW_PRIORITY, label: "Prioridad de revisión" },
@@ -411,7 +653,8 @@ export const REQUEST_REVIEW_QUEUE = {
   BLOCKED: "blocked",
 } as const;
 
-export type RequestReviewQueue = (typeof REQUEST_REVIEW_QUEUE)[keyof typeof REQUEST_REVIEW_QUEUE];
+export type RequestReviewQueue =
+  (typeof REQUEST_REVIEW_QUEUE)[keyof typeof REQUEST_REVIEW_QUEUE];
 
 export interface RequestReviewQueueFilter {
   status?: RequestStatus;
@@ -434,7 +677,8 @@ export const REQUEST_REVIEW_QUEUE_CARDS: RequestReviewQueueCard[] = [
   {
     value: REQUEST_REVIEW_QUEUE.PENDING_LEVEL_2,
     label: "En validación",
-    description: "Solicitudes en validación operativa antes de la decisión final.",
+    description:
+      "Solicitudes en validación operativa antes de la decisión final.",
   },
   {
     value: REQUEST_REVIEW_QUEUE.OBSERVED_RETURNED,
@@ -450,44 +694,70 @@ export function parseRequestListSort(value?: string | null): RequestListSort {
   return REQUEST_LIST_SORT.NEWEST_FIRST;
 }
 
-export function parseRequestStatusFilter(value?: string | null): RequestStatus | undefined {
+export function parseRequestStatusFilter(
+  value?: string | null,
+): RequestStatus | undefined {
   if (Object.values(REQUEST_STATUS).includes(value as RequestStatus)) {
     return value as RequestStatus;
   }
   return undefined;
 }
 
-export function parseRequestReviewQueue(value?: string | null): RequestReviewQueue | undefined {
-  if (Object.values(REQUEST_REVIEW_QUEUE).includes(value as RequestReviewQueue)) {
+export function parseRequestReviewQueue(
+  value?: string | null,
+): RequestReviewQueue | undefined {
+  if (
+    Object.values(REQUEST_REVIEW_QUEUE).includes(value as RequestReviewQueue)
+  ) {
     return value as RequestReviewQueue;
   }
   return undefined;
 }
 
-export function getRequestReviewQueueFilter(queue: RequestReviewQueue): RequestReviewQueueFilter {
+export function getRequestReviewQueueFilter(
+  queue: RequestReviewQueue,
+): RequestReviewQueueFilter {
   if (queue === REQUEST_REVIEW_QUEUE.PENDING_LEVEL_1) {
-    return { status: REQUEST_STATUS.SUBMITTED, sort: REQUEST_LIST_SORT.REVIEW_PRIORITY };
+    return {
+      status: REQUEST_STATUS.SUBMITTED,
+      sort: REQUEST_LIST_SORT.REVIEW_PRIORITY,
+    };
   }
   if (queue === REQUEST_REVIEW_QUEUE.PENDING_LEVEL_2) {
-    return { status: REQUEST_STATUS.IN_VALIDATION, sort: REQUEST_LIST_SORT.OLDEST_FIRST };
+    return {
+      status: REQUEST_STATUS.IN_VALIDATION,
+      sort: REQUEST_LIST_SORT.OLDEST_FIRST,
+    };
   }
   if (queue === REQUEST_REVIEW_QUEUE.OBSERVED_RETURNED) {
-    return { status: REQUEST_STATUS.OBSERVED, sort: REQUEST_LIST_SORT.NEWEST_FIRST };
+    return {
+      status: REQUEST_STATUS.OBSERVED,
+      sort: REQUEST_LIST_SORT.NEWEST_FIRST,
+    };
   }
   return {
     sort: REQUEST_LIST_SORT.NEWEST_FIRST,
-    unsupportedReason: "Funcionalidad en preparación. Esta vista estará disponible cuando se complete la habilitación operativa.",
+    unsupportedReason:
+      "Funcionalidad en preparación. Esta vista estará disponible cuando se complete la habilitación operativa.",
   };
 }
 
-export function getRequestReviewQueueForStatus(status?: RequestStatus): RequestReviewQueue | undefined {
-  if (status === REQUEST_STATUS.SUBMITTED) return REQUEST_REVIEW_QUEUE.PENDING_LEVEL_1;
-  if (status === REQUEST_STATUS.IN_VALIDATION) return REQUEST_REVIEW_QUEUE.PENDING_LEVEL_2;
-  if (status === REQUEST_STATUS.OBSERVED) return REQUEST_REVIEW_QUEUE.OBSERVED_RETURNED;
+export function getRequestReviewQueueForStatus(
+  status?: RequestStatus,
+): RequestReviewQueue | undefined {
+  if (status === REQUEST_STATUS.SUBMITTED)
+    return REQUEST_REVIEW_QUEUE.PENDING_LEVEL_1;
+  if (status === REQUEST_STATUS.IN_VALIDATION)
+    return REQUEST_REVIEW_QUEUE.PENDING_LEVEL_2;
+  if (status === REQUEST_STATUS.OBSERVED)
+    return REQUEST_REVIEW_QUEUE.OBSERVED_RETURNED;
   return undefined;
 }
 
-export function getRequestReviewQueueCount(requests: PaymentRequest[], queue: RequestReviewQueue): number {
+export function getRequestReviewQueueCount(
+  requests: PaymentRequest[],
+  queue: RequestReviewQueue,
+): number {
   if (queue === REQUEST_REVIEW_QUEUE.BLOCKED) return 0;
   const filter = getRequestReviewQueueFilter(queue);
   return requests.filter((request) => request.status === filter.status).length;
@@ -498,7 +768,8 @@ const REQUEST_LIST_ACTION_KIND = {
   EDIT: "edit",
 } as const;
 
-export type RequestListActionKind = (typeof REQUEST_LIST_ACTION_KIND)[keyof typeof REQUEST_LIST_ACTION_KIND];
+export type RequestListActionKind =
+  (typeof REQUEST_LIST_ACTION_KIND)[keyof typeof REQUEST_LIST_ACTION_KIND];
 
 export interface RequestListAction {
   kind: RequestListActionKind;
@@ -507,13 +778,18 @@ export interface RequestListAction {
   testId: string;
 }
 
-export const BENEFICIARY_DOCUMENT_TYPE_LABELS: Record<BeneficiaryDocumentType, string> = {
+export const BENEFICIARY_DOCUMENT_TYPE_LABELS: Record<
+  BeneficiaryDocumentType,
+  string
+> = {
   [BENEFICIARY_DOCUMENT_TYPE.DNI]: "DNI",
   [BENEFICIARY_DOCUMENT_TYPE.CE]: "Carné de extranjería",
   [BENEFICIARY_DOCUMENT_TYPE.RUC]: "RUC",
 };
 
-export const BENEFICIARY_DOCUMENT_TYPE_OPTIONS = Object.values(BENEFICIARY_DOCUMENT_TYPE).map((value) => ({
+export const BENEFICIARY_DOCUMENT_TYPE_OPTIONS = Object.values(
+  BENEFICIARY_DOCUMENT_TYPE,
+).map((value) => ({
   value,
   label: BENEFICIARY_DOCUMENT_TYPE_LABELS[value],
 }));
@@ -528,10 +804,12 @@ export const ACCOUNT_TYPE_LABELS: Record<AccountType, string> = {
   [ACCOUNT_TYPE.CHECKING]: "Corriente",
 };
 
-export const ACCOUNT_TYPE_OPTIONS = Object.values(ACCOUNT_TYPE).map((value) => ({
-  value,
-  label: ACCOUNT_TYPE_LABELS[value],
-}));
+export const ACCOUNT_TYPE_OPTIONS = Object.values(ACCOUNT_TYPE).map(
+  (value) => ({
+    value,
+    label: ACCOUNT_TYPE_LABELS[value],
+  }),
+);
 
 export const MONTH_OPTIONS = [
   { value: 1, label: "Enero" },
@@ -548,7 +826,12 @@ export const MONTH_OPTIONS = [
   { value: 12, label: "Diciembre" },
 ] as const;
 
-export function formatRequestCurrency(amount: number, currency = "PEN"): string {
+export function formatRequestCurrency(
+  amount: number,
+  currency: string | null = "PEN",
+): string {
+  if (currency !== "PEN" && currency !== "USD")
+    return `${amount.toFixed(2)} · Moneda pendiente de resolución`;
   return new Intl.NumberFormat("es-PE", {
     style: "currency",
     currency,
@@ -556,18 +839,25 @@ export function formatRequestCurrency(amount: number, currency = "PEN"): string 
   }).format(amount);
 }
 
-export function normalizeMoneyAmount(value: number | string | null | undefined): number | null {
+export function normalizeMoneyAmount(
+  value: number | string | null | undefined,
+): number | null {
   if (value === null || value === undefined) return null;
   const amount = typeof value === "string" ? Number(value) : value;
   return Number.isFinite(amount) ? amount : null;
 }
 
-export function toMoneyCents(value: number | string | null | undefined): number | null {
+export function toMoneyCents(
+  value: number | string | null | undefined,
+): number | null {
   const amount = normalizeMoneyAmount(value);
   return amount === null ? null : Math.round(amount * 100);
 }
 
-export function deriveRexanPreviewOutcome(requestedAmount: number | string | null | undefined, validatedSpentAmount: number | string | null | undefined): RexanOutcome | null {
+export function deriveRexanPreviewOutcome(
+  requestedAmount: number | string | null | undefined,
+  validatedSpentAmount: number | string | null | undefined,
+): RexanOutcome | null {
   const requestedCents = toMoneyCents(requestedAmount);
   const spentCents = toMoneyCents(validatedSpentAmount);
   if (requestedCents === null || spentCents === null) return null;
@@ -585,13 +875,17 @@ export interface RexanApprovalPreview {
 export function deriveRexanApprovalPreview(
   requestedAmount: number | string | null | undefined,
   validatedSpentAmount: number | string | null | undefined,
-  currency = "PEN",
+  currency: string | null = "PEN",
 ): RexanApprovalPreview | null {
+  if (currency !== "PEN" && currency !== "USD") return null;
   const requestedCents = toMoneyCents(requestedAmount);
   const spentCents = toMoneyCents(validatedSpentAmount);
   if (requestedCents === null || spentCents === null) return null;
 
-  const outcome = deriveRexanPreviewOutcome(requestedCents / 100, spentCents / 100);
+  const outcome = deriveRexanPreviewOutcome(
+    requestedCents / 100,
+    spentCents / 100,
+  );
   if (!outcome) return null;
 
   const balanceAmount = Math.abs(spentCents - requestedCents) / 100;
@@ -622,26 +916,48 @@ export function getRexanOutcomeLabel(outcome?: RexanOutcome | null): string {
   return outcome ? REXAN_OUTCOME_LABELS[outcome] : "Sin clasificación";
 }
 
-export function getRexanOutcomeDescription(outcome?: RexanOutcome | null): string {
-  return outcome ? REXAN_OUTCOME_DESCRIPTIONS[outcome] : "La rendición aún no tiene clasificación registrada.";
+export function getRexanOutcomeDescription(
+  outcome?: RexanOutcome | null,
+): string {
+  return outcome
+    ? REXAN_OUTCOME_DESCRIPTIONS[outcome]
+    : "La rendición aún no tiene clasificación registrada.";
 }
 
-export function getRexanOutcomeBadgeTone(outcome?: RexanOutcome | null): RexanOutcomeBadgeTone {
+export function getRexanOutcomeBadgeTone(
+  outcome?: RexanOutcome | null,
+): RexanOutcomeBadgeTone {
   if (outcome === REXAN_OUTCOME.EXACT) return REXAN_OUTCOME_BADGE_TONE.DEFAULT;
-  if (outcome === REXAN_OUTCOME.DEVOLUCION) return REXAN_OUTCOME_BADGE_TONE.SECONDARY;
+  if (outcome === REXAN_OUTCOME.DEVOLUCION)
+    return REXAN_OUTCOME_BADGE_TONE.SECONDARY;
   if (outcome === REXAN_OUTCOME.EXCESS) return REXAN_OUTCOME_BADGE_TONE.OUTLINE;
   return REXAN_OUTCOME_BADGE_TONE.OUTLINE;
 }
 
-export function isRexanExcessRequest(request: Pick<PaymentRequest, "request_type" | "rexan_outcome" | "rexan_balance_amount">): boolean {
+export function isRexanExcessRequest(
+  request: Pick<
+    PaymentRequest,
+    "request_type" | "rexan_outcome" | "rexan_balance_amount"
+  >,
+): boolean {
   const balanceCents = toMoneyCents(request.rexan_balance_amount);
-  return request.request_type === REQUEST_TYPE.ADVANCE_SETTLEMENT
-    && request.rexan_outcome === REXAN_OUTCOME.EXCESS
-    && balanceCents !== null
-    && balanceCents > 0;
+  return (
+    request.request_type === REQUEST_TYPE.ADVANCE_SETTLEMENT &&
+    request.rexan_outcome === REXAN_OUTCOME.EXCESS &&
+    balanceCents !== null &&
+    balanceCents > 0
+  );
 }
 
-export function getRequestPayableAmount(request: Pick<PaymentRequest, "requested_amount" | "request_type" | "rexan_outcome" | "rexan_balance_amount">): number {
+export function getRequestPayableAmount(
+  request: Pick<
+    PaymentRequest,
+    | "requested_amount"
+    | "request_type"
+    | "rexan_outcome"
+    | "rexan_balance_amount"
+  >,
+): number {
   if (isRexanExcessRequest(request)) {
     return normalizeMoneyAmount(request.rexan_balance_amount) ?? 0;
   }
@@ -652,22 +968,34 @@ export function formatRequestDate(value?: string | null): string {
   return formatBusinessDate(value);
 }
 
-export function parseRenditionStatusFilter(value?: string | null): RenditionStatus | undefined {
+export function parseRenditionStatusFilter(
+  value?: string | null,
+): RenditionStatus | undefined {
   if (Object.values(RENDITION_STATUS).includes(value as RenditionStatus)) {
     return value as RenditionStatus;
   }
   return undefined;
 }
 
-export function parseRenditionSortField(value?: string | null): RenditionSortField {
-  if (Object.values(RENDITION_SORT_FIELD).includes(value as RenditionSortField)) {
+export function parseRenditionSortField(
+  value?: string | null,
+): RenditionSortField {
+  if (
+    Object.values(RENDITION_SORT_FIELD).includes(value as RenditionSortField)
+  ) {
     return value as RenditionSortField;
   }
   return RENDITION_SORT_FIELD.LAST_ACTIVITY;
 }
 
-export function parseRenditionSortDirection(value?: string | null): RenditionSortDirection {
-  if (Object.values(RENDITION_SORT_DIRECTION).includes(value as RenditionSortDirection)) {
+export function parseRenditionSortDirection(
+  value?: string | null,
+): RenditionSortDirection {
+  if (
+    Object.values(RENDITION_SORT_DIRECTION).includes(
+      value as RenditionSortDirection,
+    )
+  ) {
     return value as RenditionSortDirection;
   }
   return RENDITION_SORT_DIRECTION.DESC;
@@ -677,14 +1005,21 @@ export function getRenditionStatusLabel(status: string): string {
   return formatRenditionQueueStatus(status);
 }
 
-export function getRenditionStatusTone(status: RenditionStatus): "default" | "secondary" | "destructive" | "outline" {
+export function getRenditionStatusTone(
+  status: RenditionStatus,
+): "default" | "secondary" | "destructive" | "outline" {
   if (status === RENDITION_STATUS.OVERDUE) return "destructive";
   if (status === RENDITION_STATUS.SETTLED) return "default";
-  if (status === RENDITION_STATUS.IN_REVIEW || status === RENDITION_STATUS.OBSERVED) return "secondary";
+  if (
+    status === RENDITION_STATUS.IN_REVIEW ||
+    status === RENDITION_STATUS.OBSERVED
+  )
+    return "secondary";
   return "outline";
 }
 
-type RenditionDeadlineSource = Pick<RenditionInboxRow,
+type RenditionDeadlineSource = Pick<
+  RenditionInboxRow,
   | "deadline_date"
   | "deadline_state"
   | "calendar_days_to_deadline"
@@ -712,9 +1047,11 @@ const COMPLETED_RENDITION_LIFECYCLES = [
 ] as const;
 
 function hasCanonicalDeadline(row: RenditionDeadlineSource): boolean {
-  return row.deadline_date !== undefined
-    || row.deadline_state !== undefined
-    || row.calendar_days_to_deadline !== undefined;
+  return (
+    row.deadline_date !== undefined ||
+    row.deadline_state !== undefined ||
+    row.calendar_days_to_deadline !== undefined
+  );
 }
 
 function isLifecycleIn(
@@ -724,13 +1061,17 @@ function isLifecycleIn(
   return status !== null && lifecycles.includes(status);
 }
 
-export function getRenditionDeadlineDate(row: RenditionDeadlineSource): string | null {
+export function getRenditionDeadlineDate(
+  row: RenditionDeadlineSource,
+): string | null {
   return hasCanonicalDeadline(row)
-    ? row.deadline_date ?? null
+    ? (row.deadline_date ?? null)
     : row.scheduled_rendition_at;
 }
 
-export function getRenditionDaysRemaining(row: RenditionDeadlineSource): number | null {
+export function getRenditionDaysRemaining(
+  row: RenditionDeadlineSource,
+): number | null {
   if (hasCanonicalDeadline(row)) return row.calendar_days_to_deadline ?? null;
   if (typeof row.days_remaining === "number") return row.days_remaining;
   if (typeof row.days_until_due === "number") return row.days_until_due;
@@ -738,8 +1079,12 @@ export function getRenditionDaysRemaining(row: RenditionDeadlineSource): number 
   return null;
 }
 
-function formatDeadlineDays(deadlineState: RenditionDeadlineState, days: number | null): string {
-  if (deadlineState === RENDITION_DEADLINE_STATE.NONE) return "Sin fecha límite";
+function formatDeadlineDays(
+  deadlineState: RenditionDeadlineState,
+  days: number | null,
+): string {
+  if (deadlineState === RENDITION_DEADLINE_STATE.NONE)
+    return "Sin fecha límite";
   if (deadlineState === RENDITION_DEADLINE_STATE.DUE_TODAY) return "Vence hoy";
   if (deadlineState === RENDITION_DEADLINE_STATE.PRESENTED) return "Presentada";
   if (deadlineState === RENDITION_DEADLINE_STATE.COMPLETED) return "Rendida";
@@ -768,18 +1113,23 @@ export function getRenditionDueLabel(row: RenditionDeadlineSource): string {
   }
 
   if (!deadlineDate) return "Sin fecha límite";
-  if (isLifecycleIn(row.settlement_status, PRESENTED_RENDITION_LIFECYCLES)
-    || row.rendition_status === RENDITION_STATUS.IN_REVIEW) {
+  if (
+    isLifecycleIn(row.settlement_status, PRESENTED_RENDITION_LIFECYCLES) ||
+    row.rendition_status === RENDITION_STATUS.IN_REVIEW
+  ) {
     return "Presentada";
   }
-  if (isLifecycleIn(row.settlement_status, COMPLETED_RENDITION_LIFECYCLES)
-    || row.rendition_status === RENDITION_STATUS.SETTLED) {
+  if (
+    isLifecycleIn(row.settlement_status, COMPLETED_RENDITION_LIFECYCLES) ||
+    row.rendition_status === RENDITION_STATUS.SETTLED
+  ) {
     return "Rendida";
   }
 
   const days = getRenditionDaysRemaining(row);
   if (days === null) return "Plazo vigente";
-  if (days < 0) return `Vencida hace ${Math.abs(days)} día${Math.abs(days) === 1 ? "" : "s"}`;
+  if (days < 0)
+    return `Vencida hace ${Math.abs(days)} día${Math.abs(days) === 1 ? "" : "s"}`;
   if (days === 0) return "Vence hoy";
   return `${days} día${days === 1 ? "" : "s"} para vencer`;
 }
@@ -787,12 +1137,19 @@ export function getRenditionDueLabel(row: RenditionDeadlineSource): string {
 export function isRenditionDueSoon(row: RenditionDeadlineSource): boolean {
   const days = getRenditionDaysRemaining(row);
   if (hasCanonicalDeadline(row)) {
-    return row.deadline_state === RENDITION_DEADLINE_STATE.OPEN
-      && days !== null
-      && days >= 1
-      && days <= 15;
+    return (
+      row.deadline_state === RENDITION_DEADLINE_STATE.OPEN &&
+      days !== null &&
+      days >= 1 &&
+      days <= 15
+    );
   }
-  return row.rendition_status === RENDITION_STATUS.PENDING && days !== null && days >= 0 && days <= 15;
+  return (
+    row.rendition_status === RENDITION_STATUS.PENDING &&
+    days !== null &&
+    days >= 0 &&
+    days <= 15
+  );
 }
 
 export interface PaymentProofDisplayItem {
@@ -808,17 +1165,41 @@ export interface PaymentProofDisplayItem {
   isPrimary: boolean;
 }
 
-export function getRenditionSummaryCount(card: RenditionSummaryCard, counts: RenditionInboxCounts | null | undefined, rows: RenditionInboxRow[]): number {
-  if (card.key === "due-soon") return counts?.due_soon ?? rows.filter((row) => isRenditionDueSoon(row)).length;
+export function getRenditionSummaryCount(
+  card: RenditionSummaryCard,
+  counts: RenditionInboxCounts | null | undefined,
+  rows: RenditionInboxRow[],
+): number {
+  if (card.key === "due-soon")
+    return (
+      counts?.due_soon ?? rows.filter((row) => isRenditionDueSoon(row)).length
+    );
   if (!card.status) return 0;
-  return counts?.[card.status] ?? rows.filter((row) => row.rendition_status === card.status).length;
+  return (
+    counts?.[card.status] ??
+    rows.filter((row) => row.rendition_status === card.status).length
+  );
 }
 
-export function getRenditionAction(row: Pick<RenditionInboxRow, "advance_id" | "settlement_request_id" | "rendition_status">): { label: string; href: Route } {
+export function getRenditionAction(
+  row: Pick<
+    RenditionInboxRow,
+    "advance_id" | "settlement_request_id" | "rendition_status"
+  >,
+): { label: string; href: Route } {
   if (row.settlement_request_id) {
-    return { label: "Ver REXAN", href: `${ROUTES.REQUESTS}/${row.settlement_request_id}` as Route };
+    return {
+      label: "Ver REXAN",
+      href: `${ROUTES.REQUESTS}/${row.settlement_request_id}` as Route,
+    };
   }
-  return { label: row.rendition_status === RENDITION_STATUS.SETTLED ? "Ver anticipo" : "Ver anticipo", href: `${ROUTES.REQUESTS}/${row.advance_id}` as Route };
+  return {
+    label:
+      row.rendition_status === RENDITION_STATUS.SETTLED
+        ? "Ver anticipo"
+        : "Ver anticipo",
+    href: `${ROUTES.REQUESTS}/${row.advance_id}` as Route,
+  };
 }
 
 export function formatRequestDateTime(value?: string | null): string {
@@ -834,20 +1215,35 @@ export function formatRequestDocumentSize(value: number | string): string {
 }
 
 export function getRequestDocumentCategoryLabel(category: string): string {
-  if (Object.values(REQUEST_DOCUMENT_CATEGORY).includes(category as RequestDocumentCategory)) {
-    return REQUEST_DOCUMENT_CATEGORY_LABELS[category as RequestDocumentCategory];
+  if (
+    Object.values(REQUEST_DOCUMENT_CATEGORY).includes(
+      category as RequestDocumentCategory,
+    )
+  ) {
+    return REQUEST_DOCUMENT_CATEGORY_LABELS[
+      category as RequestDocumentCategory
+    ];
   }
   return "Categoría no reconocida";
 }
 
-export function getRequestDocumentUploadStatusLabel(status?: string | null): string {
+export function getRequestDocumentUploadStatusLabel(
+  status?: string | null,
+): string {
   if (!status) return "Estado no informado";
-  return REQUEST_DOCUMENT_UPLOAD_STATUS_LABELS[status] ?? "Estado no reconocido";
+  return (
+    REQUEST_DOCUMENT_UPLOAD_STATUS_LABELS[status] ?? "Estado no reconocido"
+  );
 }
 
-export function getRequestDocumentStorageProviderLabel(provider?: string | null): string {
+export function getRequestDocumentStorageProviderLabel(
+  provider?: string | null,
+): string {
   if (!provider) return "Proveedor no informado";
-  return REQUEST_DOCUMENT_STORAGE_PROVIDER_LABELS[provider] ?? "Proveedor no reconocido";
+  return (
+    REQUEST_DOCUMENT_STORAGE_PROVIDER_LABELS[provider] ??
+    "Proveedor no reconocido"
+  );
 }
 
 export function getRequestDocumentMimeLabel(mimeType?: string | null): string {
@@ -859,43 +1255,150 @@ export function getRequestDocumentMimeLabel(mimeType?: string | null): string {
   return "Tipo no reconocido";
 }
 
+const UTF8_LATIN1_MOJIBAKE_SEQUENCE = /[ÃÂ][\u0080-\u00bf]/g;
+
+function countUtf8Latin1MojibakeSequences(value: string): number {
+  return value.match(UTF8_LATIN1_MOJIBAKE_SEQUENCE)?.length ?? 0;
+}
+
 function decodePotentialUtf8Mojibake(value: string): string {
-  if (!/[ÃÂ]|�/.test(value)) return value;
+  const originalMojibakeScore = countUtf8Latin1MojibakeSequences(value);
+  if (originalMojibakeScore === 0) return value;
+
+  const characters = Array.from(value);
+  if (characters.some((char) => char.charCodeAt(0) > 0xff)) return value;
 
   try {
-    const bytes = Uint8Array.from(Array.from(value, (char) => char.charCodeAt(0) & 0xff));
+    const bytes = Uint8Array.from(
+      characters.map((char) => char.charCodeAt(0)),
+    );
     const decoded = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
-    return decoded.includes("�") ? value : decoded;
+    return countUtf8Latin1MojibakeSequences(decoded) < originalMojibakeScore
+      ? decoded
+      : value;
   } catch {
     return value;
   }
 }
 
-export function getRequestDocumentDisplayName(document: RequestDocument): string {
-  const filename = document.original_filename || document.safe_filename || "Documento sin nombre";
+export function getRequestDocumentDisplayName(
+  document: RequestDocument,
+): string {
+  const filename =
+    document.original_filename ||
+    document.safe_filename ||
+    "Documento sin nombre";
   return decodePotentialUtf8Mojibake(filename);
 }
 
-export function getReturnProofDocuments(documents: RequestDocument[]): RequestDocument[] {
-  return documents.filter((document) => document.document_category === REQUEST_DOCUMENT_CATEGORY.RETURN_PROOF);
+export function getReturnProofDocuments(
+  documents: RequestDocument[],
+): RequestDocument[] {
+  return documents.filter(
+    (document) =>
+      document.document_category === REQUEST_DOCUMENT_CATEGORY.RETURN_PROOF,
+  );
 }
 
 export function hasReturnProofDocument(documents: RequestDocument[]): boolean {
   return getReturnProofDocuments(documents).length > 0;
 }
 
-export function validateRexanReturnProofSelection(outcome: RexanOutcome | null, returnProofDocumentId?: string | null, documents: RequestDocument[] = []): string | null {
+export function validateRexanReturnProofSelection(
+  outcome: RexanOutcome | null,
+  returnProofDocumentId?: string | null,
+  documents: RequestDocument[] = [],
+): string | null {
   if (outcome !== REXAN_OUTCOME.DEVOLUCION) return null;
-  if (!hasReturnProofDocument(documents)) return "Para aprobar una devolución, primero solicita o adjunta la constancia de devolución en PDF, JPG o PNG.";
-  if (!returnProofDocumentId?.trim()) return "Selecciona una constancia de devolución para aprobar esta rendición.";
-  const selectedDocument = documents.find((document) => document.id === returnProofDocumentId);
-  if (!selectedDocument) return "La constancia seleccionada no está disponible en los documentos adjuntos.";
-  if (selectedDocument.document_category !== REQUEST_DOCUMENT_CATEGORY.RETURN_PROOF) return "Selecciona un documento registrado como constancia de devolución.";
+  if (!hasReturnProofDocument(documents))
+    return "Para aprobar una devolución, primero solicita o adjunta la constancia de devolución en PDF, JPG o PNG.";
+  if (!returnProofDocumentId?.trim())
+    return "Selecciona una constancia de devolución para aprobar esta rendición.";
+  const selectedDocument = documents.find(
+    (document) => document.id === returnProofDocumentId,
+  );
+  if (!selectedDocument)
+    return "La constancia seleccionada no está disponible en los documentos adjuntos.";
+  if (
+    selectedDocument.document_category !==
+    REQUEST_DOCUMENT_CATEGORY.RETURN_PROOF
+  )
+    return "Selecciona un documento registrado como constancia de devolución.";
   return null;
 }
 
-function isExcelDocumentCategory(category?: RequestDocumentCategory | null): boolean {
-  return category === REQUEST_DOCUMENT_CATEGORY.PXQ || category === REQUEST_DOCUMENT_CATEGORY.SETTLEMENT_REPORT;
+function isExcelDocumentCategory(
+  category?: RequestDocumentCategory | null,
+): boolean {
+  return (
+    category === REQUEST_DOCUMENT_CATEGORY.PXQ ||
+    category === REQUEST_DOCUMENT_CATEGORY.SETTLEMENT_REPORT
+  );
+}
+
+const REQUEST_DOCUMENT_PDF_IMAGE_EXTENSIONS = [
+  ".pdf",
+  ".jpg",
+  ".jpeg",
+  ".png",
+] as const;
+const REQUEST_DOCUMENT_BROAD_EXTENSIONS = [
+  ...REQUEST_DOCUMENT_PDF_IMAGE_EXTENSIONS,
+  ".xlsx",
+  ".docx",
+  ".rar",
+  ".zip",
+] as const;
+
+function getTypedDocumentExtensions(
+  category?: RequestDocumentCategory | null,
+): readonly string[] | null {
+  if (
+    category === REQUEST_DOCUMENT_CATEGORY.CONTRACT ||
+    category === REQUEST_DOCUMENT_CATEGORY.FOURTH_CATEGORY_SUSPENSION
+  )
+    return [".pdf"];
+  if (
+    category === REQUEST_DOCUMENT_CATEGORY.EVIDENCE ||
+    category === REQUEST_DOCUMENT_CATEGORY.OTHER
+  )
+    return REQUEST_DOCUMENT_BROAD_EXTENSIONS;
+  if (
+    category === REQUEST_DOCUMENT_CATEGORY.INVOICE ||
+    category === REQUEST_DOCUMENT_CATEGORY.PROFESSIONAL_FEE_RECEIPT ||
+    category === REQUEST_DOCUMENT_CATEGORY.SALES_RECEIPT ||
+    category === REQUEST_DOCUMENT_CATEGORY.CASH_RECEIPT ||
+    category === REQUEST_DOCUMENT_CATEGORY.QUOTATION
+  )
+    return REQUEST_DOCUMENT_PDF_IMAGE_EXTENSIONS;
+  return null;
+}
+
+function isTypedDocumentMimeForExtension(
+  mimeType: string,
+  extension: string,
+): boolean {
+  if (extension === ".pdf")
+    return mimeType === REQUEST_DOCUMENT_ALLOWED_MIME_TYPES.PDF;
+  if (extension === ".jpg" || extension === ".jpeg")
+    return mimeType === REQUEST_DOCUMENT_ALLOWED_MIME_TYPES.JPEG;
+  if (extension === ".png")
+    return mimeType === REQUEST_DOCUMENT_ALLOWED_MIME_TYPES.PNG;
+  if (extension === ".xlsx")
+    return mimeType === REQUEST_DOCUMENT_ALLOWED_MIME_TYPES.XLSX;
+  if (extension === ".docx")
+    return mimeType === REQUEST_DOCUMENT_ALLOWED_MIME_TYPES.DOCX;
+  if (extension === ".rar")
+    return (
+      mimeType === REQUEST_DOCUMENT_ALLOWED_MIME_TYPES.RAR ||
+      mimeType === REQUEST_DOCUMENT_ALLOWED_MIME_TYPES.RAR_COMPRESSED
+    );
+  if (extension === ".zip")
+    return (
+      mimeType === REQUEST_DOCUMENT_ALLOWED_MIME_TYPES.ZIP ||
+      mimeType === REQUEST_DOCUMENT_ALLOWED_MIME_TYPES.ZIP_COMPRESSED
+    );
+  return false;
 }
 
 function getFileExtension(filename: string): string {
@@ -903,45 +1406,85 @@ function getFileExtension(filename: string): string {
   return dotIndex >= 0 ? filename.slice(dotIndex).toLowerCase() : "";
 }
 
-function isExcelMimeOrExtension(mimeType?: string | null, filename?: string | null): boolean {
+function isExcelMimeOrExtension(
+  mimeType?: string | null,
+  filename?: string | null,
+): boolean {
   const normalizedMime = mimeType?.toLowerCase();
   const extension = filename ? getFileExtension(filename) : "";
-  return normalizedMime === REQUEST_DOCUMENT_ALLOWED_MIME_TYPES.XLS
-    || normalizedMime === REQUEST_DOCUMENT_ALLOWED_MIME_TYPES.XLSX
-    || REQUEST_DOCUMENT_EXCEL_EXTENSIONS.includes(extension as (typeof REQUEST_DOCUMENT_EXCEL_EXTENSIONS)[number]);
+  return (
+    normalizedMime === REQUEST_DOCUMENT_ALLOWED_MIME_TYPES.XLS ||
+    normalizedMime === REQUEST_DOCUMENT_ALLOWED_MIME_TYPES.XLSX ||
+    REQUEST_DOCUMENT_EXCEL_EXTENSIONS.includes(
+      extension as (typeof REQUEST_DOCUMENT_EXCEL_EXTENSIONS)[number],
+    )
+  );
 }
 
 function isBaseDocumentMime(mimeType?: string | null): boolean {
-  return mimeType === REQUEST_DOCUMENT_ALLOWED_MIME_TYPES.PDF
-    || mimeType === REQUEST_DOCUMENT_ALLOWED_MIME_TYPES.JPEG
-    || mimeType === REQUEST_DOCUMENT_ALLOWED_MIME_TYPES.PNG;
+  return (
+    mimeType === REQUEST_DOCUMENT_ALLOWED_MIME_TYPES.PDF ||
+    mimeType === REQUEST_DOCUMENT_ALLOWED_MIME_TYPES.JPEG ||
+    mimeType === REQUEST_DOCUMENT_ALLOWED_MIME_TYPES.PNG
+  );
 }
 
-function isPaymentProofMimeOrExtension(mimeType?: string | null, filename?: string | null): boolean {
+function isPaymentProofMimeOrExtension(
+  mimeType?: string | null,
+  filename?: string | null,
+): boolean {
   const normalizedMime = mimeType?.toLowerCase();
   const extension = filename ? getFileExtension(filename) : "";
-  return normalizedMime === REQUEST_DOCUMENT_ALLOWED_MIME_TYPES.PDF
-    || normalizedMime === REQUEST_DOCUMENT_ALLOWED_MIME_TYPES.JPEG
-    || normalizedMime === REQUEST_DOCUMENT_ALLOWED_MIME_TYPES.PNG
-    || extension === ".pdf"
-    || extension === ".jpg"
-    || extension === ".jpeg"
-    || extension === ".png";
+  return (
+    normalizedMime === REQUEST_DOCUMENT_ALLOWED_MIME_TYPES.PDF ||
+    normalizedMime === REQUEST_DOCUMENT_ALLOWED_MIME_TYPES.JPEG ||
+    normalizedMime === REQUEST_DOCUMENT_ALLOWED_MIME_TYPES.PNG ||
+    extension === ".pdf" ||
+    extension === ".jpg" ||
+    extension === ".jpeg" ||
+    extension === ".png"
+  );
 }
 
-export function getRequestDocumentAccept(category?: RequestDocumentCategory | null): string {
-  return isExcelDocumentCategory(category) ? REQUEST_DOCUMENT_EXCEL_ACCEPT : REQUEST_DOCUMENT_ACCEPT;
+export function getRequestDocumentAccept(
+  category?: RequestDocumentCategory | null,
+): string {
+  const typedExtensions = getTypedDocumentExtensions(category);
+  if (typedExtensions) return typedExtensions.join(",");
+  return isExcelDocumentCategory(category)
+    ? REQUEST_DOCUMENT_EXCEL_ACCEPT
+    : REQUEST_DOCUMENT_ACCEPT;
 }
 
-export function getRequestDocumentAcceptedFormatsLabel(category?: RequestDocumentCategory | null): string {
+export function getRequestDocumentAcceptedFormatsLabel(
+  category?: RequestDocumentCategory | null,
+): string {
+  const typedExtensions = getTypedDocumentExtensions(category);
+  if (typedExtensions)
+    return typedExtensions
+      .map((extension) => extension.slice(1).toUpperCase())
+      .join(", ");
   return isExcelDocumentCategory(category) ? "XLS o XLSX" : "PDF, JPG o PNG";
 }
 
-export function validateRequestDocumentFile(file: File | null, category?: RequestDocumentCategory | null): string | null {
+export function validateRequestDocumentFile(
+  file: File | null,
+  category?: RequestDocumentCategory | null,
+): string | null {
   const formatsLabel = getRequestDocumentAcceptedFormatsLabel(category);
   if (!file) return `Selecciona un archivo ${formatsLabel}.`;
-  if (file.size === 0) return "El archivo está vacío. Selecciona un documento válido.";
-  if (file.size > REQUEST_DOCUMENT_MAX_FILE_SIZE_BYTES) return "El archivo supera el máximo permitido de 10 MB.";
+  if (file.size === 0)
+    return "El archivo está vacío. Selecciona un documento válido.";
+  if (file.size > REQUEST_DOCUMENT_MAX_FILE_SIZE_BYTES)
+    return "El archivo supera el máximo permitido de 10 MB.";
+  const typedExtensions = getTypedDocumentExtensions(category);
+  if (typedExtensions) {
+    const extension = getFileExtension(file.name);
+    return typedExtensions.includes(extension) &&
+      isTypedDocumentMimeForExtension(file.type.toLowerCase(), extension)
+      ? null
+      : "Formato no permitido para la categoría seleccionada.";
+  }
   if (isExcelDocumentCategory(category)) {
     return isExcelMimeOrExtension(file.type, file.name)
       ? null
@@ -966,35 +1509,54 @@ export interface RequestDocumentBatchValidationResult {
   rejected: RequestDocumentUploadQueueItem[];
 }
 
-export function validateRequestDocumentBatch(files: File[], options: RequestDocumentBatchValidationOptions): RequestDocumentBatchValidationResult {
+export function validateRequestDocumentBatch(
+  files: File[],
+  options: RequestDocumentBatchValidationOptions,
+): RequestDocumentBatchValidationResult {
   if (!options.category) {
     return {
       accepted: [],
-      rejected: files.map((file, index) => buildRejectedQueueItem(file, index, REQUEST_DOCUMENT_CATEGORY.OTHER, "Selecciona una categoría para adjuntar documentos.")),
+      rejected: files.map((file, index) =>
+        buildRejectedQueueItem(
+          file,
+          index,
+          REQUEST_DOCUMENT_CATEGORY.OTHER,
+          "Selecciona una categoría para adjuntar documentos.",
+        ),
+      ),
     };
   }
 
   const category = options.category;
   const existingCount = options.existingQueueCount ?? 0;
-  const availableSlots = Math.max(REQUEST_DOCUMENT_MAX_BATCH_FILES - existingCount, 0);
+  const availableSlots = Math.max(
+    REQUEST_DOCUMENT_MAX_BATCH_FILES - existingCount,
+    0,
+  );
   const accepted: RequestDocumentUploadQueueItem[] = [];
   const rejected: RequestDocumentUploadQueueItem[] = [];
 
   files.forEach((file, index) => {
     const validationError = validateRequestDocumentFile(file, category);
-    const allocationError = options.requiresAllocation && !options.requestAllocationId
-      ? "Selecciona la línea POA a la que corresponden los comprobantes."
-      : null;
-    const capacityError = index >= availableSlots
-      ? `Solo puedes cargar hasta ${REQUEST_DOCUMENT_MAX_BATCH_FILES} archivos por tanda.`
-      : null;
+    const allocationError =
+      options.requiresAllocation && !options.requestAllocationId
+        ? "Selecciona la línea POA a la que corresponden los comprobantes."
+        : null;
+    const capacityError =
+      index >= availableSlots
+        ? `Solo puedes cargar hasta ${REQUEST_DOCUMENT_MAX_BATCH_FILES} archivos por tanda.`
+        : null;
     const errorMessage = validationError ?? allocationError ?? capacityError;
     const baseItem = {
       id: `${Date.now()}-${index}-${file.name}`,
       file,
       document_category: category,
-      scope_type: options.requiresAllocation ? REQUEST_DOCUMENT_SCOPE_TYPE.ALLOCATION : undefined,
-      request_allocation_id: options.requiresAllocation ? options.requestAllocationId : undefined,
+      scope_type: options.requiresAllocation
+        ? REQUEST_DOCUMENT_SCOPE_TYPE.ALLOCATION
+        : undefined,
+      request_allocation_id: options.requiresAllocation
+        ? options.requestAllocationId
+        : undefined,
     };
 
     if (errorMessage) {
@@ -1018,7 +1580,12 @@ export function validateRequestDocumentBatch(files: File[], options: RequestDocu
   return { accepted, rejected };
 }
 
-function buildRejectedQueueItem(file: File, index: number, category: RequestDocumentCategory, message: string): RequestDocumentUploadQueueItem {
+function buildRejectedQueueItem(
+  file: File,
+  index: number,
+  category: RequestDocumentCategory,
+  message: string,
+): RequestDocumentUploadQueueItem {
   return {
     id: `${Date.now()}-${index}-${file.name}`,
     file,
@@ -1030,25 +1597,36 @@ function buildRejectedQueueItem(file: File, index: number, category: RequestDocu
   };
 }
 
-export function getRequestDocumentUploadErrorCode(error: unknown): string | null {
+export function getRequestDocumentUploadErrorCode(
+  error: unknown,
+): string | null {
   if (!(error instanceof ApiRequestError)) return null;
   const body = error.body as typeof error.body & { code?: unknown };
   return typeof body.code === "string" ? body.code : null;
 }
 
 export function isRetryableRequestDocumentUploadError(error: unknown): boolean {
-  if (error instanceof ApiRequestError && typeof error.body.retryable === "boolean") {
+  if (
+    error instanceof ApiRequestError &&
+    typeof error.body.retryable === "boolean"
+  ) {
     return error.body.retryable;
   }
   const code = getRequestDocumentUploadErrorCode(error);
-  if (code === "DRIVE_RATE_LIMITED" || code === "DRIVE_STORAGE_FAILED") return true;
-  return error instanceof ApiRequestError ? error.status === 429 || error.status >= 500 : false;
+  if (code === "DRIVE_RATE_LIMITED" || code === "DRIVE_STORAGE_FAILED")
+    return true;
+  return error instanceof ApiRequestError
+    ? error.status === 429 || error.status >= 500
+    : false;
 }
 
 export function validatePaymentProofFile(file: File | null): string | null {
-  if (!file) return `Adjunta la constancia de pago en ${PAYMENT_PROOF_ACCEPTED_FORMATS_LABEL}.`;
-  if (file.size === 0) return `La constancia está vacía. Adjunta un archivo ${PAYMENT_PROOF_ACCEPTED_FORMATS_LABEL} válido.`;
-  if (file.size > REQUEST_DOCUMENT_MAX_FILE_SIZE_BYTES) return "La constancia supera el máximo permitido de 10 MB.";
+  if (!file)
+    return `Adjunta la constancia de pago en ${PAYMENT_PROOF_ACCEPTED_FORMATS_LABEL}.`;
+  if (file.size === 0)
+    return `La constancia está vacía. Adjunta un archivo ${PAYMENT_PROOF_ACCEPTED_FORMATS_LABEL} válido.`;
+  if (file.size > REQUEST_DOCUMENT_MAX_FILE_SIZE_BYTES)
+    return "La constancia supera el máximo permitido de 10 MB.";
   if (!isPaymentProofMimeOrExtension(file.type, file.name)) {
     return `Formato no permitido. Adjunta una constancia en ${PAYMENT_PROOF_ACCEPTED_FORMATS_LABEL}.`;
   }
@@ -1056,10 +1634,13 @@ export function validatePaymentProofFile(file: File | null): string | null {
 }
 
 export function getPaymentQueueStatusLabel(status: RequestStatus): string {
-  return formatRequestStatus(status, { surface: REQUEST_STATUS_SURFACE.PAYMENT });
+  return formatRequestStatus(status, {
+    surface: REQUEST_STATUS_SURFACE.PAYMENT,
+  });
 }
 
-interface RegisteredPartySource {
+interface RegisteredPartySource extends SupplierIdentitySource {
+  request_type?: string;
   registered_party_name?: string | null;
   registered_party_document_type?: string | null;
   registered_party_document_number?: string | null;
@@ -1070,18 +1651,36 @@ interface RegisteredPartySource {
   beneficiary_document_number?: string | null;
 }
 
-function normalizeOptionalDisplay(value: string | null | undefined): string | null {
+function normalizeOptionalDisplay(
+  value: string | null | undefined,
+): string | null {
   const normalized = value?.trim();
   return normalized ? normalized : null;
 }
 
-function getRegisteredPartyDocumentParts(source: RegisteredPartySource): { type: string | null; number: string | null } {
-  const explicitType = normalizeOptionalDisplay(source.registered_party_document_type);
-  const explicitNumber = normalizeOptionalDisplay(source.registered_party_document_number);
-  if (explicitType || explicitNumber) return { type: explicitType, number: explicitNumber };
+function getRegisteredPartyDocumentParts(source: RegisteredPartySource): {
+  type: string | null;
+  number: string | null;
+} {
+  if (source.request_type === REQUEST_TYPE.SUPPLIER_PAYMENT) {
+    const supplier = resolveSupplierIdentity(source);
+    return {
+      type: supplier?.supplier_document_type ?? null,
+      number: supplier?.supplier_document_number ?? null,
+    };
+  }
+  const explicitType = normalizeOptionalDisplay(
+    source.registered_party_document_type,
+  );
+  const explicitNumber = normalizeOptionalDisplay(
+    source.registered_party_document_number,
+  );
+  if (explicitType || explicitNumber)
+    return { type: explicitType, number: explicitNumber };
 
   const supplierRuc = normalizeOptionalDisplay(source.supplier_ruc);
-  if (supplierRuc) return { type: BENEFICIARY_DOCUMENT_TYPE.RUC, number: supplierRuc };
+  if (supplierRuc)
+    return { type: BENEFICIARY_DOCUMENT_TYPE.RUC, number: supplierRuc };
 
   return {
     type: normalizeOptionalDisplay(source.beneficiary_document_type),
@@ -1089,7 +1688,15 @@ function getRegisteredPartyDocumentParts(source: RegisteredPartySource): { type:
   };
 }
 
-export function getRegisteredPartyDisplay(source: RegisteredPartySource): string {
+export function getRegisteredPartyDisplay(
+  source: RegisteredPartySource,
+): string {
+  if (source.request_type === REQUEST_TYPE.SUPPLIER_PAYMENT) {
+    return (
+      resolveSupplierIdentity(source)?.supplier_name ??
+      "Proveedor pendiente de resolución"
+    );
+  }
   const explicitName = normalizeOptionalDisplay(source.registered_party_name);
   if (explicitName) return explicitName;
 
@@ -1099,7 +1706,9 @@ export function getRegisteredPartyDisplay(source: RegisteredPartySource): string
   return normalizeOptionalDisplay(source.beneficiary_name) ?? "—";
 }
 
-export function getRegisteredPartyDocumentLabel(source: RegisteredPartySource): string {
+export function getRegisteredPartyDocumentLabel(
+  source: RegisteredPartySource,
+): string {
   const { type, number } = getRegisteredPartyDocumentParts(source);
   if (type && number) return `${type} ${number}`;
   return number ?? "—";
@@ -1107,9 +1716,15 @@ export function getRegisteredPartyDocumentLabel(source: RegisteredPartySource): 
 
 export function getRegisteredByDisplayName(request: PaymentRequest): string;
 export function getRegisteredByDisplayName(request: RenditionInboxRow): string;
-export function getRegisteredByDisplayName(request: PaymentRequest | RenditionInboxRow): string {
+export function getRegisteredByDisplayName(
+  request: PaymentRequest | RenditionInboxRow,
+): string {
   if ("advance_id" in request) {
-    return normalizeOptionalDisplay(request.registered_by) ?? normalizeOptionalDisplay(request.requester) ?? "—";
+    return (
+      normalizeOptionalDisplay(request.registered_by) ??
+      normalizeOptionalDisplay(request.requester) ??
+      "—"
+    );
   }
 
   return getPaymentRequestCreatorDisplayName(request);
@@ -1119,11 +1734,17 @@ export function getPaymentRequestParty(request: PaymentRequest): string {
   return getRegisteredPartyDisplay(request);
 }
 
-export function getPaymentRequestCreatorDisplayName(request: PaymentRequest): string {
-  const explicitDisplayName = request.created_by_display_name?.trim() || request.requester_name?.trim();
+export function getPaymentRequestCreatorDisplayName(
+  request: PaymentRequest,
+): string {
+  const explicitDisplayName =
+    request.created_by_display_name?.trim() || request.requester_name?.trim();
   if (explicitDisplayName) return explicitDisplayName;
 
-  const requesterName = [request.requester?.firstName, request.requester?.lastName]
+  const requesterName = [
+    request.requester?.firstName,
+    request.requester?.lastName,
+  ]
     .filter((value): value is string => Boolean(value?.trim()))
     .join(" ");
 
@@ -1148,24 +1769,38 @@ const ADVANCE_SETTLEMENT_SETTLED_STATUSES = [
   REQUEST_STATUS.CLOSED,
 ] as const;
 
-export function getRequestDisplayCode(request: Pick<PaymentRequest, "request_code" | "sequential_number" | "id">): string {
+export function getRequestDisplayCode(
+  request: Pick<PaymentRequest, "request_code" | "sequential_number" | "id">,
+): string {
   return request.request_code ?? request.sequential_number ?? request.id;
 }
 
-export function getActiveAdvanceSettlement(request: Pick<PaymentRequest, "advanceSettlements">): NonNullable<PaymentRequest["advanceSettlements"]>[number] | null {
-  return getLatestAdvanceSettlementByStatuses(request, ADVANCE_SETTLEMENT_ACTIVE_STATUSES);
+export function getActiveAdvanceSettlement(
+  request: Pick<PaymentRequest, "advanceSettlements">,
+): NonNullable<PaymentRequest["advanceSettlements"]>[number] | null {
+  return getLatestAdvanceSettlementByStatuses(
+    request,
+    ADVANCE_SETTLEMENT_ACTIVE_STATUSES,
+  );
 }
 
 function getLatestAdvanceSettlementByStatuses(
   request: Pick<PaymentRequest, "advanceSettlements">,
   statuses: readonly RequestStatus[],
 ): NonNullable<PaymentRequest["advanceSettlements"]>[number] | null {
-  const settlements = request.advanceSettlements?.filter((settlement) => (
-    settlement.request_type === REQUEST_TYPE.ADVANCE_SETTLEMENT
-    && statuses.includes(settlement.status)
-  )) ?? [];
+  const settlements =
+    request.advanceSettlements?.filter(
+      (settlement) =>
+        settlement.request_type === REQUEST_TYPE.ADVANCE_SETTLEMENT &&
+        statuses.includes(settlement.status),
+    ) ?? [];
 
-  return settlements.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())[0] ?? null;
+  return (
+    settlements.sort(
+      (a, b) =>
+        new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
+    )[0] ?? null
+  );
 }
 
 function canAccessAdvanceSettlementCta(
@@ -1173,30 +1808,51 @@ function canAccessAdvanceSettlementCta(
   request: Pick<PaymentRequest, "requester_id">,
   currentUserId?: string | null,
 ): boolean {
-  if (roleCode === ROLE_CODE.ADMIN_SISTEMA || isGiofOperationalRole(roleCode)) return true;
-  return roleCode === ROLE_CODE.SOLICITANTE_EPE && Boolean(currentUserId) && request.requester_id === currentUserId;
+  if (roleCode === ROLE_CODE.ADMIN_SISTEMA || isGiofOperationalRole(roleCode))
+    return true;
+  return (
+    roleCode === ROLE_CODE.SOLICITANTE_EPE &&
+    Boolean(currentUserId) &&
+    request.requester_id === currentUserId
+  );
 }
 
-function getAdvanceSettlementHref(settlement: NonNullable<PaymentRequest["advanceSettlements"]>[number]): string {
+function getAdvanceSettlementHref(
+  settlement: NonNullable<PaymentRequest["advanceSettlements"]>[number],
+): string {
   const baseHref = `${ROUTES.REQUESTS}/${settlement.id}`;
-  return ADVANCE_SETTLEMENT_EDITABLE_STATUSES.includes(settlement.status as (typeof ADVANCE_SETTLEMENT_EDITABLE_STATUSES)[number])
+  return ADVANCE_SETTLEMENT_EDITABLE_STATUSES.includes(
+    settlement.status as (typeof ADVANCE_SETTLEMENT_EDITABLE_STATUSES)[number],
+  )
     ? `${baseHref}/edit?step=documents`
     : baseHref;
 }
 
 export function getAdvanceSettlementCta(
   roleCode: string | null | undefined,
-  request: Pick<PaymentRequest, "request_type" | "status" | "requester_id" | "advanceSettlements">,
+  request: Pick<
+    PaymentRequest,
+    "request_type" | "status" | "requester_id" | "advanceSettlements"
+  >,
   currentUserId?: string | null,
 ): AdvanceSettlementCta | null {
-  if (request.request_type !== REQUEST_TYPE.ADVANCE || request.status !== REQUEST_STATUS.PAID) return null;
-  if (!canAccessAdvanceSettlementCta(roleCode, request, currentUserId)) return null;
+  if (
+    request.request_type !== REQUEST_TYPE.ADVANCE ||
+    request.status !== REQUEST_STATUS.PAID
+  )
+    return null;
+  if (!canAccessAdvanceSettlementCta(roleCode, request, currentUserId))
+    return null;
 
   const activeSettlement = getActiveAdvanceSettlement(request);
   if (activeSettlement) {
-    const isEditable = ADVANCE_SETTLEMENT_EDITABLE_STATUSES.includes(activeSettlement.status as (typeof ADVANCE_SETTLEMENT_EDITABLE_STATUSES)[number]);
+    const isEditable = ADVANCE_SETTLEMENT_EDITABLE_STATUSES.includes(
+      activeSettlement.status as (typeof ADVANCE_SETTLEMENT_EDITABLE_STATUSES)[number],
+    );
     return {
-      state: isEditable ? ADVANCE_SETTLEMENT_CTA_STATE.CONTINUE_EDITABLE : ADVANCE_SETTLEMENT_CTA_STATE.VIEW_EXISTING,
+      state: isEditable
+        ? ADVANCE_SETTLEMENT_CTA_STATE.CONTINUE_EDITABLE
+        : ADVANCE_SETTLEMENT_CTA_STATE.VIEW_EXISTING,
       label: isEditable ? "Continuar rendición" : "Ver rendición",
       description: isEditable
         ? `Este anticipo ya tiene una rendición editable vinculada (${getRequestDisplayCode(activeSettlement)}). Continúa desde la solicitud existente.`
@@ -1207,7 +1863,10 @@ export function getAdvanceSettlementCta(
     };
   }
 
-  const settledSettlement = getLatestAdvanceSettlementByStatuses(request, ADVANCE_SETTLEMENT_SETTLED_STATUSES);
+  const settledSettlement = getLatestAdvanceSettlementByStatuses(
+    request,
+    ADVANCE_SETTLEMENT_SETTLED_STATUSES,
+  );
   if (settledSettlement) {
     return {
       state: ADVANCE_SETTLEMENT_CTA_STATE.COMPLETED,
@@ -1219,7 +1878,9 @@ export function getAdvanceSettlementCta(
     };
   }
 
-  const rejectedSettlement = getLatestAdvanceSettlementByStatuses(request, [REQUEST_STATUS.REJECTED]);
+  const rejectedSettlement = getLatestAdvanceSettlementByStatuses(request, [
+    REQUEST_STATUS.REJECTED,
+  ]);
   if (rejectedSettlement) {
     return {
       state: ADVANCE_SETTLEMENT_CTA_STATE.RETRY_AFTER_REJECTED,
@@ -1234,7 +1895,8 @@ export function getAdvanceSettlementCta(
   return {
     state: ADVANCE_SETTLEMENT_CTA_STATE.CAN_START,
     label: "Iniciar rendición",
-    description: "Inicia la rendición de este anticipo pagado y adjunta los documentos requeridos.",
+    description:
+      "Inicia la rendición de este anticipo pagado y adjunta los documentos requeridos.",
     href: null,
     settlement: null,
     canStartNew: true,
@@ -1243,20 +1905,36 @@ export function getAdvanceSettlementCta(
 
 export function getRenditionNextStepGuidance(
   roleCode: string | null | undefined,
-  request: Pick<PaymentRequest, "request_type" | "status" | "requester_id" | "advanceSettlements">,
+  request: Pick<
+    PaymentRequest,
+    "request_type" | "status" | "requester_id" | "advanceSettlements"
+  >,
   currentUserId?: string | null,
 ): RenditionNextStepGuidance | null {
-  if (request.request_type !== REQUEST_TYPE.ADVANCE || request.status !== REQUEST_STATUS.PAID) return null;
+  if (
+    request.request_type !== REQUEST_TYPE.ADVANCE ||
+    request.status !== REQUEST_STATUS.PAID
+  )
+    return null;
 
-  const requesterCta = getAdvanceSettlementCta(ROLE_CODE.SOLICITANTE_EPE, request, request.requester_id);
-  const isRequester = Boolean(roleCode) && Boolean(currentUserId) && currentUserId === request.requester_id;
+  const requesterCta = getAdvanceSettlementCta(
+    ROLE_CODE.SOLICITANTE_EPE,
+    request,
+    request.requester_id,
+  );
+  const isRequester =
+    Boolean(roleCode) &&
+    Boolean(currentUserId) &&
+    currentUserId === request.requester_id;
 
   if (isRequester && requesterCta) {
     return {
       title: "Siguiente paso: preparar rendición",
       description: `Debes preparar la rendición de este anticipo desde Bandeja de Rendiciones o con la acción ${requesterCta.label}. GIOF la revisará cuando la envíes.`,
       actionLabel: requesterCta.label,
-      action: requesterCta.href ? RENDITION_NEXT_STEP_ACTION.NAVIGATE : RENDITION_NEXT_STEP_ACTION.START,
+      action: requesterCta.href
+        ? RENDITION_NEXT_STEP_ACTION.NAVIGATE
+        : RENDITION_NEXT_STEP_ACTION.START,
       href: requesterCta.href,
     };
   }
@@ -1265,69 +1943,119 @@ export function getRenditionNextStepGuidance(
     const activeSettlement = getActiveAdvanceSettlement(request);
     return {
       title: "Siguiente paso: espera de rendición del solicitante",
-      description: "El solicitante prepara y envía la rendición. GIOF revisa cuando la rendición aparezca enviada en la Bandeja de Rendiciones.",
-      actionLabel: activeSettlement ? "Ver rendición vinculada" : "Ir a Bandeja de Rendiciones",
+      description:
+        "El solicitante prepara y envía la rendición. GIOF revisa cuando la rendición aparezca enviada en la Bandeja de Rendiciones.",
+      actionLabel: activeSettlement
+        ? "Ver rendición vinculada"
+        : "Ir a Bandeja de Rendiciones",
       action: RENDITION_NEXT_STEP_ACTION.NAVIGATE,
-      href: activeSettlement ? `${ROUTES.REQUESTS}/${activeSettlement.id}` : ROUTES.RENDITIONS,
+      href: activeSettlement
+        ? `${ROUTES.REQUESTS}/${activeSettlement.id}`
+        : ROUTES.RENDITIONS,
     };
   }
 
   return null;
 }
 
-export function getPaymentRequestRenditionStatus(request: Pick<PaymentRequest, "request_type" | "status" | "scheduled_rendition_at" | "advanceSettlements">): RenditionStatus | null {
-  if (request.request_type !== REQUEST_TYPE.ADVANCE || request.status !== REQUEST_STATUS.PAID) return null;
+export function getPaymentRequestRenditionStatus(
+  request: Pick<
+    PaymentRequest,
+    "request_type" | "status" | "scheduled_rendition_at" | "advanceSettlements"
+  >,
+): RenditionStatus | null {
+  if (
+    request.request_type !== REQUEST_TYPE.ADVANCE ||
+    request.status !== REQUEST_STATUS.PAID
+  )
+    return null;
 
-  const settledSettlement = getLatestAdvanceSettlementByStatuses(request, ADVANCE_SETTLEMENT_SETTLED_STATUSES);
+  const settledSettlement = getLatestAdvanceSettlementByStatuses(
+    request,
+    ADVANCE_SETTLEMENT_SETTLED_STATUSES,
+  );
   if (settledSettlement) return RENDITION_STATUS.SETTLED;
 
-  const observedSettlement = getLatestAdvanceSettlementByStatuses(request, [REQUEST_STATUS.OBSERVED]);
+  const observedSettlement = getLatestAdvanceSettlementByStatuses(request, [
+    REQUEST_STATUS.OBSERVED,
+  ]);
   if (observedSettlement) return RENDITION_STATUS.OBSERVED;
 
-  const activeSettlement = getLatestAdvanceSettlementByStatuses(request, [REQUEST_STATUS.DRAFT, REQUEST_STATUS.SUBMITTED, REQUEST_STATUS.IN_VALIDATION]);
+  const activeSettlement = getLatestAdvanceSettlementByStatuses(request, [
+    REQUEST_STATUS.DRAFT,
+    REQUEST_STATUS.SUBMITTED,
+    REQUEST_STATUS.IN_VALIDATION,
+  ]);
   if (activeSettlement) return RENDITION_STATUS.IN_REVIEW;
 
   const dueTime = getDateOnlyTime(request.scheduled_rendition_at);
   const todayTime = getDateOnlyTime(new Date().toISOString());
-  if (dueTime !== null && todayTime !== null && dueTime < todayTime) return RENDITION_STATUS.OVERDUE;
+  if (dueTime !== null && todayTime !== null && dueTime < todayTime)
+    return RENDITION_STATUS.OVERDUE;
 
   return RENDITION_STATUS.PENDING;
 }
 
 export function canStartAdvanceSettlement(
   roleCode: string | null | undefined,
-  request: Pick<PaymentRequest, "request_type" | "status" | "requester_id" | "advanceSettlements">,
+  request: Pick<
+    PaymentRequest,
+    "request_type" | "status" | "requester_id" | "advanceSettlements"
+  >,
   currentUserId?: string | null,
 ): boolean {
-  return Boolean(getAdvanceSettlementCta(roleCode, request, currentUserId)?.canStartNew);
+  return Boolean(
+    getAdvanceSettlementCta(roleCode, request, currentUserId)?.canStartNew,
+  );
 }
 
-export function getNewAdvancePendingSettlementBlockMessage(requestType: RequestType, error?: unknown): string | null {
+export function getNewAdvancePendingSettlementBlockMessage(
+  requestType: RequestType,
+  error?: unknown,
+): string | null {
   if (requestType !== REQUEST_TYPE.ADVANCE) return null;
   if (error === undefined || error === null) {
     return "No puedes crear un nuevo anticipo porque tienes dos o más anticipos pagados pendientes de rendición.";
   }
   const backendPendingMessage = error
-    ? getApiErrorMessages(error).find((message) => /anticipo|advance/i.test(message) && /pendiente|pending|rendici[oó]n|settlement/i.test(message))
+    ? getApiErrorMessages(error).find(
+        (message) =>
+          /anticipo|advance/i.test(message) &&
+          /pendiente|pending|rendici[oó]n|settlement/i.test(message),
+      )
     : undefined;
   return backendPendingMessage ?? null;
 }
 
 export function getRequestEditStep(value?: string | null): RequestEditStep {
-  if (value === REQUEST_EDIT_STEP.DOCUMENTS || value === REQUEST_EDIT_STEP.REVIEW) return value;
+  if (
+    value === REQUEST_EDIT_STEP.DOCUMENTS ||
+    value === REQUEST_EDIT_STEP.REVIEW
+  )
+    return value;
   return REQUEST_EDIT_STEP.DATA;
 }
 
-export function getRequestEditStepperItems(activeStep: RequestEditStep, options: RequestEditStepperOptions = {}): RequestEditStepperItem[] {
-  const steps = [REQUEST_EDIT_STEP.DATA, REQUEST_EDIT_STEP.DOCUMENTS, REQUEST_EDIT_STEP.REVIEW] as const;
-  const labels: Record<RequestEditStep, string> = options.requestType === REQUEST_TYPE.ADVANCE_SETTLEMENT ? {
-    [REQUEST_EDIT_STEP.DATA]: "Datos del anticipo",
-    [REQUEST_EDIT_STEP.DOCUMENTS]: "Sustentos de rendición",
-    [REQUEST_EDIT_STEP.REVIEW]: "Revisión de rendición",
-  } : {
-    [REQUEST_EDIT_STEP.DATA]: "Datos",
-    [REQUEST_EDIT_STEP.DOCUMENTS]: "Documentos",
-    [REQUEST_EDIT_STEP.REVIEW]: "Revisión/Envío",
+export function getRequestEditStepperItems(
+  activeStep: RequestEditStep,
+  options: RequestEditStepperOptions = {},
+): RequestEditStepperItem[] {
+  const steps = [
+    REQUEST_EDIT_STEP.DATA,
+    REQUEST_EDIT_STEP.DOCUMENTS,
+    REQUEST_EDIT_STEP.REVIEW,
+  ] as const;
+  const labels: Record<RequestEditStep, string> =
+    options.requestType === REQUEST_TYPE.ADVANCE_SETTLEMENT
+      ? {
+          [REQUEST_EDIT_STEP.DATA]: "Datos del anticipo",
+          [REQUEST_EDIT_STEP.DOCUMENTS]: "Sustentos de rendición",
+          [REQUEST_EDIT_STEP.REVIEW]: "Revisión de rendición",
+        }
+      : {
+          [REQUEST_EDIT_STEP.DATA]: "Datos",
+          [REQUEST_EDIT_STEP.DOCUMENTS]: "Documentos",
+          [REQUEST_EDIT_STEP.REVIEW]: "Revisión/Envío",
   };
   const completeness: Record<RequestEditStep, boolean> = {
     [REQUEST_EDIT_STEP.DATA]: options.isDataComplete ?? true,
@@ -1339,52 +2067,103 @@ export function getRequestEditStepperItems(activeStep: RequestEditStep, options:
   return steps.map((step, index) => ({
     step,
     label: labels[step],
-    state: step === activeStep
-      ? REQUEST_STEPPER_STATE.CURRENT
-      : index < activeIndex && completeness[step]
-        ? REQUEST_STEPPER_STATE.COMPLETED
+    state:
+      step === activeStep
+        ? REQUEST_STEPPER_STATE.CURRENT
+        : index < activeIndex && completeness[step]
+          ? REQUEST_STEPPER_STATE.COMPLETED
         : REQUEST_STEPPER_STATE.PENDING,
   }));
 }
 
-export function hasPaymentProofPending(request: Pick<PaymentRequest, "payment_proof_pending" | "proof_pending" | "payment">): boolean {
-  return Boolean(request.payment_proof_pending ?? request.proof_pending ?? request.payment?.proof_pending);
+export function hasPaymentProofPending(
+  request: Pick<
+    PaymentRequest,
+    "payment_proof_pending" | "proof_pending" | "payment"
+  >,
+): boolean {
+  return Boolean(
+    request.payment_proof_pending ??
+    request.proof_pending ??
+    request.payment?.proof_pending,
+  );
 }
 
-export function hasPaymentDetailsPending(request: Pick<PaymentRequest, "payment_details_pending" | "details_pending" | "payment">): boolean {
-  return Boolean(request.payment_details_pending ?? request.details_pending ?? request.payment?.details_pending);
+export function hasPaymentDetailsPending(
+  request: Pick<
+    PaymentRequest,
+    "payment_details_pending" | "details_pending" | "payment"
+  >,
+): boolean {
+  return Boolean(
+    request.payment_details_pending ??
+    request.details_pending ??
+    request.payment?.details_pending,
+  );
 }
 
-export function hasPaymentSourcePending(request: Pick<PaymentRequest, "payment">): boolean {
+export function hasPaymentSourcePending(
+  request: Pick<PaymentRequest, "payment">,
+): boolean {
   return request.payment?.drive_projection_status === "SOURCE_REQUIRED";
 }
 
-export function getPaymentId(request: Pick<PaymentRequest, "payment_id" | "payment">): string | null {
+export function getPaymentId(
+  request: Pick<PaymentRequest, "payment_id" | "payment">,
+): string | null {
   return request.payment_id ?? request.payment?.id ?? null;
 }
 
-export function getRequestPaymentProofEntries(payment?: Pick<RequestPayment, "proof_entries" | "proofs"> | null): RequestPaymentProof[] {
+export function getRequestPaymentProofEntries(
+  payment?: Pick<RequestPayment, "proof_entries" | "proofs"> | null,
+): RequestPaymentProof[] {
   return (payment?.proof_entries ?? payment?.proofs ?? []).slice(0, 1);
 }
 
-export function getPaymentProofDocumentName(document?: Pick<RequestDocument, "original_filename" | "safe_filename"> | null): string {
-  return document?.original_filename?.trim() || document?.safe_filename?.trim() || "Constancia de pago";
+export function getPaymentProofDocumentName(
+  document?: Pick<
+    RequestDocument,
+    "original_filename" | "safe_filename"
+  > | null,
+): string {
+  return (
+    document?.original_filename?.trim() ||
+    document?.safe_filename?.trim() ||
+    "Constancia de pago"
+  );
 }
 
-function getPaymentProofDocumentKey(documentId: string | null | undefined, document?: Pick<RequestDocument, "id"> | null): string | null {
+function getPaymentProofDocumentKey(
+  documentId: string | null | undefined,
+  document?: Pick<RequestDocument, "id"> | null,
+): string | null {
   return document?.id ?? documentId ?? null;
 }
 
 export function getPaymentProofDisplayItems(
-  payment?: Pick<RequestPayment, "id" | "paid_at" | "amount_paid" | "operation_reference" | "proof_document_id" | "proofDocument" | "proof_entries" | "proofs"> | null,
+  payment?: Pick<
+    RequestPayment,
+    | "id"
+    | "paid_at"
+    | "amount_paid"
+    | "operation_reference"
+    | "proof_document_id"
+    | "proofDocument"
+    | "proof_entries"
+    | "proofs"
+  > | null,
 ): PaymentProofDisplayItem[] {
   if (!payment) return [];
 
   const items: PaymentProofDisplayItem[] = [];
   const seen = new Set<string>();
-  const primaryDocumentKey = getPaymentProofDocumentKey(payment.proof_document_id, payment.proofDocument);
+  const primaryDocumentKey = getPaymentProofDocumentKey(
+    payment.proof_document_id,
+    payment.proofDocument,
+  );
   if (primaryDocumentKey || payment.proof_document_id) {
-    const key = primaryDocumentKey ?? payment.proof_document_id ?? "primary-proof";
+    const key =
+      primaryDocumentKey ?? payment.proof_document_id ?? "primary-proof";
     seen.add(key);
     items.push({
       id: key,
@@ -1403,7 +2182,11 @@ export function getPaymentProofDisplayItems(
   if (items.length > 0) return items;
 
   getRequestPaymentProofEntries(payment).forEach((proof) => {
-    const key = getPaymentProofDocumentKey(proof.proof_document_id, proof.proof_document) ?? proof.id;
+    const key =
+      getPaymentProofDocumentKey(
+        proof.proof_document_id,
+        proof.proof_document,
+      ) ?? proof.id;
     if (seen.has(key)) return;
     seen.add(key);
     items.push({
@@ -1428,9 +2211,11 @@ export function getPaymentProofEntriesForAllocation(
   allocationId: string | null | undefined,
 ): RequestPaymentProof[] {
   if (!allocationId) return [];
-  return getRequestPaymentProofEntries(payment).filter((proof) => (
-    proof.allocations.some((allocation) => allocation.request_allocation_id === allocationId)
-  ));
+  return getRequestPaymentProofEntries(payment).filter((proof) =>
+    proof.allocations.some(
+      (allocation) => allocation.request_allocation_id === allocationId,
+    ),
+  );
 }
 
 export function hasAllocationPaymentProofCoverage(
@@ -1445,24 +2230,40 @@ export function hasAllAllocationPaymentProofCoverage(
 ): boolean {
   const allocations = request.allocations ?? [];
   if (allocations.length === 0) return false;
-  return allocations.every((allocation) => hasAllocationPaymentProofCoverage(request.payment, allocation.id));
+  return allocations.every((allocation) =>
+    hasAllocationPaymentProofCoverage(request.payment, allocation.id),
+  );
 }
 
 export function getAllocationProofCoverageLabel(
   allocation: Pick<RequestAllocation, "id">,
   payment: Pick<RequestPayment, "proof_entries" | "proofs"> | null | undefined,
 ): string {
-  return hasAllocationPaymentProofCoverage(payment, allocation.id) ? "Cubierta por la constancia global" : "Constancia pendiente";
+  return hasAllocationPaymentProofCoverage(payment, allocation.id)
+    ? "Cubierta por la constancia global"
+    : "Constancia pendiente";
 }
 
-export function getAllocationFinanciersLabel(financiers?: RequestAllocationFundingSource[] | null): string {
-  const names = financiers
-    ?.map((financier) => financier.name ?? financier.code)
-    .filter((value): value is string => Boolean(value?.trim())) ?? [];
+export function getAllocationFinanciersLabel(
+  financiers?: RequestAllocationFundingSource[] | null,
+): string {
+  const names =
+    financiers
+      ?.map((financier) => financier.name ?? financier.code)
+      .filter((value): value is string => Boolean(value?.trim())) ?? [];
   return names.length > 0 ? names.join(", ") : "Financiadores no informados";
 }
 
-export function getPaymentPendingBadges(request: Pick<PaymentRequest, "payment_proof_pending" | "proof_pending" | "payment_details_pending" | "details_pending" | "payment">): string[] {
+export function getPaymentPendingBadges(
+  request: Pick<
+    PaymentRequest,
+    | "payment_proof_pending"
+    | "proof_pending"
+    | "payment_details_pending"
+    | "details_pending"
+    | "payment"
+  >,
+): string[] {
   return getPaymentCompletenessLabels({
     proofPending: hasPaymentProofPending(request),
     referencePending: hasPaymentDetailsPending(request),
@@ -1470,8 +2271,12 @@ export function getPaymentPendingBadges(request: Pick<PaymentRequest, "payment_p
   });
 }
 
-export function getBulkPaymentResultLabel(result: Pick<BulkPaymentItemResult, "status" | "error">): string {
-  return result.status.toLowerCase() === "success" ? "Pago registrado" : result.error ?? "No se pudo registrar";
+export function getBulkPaymentResultLabel(
+  result: Pick<BulkPaymentItemResult, "status" | "error">,
+): string {
+  return result.status.toLowerCase() === "success"
+    ? "Pago registrado"
+    : (result.error ?? "No se pudo registrar");
 }
 
 export function getPaymentEmailStatusLabel(status?: string | null): string {
@@ -1484,12 +2289,17 @@ export function getPaymentEmailStatusLabel(status?: string | null): string {
   return status;
 }
 
-export function getPaymentRexanStatusLabel(status?: string | null, preserveLegacyCopy = true): string {
+export function getPaymentRexanStatusLabel(
+  status?: string | null,
+  preserveLegacyCopy = true,
+): string {
   if (!status) return "REXAN no informado";
   return formatRexanActivationStatus(status, preserveLegacyCopy);
 }
 
-export function getBulkPaymentRexanHref(rexan?: BulkPaymentRexanResult | null): string | null {
+export function getBulkPaymentRexanHref(
+  rexan?: BulkPaymentRexanResult | null,
+): string | null {
   if (!rexan) return null;
   const requestId = rexan.settlement_request_id;
   return requestId ? `${ROUTES.REQUESTS}/${requestId}` : null;
@@ -1503,9 +2313,11 @@ const REQUEST_SUBMIT_VALIDATION_STEP = {
   DATA: "data",
 } as const;
 
-export type RequestSubmitValidationStep = (typeof REQUEST_SUBMIT_VALIDATION_STEP)[keyof typeof REQUEST_SUBMIT_VALIDATION_STEP];
+export type RequestSubmitValidationStep =
+  (typeof REQUEST_SUBMIT_VALIDATION_STEP)[keyof typeof REQUEST_SUBMIT_VALIDATION_STEP];
 
 export const REQUEST_SUBMIT_FIELD = {
+  SUPPLIER_DOCUMENT_NUMBER: "supplier_document_number",
   BUDGET_PLANNING_LINE_ID: "budget_planning_line_id",
   REQUESTED_AMOUNT: "requested_amount",
   CONCEPT: "concept",
@@ -1519,7 +2331,8 @@ export const REQUEST_SUBMIT_FIELD = {
   BANK_CCI: "bank_cci",
 } as const;
 
-export type RequestSubmitField = (typeof REQUEST_SUBMIT_FIELD)[keyof typeof REQUEST_SUBMIT_FIELD];
+export type RequestSubmitField =
+  (typeof REQUEST_SUBMIT_FIELD)[keyof typeof REQUEST_SUBMIT_FIELD];
 
 export interface RequestSubmitValidationIssue {
   field: RequestSubmitField;
@@ -1533,11 +2346,14 @@ export interface RequestReviewNavigationIssues {
   canEnterReview: boolean;
 }
 
-export function validateRequestDataForSubmitIssues(request: RequestSubmitDataWithAllocations): RequestSubmitValidationIssue[] {
+export function validateRequestDataForSubmitIssues(
+  request: RequestSubmitDataWithAllocations,
+): RequestSubmitValidationIssue[] {
   const issues: RequestSubmitValidationIssue[] = [];
   if (request.request_type === REQUEST_TYPE.ADVANCE_SETTLEMENT) return issues;
 
-  const beneficiaryDocumentNumber = request.beneficiary_document_number?.trim().toUpperCase() ?? "";
+  const beneficiaryDocumentNumber =
+    request.beneficiary_document_number?.trim().toUpperCase() ?? "";
   const bankAccount = request.bank_account?.trim() ?? "";
   const bankCci = request.bank_cci?.trim() ?? "";
   const bankName = request.bank_name?.trim() ?? "";
@@ -1547,47 +2363,165 @@ export function validateRequestDataForSubmitIssues(request: RequestSubmitDataWit
     issues.push({ field, step: REQUEST_SUBMIT_VALIDATION_STEP.DATA, message });
   }
 
+  if (
+    request.request_type === REQUEST_TYPE.SUPPLIER_PAYMENT &&
+    !resolveSupplierIdentity(request)
+  ) {
+    addIssue(
+      REQUEST_SUBMIT_FIELD.SUPPLIER_DOCUMENT_NUMBER,
+      "Completa el nombre y documento válido del proveedor (RUC, DNI o CE).",
+    );
+  }
+
   const allocations = request.allocations ?? [];
   const hasAllocations = allocations.length > 0;
   if (hasAllocations) {
     const seenLineIds = new Set<string>();
     allocations.forEach((allocation) => {
-      if (!hasText(allocation.budget_planning_line_id)) addIssue(REQUEST_SUBMIT_FIELD.BUDGET_PLANNING_LINE_ID, "Selecciona una línea POA.");
-      if (Number(allocation.amount) <= 0) addIssue(REQUEST_SUBMIT_FIELD.REQUESTED_AMOUNT, "El monto de la línea POA debe ser mayor a cero.");
-      if (allocation.budget_planning_line_id && seenLineIds.has(allocation.budget_planning_line_id)) {
-        addIssue(REQUEST_SUBMIT_FIELD.BUDGET_PLANNING_LINE_ID, "Esta línea POA ya fue agregada; edite el monto del bloque existente.");
+      if (!hasText(allocation.budget_planning_line_id))
+        addIssue(
+          REQUEST_SUBMIT_FIELD.BUDGET_PLANNING_LINE_ID,
+          "Selecciona una línea POA.",
+        );
+      if (Number(allocation.amount) <= 0)
+        addIssue(
+          REQUEST_SUBMIT_FIELD.REQUESTED_AMOUNT,
+          "El monto de la línea POA debe ser mayor a cero.",
+        );
+      if (
+        allocation.budget_planning_line_id &&
+        seenLineIds.has(allocation.budget_planning_line_id)
+      ) {
+        addIssue(
+          REQUEST_SUBMIT_FIELD.BUDGET_PLANNING_LINE_ID,
+          "Esta línea POA ya fue agregada; edite el monto del bloque existente.",
+        );
       }
       seenLineIds.add(allocation.budget_planning_line_id);
     });
-  } else if (!hasText(request.budget_planning_line_id)) addIssue(REQUEST_SUBMIT_FIELD.BUDGET_PLANNING_LINE_ID, "Selecciona una línea POA.");
-  if (hasAllocations ? allocations.reduce((total, allocation) => total + Number(allocation.amount || 0), 0) <= 0 : Number(request.requested_amount) <= 0) addIssue(REQUEST_SUBMIT_FIELD.REQUESTED_AMOUNT, "Ingresa un monto mayor a cero.");
-  if (!hasText(request.concept)) addIssue(REQUEST_SUBMIT_FIELD.CONCEPT, "Describe el concepto o justificación.");
-  else if (request.concept.trim().length > 120) addIssue(REQUEST_SUBMIT_FIELD.CONCEPT, "El concepto o justificación debe tener máximo 120 caracteres.");
-  if (!hasText(request.beneficiary_name)) addIssue(REQUEST_SUBMIT_FIELD.BENEFICIARY_NAME, "Ingresa el nombre del beneficiario.");
-  if (!request.beneficiary_document_type) addIssue(REQUEST_SUBMIT_FIELD.BENEFICIARY_DOCUMENT_TYPE, "Selecciona el tipo de documento del beneficiario.");
-  if (!beneficiaryDocumentNumber) addIssue(REQUEST_SUBMIT_FIELD.BENEFICIARY_DOCUMENT_NUMBER, "Ingresa el número de documento del beneficiario.");
-  if (request.beneficiary_document_type === BENEFICIARY_DOCUMENT_TYPE.DNI && !/^\d{8}$/.test(beneficiaryDocumentNumber)) {
-    addIssue(REQUEST_SUBMIT_FIELD.BENEFICIARY_DOCUMENT_NUMBER, "El DNI del beneficiario debe tener 8 dígitos.");
+  } else if (!hasText(request.budget_planning_line_id))
+    addIssue(
+      REQUEST_SUBMIT_FIELD.BUDGET_PLANNING_LINE_ID,
+      "Selecciona una línea POA.",
+    );
+  if (
+    hasAllocations
+      ? allocations.reduce(
+          (total, allocation) => total + Number(allocation.amount || 0),
+          0,
+        ) <= 0
+      : Number(request.requested_amount) <= 0
+  )
+    addIssue(
+      REQUEST_SUBMIT_FIELD.REQUESTED_AMOUNT,
+      "Ingresa un monto mayor a cero.",
+    );
+  if (!hasText(request.concept))
+    addIssue(
+      REQUEST_SUBMIT_FIELD.CONCEPT,
+      "Describe el concepto o justificación.",
+    );
+  else if (request.concept.trim().length > 120)
+    addIssue(
+      REQUEST_SUBMIT_FIELD.CONCEPT,
+      "El concepto o justificación debe tener máximo 120 caracteres.",
+    );
+  if (!hasText(request.beneficiary_name))
+    addIssue(
+      REQUEST_SUBMIT_FIELD.BENEFICIARY_NAME,
+      "Ingresa el nombre del beneficiario.",
+    );
+  if (!request.beneficiary_document_type)
+    addIssue(
+      REQUEST_SUBMIT_FIELD.BENEFICIARY_DOCUMENT_TYPE,
+      "Selecciona el tipo de documento del beneficiario.",
+    );
+  if (!beneficiaryDocumentNumber)
+    addIssue(
+      REQUEST_SUBMIT_FIELD.BENEFICIARY_DOCUMENT_NUMBER,
+      "Ingresa el número de documento del beneficiario.",
+    );
+  if (
+    request.beneficiary_document_type === BENEFICIARY_DOCUMENT_TYPE.DNI &&
+    !/^\d{8}$/.test(beneficiaryDocumentNumber)
+  ) {
+    addIssue(
+      REQUEST_SUBMIT_FIELD.BENEFICIARY_DOCUMENT_NUMBER,
+      "El DNI del beneficiario debe tener 8 dígitos.",
+    );
   }
-  if (request.beneficiary_document_type === BENEFICIARY_DOCUMENT_TYPE.RUC && !/^\d{11}$/.test(beneficiaryDocumentNumber)) {
-    addIssue(REQUEST_SUBMIT_FIELD.BENEFICIARY_DOCUMENT_NUMBER, "El RUC del beneficiario debe tener 11 dígitos.");
+  if (
+    request.beneficiary_document_type === BENEFICIARY_DOCUMENT_TYPE.RUC &&
+    !/^\d{11}$/.test(beneficiaryDocumentNumber)
+  ) {
+    addIssue(
+      REQUEST_SUBMIT_FIELD.BENEFICIARY_DOCUMENT_NUMBER,
+      "El RUC del beneficiario debe tener 11 dígitos.",
+    );
   }
-  if (request.beneficiary_document_type === BENEFICIARY_DOCUMENT_TYPE.CE && !/^[A-Z0-9]{6,12}$/.test(beneficiaryDocumentNumber)) {
-    addIssue(REQUEST_SUBMIT_FIELD.BENEFICIARY_DOCUMENT_NUMBER, "El carné de extranjería del beneficiario debe tener de 6 a 12 letras o números.");
+  if (
+    request.beneficiary_document_type === BENEFICIARY_DOCUMENT_TYPE.CE &&
+    !/^[A-Z0-9]{6,12}$/.test(beneficiaryDocumentNumber)
+  ) {
+    addIssue(
+      REQUEST_SUBMIT_FIELD.BENEFICIARY_DOCUMENT_NUMBER,
+      "El carné de extranjería del beneficiario debe tener de 6 a 12 letras o números.",
+    );
   }
-  if (!request.bank_code || !Object.values(BANK_CODE).includes(request.bank_code)) addIssue(REQUEST_SUBMIT_FIELD.BANK_CODE, "Selecciona el banco del beneficiario.");
-  if (isOtherBank(request.bank_code) && !bankName) addIssue(REQUEST_SUBMIT_FIELD.BANK_NAME, "Ingresa el nombre del banco.");
-  else if (isOtherBank(request.bank_code) && bankName.length > 100) addIssue(REQUEST_SUBMIT_FIELD.BANK_NAME, "El nombre del banco debe tener máximo 100 caracteres.");
-  if (!request.account_type || !Object.values(ACCOUNT_TYPE).includes(request.account_type)) addIssue(REQUEST_SUBMIT_FIELD.ACCOUNT_TYPE, "Selecciona el tipo de cuenta bancaria.");
-  if (!/^\d{6,30}$/.test(bankAccount)) addIssue(REQUEST_SUBMIT_FIELD.BANK_ACCOUNT, "Ingresa una cuenta bancaria de 6 a 30 dígitos.");
-  if (requiresCci && !bankCci) addIssue(REQUEST_SUBMIT_FIELD.BANK_CCI, "Ingresa el CCI de 20 dígitos.");
-  else if (requiresCci && !/^\d{20}$/.test(bankCci)) addIssue(REQUEST_SUBMIT_FIELD.BANK_CCI, "El CCI debe tener exactamente 20 dígitos.");
+  if (
+    !request.bank_code ||
+    !Object.values(BANK_CODE).includes(request.bank_code)
+  )
+    addIssue(
+      REQUEST_SUBMIT_FIELD.BANK_CODE,
+      "Selecciona el banco del beneficiario.",
+    );
+  if (isOtherBank(request.bank_code) && !bankName)
+    addIssue(REQUEST_SUBMIT_FIELD.BANK_NAME, "Ingresa el nombre del banco.");
+  else if (isOtherBank(request.bank_code) && bankName.length > 100)
+    addIssue(
+      REQUEST_SUBMIT_FIELD.BANK_NAME,
+      "El nombre del banco debe tener máximo 100 caracteres.",
+    );
+  if (
+    !request.account_type ||
+    !Object.values(ACCOUNT_TYPE).includes(request.account_type)
+  )
+    addIssue(
+      REQUEST_SUBMIT_FIELD.ACCOUNT_TYPE,
+      "Selecciona el tipo de cuenta bancaria.",
+    );
+  if (!/^\d{6,30}$/.test(bankAccount))
+    addIssue(
+      REQUEST_SUBMIT_FIELD.BANK_ACCOUNT,
+      "Ingresa una cuenta bancaria de 6 a 30 dígitos.",
+    );
+  if (requiresCci && !bankCci)
+    addIssue(REQUEST_SUBMIT_FIELD.BANK_CCI, "Ingresa el CCI de 20 dígitos.");
+  else if (requiresCci && !/^\d{20}$/.test(bankCci))
+    addIssue(
+      REQUEST_SUBMIT_FIELD.BANK_CCI,
+      "El CCI debe tener exactamente 20 dígitos.",
+    );
 
-  return issues.filter((issue, index, currentIssues) => currentIssues.findIndex((currentIssue) => currentIssue.field === issue.field && currentIssue.message === issue.message) === index);
+  return issues.filter(
+    (issue, index, currentIssues) =>
+      currentIssues.findIndex(
+        (currentIssue) =>
+          currentIssue.field === issue.field &&
+          currentIssue.message === issue.message,
+      ) === index,
+  );
 }
 
-export function validateRequestDataForSubmit(request: RequestSubmitDataWithAllocations): string[] {
-  return Array.from(new Set(validateRequestDataForSubmitIssues(request).map((issue) => issue.message)));
+export function validateRequestDataForSubmit(
+  request: RequestSubmitDataWithAllocations,
+): string[] {
+  return Array.from(
+    new Set(
+      validateRequestDataForSubmitIssues(request).map((issue) => issue.message),
+    ),
+  );
 }
 
 export function getRequestReviewNavigationIssues(
@@ -1595,7 +2529,9 @@ export function getRequestReviewNavigationIssues(
   checklist: Pick<RequiredDocumentChecklist, "isComplete" | "missingMessages">,
 ): RequestReviewNavigationIssues {
   const dataIssues = validateRequestDataForSubmitIssues(request);
-  const documentMessages = checklist.isComplete ? [] : checklist.missingMessages;
+  const documentMessages = checklist.isComplete
+    ? []
+    : checklist.missingMessages;
 
   return {
     dataIssues,
@@ -1604,24 +2540,103 @@ export function getRequestReviewNavigationIssues(
   };
 }
 
-const REQUEST_PXQ_REQUIRED_RULE: Omit<RequiredDocumentChecklistItem, "satisfied"> = {
-    key: "request-pxq",
-    category: REQUEST_DOCUMENT_CATEGORY.PXQ,
-    label: "PXQ",
-    description: "Adjunta un PXQ asociado a la solicitud. Puede pertenecer a cualquiera de sus líneas POA.",
-    required: true,
-    acceptedFormatsLabel: "Formato PXQ permitido",
-    missingMessage: "Falta adjuntar Excel PxQ.",
+const REQUEST_PXQ_REQUIRED_RULE: Omit<
+  RequiredDocumentChecklistItem,
+  "satisfied"
+> = {
+  key: "request-pxq",
+  category: REQUEST_DOCUMENT_CATEGORY.PXQ,
+  label: "PXQ",
+  description:
+    "Adjunta un PXQ asociado a la solicitud. Puede pertenecer a cualquiera de sus líneas POA.",
+  required: true,
+  acceptedFormatsLabel: "Formato PXQ permitido",
+  missingMessage: "Falta adjuntar Excel PxQ.",
 };
 
-const REQUIRED_DOCUMENT_RULES: Record<RequestType, Omit<RequiredDocumentChecklistItem, "satisfied">[]> = {
+const REQUIRED_DOCUMENT_RULES: Record<
+  RequestType,
+  Omit<RequiredDocumentChecklistItem, "satisfied">[]
+> = {
   [REQUEST_TYPE.ADVANCE]: [REQUEST_PXQ_REQUIRED_RULE],
-  [REQUEST_TYPE.REIMBURSEMENT]: [REQUEST_PXQ_REQUIRED_RULE],
-  [REQUEST_TYPE.SUPPLIER_PAYMENT]: [REQUEST_PXQ_REQUIRED_RULE],
+  [REQUEST_TYPE.REIMBURSEMENT]: [],
+  [REQUEST_TYPE.SUPPLIER_PAYMENT]: [],
   [REQUEST_TYPE.ADVANCE_SETTLEMENT]: [],
 };
 
-export function getRequiredDocumentChecklist(requestType: RequestType, documents: RequestDocument[]): RequiredDocumentChecklist {
+export function getRequiredDocumentChecklist(
+  requestType: RequestType,
+  documents: RequestDocument[],
+  request?: RequestEvidenceContext,
+  receipts: readonly EvidenceReceipt[] = [],
+  annualUit?: string | null,
+): RequiredDocumentChecklist {
+  if (
+    requestType === REQUEST_TYPE.SUPPLIER_PAYMENT ||
+    requestType === REQUEST_TYPE.REIMBURSEMENT
+  ) {
+    const context = request ?? {
+      id: "",
+      request_type: requestType,
+      currency: null,
+      requested_amount: "0",
+    };
+    const evidence = evaluateRequestEvidence(
+      context,
+      documents,
+      receipts,
+      annualUit,
+    );
+    const supplier = requestType === REQUEST_TYPE.SUPPLIER_PAYMENT;
+    const items: RequiredDocumentChecklistItem[] = [
+      {
+        key: "request-primary",
+        category: REQUEST_DOCUMENT_CATEGORY.RECEIPT,
+        label: supplier
+          ? "Comprobante primario del proveedor"
+          : "Comprobante real vinculado",
+        description: supplier
+          ? "Factura o RHE; boleta solo con declaración RUS, recibo de caja solo con Casa de Retiro. Contrato u otros sustentos no los sustituyen."
+          : "Adjunta un comprobante activo vinculado a esta solicitud. No requiere PXQ ni éxito de OCR.",
+        required: true,
+        satisfied: evidence.primarySatisfied,
+        acceptedFormatsLabel: "PDF, JPG, JPEG o PNG",
+        missingMessage: supplier
+          ? "Falta un documento primario elegible del proveedor."
+          : "Falta adjuntar un comprobante real activo para continuar con el reembolso.",
+      },
+    ];
+    if (supplier)
+      items.push({
+        key: "supplier-contract",
+        category: REQUEST_DOCUMENT_CATEGORY.CONTRACT,
+        label: "Contrato / convenio",
+        description:
+          context.currency === "USD"
+            ? USD_CONTRACT_NOTICE
+            : "PDF obligatorio solo cuando el total en soles supera estrictamente ½ UIT del año de la solicitud.",
+        required: evidence.contractRequired,
+        satisfied: evidence.contractPresent,
+        acceptedFormatsLabel: "PDF",
+        missingMessage:
+          "El total en soles supera media UIT y requiere contrato/convenio PDF.",
+      });
+    const missingMessages = items
+      .filter((item) => item.required && !item.satisfied)
+      .map((item) => item.missingMessage);
+    if (evidence.error)
+      missingMessages.push(
+        evidence.error === "UIT_NOT_CONFIGURED"
+          ? "UIT no configurada para el año de la solicitud. Solicita su configuración antes de enviar."
+          : "Resuelve la moneda o el monto de la solicitud antes de continuar.",
+      );
+    return {
+      items,
+      conditionalNotes: [],
+      missingMessages,
+      isComplete: missingMessages.length === 0,
+    };
+  }
   const rules = REQUIRED_DOCUMENT_RULES[requestType] ?? [];
   const items = rules.map((rule): RequiredDocumentChecklistItem => {
     const satisfied = documents.some(
@@ -1632,7 +2647,9 @@ export function getRequiredDocumentChecklist(requestType: RequestType, documents
 
     return { ...rule, satisfied };
   });
-  const missingMessages = items.filter((item) => item.required && !item.satisfied).map((item) => item.missingMessage);
+  const missingMessages = items
+    .filter((item) => item.required && !item.satisfied)
+    .map((item) => item.missingMessage);
 
   return {
     items,
@@ -1643,7 +2660,23 @@ export function getRequiredDocumentChecklist(requestType: RequestType, documents
 }
 
 export function getMissingDocumentMessagesFromError(error: unknown): string[] {
-  return getApiErrorMessages(error).filter((message) => /falta adjuntar|documento|required document|missing document/i.test(message));
+  const policy = getRequestErrorPolicy(error);
+  if (policy)
+    return policy.step === REQUEST_EDIT_STEP.DOCUMENTS ? [policy.message] : [];
+  return getApiErrorMessages(error).filter((message) =>
+    /falta adjuntar|documento|required document|missing document/i.test(
+      message,
+    ),
+  );
+}
+
+export function getRequestErrorStep(error: unknown): RequestEditStep | null {
+  return (
+    getRequestErrorPolicy(error)?.step ??
+    (getMissingDocumentMessagesFromError(error).length > 0
+      ? REQUEST_EDIT_STEP.DOCUMENTS
+      : null)
+  );
 }
 
 export function getRequestDocumentPermissionMessage(
@@ -1652,17 +2685,32 @@ export function getRequestDocumentPermissionMessage(
   request: Pick<PaymentRequest, "requester_id" | "request_type">,
   currentUserId?: string | null,
 ): string | null {
-  if (canManageRequestDocuments(roleCode, status, request, currentUserId)) return null;
-  if (status === REQUEST_STATUS.REJECTED || status === REQUEST_STATUS.CLOSED || status === REQUEST_STATUS.VOIDED) {
+  if (canManageRequestDocuments(roleCode, status, request, currentUserId))
+    return null;
+  if (
+    status === REQUEST_STATUS.REJECTED ||
+    status === REQUEST_STATUS.CLOSED ||
+    status === REQUEST_STATUS.VOIDED
+  ) {
     return "La solicitud está en un estado final y sus documentos ya no pueden modificarse.";
   }
-  if (roleCode === ROLE_CODE.SOLICITANTE_EPE && request.requester_id !== currentUserId) {
+  if (
+    roleCode === ROLE_CODE.SOLICITANTE_EPE &&
+    request.requester_id !== currentUserId
+  ) {
     return "Solo el solicitante titular puede modificar documentos en esta solicitud.";
   }
-  if (roleCode === ROLE_CODE.SOLICITANTE_EPE && request.requester_id === currentUserId) {
+  if (
+    roleCode === ROLE_CODE.SOLICITANTE_EPE &&
+    request.requester_id === currentUserId
+  ) {
     return "Como solicitante titular, solo puedes modificar documentos en borrador u observación.";
   }
-  if (isGiofOperationalRole(roleCode) && request.request_type === REQUEST_TYPE.ADVANCE_SETTLEMENT && status === REQUEST_STATUS.OBSERVED) {
+  if (
+    isGiofOperationalRole(roleCode) &&
+    request.request_type === REQUEST_TYPE.ADVANCE_SETTLEMENT &&
+    status === REQUEST_STATUS.OBSERVED
+  ) {
     return "GIOF solo puede revisar los documentos de una rendición observada; el solicitante titular debe corregirlos.";
   }
   if (isGiofOperationalRole(roleCode)) {
@@ -1671,8 +2719,13 @@ export function getRequestDocumentPermissionMessage(
   return "Tu rol no tiene permisos para cargar o eliminar documentos en este estado.";
 }
 
-function getHistoryDateByStatus(statusHistory: RequestStatusHistoryItem[] | undefined, status: RequestStatus): string | null {
-  return statusHistory?.find((item) => item.to_status === status)?.created_at ?? null;
+function getHistoryDateByStatus(
+  statusHistory: RequestStatusHistoryItem[] | undefined,
+  status: RequestStatus,
+): string | null {
+  return (
+    statusHistory?.find((item) => item.to_status === status)?.created_at ?? null
+  );
 }
 
 function getRequestStepperDate(
@@ -1694,23 +2747,47 @@ function getRequestStepperDate(
   return null;
 }
 
-function hasStepperStatus(statusHistory: RequestStatusHistoryItem[] | undefined, status: RequestStatus): boolean {
-  return Boolean(statusHistory?.some((item) => item.to_status === status || item.from_status === status));
+function hasStepperStatus(
+  statusHistory: RequestStatusHistoryItem[] | undefined,
+  status: RequestStatus,
+): boolean {
+  return Boolean(
+    statusHistory?.some(
+      (item) => item.to_status === status || item.from_status === status,
+    ),
+  );
 }
 
-function isApprovedRexanWithoutPayment(status: RequestStatus, context?: RequestStatusLabelContext | null): boolean {
-  return status === REQUEST_STATUS.APPROVED
-    && context?.request_type === REQUEST_TYPE.ADVANCE_SETTLEMENT
-    && (context.rexan_outcome === REXAN_OUTCOME.EXACT || context.rexan_outcome === REXAN_OUTCOME.DEVOLUCION);
+function isApprovedRexanWithoutPayment(
+  status: RequestStatus,
+  context?: RequestStatusLabelContext | null,
+): boolean {
+  return (
+    status === REQUEST_STATUS.APPROVED &&
+    context?.request_type === REQUEST_TYPE.ADVANCE_SETTLEMENT &&
+    (context.rexan_outcome === REXAN_OUTCOME.EXACT ||
+      context.rexan_outcome === REXAN_OUTCOME.DEVOLUCION)
+  );
 }
 
-function getRequestStepperPath(status: RequestStatus, statusHistory?: RequestStatusHistoryItem[], context?: RequestStatusLabelContext | null): RequestStatus[] {
+function getRequestStepperPath(
+  status: RequestStatus,
+  statusHistory?: RequestStatusHistoryItem[],
+  context?: RequestStatusLabelContext | null,
+): RequestStatus[] {
   const path: RequestStatus[] = isApprovedRexanWithoutPayment(status, context)
-    ? REQUEST_APPROVAL_PATH.filter((stepStatus) => stepStatus !== REQUEST_STATUS.PAID)
+    ? REQUEST_APPROVAL_PATH.filter(
+        (stepStatus) => stepStatus !== REQUEST_STATUS.PAID,
+      )
     : [...REQUEST_APPROVAL_PATH];
-  const shouldShowValidation = status === REQUEST_STATUS.IN_VALIDATION || hasStepperStatus(statusHistory, REQUEST_STATUS.IN_VALIDATION);
+  const shouldShowValidation =
+    status === REQUEST_STATUS.IN_VALIDATION ||
+    hasStepperStatus(statusHistory, REQUEST_STATUS.IN_VALIDATION);
   if (shouldShowValidation) path.splice(2, 0, REQUEST_STATUS.IN_VALIDATION);
-  if (status === REQUEST_STATUS.CLOSED || hasStepperStatus(statusHistory, REQUEST_STATUS.CLOSED)) {
+  if (
+    status === REQUEST_STATUS.CLOSED ||
+    hasStepperStatus(statusHistory, REQUEST_STATUS.CLOSED)
+  ) {
     path.push(REQUEST_STATUS.CLOSED);
   }
 
@@ -1719,11 +2796,19 @@ function getRequestStepperPath(status: RequestStatus, statusHistory?: RequestSta
     return [...path.slice(0, branchIndex), REQUEST_STATUS.REJECTED];
   }
   if (status === REQUEST_BRANCH_STATUS.VOIDED) {
-    const voidedIndex = hasStepperStatus(statusHistory, REQUEST_STATUS.SUBMITTED) ? branchIndex : 1;
+    const voidedIndex = hasStepperStatus(
+      statusHistory,
+      REQUEST_STATUS.SUBMITTED,
+    )
+      ? branchIndex
+      : 1;
     return [...path.slice(0, voidedIndex), REQUEST_STATUS.VOIDED];
   }
 
-  if (status === REQUEST_BRANCH_STATUS.OBSERVED || hasStepperStatus(statusHistory, REQUEST_BRANCH_STATUS.OBSERVED)) {
+  if (
+    status === REQUEST_BRANCH_STATUS.OBSERVED ||
+    hasStepperStatus(statusHistory, REQUEST_BRANCH_STATUS.OBSERVED)
+  ) {
     path.splice(branchIndex, 0, REQUEST_STATUS.OBSERVED);
   }
 
@@ -1740,15 +2825,21 @@ export function getRequestStatusStepperItems(
   const path = getRequestStepperPath(status, statusHistory, context);
   const currentIndex = path.indexOf(status);
   const safeCurrentIndex = currentIndex >= 0 ? currentIndex : 0;
-  const terminalBranch = status === REQUEST_STATUS.REJECTED || status === REQUEST_STATUS.VOIDED;
+  const terminalBranch =
+    status === REQUEST_STATUS.REJECTED || status === REQUEST_STATUS.VOIDED;
 
   return path.map((stepStatus, index) => {
-    const isBranch = stepStatus === REQUEST_STATUS.OBSERVED || stepStatus === REQUEST_STATUS.REJECTED || stepStatus === REQUEST_STATUS.VOIDED;
-    const state = stepStatus === status
-      ? REQUEST_STEPPER_STATE.CURRENT
-      : index < safeCurrentIndex && !(terminalBranch && index > safeCurrentIndex)
-        ? REQUEST_STEPPER_STATE.COMPLETED
-        : REQUEST_STEPPER_STATE.PENDING;
+    const isBranch =
+      stepStatus === REQUEST_STATUS.OBSERVED ||
+      stepStatus === REQUEST_STATUS.REJECTED ||
+      stepStatus === REQUEST_STATUS.VOIDED;
+    const state =
+      stepStatus === status
+        ? REQUEST_STEPPER_STATE.CURRENT
+        : index < safeCurrentIndex &&
+            !(terminalBranch && index > safeCurrentIndex)
+          ? REQUEST_STEPPER_STATE.COMPLETED
+          : REQUEST_STEPPER_STATE.PENDING;
 
     return {
       status: stepStatus,
@@ -1761,14 +2852,25 @@ export function getRequestStatusStepperItems(
 }
 
 export function getRequestTimelineDate(request: PaymentRequest): string | null {
-  const candidates = [request.updated_at, request.submitted_at, request.created_at].filter((value): value is string => Boolean(value));
+  const candidates = [
+    request.updated_at,
+    request.submitted_at,
+    request.created_at,
+  ].filter((value): value is string => Boolean(value));
   if (candidates.length === 0) return null;
-  return candidates.reduce((latest, value) => (getComparableTime(value) > getComparableTime(latest) ? value : latest));
+  return candidates.reduce((latest, value) =>
+    getComparableTime(value) > getComparableTime(latest) ? value : latest,
+  );
 }
 
 export function getRequestTimelineLabel(request: PaymentRequest): string {
   const timelineDate = getRequestTimelineDate(request);
-  if (timelineDate === request.updated_at && request.updated_at !== request.created_at && request.updated_at !== request.submitted_at) return "Modificación";
+  if (
+    timelineDate === request.updated_at &&
+    request.updated_at !== request.created_at &&
+    request.updated_at !== request.submitted_at
+  )
+    return "Modificación";
   if (timelineDate === request.submitted_at) return "Envío";
   return "Creación";
 }
@@ -1780,17 +2882,25 @@ function getComparableTime(value?: string | null): number {
 }
 
 function compareRequestDateAsc(a: PaymentRequest, b: PaymentRequest): number {
-  return getComparableTime(getRequestTimelineDate(a)) - getComparableTime(getRequestTimelineDate(b));
+  return (
+    getComparableTime(getRequestTimelineDate(a)) -
+    getComparableTime(getRequestTimelineDate(b))
+  );
 }
 
 function compareRequestDateDesc(a: PaymentRequest, b: PaymentRequest): number {
   return compareRequestDateAsc(b, a);
 }
 
-export function sortRequestsForList(requests: PaymentRequest[], sort: RequestListSort): PaymentRequest[] {
+export function sortRequestsForList(
+  requests: PaymentRequest[],
+  sort: RequestListSort,
+): PaymentRequest[] {
   return [...requests].sort((a, b) => {
-    if (sort === REQUEST_LIST_SORT.NEWEST_FIRST) return compareRequestDateDesc(a, b);
-    if (sort === REQUEST_LIST_SORT.OLDEST_FIRST) return compareRequestDateAsc(a, b);
+    if (sort === REQUEST_LIST_SORT.NEWEST_FIRST)
+      return compareRequestDateDesc(a, b);
+    if (sort === REQUEST_LIST_SORT.OLDEST_FIRST)
+      return compareRequestDateAsc(a, b);
 
     const aSubmitted = a.status === REQUEST_STATUS.SUBMITTED;
     const bSubmitted = b.status === REQUEST_STATUS.SUBMITTED;
@@ -1804,35 +2914,145 @@ export function getRequestMonthLabel(month?: number | null): string {
   return MONTH_OPTIONS.find((option) => option.value === month)?.label ?? "—";
 }
 
+interface RequestErrorPolicy {
+  message: string;
+  step: RequestEditStep;
+}
+
+const REQUEST_ERROR_POLICIES: Readonly<Record<string, RequestErrorPolicy>> = {
+  SUPPLIER_IDENTITY_REQUIRED: {
+    message:
+      "Completa el nombre y documento válido del proveedor, independientemente del beneficiario bancario.",
+    step: REQUEST_EDIT_STEP.DATA,
+  },
+  SUPPLIER_IDENTITY_INVALID: {
+    message:
+      "Revisa el nombre, tipo y número de documento del proveedor: RUC de 11 dígitos, DNI de 8 o CE de 6 a 12 letras o números.",
+    step: REQUEST_EDIT_STEP.DATA,
+  },
+  SUPPLIER_IDENTITY_CONFLICT: {
+    message:
+      "La identidad del proveedor y el RUC registrado no coinciden. Actualiza la solicitud y revisa los datos antes de guardar nuevamente.",
+    step: REQUEST_EDIT_STEP.DATA,
+  },
+  SUPPLIER_PRIMARY_DOCUMENT_REQUIRED: {
+    message:
+      "Falta un documento primario elegible del proveedor: factura o recibo por honorarios; boleta solo con RUS o recibo de caja solo con Casa de Retiro.",
+    step: REQUEST_EDIT_STEP.DOCUMENTS,
+  },
+  SUPPLIER_DOCUMENT_INELIGIBLE: {
+    message:
+      "Revisa los documentos del proveedor y las declaraciones RUS y Casa de Retiro. Un contrato u otro sustento no sustituye al comprobante primario elegible.",
+    step: REQUEST_EDIT_STEP.DOCUMENTS,
+  },
+  UIT_NOT_CONFIGURED: {
+    message:
+      "La UIT del año de la solicitud no está configurada o no es válida. Solicita su configuración autorizada; adjuntar un contrato no resuelve este bloqueo.",
+    step: REQUEST_EDIT_STEP.DOCUMENTS,
+  },
+  CONTRACT_REQUIRED_BY_UIT: {
+    message:
+      "El total en soles supera estrictamente ½ UIT del año de la solicitud. Adjunta un contrato o convenio PDF activo.",
+    step: REQUEST_EDIT_STEP.DOCUMENTS,
+  },
+  POA_CURRENCY_MISMATCH: {
+    message:
+      "Revisa la moneda de la solicitud, sus líneas POA y comprobantes. Las líneas deben tener una moneda homogénea y compatible; no conviertas ni cambies la etiqueta de los importes existentes.",
+    step: REQUEST_EDIT_STEP.DATA,
+  },
+  LEGACY_CURRENCY_RESOLUTION_REQUIRED: {
+    message:
+      "Hay una moneda histórica pendiente de resolución autorizada en la solicitud o sus datos relacionados. No asumas soles; actualiza los datos después de resolverla.",
+    step: REQUEST_EDIT_STEP.DATA,
+  },
+  SETTLEMENT_BALANCE_MISMATCH: {
+    message:
+      "El saldo de la rendición no coincide con el anticipo y sus comprobantes. Revisa los importes y la devolución antes de continuar.",
+    step: REQUEST_EDIT_STEP.DOCUMENTS,
+  },
+  REIMBURSEMENT_RECEIPT_REQUIRED: {
+    message:
+      "Falta un comprobante real activo vinculado a esta solicitud de reembolso. El Excel PxQ no lo sustituye.",
+    step: REQUEST_EDIT_STEP.DOCUMENTS,
+  },
+};
+
+function getRequestErrorPolicy(error: unknown): RequestErrorPolicy | null {
+  if (
+    !(error instanceof ApiRequestError) ||
+    typeof error.body.code !== "string"
+  )
+    return null;
+  return Object.hasOwn(REQUEST_ERROR_POLICIES, error.body.code)
+    ? REQUEST_ERROR_POLICIES[error.body.code]
+    : null;
+}
+
 export function getApiErrorMessages(error: unknown): string[] {
+  const policy = getRequestErrorPolicy(error);
+  if (policy) return [policy.message];
   if (error instanceof ApiRequestError) {
     const code = typeof error.body.code === "string" ? error.body.code : null;
     const paymentErrorMessages: Record<string, string> = {
-      PAYMENT_ALREADY_EXISTS: "Esta solicitud ya tiene un pago registrado. Actualiza la cola para ver su estado.",
-      PAYMENT_PROOF_ALREADY_EXISTS: "Esta solicitud ya tiene una constancia global de pago.",
-      PAYMENT_AMOUNT_MISMATCH: "El pago debe cubrir el importe completo de la solicitud; no se admiten pagos parciales.",
-      REQUEST_STATE_CONFLICT: "La solicitud cambió de estado. Actualiza la cola antes de continuar.",
-      GIOF_WORK_ASSIGNMENT_REQUIRED: "Este pago debe estar asignado a tu usuario antes de procesarlo.",
-      GIOF_WORK_LEASE_REQUIRED: "Tu sesión de trabajo venció o no corresponde. Vuelve a abrir el pago desde la cola.",
-      GIOF_ASSIGNMENT_VERSION_REQUIRED: "Falta el contexto vigente de asignación. Actualiza la cola y vuelve a Procesar el pago.",
-      GIOF_ASSIGNMENT_VERSION_STALE: "La asignación cambió mientras procesabas el pago. Actualiza la cola y vuelve a adquirir la sesión.",
-      GIOF_LEASE_TOKEN_REQUIRED: "Falta la sesión operativa del pago. Cierra esta ventana y vuelve a Procesar desde la cola.",
-      GIOF_LEASE_EXPIRED: "La sesión operativa venció. Actualiza la cola y vuelve a Procesar el pago.",
-      GIOF_LEASE_FOREIGN: "La sesión del pago pertenece a otra persona o a otro proceso. Actualiza la cola antes de continuar.",
-      GIOF_NOT_ASSIGNED_OWNER: "El pago ya no está asignado a tu usuario. Actualiza la cola.",
-      GIOF_OPERATION_FORBIDDEN: "Tu usuario ya no puede ejecutar este pago. Actualiza la cola o solicita una nueva asignación.",
-      GIOF_LIFECYCLE_CONFLICT: "El pago ya no está disponible para edición. Actualiza la cola para ver su estado.",
-      PAYMENT_PAID_AT_IN_FUTURE: "La fecha efectiva del pago supera el máximo permitido por la política vigente. Revisa la fecha y hora de pago.",
-      PAYMENT_ROUTE_POLICY_UNAVAILABLE: "El registro de pagos está temporalmente cerrado porque la política de destino no está disponible. No reintentes hasta que Operaciones confirme la configuración.",
-      PAYMENT_BULK_DAILY_UNAVAILABLE: "El pago masivo no está disponible con destinos diarios. Registra cada pago individualmente con su cuenta de origen y constancia.",
+      PAYMENT_ALREADY_EXISTS:
+        "Esta solicitud ya tiene un pago registrado. Actualiza la cola para ver su estado.",
+      PAYMENT_PROOF_ALREADY_EXISTS:
+        "Esta solicitud ya tiene una constancia global de pago.",
+      PAYMENT_AMOUNT_MISMATCH:
+        "El pago debe cubrir el importe completo de la solicitud; no se admiten pagos parciales.",
+      REQUEST_STATE_CONFLICT:
+        "La solicitud cambió de estado. Actualiza la cola antes de continuar.",
+      GIOF_WORK_ASSIGNMENT_REQUIRED:
+        "Este pago debe estar asignado a tu usuario antes de procesarlo.",
+      GIOF_WORK_LEASE_REQUIRED:
+        "Tu sesión de trabajo venció o no corresponde. Vuelve a abrir el pago desde la cola.",
+      GIOF_ASSIGNMENT_VERSION_REQUIRED:
+        "Falta el contexto vigente de asignación. Actualiza la cola y vuelve a Procesar el pago.",
+      GIOF_ASSIGNMENT_VERSION_STALE:
+        "La asignación cambió mientras procesabas el pago. Actualiza la cola y vuelve a adquirir la sesión.",
+      GIOF_LEASE_TOKEN_REQUIRED:
+        "Falta la sesión operativa del pago. Cierra esta ventana y vuelve a Procesar desde la cola.",
+      GIOF_LEASE_EXPIRED:
+        "La sesión operativa venció. Actualiza la cola y vuelve a Procesar el pago.",
+      GIOF_LEASE_FOREIGN:
+        "La sesión del pago pertenece a otra persona o a otro proceso. Actualiza la cola antes de continuar.",
+      GIOF_NOT_ASSIGNED_OWNER:
+        "El pago ya no está asignado a tu usuario. Actualiza la cola.",
+      GIOF_OPERATION_FORBIDDEN:
+        "Tu usuario ya no puede ejecutar este pago. Actualiza la cola o solicita una nueva asignación.",
+      GIOF_LIFECYCLE_CONFLICT:
+        "El pago ya no está disponible para edición. Actualiza la cola para ver su estado.",
+      PAYMENT_PAID_AT_IN_FUTURE:
+        "La fecha efectiva del pago supera el máximo permitido por la política vigente. Revisa la fecha y hora de pago.",
+      PAYMENT_ROUTE_POLICY_UNAVAILABLE:
+        "El registro de pagos está temporalmente cerrado porque la política de destino no está disponible. No reintentes hasta que Operaciones confirme la configuración.",
+      PAYMENT_BULK_DAILY_UNAVAILABLE:
+        "El pago masivo no está disponible con destinos diarios. Registra cada pago individualmente con su cuenta de origen y constancia.",
+      PAYMENT_REJECTION_STATE_CONFLICT:
+        "La solicitud ya no está aprobada para pago. Actualiza la cola antes de continuar.",
+      PAYMENT_REJECTION_STATUS_CONFLICT:
+        "La solicitud ya no está aprobada para pago. Actualiza la cola antes de continuar.",
+      PAYMENT_EXECUTION_EXISTS:
+        "La solicitud ya tiene ejecución de pago y no puede rechazarse. Actualiza la cola.",
     };
     if (code && paymentErrorMessages[code]) return [paymentErrorMessages[code]];
-    if (error.status === 403) return ["No tienes permiso para realizar esta acción o tu asignación ya no está vigente."];
-    if (error.status === 409 && /(?:request-payments|\/payments(?:\/|$))/i.test(error.body.path ?? "")) {
-      return ["El pago cambió mientras lo procesabas. Actualiza la cola y verifica si ya fue registrado."];
+    if (error.status === 403)
+      return [
+        "No tienes permiso para realizar esta acción o tu asignación ya no está vigente.",
+      ];
+    if (
+      error.status === 409 &&
+      /(?:request-payments|\/payments(?:\/|$))/i.test(error.body.path ?? "")
+    ) {
+      return [
+        "El pago cambió mientras lo procesabas. Actualiza la cola y verifica si ya fue registrado.",
+      ];
     }
     const message = error.body.message;
-    if (Array.isArray(message)) return message.filter((item): item is string => typeof item === "string").map(mapApiValidationMessage);
+    if (Array.isArray(message))
+      return message
+        .filter((item): item is string => typeof item === "string")
+        .map(mapApiValidationMessage);
     if (typeof message === "string") return [mapApiValidationMessage(message)];
   }
 
@@ -1846,24 +3066,36 @@ export function getApiErrorMessages(error: unknown): string[] {
 function mapApiValidationMessage(message: string): string {
   const validationMessageMap: Record<string, string> = {
     "budget_planning_line_id is required": "Selecciona una línea POA.",
-    "budget_month must be between 1 and 12": "Selecciona un mes presupuestal válido.",
+    "budget_month must be between 1 and 12":
+      "Selecciona un mes presupuestal válido.",
     "requested_amount must be greater than 0": "Ingresa un monto mayor a cero.",
     "concept is required": "Describe el concepto o justificación.",
     "beneficiary_name is required": "Ingresa el nombre del beneficiario.",
-    "beneficiary_document_type is required": "Selecciona el tipo de documento del beneficiario.",
-    "beneficiary_document_number is required": "Ingresa el número de documento del beneficiario.",
-    "beneficiary_document_number must contain exactly 8 digits for DNI": "El DNI del beneficiario debe tener 8 dígitos.",
-    "beneficiary_document_number must contain exactly 11 digits for RUC": "El RUC del beneficiario debe tener 11 dígitos.",
-    "beneficiary_document_number must contain 6 to 12 alphanumeric characters for CE": "El carné de extranjería del beneficiario debe tener de 6 a 12 letras o números.",
+    "beneficiary_document_type is required":
+      "Selecciona el tipo de documento del beneficiario.",
+    "beneficiary_document_number is required":
+      "Ingresa el número de documento del beneficiario.",
+    "beneficiary_document_number must contain exactly 8 digits for DNI":
+      "El DNI del beneficiario debe tener 8 dígitos.",
+    "beneficiary_document_number must contain exactly 11 digits for RUC":
+      "El RUC del beneficiario debe tener 11 dígitos.",
+    "beneficiary_document_number must contain 6 to 12 alphanumeric characters for CE":
+      "El carné de extranjería del beneficiario debe tener de 6 a 12 letras o números.",
     "bank_code is required": "Selecciona el banco del beneficiario.",
     "account_type is required": "Selecciona el tipo de cuenta bancaria.",
-    "bank_account must contain 6 to 30 digits": "Ingresa una cuenta bancaria de 6 a 30 dígitos.",
+    "bank_account must contain 6 to 30 digits":
+      "Ingresa una cuenta bancaria de 6 a 30 dígitos.",
     "bank_cci is required for non-BCP banks": "Ingresa el CCI de 20 dígitos.",
-    "bank_cci must contain exactly 20 digits": "El CCI debe tener exactamente 20 dígitos.",
+    "bank_cci must contain exactly 20 digits":
+      "El CCI debe tener exactamente 20 dígitos.",
   };
 
   if (validationMessageMap[message]) return validationMessageMap[message];
-  if (/^[a-z_]+\b.*\b(is required|must|should|invalid|exactly|between)\b/i.test(message)) {
+  if (
+    /^[a-z_]+\b.*\b(is required|must|should|invalid|exactly|between)\b/i.test(
+      message,
+    )
+  ) {
     return "Revisa los datos ingresados. Hay un campo obligatorio o con formato inválido.";
   }
 
@@ -1874,24 +3106,39 @@ export function getApiErrorMessage(error: unknown): string {
   return getApiErrorMessages(error).join("\n");
 }
 
-export function isBudgetPreviewBlocking(preview: RequestBudgetPreview | RequestAllocationsBudgetPreview | null | undefined): boolean {
+export function isBudgetPreviewBlocking(
+  preview:
+    RequestBudgetPreview | RequestAllocationsBudgetPreview | null | undefined,
+): boolean {
   if (preview && "hard_blocked" in preview) return preview.hard_blocked;
-  return Boolean(preview?.willExceedOrgUnitCeiling || (preview?.orgUnitBlockingErrors?.length ?? 0) > 0);
+  return Boolean(
+    preview?.willExceedOrgUnitCeiling ||
+    (preview?.orgUnitBlockingErrors?.length ?? 0) > 0,
+  );
 }
 
-export function getBeneficiaryDocumentPlaceholder(documentType?: BeneficiaryDocumentType | ""): string {
+export function getBeneficiaryDocumentPlaceholder(
+  documentType?: BeneficiaryDocumentType | "",
+): string {
   if (documentType === BENEFICIARY_DOCUMENT_TYPE.RUC) return "11 dígitos";
-  if (documentType === BENEFICIARY_DOCUMENT_TYPE.CE) return "6 a 12 letras o números";
+  if (documentType === BENEFICIARY_DOCUMENT_TYPE.CE)
+    return "6 a 12 letras o números";
   return "8 dígitos";
 }
 
-export function getBeneficiaryDocumentHelp(documentType?: BeneficiaryDocumentType | ""): string {
-  if (documentType === BENEFICIARY_DOCUMENT_TYPE.RUC) return "Ingresa el RUC de 11 dígitos.";
-  if (documentType === BENEFICIARY_DOCUMENT_TYPE.CE) return "Ingresa el carné de extranjería, de 6 a 12 caracteres alfanuméricos.";
+export function getBeneficiaryDocumentHelp(
+  documentType?: BeneficiaryDocumentType | "",
+): string {
+  if (documentType === BENEFICIARY_DOCUMENT_TYPE.RUC)
+    return "Ingresa el RUC de 11 dígitos.";
+  if (documentType === BENEFICIARY_DOCUMENT_TYPE.CE)
+    return "Ingresa el carné de extranjería, de 6 a 12 caracteres alfanuméricos.";
   return "Ingresa el DNI de 8 dígitos.";
 }
 
-export function getBeneficiaryDocumentMaxLength(documentType?: BeneficiaryDocumentType | ""): number {
+export function getBeneficiaryDocumentMaxLength(
+  documentType?: BeneficiaryDocumentType | "",
+): number {
   if (documentType === BENEFICIARY_DOCUMENT_TYPE.RUC) return 11;
   if (documentType === BENEFICIARY_DOCUMENT_TYPE.CE) return 12;
   return 8;
@@ -1901,15 +3148,23 @@ export function sanitizeDigits(value: string, maxLength: number): string {
   return value.replace(/\D/g, "").slice(0, maxLength);
 }
 
-export function sanitizeBeneficiaryDocumentNumber(value: string, documentType?: BeneficiaryDocumentType | ""): string {
+export function sanitizeBeneficiaryDocumentNumber(
+  value: string,
+  documentType?: BeneficiaryDocumentType | "",
+): string {
   if (documentType === BENEFICIARY_DOCUMENT_TYPE.CE) {
-    return value.replace(/[^a-zA-Z0-9]/g, "").toUpperCase().slice(0, getBeneficiaryDocumentMaxLength(documentType));
+    return value
+      .replace(/[^a-zA-Z0-9]/g, "")
+      .toUpperCase()
+      .slice(0, getBeneficiaryDocumentMaxLength(documentType));
   }
 
   return sanitizeDigits(value, getBeneficiaryDocumentMaxLength(documentType));
 }
 
-export function getBeneficiaryDocumentInputMode(documentType?: BeneficiaryDocumentType | ""): "numeric" | "text" {
+export function getBeneficiaryDocumentInputMode(
+  documentType?: BeneficiaryDocumentType | "",
+): "numeric" | "text" {
   return documentType === BENEFICIARY_DOCUMENT_TYPE.CE ? "text" : "numeric";
 }
 
@@ -1933,7 +3188,12 @@ export function isBankCciRequired(bankCode?: BankCode | null): boolean {
   return Boolean(bankCode && isKnownBankCode(bankCode) && !isBcpBank(bankCode));
 }
 
-export function getPlanningLineDisplay(line: { line_code?: string | null; resource_description?: string | null } | null | undefined): string {
+export function getPlanningLineDisplay(
+  line:
+    | { line_code?: string | null; resource_description?: string | null }
+    | null
+    | undefined,
+): string {
   if (!line) return "—";
   const code = line.line_code?.trim();
   const description = line.resource_description?.trim();
@@ -1960,27 +3220,44 @@ export function isGiofOperationalContextError(error: unknown): boolean {
   if (!(error instanceof ApiRequestError)) return false;
   if (error.status === 409) return true;
   const code = typeof error.body.code === "string" ? error.body.code : "";
-  return Object.values(GIOF_OPERATIONAL_ERROR_CODE).some((candidate) => candidate === code);
+  return Object.values(GIOF_OPERATIONAL_ERROR_CODE).some(
+    (candidate) => candidate === code,
+  );
 }
 
 export function isRequesterRole(roleCode?: string | null): boolean {
   return roleCode === ROLE_CODE.SOLICITANTE_EPE;
 }
 
-export function canReviewRequest(roleCode: string | null | undefined, status: RequestStatus): boolean {
+export function canReviewRequest(
+  roleCode: string | null | undefined,
+  status: RequestStatus,
+): boolean {
   return isRequestReviewRole(roleCode) && status === REQUEST_STATUS.SUBMITTED;
 }
 
-export function canCorrectObservedRequest(roleCode: string | null | undefined, status: RequestStatus): boolean {
+export function canCorrectObservedRequest(
+  roleCode: string | null | undefined,
+  status: RequestStatus,
+): boolean {
   return Boolean(roleCode) && status === REQUEST_STATUS.OBSERVED;
 }
 
-export function canEditDraftRequest(roleCode: string | null | undefined, status: RequestStatus): boolean {
+export function canEditDraftRequest(
+  roleCode: string | null | undefined,
+  status: RequestStatus,
+): boolean {
   return Boolean(roleCode) && status === REQUEST_STATUS.DRAFT;
 }
 
-export function canEditRequest(roleCode: string | null | undefined, status: RequestStatus): boolean {
-  return canEditDraftRequest(roleCode, status) || canCorrectObservedRequest(roleCode, status);
+export function canEditRequest(
+  roleCode: string | null | undefined,
+  status: RequestStatus,
+): boolean {
+  return (
+    canEditDraftRequest(roleCode, status) ||
+    canCorrectObservedRequest(roleCode, status)
+  );
 }
 
 export function canManageRequestDocuments(
@@ -1989,19 +3266,23 @@ export function canManageRequestDocuments(
   request: Pick<PaymentRequest, "requester_id" | "request_type" | "giof_work">,
   currentUserId?: string | null,
 ): boolean {
-  const isTerminal = status === REQUEST_STATUS.REJECTED
-    || status === REQUEST_STATUS.CLOSED
-    || status === REQUEST_STATUS.VOIDED;
+  const isTerminal =
+    status === REQUEST_STATUS.REJECTED ||
+    status === REQUEST_STATUS.CLOSED ||
+    status === REQUEST_STATUS.VOIDED;
   if (isTerminal) return false;
-  const isOwnerEditable = (status === REQUEST_STATUS.DRAFT || status === REQUEST_STATUS.OBSERVED)
-    && Boolean(currentUserId)
-    && request.requester_id === currentUserId;
+  const isOwnerEditable =
+    (status === REQUEST_STATUS.DRAFT || status === REQUEST_STATUS.OBSERVED) &&
+    Boolean(currentUserId) &&
+    request.requester_id === currentUserId;
   if (isOwnerEditable) return true;
   if (
-    roleCode === ROLE_CODE.ADMIN_SISTEMA
-    || roleCode === ROLE_CODE.AUDITOR_DIRECCION
-  ) return true;
-  if (isGiofOperationalRole(roleCode)) return Boolean(request.giof_work?.canEdit);
+    roleCode === ROLE_CODE.ADMIN_SISTEMA ||
+    roleCode === ROLE_CODE.AUDITOR_DIRECCION
+  )
+    return true;
+  if (isGiofOperationalRole(roleCode))
+    return Boolean(request.giof_work?.canEdit);
   return false;
 }
 
@@ -2014,29 +3295,71 @@ export function getRequestListActions(
 ): RequestListAction[] {
   const detailHref = `${ROUTES.REQUESTS}/${requestId}` as Route;
   const editHref = `${detailHref}/edit` as Route;
-  const isOwner = Boolean(currentUserId && requesterId && currentUserId === requesterId);
+  const isOwner = Boolean(
+    currentUserId && requesterId && currentUserId === requesterId,
+  );
 
   if (canReviewRequest(roleCode, status)) {
-    return [{ kind: REQUEST_LIST_ACTION_KIND.DETAIL, label: "Gestionar", href: detailHref, testId: "request-detail-link" }];
+    return [
+      {
+        kind: REQUEST_LIST_ACTION_KIND.DETAIL,
+        label: "Gestionar",
+        href: detailHref,
+        testId: "request-detail-link",
+      },
+    ];
   }
 
   if (isOwner && canEditDraftRequest(roleCode, status)) {
     return [
-      { kind: REQUEST_LIST_ACTION_KIND.EDIT, label: "Continuar edición", href: editHref, testId: "request-edit-link" },
+      {
+        kind: REQUEST_LIST_ACTION_KIND.EDIT,
+        label: "Continuar edición",
+        href: editHref,
+        testId: "request-edit-link",
+      },
     ];
   }
 
   if (isOwner && canCorrectObservedRequest(roleCode, status)) {
     return [
-      { kind: REQUEST_LIST_ACTION_KIND.EDIT, label: "Corregir", href: editHref, testId: "request-edit-link" },
-      { kind: REQUEST_LIST_ACTION_KIND.DETAIL, label: "Ver", href: detailHref, testId: "request-detail-link" },
+      {
+        kind: REQUEST_LIST_ACTION_KIND.EDIT,
+        label: "Corregir",
+        href: editHref,
+        testId: "request-edit-link",
+      },
+      {
+        kind: REQUEST_LIST_ACTION_KIND.DETAIL,
+        label: "Ver",
+        href: detailHref,
+        testId: "request-detail-link",
+      },
     ];
   }
 
-  return [{ kind: REQUEST_LIST_ACTION_KIND.DETAIL, label: "Ver detalle", href: detailHref, testId: "request-detail-link" }];
+  return [
+    {
+      kind: REQUEST_LIST_ACTION_KIND.DETAIL,
+      label: "Ver detalle",
+      href: detailHref,
+      testId: "request-detail-link",
+    },
+  ];
 }
 
-export function getRequestObserverName(observer: { firstName?: string | null; lastName?: string | null; email?: string | null } | null | undefined): string {
-  const name = [observer?.firstName, observer?.lastName].filter((value): value is string => Boolean(value?.trim())).join(" ");
+export function getRequestObserverName(
+  observer:
+    | {
+        firstName?: string | null;
+        lastName?: string | null;
+        email?: string | null;
+      }
+    | null
+    | undefined,
+): string {
+  const name = [observer?.firstName, observer?.lastName]
+    .filter((value): value is string => Boolean(value?.trim()))
+    .join(" ");
   return name || observer?.email || "Revisor GIOF";
 }

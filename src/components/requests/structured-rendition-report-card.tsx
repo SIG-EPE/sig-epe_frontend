@@ -151,7 +151,7 @@ function getAllocationLabel(allocation: RequestAllocation, index: number): strin
   return `Línea ${index + 1}: ${lineLabel}${amountLabel}`;
 }
 
-function getCoverageAllocationLabel(plannedAmount: number, currency: string, index: number, backendLabel?: string): string {
+function getCoverageAllocationLabel(plannedAmount: number, currency: string | null, index: number, backendLabel?: string): string {
   if (backendLabel?.trim()) return backendLabel.trim();
   const amountLabel = plannedAmount > 0 ? ` · ${formatRequestCurrency(plannedAmount, currency)}` : "";
   return `Línea POA ${index + 1}${amountLabel}`;
@@ -444,7 +444,7 @@ function getLineReturnBlockerMessage(status: string | null | undefined, requires
   }
 }
 
-function getLineReturnMeaningMessage(expectedReturn: number, excessAmount: number, currency: string, requiresReturnProof: boolean): string | null {
+function getLineReturnMeaningMessage(expectedReturn: number, excessAmount: number, currency: string | null, requiresReturnProof: boolean): string | null {
   if (expectedReturn > 0) {
     if (!requiresReturnProof) {
       return `Saldo estimado: la base pagada supera lo rendido por ${formatRequestCurrency(expectedReturn, currency)}. En esta preparación inicial no se solicita constancia de devolución; GIOF decidirá si observa la rendición y pide sustento de devolución.`;

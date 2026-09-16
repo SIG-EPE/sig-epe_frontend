@@ -29,6 +29,7 @@ interface SearchSelectModalProps<T> {
   getItemId: (item: T) => string;
   getItemLabel: (item: T) => string;
   getItemSubLabel?: (item: T) => string;
+  getItemDisabledReason?: (item: T) => string | null;
   searchPlaceholder?: string;
   testId?: string;
 
@@ -69,6 +70,7 @@ export function SearchSelectModal<T>({
   getItemId,
   getItemLabel,
   getItemSubLabel,
+  getItemDisabledReason,
   searchPlaceholder = "Buscar...",
   testId,
   onChange,
@@ -208,12 +210,15 @@ export function SearchSelectModal<T>({
                 const label = getItemLabel(item);
                 const subLabel = getItemSubLabel ? getItemSubLabel(item) : undefined;
                 const isSelected = value === id;
+                const disabledReason = getItemDisabledReason?.(item);
 
                 return (
                   <button
                     key={id}
                     type="button"
                     data-testid={testId ? `${testId}-option` : undefined}
+                    disabled={Boolean(disabledReason)}
+                    title={disabledReason ?? undefined}
                     onClick={() => handleSelect(id)}
                     className={[
                       "w-full flex items-center justify-between px-3 py-2 text-sm text-left transition-colors",
@@ -228,6 +233,7 @@ export function SearchSelectModal<T>({
                           {subLabel}
                         </span>
                       )}
+                      {disabledReason && <span className="text-xs text-muted-foreground">{disabledReason}</span>}
                     </span>
                     {isSelected && (
                       <Check className="h-4 w-4 shrink-0 ml-2 text-primary" />

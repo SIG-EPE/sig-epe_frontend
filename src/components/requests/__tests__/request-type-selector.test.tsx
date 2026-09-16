@@ -19,12 +19,12 @@ beforeAll(() => {
   }
 });
 
-function RequestTypeSelectorHarness({ initialType = REQUEST_TYPE.ADVANCE }: { initialType?: RequestFormValues["request_type"] }) {
+function RequestTypeSelectorHarness({ disabled = false, initialType = REQUEST_TYPE.ADVANCE }: { disabled?: boolean; initialType?: RequestFormValues["request_type"] }) {
   const form = useForm<RequestFormValues>({
     defaultValues: {
       request_type: initialType,
       budget_planning_line_id: "line-1",
-      requested_amount: 100,
+      requested_amount: "100",
       concept: "Solicitud de prueba",
       scheduled_rendition_at: "",
       beneficiary_name: "",
@@ -42,12 +42,19 @@ function RequestTypeSelectorHarness({ initialType = REQUEST_TYPE.ADVANCE }: { in
 
   return (
     <Form {...form}>
-      <RequestTypeSelector control={form.control} />
+      <RequestTypeSelector control={form.control} disabled={disabled} />
     </Form>
   );
 }
 
 describe("RequestTypeSelector", () => {
+  it("supports a read-only saved request type", () => {
+    render(<RequestTypeSelectorHarness disabled initialType={REQUEST_TYPE.ADVANCE} />);
+
+    expect(screen.getByTestId("request-type-select")).toBeDisabled();
+    expect(screen.getByTestId("request-type-select")).toHaveTextContent("Anticipo");
+  });
+
   it("activa el recordatorio solo al cambiar a Reembolso desde otro tipo", () => {
     expect(shouldShowReimbursementSstWarning(REQUEST_TYPE.ADVANCE, REQUEST_TYPE.REIMBURSEMENT)).toBe(true);
     expect(shouldShowReimbursementSstWarning(REQUEST_TYPE.SUPPLIER_PAYMENT, REQUEST_TYPE.REIMBURSEMENT)).toBe(true);

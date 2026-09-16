@@ -4,10 +4,22 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { RenditionsInboxPage } from "@/components/renditions/renditions-inbox-page";
 import { useRenditionsInbox } from "@/hooks/use-requests";
-import { RENDITION_DEADLINE_BUCKET, RENDITION_DEADLINE_STATE, RENDITION_STATUS, type RenditionInboxCounts, type RenditionInboxFacets, type RenditionInboxRow } from "@/types/requests";
+import {
+  RENDITION_DEADLINE_BUCKET,
+  RENDITION_DEADLINE_STATE,
+  RENDITION_STATUS,
+  type RenditionInboxCounts,
+  type RenditionInboxFacets,
+  type RenditionInboxRow,
+} from "@/types/requests";
 
 const replaceMock = vi.fn();
 let searchParams = new URLSearchParams();
+let roleCode = "GIOF_GESTOR";
+const giofMocks = vi.hoisted(() => ({
+  useClaimableWork: vi.fn(),
+  useSelfClaim: vi.fn(),
+}));
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ replace: replaceMock }),
@@ -22,13 +34,33 @@ vi.mock("@/hooks/use-requests", () => ({
   useRenditionsInbox: vi.fn(),
 }));
 
+vi.mock("@/stores/auth-store", () => ({
+  useAuthStore: (selector: (state: unknown) => unknown) =>
+    selector({ user: { id: "user-1", role: { code: roleCode } } }),
+}));
+
+vi.mock("@/hooks/use-giof-work", () => ({
+  useGiofClaimableWork: giofMocks.useClaimableWork,
+  useGiofSelfClaim: giofMocks.useSelfClaim,
+  useGiofAssignees: vi.fn(() => ({ data: [], isLoading: false, error: null })),
+  fetchGiofHistory: vi.fn().mockResolvedValue([]),
+  bulkAssignGiofWork: vi.fn(),
+  getGiofConflictMessage: (error: unknown) =>
+    error instanceof Error ? error.message : "Error",
+}));
+
 beforeAll(() => {
-  if (!HTMLElement.prototype.hasPointerCapture) HTMLElement.prototype.hasPointerCapture = vi.fn(() => false);
-  if (!HTMLElement.prototype.releasePointerCapture) HTMLElement.prototype.releasePointerCapture = vi.fn();
-  if (!HTMLElement.prototype.scrollIntoView) HTMLElement.prototype.scrollIntoView = vi.fn();
+  if (!HTMLElement.prototype.hasPointerCapture)
+    HTMLElement.prototype.hasPointerCapture = vi.fn(() => false);
+  if (!HTMLElement.prototype.releasePointerCapture)
+    HTMLElement.prototype.releasePointerCapture = vi.fn();
+  if (!HTMLElement.prototype.scrollIntoView)
+    HTMLElement.prototype.scrollIntoView = vi.fn();
 });
 
-function makeCounts(overrides: Partial<RenditionInboxCounts> = {}): RenditionInboxCounts {
+function makeCounts(
+  overrides: Partial<RenditionInboxCounts> = {},
+): RenditionInboxCounts {
   return {
     [RENDITION_STATUS.PENDING]: 2,
     [RENDITION_STATUS.OVERDUE]: 1,
@@ -40,7 +72,9 @@ function makeCounts(overrides: Partial<RenditionInboxCounts> = {}): RenditionInb
   };
 }
 
-function makeRendition(overrides: Partial<RenditionInboxRow>): RenditionInboxRow {
+function makeRendition(
+  overrides: Partial<RenditionInboxRow>,
+): RenditionInboxRow {
   return {
     advance_id: "advance-1",
     request_code: "SOL-1",
@@ -91,6 +125,7 @@ function makeFacets(): RenditionInboxFacets {
 describe("RenditionsInboxPage", () => {
   beforeEach(() => {
     replaceMock.mockReset();
+    roleCode = "GIOF_GESTOR";
     searchParams = new URLSearchParams("status=PENDING&page=1");
     vi.mocked(useRenditionsInbox).mockReturnValue({
       renditions: [],
@@ -106,14 +141,77 @@ describe("RenditionsInboxPage", () => {
       error: null,
       refetch: vi.fn(),
     });
+    giofMocks.useClaimableWork.mockReturnValue({
+      items: [],
+      total: 0,
+      page: 1,
+      limit: 20,
+      isLoading: false,
+      isRefreshing: false,
+      error: null,
+      refetch: vi.fn().mockResolvedValue(undefined),
+    });
+    giofMocks.useSelfClaim.mockReturnValue({
+      claim: vi.fn(),
+      pendingRequestId: null,
+      isSubmitting: false,
+      error: null,
+      clearError: vi.fn(),
+    });
+  });
+
+  it.each(["GIOF_GESTOR", "GIOF_MANAGER"])(
+    "integra REXAN claimable para %s con refetch autoritativo y sin navegación automática",
+    async (role) => {
+      roleCode = role;
+      const refetch = vi.fn().mockResolvedValue(undefined);
+      vi.mocked(useRenditionsInbox).mockReturnValue({
+        renditions: [],
+        total: 0,
+        page: 1,
+        limit: 20,
+        counts: makeCounts(),
+        summary: { count: 0 },
+        facets: makeFacets(),
+        isLoading: false,
+        isInitialLoading: false,
+        isRefreshing: false,
+        error: null,
+        refetch,
+      });
+
+      render(<RenditionsInboxPage />);
+
+      expect(screen.getByTestId("giof-claimable-REXAN")).toBeInTheDocument();
+      const options = giofMocks.useSelfClaim.mock.calls.at(-1)?.[0];
+      await options.refetchPoolQueue({ force: true });
+      expect(refetch).toHaveBeenCalledWith({ force: true });
+      expect(replaceMock).not.toHaveBeenCalledWith(
+        expect.stringContaining("mode=process"),
+      );
+    },
+  );
+
+  it("oculta REXAN claimable para roles no operativos", () => {
+    roleCode = "ADMIN_SISTEMA";
+    render(<RenditionsInboxPage />);
+    expect(
+      screen.queryByTestId("giof-claimable-REXAN"),
+    ).not.toBeInTheDocument();
   });
 
   it("activa solo la tarjeta exacta para pendientes y no duplica próximas", () => {
     render(<RenditionsInboxPage />);
 
-    expect(screen.getByTestId("renditions-summary-card-pending")).toHaveAttribute("aria-pressed", "true");
-    expect(screen.getByTestId("renditions-summary-card-due-soon")).toHaveAttribute("aria-pressed", "false");
-    expect(screen.getByText("Vencen en los próximos 15 días.")).toBeInTheDocument();
+    expect(
+      screen.getByTestId("renditions-summary-card-pending"),
+    ).toHaveAttribute("aria-pressed", "true");
+    expect(
+      screen.getByTestId("renditions-summary-card-due-soon"),
+    ).toHaveAttribute("aria-pressed", "false");
+    expect(
+      screen.getByText("Vencen en los próximos 15 días."),
+    ).toBeInTheDocument();
   });
 
   it("combina status con deadline bucket canónico sin serializar ALL", () => {
@@ -121,16 +219,26 @@ describe("RenditionsInboxPage", () => {
 
     fireEvent.click(screen.getByTestId("renditions-summary-card-due-soon"));
 
-    expect(replaceMock).toHaveBeenCalledWith("/renditions?status=PENDING&deadline_bucket=due_soon");
+    expect(replaceMock).toHaveBeenCalledWith(
+      "/renditions?status=PENDING&deadline_bucket=due_soon",
+    );
   });
 
   it("mantiene fallback local del bucket due-soon en 1–15 y separa vence hoy", () => {
     vi.mocked(useRenditionsInbox).mockReturnValue({
       renditions: [
-        makeRendition({ advance_id: "today", deadline_state: RENDITION_DEADLINE_STATE.DUE_TODAY, calendar_days_to_deadline: 0 }),
+        makeRendition({
+          advance_id: "today",
+          deadline_state: RENDITION_DEADLINE_STATE.DUE_TODAY,
+          calendar_days_to_deadline: 0,
+        }),
         makeRendition({ advance_id: "day-15", calendar_days_to_deadline: 15 }),
         makeRendition({ advance_id: "day-16", calendar_days_to_deadline: 16 }),
-        makeRendition({ advance_id: "presented", deadline_state: RENDITION_DEADLINE_STATE.PRESENTED, calendar_days_to_deadline: null }),
+        makeRendition({
+          advance_id: "presented",
+          deadline_state: RENDITION_DEADLINE_STATE.PRESENTED,
+          calendar_days_to_deadline: null,
+        }),
       ],
       total: 4,
       page: 1,
@@ -147,8 +255,12 @@ describe("RenditionsInboxPage", () => {
 
     render(<RenditionsInboxPage />);
 
-    expect(screen.getByTestId("renditions-summary-card-due-soon")).toHaveTextContent("1");
-    expect(screen.queryByTestId("renditions-deadline-state-filter")).not.toBeInTheDocument();
+    expect(
+      screen.getByTestId("renditions-summary-card-due-soon"),
+    ).toHaveTextContent("1");
+    expect(
+      screen.queryByTestId("renditions-deadline-state-filter"),
+    ).not.toBeInTheDocument();
   });
 
   it("ofrece exactamente la allowlist de estados derivados de Renditions", async () => {
@@ -159,7 +271,9 @@ describe("RenditionsInboxPage", () => {
     expect(statusFilter).toBe(screen.getByTestId("renditions-status-filter"));
     await user.click(statusFilter);
 
-    expect(screen.getAllByRole("option").map((option) => option.textContent)).toEqual([
+    expect(
+      screen.getAllByRole("option").map((option) => option.textContent),
+    ).toEqual([
       "Ver todo",
       "Pendiente de rendición",
       "Vencida",
@@ -175,51 +289,88 @@ describe("RenditionsInboxPage", () => {
   it("muestra summary exacto y comunica qué dimensión excluye cada facet", () => {
     vi.mocked(useRenditionsInbox).mockReturnValue({
       ...vi.mocked(useRenditionsInbox).mock.results[0]?.value,
-      renditions: [], total: 1, page: 1, limit: 20, counts: makeCounts(),
-      summary: { count: 1 }, facets: makeFacets(), isLoading: false,
-      isInitialLoading: false, isRefreshing: false, error: null, refetch: vi.fn(),
+      renditions: [],
+      total: 1,
+      page: 1,
+      limit: 20,
+      counts: makeCounts(),
+      summary: { count: 1 },
+      facets: makeFacets(),
+      isLoading: false,
+      isInitialLoading: false,
+      isRefreshing: false,
+      error: null,
+      refetch: vi.fn(),
     });
 
     render(<RenditionsInboxPage />);
 
-    expect(screen.getByTestId("renditions-summary-card-results")).toHaveTextContent("1");
-    expect(screen.getByTestId("renditions-summary-card-pending")).toHaveTextContent("8");
-    expect(screen.getByTestId("renditions-summary-card-due-soon")).toHaveTextContent("5");
-    expect(screen.getByText("Aplica todos los filtros activos.")).toBeInTheDocument();
-    expect(screen.getAllByText("Facet: ignora solo el filtro de estado.").length).toBeGreaterThan(0);
-    expect(screen.getByText("Facet: ignora solo el filtro de plazo.")).toBeInTheDocument();
+    expect(
+      screen.getByTestId("renditions-summary-card-results"),
+    ).toHaveTextContent("1");
+    expect(
+      screen.getByTestId("renditions-summary-card-pending"),
+    ).toHaveTextContent("8");
+    expect(
+      screen.getByTestId("renditions-summary-card-due-soon"),
+    ).toHaveTextContent("5");
+    expect(
+      screen.getByText("Aplica todos los filtros activos."),
+    ).toBeInTheDocument();
+    expect(
+      screen.getAllByText("Facet: ignora solo el filtro de estado.").length,
+    ).toBeGreaterThan(0);
+    expect(
+      screen.getByText("Facet: ignora solo el filtro de plazo."),
+    ).toBeInTheDocument();
   });
 
   it("canonicaliza aliases una vez y conserva reload/back sin loops", () => {
-    searchParams = new URLSearchParams("status=ALL&bucket=due_soon&due_from=2026-06-01&page=2");
+    searchParams = new URLSearchParams(
+      "status=ALL&bucket=due_soon&due_from=2026-06-01&page=2",
+    );
 
     const { rerender } = render(<RenditionsInboxPage />);
-    expect(replaceMock).toHaveBeenCalledWith("/renditions?page=2&deadline_from=2026-06-01&deadline_bucket=due_soon");
+    expect(replaceMock).toHaveBeenCalledWith(
+      "/renditions?page=2&deadline_from=2026-06-01&deadline_bucket=due_soon",
+    );
 
     replaceMock.mockClear();
-    searchParams = new URLSearchParams("page=2&deadline_from=2026-06-01&deadline_bucket=due_soon");
+    searchParams = new URLSearchParams(
+      "page=2&deadline_from=2026-06-01&deadline_bucket=due_soon",
+    );
     rerender(<RenditionsInboxPage />);
     expect(replaceMock).not.toHaveBeenCalled();
   });
 
   it("expone controles, chips, clear y reset seguro sin filtros REXAN/documentales", async () => {
     const user = userEvent.setup();
-    searchParams = new URLSearchParams("search=viaje&deadline_from=2026-06-01&deadline_bucket=overdue");
+    searchParams = new URLSearchParams(
+      "search=viaje&deadline_from=2026-06-01&deadline_bucket=overdue",
+    );
     render(<RenditionsInboxPage />);
 
     expect(screen.getByLabelText("Plazo de rendición")).toBeInTheDocument();
-    expect(screen.getByLabelText("Fecha límite desde")).toHaveValue("2026-06-01");
+    expect(screen.getByLabelText("Fecha límite desde")).toHaveValue(
+      "2026-06-01",
+    );
     expect(screen.getByText("Búsqueda: viaje")).toBeInTheDocument();
-    expect(screen.queryByText(/completitud documental/i)).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(/completitud documental/i),
+    ).not.toBeInTheDocument();
     expect(screen.queryByText(/estado REXAN/i)).not.toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: "Limpiar todos los filtros" }));
+    await user.click(
+      screen.getByRole("button", { name: "Limpiar todos los filtros" }),
+    );
     expect(replaceMock).toHaveBeenCalledWith("/renditions");
 
     replaceMock.mockClear();
     searchParams = new URLSearchParams("document_complete=true");
     render(<RenditionsInboxPage />);
-    await user.click(screen.getByRole("button", { name: "Restablecer filtros" }));
+    await user.click(
+      screen.getByRole("button", { name: "Restablecer filtros" }),
+    );
     expect(replaceMock).toHaveBeenCalledWith("/renditions");
   });
 });

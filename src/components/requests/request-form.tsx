@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useFieldArray, useForm } from "react-hook-form";
@@ -27,6 +27,7 @@ import {
   REQUEST_EDIT_STEP,
   getApiErrorMessage,
   getMissingDocumentMessagesFromError,
+  getRequestErrorStep,
   getNewAdvancePendingSettlementBlockMessage,
   getRequestReviewNavigationIssues,
   getRequestEditStepperItems,
@@ -86,6 +87,10 @@ import { hasBudgetClassification, SettlementBudgetClassification } from "./settl
 import { SettlementUploadProgressPanel } from "./settlement-preparation/settlement-upload-progress-panel";
 import { StructuredRenditionReportCard } from "./structured-rendition-report-card";
 import { SupplierFields } from "./supplier-fields";
+import { resolveSupplierIdentity, supplierIdentityPayload, supplierMatchesPayee, supplierPayeeConsentKey, sumRequestAmounts } from "@/lib/request-supplier-policy";
+import { useRequestAnnualUit } from "@/hooks/use-request-currency";
+import { validatePoaCurrencies } from "@/lib/request-currency-policy";
+import { requestMoneyError, requestMoneyInput, requestMoneyTotal } from "@/lib/request-form-money";
 
 const STRUCTURED_REPORT_PENDING_MESSAGE = "Informe pendiente de generación: genera el Excel validado antes de enviar a revisión.";
 
@@ -102,6 +107,11 @@ function toRequestEditStep(step: SettlementPreparationStep): RequestEditStep {
 }
 
 export const requestFormSchema = z.object({
+  currency: z.enum(["PEN", "USD"]).nullable().optional(),
+  supplier_document_type: z.enum(["RUC", "DNI", "CE"]).optional(),
+  supplier_document_number: z.string().optional(),
+  declares_rus: z.boolean().nullable().optional(),
+  declares_casa_de_retiro: z.boolean().nullable().optional(),
   request_type: z.enum([
     REQUEST_TYPE.ADVANCE,
     REQUEST_TYPE.REIMBURSEMENT,
@@ -109,11 +119,18 @@ export const requestFormSchema = z.object({
     REQUEST_TYPE.ADVANCE_SETTLEMENT,
   ], { errorMap: () => ({ message: "Selecciona un tipo de solicitud válido" }) }),
   budget_planning_line_id: z.string().optional(),
-  requested_amount: z.coerce.number().optional(),
+  requested_amount: z.string().superRefine((value, ctx) => {
+    if (value === "") return;
+    const message = requestMoneyError(value, 16, true);
+    if (message) ctx.addIssue({ code: z.ZodIssueCode.custom, message });
+  }).optional(),
   allocations: z.array(z.object({
     client_key: z.string(),
     budget_planning_line_id: z.string().min(1, "Selecciona una línea POA"),
-    amount: z.coerce.number().positive("El monto de la línea POA debe ser mayor a cero"),
+    amount: z.string().superRefine((value, ctx) => {
+      const message = requestMoneyError(value);
+      if (message) ctx.addIssue({ code: z.ZodIssueCode.custom, message });
+    }),
   })).min(1, "Debe agregar al menos una línea POA."),
   concept: z.string().min(5, "Describe el concepto o justificación").max(120, "El concepto o justificación debe tener máximo 120 caracteres."),
   scheduled_rendition_at: z.string().optional(),
@@ -157,18 +174,13 @@ export const requestFormSchema = z.object({
   });
 }).superRefine((value, ctx) => {
   if (value.request_type !== REQUEST_TYPE.SUPPLIER_PAYMENT) return;
-  if (!value.supplier_ruc?.trim()) {
-    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["supplier_ruc"], message: "El RUC del proveedor es requerido" });
-  }
-  if (!value.supplier_name?.trim()) {
-    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["supplier_name"], message: "El nombre del proveedor es requerido" });
-  }
-  if (value.supplier_ruc?.trim() && !/^\d{11}$/.test(value.supplier_ruc.trim())) {
-    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["supplier_ruc"], message: "El RUC del proveedor debe tener 11 dígitos" });
+  if (!resolveSupplierIdentity(value)) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["supplier_document_number"], message: "Completa el nombre y documento válido del proveedor (RUC, DNI o CE)." });
   }
 }).superRefine((value, ctx) => {
-  const documentType = value.beneficiary_document_type;
-  const documentNumber = value.beneficiary_document_number?.trim().toUpperCase() ?? "";
+  // Supplier identity is validated above; the hidden historical payee is not an editor.
+  const documentType = value.request_type === REQUEST_TYPE.SUPPLIER_PAYMENT ? undefined : value.beneficiary_document_type;
+  const documentNumber = value.request_type === REQUEST_TYPE.SUPPLIER_PAYMENT ? "" : value.beneficiary_document_number?.trim().toUpperCase() ?? "";
   if (documentNumber && !documentType) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["beneficiary_document_type"], message: "Selecciona el tipo de documento" });
   }
@@ -206,11 +218,7 @@ export function getScheduledRenditionMinDate(): string {
 }
 
 export function normalizeRequestAmountInput(value: string): string {
-  const trimmed = value.trim();
-  if (!trimmed) return "";
-
-  const numericValue = Number(trimmed);
-  return Number.isFinite(numericValue) ? String(numericValue) : trimmed;
+  return value.trim();
 }
 
 function emptyToUndefined(value?: string): string | undefined {
@@ -253,24 +261,29 @@ function formatOptionalCodeName(code?: string | null, name?: string | null): str
   return cleanName ?? cleanCode ?? "—";
 }
 
+function exactAllocationTotal(values: RequestFormValues): string {
+  return requestMoneyTotal(values.allocations.map((allocation) => allocation.amount));
+}
+
 export function toCreateRequestDto(values: RequestFormValues): CreateRequestDto {
+  values = withSupplierAsPayee(values);
+  if (values.currency !== "PEN" && values.currency !== "USD") throw new Error("Selecciona la moneda de la solicitud.");
   const bankCode = optionalBankCode(values.bank_code);
   const bankCci = conditionalBankCci(bankCode, values.bank_cci);
   const bankName = conditionalBankName(bankCode, values.bank_name);
   const allocations = values.allocations.map((allocation) => ({
     client_key: allocation.client_key,
     budget_planning_line_id: allocation.budget_planning_line_id,
-    amount: Number(allocation.amount),
+    amount: requestMoneyInput(allocation.amount),
   }));
   const dto: CreateRequestDto = {
     request_type: values.request_type,
     budget_planning_line_id: allocations[0]?.budget_planning_line_id,
-    requested_amount: allocations.reduce((total, allocation) => total + allocation.amount, 0),
+    requested_amount: exactAllocationTotal(values),
     allocations,
-    currency: REQUEST_CURRENCY.PEN,
+    currency: values.currency,
     concept: values.concept.trim(),
-    supplier_ruc: emptyToUndefined(values.supplier_ruc),
-    supplier_name: emptyToUndefined(values.supplier_name),
+    ...toSupplierPayload(values),
     beneficiary_name: emptyToUndefined(values.beneficiary_name),
     beneficiary_document_type: optionalDocumentType(values.beneficiary_document_type),
     beneficiary_document_number: emptyToUndefined(values.beneficiary_document_number)?.toUpperCase(),
@@ -292,6 +305,7 @@ export function toCreateRequestDto(values: RequestFormValues): CreateRequestDto 
 export function toUpdateRequestDto(values: RequestFormValues, currentRequestType?: RequestType | null): UpdateRequestDto {
   const effectiveRequestType = currentRequestType ?? values.request_type;
   if (effectiveRequestType === REQUEST_TYPE.ADVANCE_SETTLEMENT) return {};
+  values = withSupplierAsPayee({ ...values, request_type: effectiveRequestType });
 
   const bankCode = optionalBankCode(values.bank_code);
   const bankCci = conditionalBankCci(bankCode, values.bank_cci);
@@ -299,16 +313,15 @@ export function toUpdateRequestDto(values: RequestFormValues, currentRequestType
   const allocations = values.allocations.map((allocation) => ({
     client_key: allocation.client_key,
     budget_planning_line_id: allocation.budget_planning_line_id,
-    amount: Number(allocation.amount),
+    amount: requestMoneyInput(allocation.amount),
   }));
   const dto: UpdateRequestDto = {
     budget_planning_line_id: allocations[0]?.budget_planning_line_id,
-    requested_amount: allocations.reduce((total, allocation) => total + allocation.amount, 0),
+    requested_amount: exactAllocationTotal(values),
     allocations,
-    currency: REQUEST_CURRENCY.PEN,
+    currency: values.currency ?? undefined,
     concept: values.concept.trim(),
-    supplier_ruc: emptyToUndefined(values.supplier_ruc),
-    supplier_name: emptyToUndefined(values.supplier_name),
+    ...toSupplierPayload(values),
     beneficiary_name: emptyToUndefined(values.beneficiary_name),
     beneficiary_document_type: optionalDocumentType(values.beneficiary_document_type),
     beneficiary_document_number: emptyToUndefined(values.beneficiary_document_number)?.toUpperCase(),
@@ -328,16 +341,22 @@ export function toUpdateRequestDto(values: RequestFormValues, currentRequestType
 }
 
 function toRequestSubmitData(values: RequestFormValues): RequestSubmitDataWithAllocations {
-  const totalRequestedAmount = values.allocations.reduce((total, allocation) => total + Number(allocation.amount || 0), 0);
+  values = withSupplierAsPayee(values);
+  const totalRequestedAmount = exactAllocationTotal(values);
   return {
     request_type: values.request_type,
     budget_planning_line_id: values.allocations[0]?.budget_planning_line_id ?? "",
     requested_amount: totalRequestedAmount,
     allocations: values.allocations.map((allocation) => ({
       budget_planning_line_id: allocation.budget_planning_line_id,
-      amount: Number(allocation.amount || 0),
+      amount: requestMoneyInput(allocation.amount),
     })),
     concept: values.concept,
+    currency: values.currency,
+    supplier_document_type: values.supplier_document_type,
+    supplier_document_number: values.supplier_document_number,
+    supplier_name: values.supplier_name,
+    supplier_ruc: values.supplier_ruc,
     beneficiary_name: values.beneficiary_name ?? null,
     beneficiary_document_type: optionalDocumentType(values.beneficiary_document_type) ?? null,
     beneficiary_document_number: values.beneficiary_document_number ?? null,
@@ -351,6 +370,34 @@ function toRequestSubmitData(values: RequestFormValues): RequestSubmitDataWithAl
 
 function getRequestIdentifier(request: PaymentRequest): string {
   return request.request_code ?? request.sequential_number ?? request.id;
+}
+
+function toSupplierPayload(values: RequestFormValues) {
+  if (values.request_type !== REQUEST_TYPE.SUPPLIER_PAYMENT) return {};
+  return { ...supplierIdentityPayload({
+    supplier_document_type: values.supplier_document_type,
+    supplier_document_number: values.supplier_document_number,
+    supplier_name: emptyToUndefined(values.supplier_name),
+    supplier_ruc: values.supplier_document_type ? undefined : emptyToUndefined(values.supplier_ruc),
+  }),
+    declares_rus: values.declares_rus ?? undefined,
+    declares_casa_de_retiro: values.declares_casa_de_retiro ?? undefined,
+  };
+}
+
+/** Command-only projection. Never writes into hydrated form/history or banking. */
+function withSupplierAsPayee(values: RequestFormValues): RequestFormValues {
+  if (values.request_type !== REQUEST_TYPE.SUPPLIER_PAYMENT) return values;
+  const identity = resolveSupplierIdentity(values);
+  if (!identity) return values; // Schema/submit validation reports the unresolved provider.
+  return {
+    ...values,
+    ...identity,
+    supplier_ruc: identity.supplier_document_type === "RUC" ? identity.supplier_document_number : undefined,
+    beneficiary_document_type: identity.supplier_document_type,
+    beneficiary_document_number: identity.supplier_document_number,
+    beneficiary_name: identity.supplier_name,
+  };
 }
 
 export function getRequestSaveSuccessToast(request: PaymentRequest): string {
@@ -391,6 +438,7 @@ function mapRequestPlanningLineToLookup(line: PaymentRequest["budgetPlanningLine
   if (!line) return null;
   return {
     id: line.id,
+    currency: line.currency ?? null,
     line_code: line.line_code,
     resource_description: line.resource_description ?? "Línea POA seleccionada",
     planning_type: line.planning_type ?? null,
@@ -415,13 +463,13 @@ function getInitialAllocationValues(initialRequest?: PaymentRequest): RequestFor
     return allocations.map((allocation, index) => ({
       client_key: allocation.id ?? `allocation-${index + 1}`,
       budget_planning_line_id: allocation.budget_planning_line_id,
-      amount: Number(allocation.amount ?? 0),
+      amount: requestMoneyInput(allocation.amount),
     }));
   }
   return [{
     client_key: DEFAULT_ALLOCATION_CLIENT_KEY,
     budget_planning_line_id: initialRequest?.budget_planning_line_id ?? "",
-    amount: Number(initialRequest?.requested_amount ?? 0),
+    amount: requestMoneyInput(initialRequest?.requested_amount),
   }];
 }
 
@@ -433,6 +481,7 @@ function getInitialSelectedLines(initialRequest?: PaymentRequest): Array<Request
       if (!line) return null;
       return {
         id: line.id,
+        currency: line.currency ?? null,
         line_code: line.line_code,
         resource_description: line.resource_description,
         planning_type: line.planning_type ?? null,
@@ -455,6 +504,37 @@ function getInitialSelectedLines(initialRequest?: PaymentRequest): Array<Request
   }
   const legacyLine = mapRequestPlanningLineToLookup(initialRequest?.budgetPlanningLine);
   return legacyLine ? [legacyLine] : [];
+}
+
+export function getRequestFormDefaultValues(initialRequest?: PaymentRequest): RequestFormValues {
+  const supplierIdentity = initialRequest ? resolveSupplierIdentity(initialRequest) : null;
+  return {
+    supplier_document_type: supplierIdentity?.supplier_document_type,
+    supplier_document_number: supplierIdentity?.supplier_document_number,
+    currency: initialRequest
+      ? initialRequest.currency === REQUEST_CURRENCY.PEN || initialRequest.currency === REQUEST_CURRENCY.USD
+        ? initialRequest.currency
+        : null
+      : REQUEST_CURRENCY.PEN,
+    request_type: initialRequest?.request_type ?? REQUEST_TYPE.ADVANCE,
+    budget_planning_line_id: initialRequest?.budget_planning_line_id ?? "",
+    requested_amount: requestMoneyInput(initialRequest?.requested_amount),
+    allocations: getInitialAllocationValues(initialRequest),
+    concept: initialRequest?.concept ?? "",
+    scheduled_rendition_at: initialRequest?.request_type === REQUEST_TYPE.ADVANCE ? initialRequest.scheduled_rendition_at ?? "" : "",
+    beneficiary_name: initialRequest?.beneficiary_name ?? "",
+    beneficiary_document_type: initialRequest?.beneficiary_document_type ?? "",
+    beneficiary_document_number: initialRequest?.beneficiary_document_number ?? "",
+    bank_code: initialRequest?.bank_code ?? "",
+    bank_name: initialRequest?.bank_name ?? "",
+    bank_account: initialRequest?.bank_account ?? "",
+    bank_cci: initialRequest?.bank_cci ?? "",
+    account_type: initialRequest?.account_type ?? "",
+    supplier_ruc: initialRequest?.supplier_ruc ?? "",
+    supplier_name: initialRequest?.supplier_name ?? "",
+    declares_rus: initialRequest?.declares_rus ?? null,
+    declares_casa_de_retiro: initialRequest?.declares_casa_de_retiro ?? null,
+  };
 }
 
 export const REQUEST_BUDGET_CEILING_BLOCK_MESSAGE =
@@ -496,39 +576,33 @@ export function RequestForm({
   const [structuredReportLocked, setStructuredReportLocked] = useState(false);
   const [structuredReportMessages, setStructuredReportMessages] = useState<string[]>([]);
   const [structuredReportRefreshSignal, setStructuredReportRefreshSignal] = useState(0);
+  const [confirmedSupplierPayeeKey, setConfirmedSupplierPayeeKey] = useState<string | null>(null);
+  const hydratedRequestId = useRef(initialRequest?.id);
 
   const form = useForm<RequestFormValues>({
     resolver: zodResolver(requestFormSchema),
-    defaultValues: {
-      request_type: initialRequest?.request_type ?? REQUEST_TYPE.ADVANCE,
-      budget_planning_line_id: initialRequest?.budget_planning_line_id ?? "",
-      requested_amount: Number(initialRequest?.requested_amount ?? 0),
-      allocations: getInitialAllocationValues(initialRequest),
-      concept: initialRequest?.concept ?? "",
-      scheduled_rendition_at: initialRequest?.request_type === REQUEST_TYPE.ADVANCE ? initialRequest.scheduled_rendition_at ?? "" : "",
-      beneficiary_name: initialRequest?.beneficiary_name ?? "",
-      beneficiary_document_type: initialRequest?.beneficiary_document_type ?? "",
-      beneficiary_document_number: initialRequest?.beneficiary_document_number ?? "",
-      bank_code: initialRequest?.bank_code ?? "",
-      bank_name: initialRequest?.bank_name ?? "",
-      bank_account: initialRequest?.bank_account ?? "",
-      bank_cci: initialRequest?.bank_cci ?? "",
-      account_type: initialRequest?.account_type ?? "",
-      supplier_ruc: initialRequest?.supplier_ruc ?? "",
-      supplier_name: initialRequest?.supplier_name ?? "",
-    },
+    defaultValues: getRequestFormDefaultValues(initialRequest),
   });
 
   const requestType = form.watch("request_type");
+  // RHF requires this subscription for keepDirtyValues on delayed refresh/reset.
+  const { dirtyFields } = form.formState;
+  const currency = form.watch("currency");
   const conceptLength = form.watch("concept")?.length ?? 0;
   const effectiveRequestType = currentRequest?.request_type ?? initialRequest?.request_type ?? requestType;
   const isAdvanceSettlement = effectiveRequestType === REQUEST_TYPE.ADVANCE_SETTLEMENT;
+  const supplierPayeeKey = currentRequest?.request_type === REQUEST_TYPE.SUPPLIER_PAYMENT
+    ? supplierPayeeConsentKey(currentRequest) : null;
+  const needsSupplierPayeeConsent = supplierPayeeKey !== null
+    && currentRequest !== null && !supplierMatchesPayee(currentRequest)
+    && confirmedSupplierPayeeKey !== supplierPayeeKey;
   const allocations = form.watch("allocations");
-  const totalRequestedAmount = allocations.reduce((total, allocation) => total + Number(allocation.amount || 0), 0);
+  const totalRequestedAmount = sumRequestAmounts(allocations.map((allocation) => allocation.amount)) ?? "—";
   const scheduledRenditionMinDate = getScheduledRenditionMinDate();
   const allocationFields = useFieldArray({ control: form.control, name: "allocations" });
   const selectedFiscalYears = selectedLines.map(getLineFiscalYear).filter((year): year is number => typeof year === "number");
   const hasMixedFiscalYears = new Set(selectedFiscalYears).size > 1;
+  const currencyIssue = isAdvanceSettlement ? null : validatePoaCurrencies(currency, allocations.map((allocation) => selectedLines.find((line) => line?.id === allocation.budget_planning_line_id)?.currency));
   const selectedAllocationLineIds = allocations.map((allocation) => allocation.budget_planning_line_id).filter((lineId) => lineId.trim().length > 0);
   const duplicateAllocationLineIds = selectedAllocationLineIds.filter((lineId, index) => selectedAllocationLineIds.indexOf(lineId) !== index);
   const hasDuplicateAllocations = duplicateAllocationLineIds.length > 0;
@@ -537,11 +611,13 @@ export function RequestForm({
   );
 
   const preview = useBudgetPreview({
+    currency,
+    planningLineCurrencies: allocations.map((allocation) => selectedLines.find((line) => line?.id === allocation.budget_planning_line_id)?.currency),
     requestId: draftId ?? initialRequest?.id,
     allocations: isAdvanceSettlement ? [] : allocations.map((allocation) => ({
       client_key: allocation.client_key,
       budget_planning_line_id: allocation.budget_planning_line_id,
-      amount: Number(allocation.amount || 0),
+      amount: allocation.amount,
     })),
   });
   const { createRequest, isLoading: creating } = useCreateRequest();
@@ -567,8 +643,10 @@ export function RequestForm({
   const isSaving = creating || updating || pendingAction === "save" || pendingAction === "submit";
   const isSubmitting = submitting || pendingAction === "submit";
   const isBusy = isSaving || isSubmitting || isNavigatingStep;
-  const checklist = getRequiredDocumentChecklist(effectiveRequestType, reviewDocuments.documents);
-  const areDocumentsReady = !reviewDocuments.isLoading;
+  const annualUitLookupEnabled = effectiveRequestType === REQUEST_TYPE.SUPPLIER_PAYMENT && currency === "PEN" && currentRequest?.uit_year_applied == null && currentRequest?.uit_amount_applied == null;
+  const annualUit = useRequestAnnualUit(currentRequest?.fiscal_year ?? (hasMixedFiscalYears ? null : selectedFiscalYears[0]), annualUitLookupEnabled);
+  const checklist = getRequiredDocumentChecklist(effectiveRequestType, reviewDocuments.documents, currentRequest ?? undefined, reviewReceipts.receipts.map((item) => item.receipt), annualUit.annualUit);
+  const areDocumentsReady = !reviewDocuments.isLoading && !reviewReceipts.isLoading;
   const currentRequestDataIssues = currentRequest ? validateRequestDataForSubmitIssues(currentRequest) : [];
   const currentRequestDataErrors = currentRequestDataIssues.length > 0 ? getDataValidationMessages(currentRequestDataIssues) : [];
   const hasCompleteRequestData = currentRequestDataErrors.length === 0;
@@ -588,7 +666,8 @@ export function RequestForm({
   });
   const reviewNavigationIssues = currentRequest ? getRequestReviewNavigationIssues(currentRequest, checklist) : null;
   const isBudgetCeilingBlocked = !isAdvanceSettlement && isBudgetPreviewBlocking(preview.data);
-  const canSubmitReview = hasCompleteRequestData && areDocumentsReady && checklist.isComplete && !isBudgetCeilingBlocked && (!isAdvanceSettlement || structuredReportReady);
+  const isAnnualUitReady = !annualUitLookupEnabled || annualUit.isResolved;
+  const canSubmitReview = hasCompleteRequestData && areDocumentsReady && isAnnualUitReady && checklist.isComplete && !isBudgetCeilingBlocked && (!isAdvanceSettlement || structuredReportReady);
   const settlementGuidanceAllocations = isAdvanceSettlement && (currentRequest?.allocations?.length ?? 0) === 0
     ? settlementContext?.original_advance.allocations ?? []
     : [];
@@ -619,15 +698,22 @@ export function RequestForm({
 
   useEffect(() => {
     if (!initialRequest) return;
+    const preserveSupplierEdits = initialRequest.request_type === REQUEST_TYPE.SUPPLIER_PAYMENT
+      && (!hydratedRequestId.current || hydratedRequestId.current === initialRequest.id);
+    form.reset(getRequestFormDefaultValues(initialRequest), { keepDirtyValues: preserveSupplierEdits });
+    hydratedRequestId.current = initialRequest.id;
     setDraftId(initialRequest.id);
     setCurrentRequest(initialRequest);
-  }, [initialRequest]);
+    if (!preserveSupplierEdits || !dirtyFields.allocations) setSelectedLines(getInitialSelectedLines(initialRequest));
+    setSubmitErrors([]);
+    setDocumentStepErrors([]);
+  }, [form, initialRequest]);
 
   useEffect(() => {
     if (hydratedPlanningLines.items.length === 0) return;
     const byId = new Map(hydratedPlanningLines.items.map((line) => [line.id, line]));
     setSelectedLines((current) => allocations.map((allocation, index) =>
-      current[index] ?? byId.get(allocation.budget_planning_line_id) ?? null,
+      byId.get(allocation.budget_planning_line_id) ?? (current[index]?.id === allocation.budget_planning_line_id ? current[index] : null),
     ));
   }, [hydratedPlanningLines.items, selectedAllocationLineIds.join("|")]);
 
@@ -636,6 +722,7 @@ export function RequestForm({
   }, [activeStep]);
 
   useEffect(() => {
+    if (form.getValues("request_type") === REQUEST_TYPE.SUPPLIER_PAYMENT) return;
     const initialBankCode = form.getValues("bank_code");
     const shouldClearHiddenCci = !initialBankCode || !isKnownBankCode(initialBankCode) || isBcpBank(initialBankCode);
     if (shouldClearHiddenCci && form.getValues("bank_cci")?.trim()) {
@@ -697,6 +784,15 @@ export function RequestForm({
     setIsNavigatingStep(true);
     const hash = targetId ? `#${targetId}` : "";
     router.push(`${ROUTES.REQUESTS}/${requestId}/edit?step=${step}${hash}` as Parameters<typeof router.push>[0]);
+  }
+
+  function showApiErrorStep(error: unknown, requestId = draftId): void {
+    const step = getRequestErrorStep(error);
+    if (!step) return;
+    const messages = [getApiErrorMessage(error)];
+    setSubmitErrors(messages);
+    setDocumentStepErrors(step === REQUEST_EDIT_STEP.DOCUMENTS ? messages : []);
+    if (mode === "edit" && step !== activeStep) navigateToStep(step, requestId);
   }
 
   function navigateAway(href: Parameters<typeof router.push>[0]): void {
@@ -810,7 +906,15 @@ export function RequestForm({
     navigateToStep(REQUEST_EDIT_STEP.REVIEW, currentRequest.id);
   }
 
+  function blockUnconfirmedSupplierPayee(): boolean {
+    if (!needsSupplierPayeeConsent) return false;
+    toast.error("Confirma el proveedor como beneficiario antes de guardar.");
+    if (activeStep !== REQUEST_EDIT_STEP.DATA) navigateToStep(REQUEST_EDIT_STEP.DATA);
+    return true;
+  }
+
   async function saveDraft(values: RequestFormValues): Promise<PaymentRequest> {
+    if (needsSupplierPayeeConsent) throw new Error("Confirma el proveedor como beneficiario antes de guardar.");
     if (draftId && isAdvanceSettlement && currentRequest) return currentRequest;
 
     const saved = draftId
@@ -823,6 +927,8 @@ export function RequestForm({
 
   async function handleSaveDraft(values: RequestFormValues): Promise<void> {
     if (isBusy) return;
+    if (blockUnconfirmedSupplierPayee()) return;
+    if (currencyIssue) { setSubmitErrors([currencyIssue]); toast.error(currencyIssue); return; }
     const requestTypeForBlocking = effectiveRequestType;
     setPendingAction("save");
     setSubmitErrors([]);
@@ -868,6 +974,7 @@ export function RequestForm({
       navigateToStep(REQUEST_EDIT_STEP.DOCUMENTS, saved.id);
     } catch (error) {
       toast.error(getNewAdvancePendingSettlementBlockMessage(requestTypeForBlocking, error) ?? getApiErrorMessage(error));
+      showApiErrorStep(error);
       if (isRequestStateConflict(error)) {
         await onRequestStateConflict?.();
       }
@@ -878,8 +985,21 @@ export function RequestForm({
 
   async function handleSubmitDraft(values: RequestFormValues): Promise<void> {
     if (isBusy) return;
+    if (blockUnconfirmedSupplierPayee()) return;
+    if (currencyIssue) { setSubmitErrors([currencyIssue]); toast.error(currencyIssue); return; }
     if (documentUploadQueue.isNavigationBlocked) {
       toast.error("Finaliza, pausa o retira los archivos pendientes antes de enviar la rendición.");
+      return;
+    }
+
+    if (!isAnnualUitReady) {
+      const message = annualUit.error
+        ? "No se pudo consultar el Valor UIT del año de la solicitud. Verifica tu sesión y vuelve a intentarlo."
+        : "Espera mientras consultamos el Valor UIT del año de la solicitud.";
+      setSubmitErrors([message]);
+      setDocumentStepErrors([message]);
+      toast.error(message);
+      setPendingAction(null);
       return;
     }
     const requestTypeForBlocking = effectiveRequestType;
@@ -941,6 +1061,7 @@ export function RequestForm({
       toast.success(getRequestSubmitSavingToast(saved.status));
     } catch (error) {
       toast.error(getNewAdvancePendingSettlementBlockMessage(requestTypeForBlocking, error) ?? getApiErrorMessage(error));
+      showApiErrorStep(error);
       if (isRequestStateConflict(error)) {
         await onRequestStateConflict?.();
       }
@@ -959,6 +1080,7 @@ export function RequestForm({
       const message = pendingSettlementMessage ?? getApiErrorMessage(error);
       setSubmitErrors(missingMessages.length > 0 ? missingMessages : [message]);
       toast.error(getRequestSubmitFailureToast(message, saved.status));
+      showApiErrorStep(error, saved.id);
       if (isRequestStateConflict(error)) {
         await onRequestStateConflict?.();
       }
@@ -1019,7 +1141,7 @@ export function RequestForm({
   }
 
   function addAllocationBlock(): void {
-    allocationFields.append({ client_key: makeAllocationClientKey(), budget_planning_line_id: "", amount: 0 });
+    allocationFields.append({ client_key: makeAllocationClientKey(), budget_planning_line_id: "", amount: "" });
     setSelectedLines((current) => [...current, null]);
   }
 
@@ -1094,6 +1216,7 @@ export function RequestForm({
                   control={form.control}
                   name={`allocations.${index}.budget_planning_line_id`}
                   selectedLine={selectedLines[index] ?? null}
+                  otherSelectedCurrencies={allocations.filter((allocation, otherIndex) => otherIndex !== index && allocation.budget_planning_line_id).map((allocation) => selectedLines.find((line) => line?.id === allocation.budget_planning_line_id)?.currency)}
                   onSelectedLineChange={(line) => setAllocationLine(index, line)}
                 />
                 <FormField control={form.control} name={`allocations.${index}.amount`} render={({ field: amountField }) => (
@@ -1128,7 +1251,7 @@ export function RequestForm({
 
         <div className="rounded-md border bg-muted/40 p-4 text-sm">
           <p className="text-muted-foreground">Total solicitado</p>
-          <p className="text-lg font-semibold" data-testid="request-total-amount">{formatRequestCurrency(totalRequestedAmount)}</p>
+          <p className="text-lg font-semibold" data-testid="request-total-amount">{totalRequestedAmount} · {currency ?? "Moneda pendiente de resolución"}</p>
         </div>
       </section>
     );
@@ -1181,7 +1304,23 @@ export function RequestForm({
             <section className="space-y-4">
               <h2 className="border-b pb-2 text-base font-semibold">1. Datos de la solicitud</h2>
               <div className="max-w-xl">
-                <RequestTypeSelector control={form.control} />
+                <RequestTypeSelector
+                  control={form.control}
+                  disabled={Boolean(draftId || currentRequest)}
+                  persistedType={currentRequest?.request_type ?? initialRequest?.request_type}
+                />
+                <FormField control={form.control} name="currency" render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Moneda de la solicitud</FormLabel>
+                    <FormControl><select {...field} value={field.value ?? ""} onChange={(event) => field.onChange(event.target.value || null)} className="h-10 w-full rounded-md border bg-background px-3" disabled={isBusy}>
+                      <option value="">Pendiente de resolución</option>
+                      <option value="PEN">PEN · Soles</option><option value="USD">USD · Dólares</option>
+                    </select></FormControl>
+                    <p className="text-xs text-muted-foreground">Cambiar la moneda conserva los montos ingresados. Revisa las líneas POA y comprobantes; el servidor valida las dependencias existentes.</p>
+                    <FormMessage />
+                  </FormItem>
+                )} />
+                {currencyIssue && <p role="status" className="text-sm text-muted-foreground">{currencyIssue}</p>}
               </div>
             </section>
 
@@ -1189,7 +1328,7 @@ export function RequestForm({
 
             <section className="space-y-4">
               <h2 className="border-b pb-2 text-base font-semibold">3. Justificación</h2>
-              {requestType === REQUEST_TYPE.ADVANCE && (
+              {effectiveRequestType === REQUEST_TYPE.ADVANCE && (
                 <FormField control={form.control} name="scheduled_rendition_at" render={({ field }) => (
                   <FormItem>
                     <FormLabel>Fecha límite de rendición</FormLabel>
@@ -1211,10 +1350,29 @@ export function RequestForm({
               )} />
             </section>
 
-            <BeneficiaryFields control={form.control} user={user} setValue={form.setValue} watch={form.watch} onDocumentFieldsChange={clearBeneficiaryDocumentSubmitErrors} />
-            {requestType === REQUEST_TYPE.SUPPLIER_PAYMENT && <SupplierFields control={form.control} />}
+            {effectiveRequestType === REQUEST_TYPE.SUPPLIER_PAYMENT && (
+              <div className="space-y-4">
+                {needsSupplierPayeeConsent && (
+                  <Alert data-testid="supplier-payee-mismatch">
+                    <AlertDescription className="space-y-2">
+                      <p>{currentRequest && resolveSupplierIdentity(currentRequest)
+                        ? "Este borrador tiene un beneficiario distinto del proveedor. Al guardar, se usará el proveedor como beneficiario; la cuenta bancaria se conserva."
+                        : "Completa la identidad del proveedor: este borrador no tiene una identidad válida. No se copiará del beneficiario anterior. Al guardar, el proveedor ingresado será el beneficiario y la cuenta bancaria se conserva."}</p>
+                      <Button type="button" variant="outline" disabled={isBusy} onClick={() => setConfirmedSupplierPayeeKey(supplierPayeeKey)}>
+                        Confirmar proveedor como beneficiario
+                      </Button>
+                      <p>Puedes cancelar para salir sin guardar cambios.</p>
+                    </AlertDescription>
+                  </Alert>
+                )}
+                <p className="text-sm text-muted-foreground">El proveedor es el beneficiario del pago. Ingresa su identidad una sola vez.</p>
+                <SupplierFields control={form.control} />
+              </div>
+            )}
+            <BeneficiaryFields bankOnly={effectiveRequestType === REQUEST_TYPE.SUPPLIER_PAYMENT} control={form.control} user={user} setValue={form.setValue} watch={form.watch} onDocumentFieldsChange={clearBeneficiaryDocumentSubmitErrors} />
 
             <BudgetPreviewCard
+              currency={currency}
               preview={preview.data}
               isLoading={preview.isLoading}
               error={preview.error}
@@ -1422,7 +1580,9 @@ export function RequestForm({
               {renderSummaryItem("Cuenta", formatOptionalText(currentRequest.bank_account))}
               {renderSummaryItem("CCI", formatOptionalText(currentRequest.bank_cci))}
               {currentRequest.request_type === REQUEST_TYPE.SUPPLIER_PAYMENT && renderSummaryItem("Proveedor", formatOptionalText(currentRequest.supplier_name))}
-              {currentRequest.request_type === REQUEST_TYPE.SUPPLIER_PAYMENT && renderSummaryItem("RUC proveedor", formatOptionalText(currentRequest.supplier_ruc))}
+              {currentRequest.request_type === REQUEST_TYPE.SUPPLIER_PAYMENT && renderSummaryItem("Documento del proveedor", resolveSupplierIdentity(currentRequest) ? `${resolveSupplierIdentity(currentRequest)!.supplier_document_type} ${resolveSupplierIdentity(currentRequest)!.supplier_document_number}` : "Pendiente de resolución")}
+              {currentRequest.request_type === REQUEST_TYPE.SUPPLIER_PAYMENT && renderSummaryItem("RUS", currentRequest.declares_rus == null ? "Sin declarar" : currentRequest.declares_rus ? "Sí" : "No")}
+              {currentRequest.request_type === REQUEST_TYPE.SUPPLIER_PAYMENT && renderSummaryItem("Casa de Retiro", currentRequest.declares_casa_de_retiro == null ? "Sin declarar" : currentRequest.declares_casa_de_retiro ? "Sí" : "No")}
               {currentRequest.relatedRequest && renderSummaryItem("Solicitud relacionada", `${currentRequest.relatedRequest.request_code ?? currentRequest.relatedRequest.sequential_number ?? currentRequest.relatedRequest.id} · ${formatRequestCurrency(Number(currentRequest.relatedRequest.requested_amount), currentRequest.relatedRequest.currency)}`, "md:col-span-2")}
             </div>
           </section>
@@ -1504,6 +1664,21 @@ export function RequestForm({
               />
             )}
           </>
+        )}
+        {annualUitLookupEnabled && annualUit.isLoading && (
+          <p role="status" className="text-sm text-muted-foreground">
+            Consultando el Valor UIT del año de la solicitud…
+          </p>
+        )}
+        {annualUitLookupEnabled && annualUit.error && (
+          <Alert variant="destructive">
+            <AlertDescription>
+              No se pudo consultar el Valor UIT del año de la solicitud. Verifica tu sesión y vuelve a intentarlo.{" "}
+              <Button type="button" variant="outline" size="sm" onClick={() => void annualUit.refetch()}>
+                Volver a consultar UIT
+              </Button>
+            </AlertDescription>
+          </Alert>
         )}
         <div className="flex flex-col-reverse gap-3 border-t pt-4 sm:flex-row sm:justify-between">
           <Button type="button" variant="outline" onClick={() => navigateToStep(REQUEST_EDIT_STEP.DOCUMENTS)} disabled={isBusy}>Volver a documentos</Button>

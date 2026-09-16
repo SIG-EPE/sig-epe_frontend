@@ -101,9 +101,10 @@ export interface BalanceData {
 /** Ano fiscal presupuestal */
 export interface FiscalYear {
   id: string;
+  annual_uit: string | null;
   year: number;
   status: "DRAFT" | "ACTIVE" | "CLOSED";
-  notes?: string;
+  notes?: string | null;
   created_by: string;
   approved_by?: string;
   approved_at?: string;

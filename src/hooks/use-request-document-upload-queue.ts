@@ -144,6 +144,7 @@ export function useRequestDocumentUploadQueue({
             document_category: item.documentCategory,
             scope_type: item.scopeType,
             request_allocation_id: item.requestAllocationId,
+            idempotency_key: item.idempotencyKey ?? item.id,
           });
           upsertDocument?.(uploaded);
           commit({ type: "upload-saved", itemId, document: uploaded });

@@ -1,5 +1,10 @@
 import { create } from "zustand";
-import { setQueryCacheAuthNamespace, bumpQueryCacheSessionGeneration, clearQueryCache } from "@/lib/query-cache";
+import {
+  setQueryCacheAuthNamespace,
+  bumpQueryCacheSessionGeneration,
+  clearQueryCache,
+} from "@/lib/query-cache";
+import { clearBulkMarkPaidRunStorage } from "@/lib/bulk-mark-paid-run-storage";
 import type { AuthUser } from "@/types/auth";
 
 // -------------------------------------------------------
@@ -32,7 +37,7 @@ function buildAuthCacheNamespace(user: AuthUser): string {
   return [user.id, user.role?.code ?? "sin-rol"].join(":");
 }
 
-export const useAuthStore = create<AuthStore>((set) => ({
+export const useAuthStore = create<AuthStore>((set, get) => ({
   user: null,
   accessToken: null,
   accessTokenExpiresAt: null,
@@ -40,6 +45,14 @@ export const useAuthStore = create<AuthStore>((set) => ({
   isLoading: true,
 
   setAuth: (user, accessToken, expiries) => {
+    const current = get();
+    if (
+      current.user &&
+      (current.user.id !== user.id ||
+        (current.sessionExpiresAt !== null &&
+          current.sessionExpiresAt !== (expiries?.sessionExpiresAt ?? null)))
+    )
+      clearBulkMarkPaidRunStorage();
     setQueryCacheAuthNamespace(buildAuthCacheNamespace(user));
     set({
       user,
@@ -51,6 +64,7 @@ export const useAuthStore = create<AuthStore>((set) => ({
   },
 
   clearAuth: () => {
+    clearBulkMarkPaidRunStorage();
     clearQueryCache();
     bumpQueryCacheSessionGeneration();
     if (typeof document !== "undefined") {
@@ -65,8 +79,7 @@ export const useAuthStore = create<AuthStore>((set) => ({
     });
   },
 
-  setLoading: (isLoading) =>
-    set({ isLoading }),
+  setLoading: (isLoading) => set({ isLoading }),
 
   patchUser: (partial) =>
     set((state) => ({

@@ -4,51 +4,70 @@ import { useEffect, useRef, useState } from "react";
 
 import { useCachedResource } from "@/hooks/use-cached-resource";
 import { api, ApiRequestError } from "@/lib/api-client";
-import { bindGiofLeaseCredential, isGiofLeaseCurrent, unbindGiofLeaseCredential } from "@/lib/giof-work-lease-session";
+import {
+  bindGiofLeaseCredential,
+  isGiofLeaseCurrent,
+  unbindGiofLeaseCredential,
+} from "@/lib/giof-work-lease-session";
 import { QUERY_CACHE_TTL_MS } from "@/lib/query-cache";
-import { invalidateRequestDomain, QUERY_TAGS } from "@/lib/query-tags";
+import {
+  invalidateQueryPrefixes,
+  invalidateRequestDomain,
+  QUERY_TAGS,
+} from "@/lib/query-tags";
 import type {
   GiofAssigneeCandidate,
   GiofAssignmentHistoryItem,
   GiofBulkAssignInput,
   GiofBulkAssignResponse,
+  GiofClaimableWorkPage,
+  GiofSelfClaimCommand,
+  GiofSelfClaimResult,
   GiofWorkLease,
   GiofWorkMetadata,
   GiofWorkPool,
 } from "@/types/giof-work";
 
-export interface GiofSelfAssignmentResult {
-  requestId: string;
-  assignmentVersion: string;
-  changed: boolean;
-}
-
 const DEFAULT_HEARTBEAT_MS = 60_000;
 
 function toExpectedVersion(version: string): number {
   const value = Number(version);
-  if (!Number.isSafeInteger(value) || value < 0) throw new Error("La versión de asignación no es válida. Actualiza la bandeja.");
+  if (!Number.isSafeInteger(value) || value < 0)
+    throw new Error(
+      "La versión de asignación no es válida. Actualiza la bandeja.",
+    );
   return value;
 }
 
 export function getGiofConflictMessage(error: unknown): string {
+  if (error instanceof ApiRequestError && error.status === 401) {
+    return "Tu sesión venció. Inicia sesión nuevamente antes de tomar trabajo.";
+  }
+  if (error instanceof ApiRequestError && error.status === 403) {
+    return "No tienes permisos para tomar este trabajo.";
+  }
   if (error instanceof ApiRequestError && error.status === 409) {
     const code = error.body.code;
     if (code === "ACTIVE_FOREIGN_LEASE" || code === "GIOF_LEASE_FOREIGN") {
       return "La solicitud tiene un lease activo de otra persona. No se modificó la asignación ni el pago.";
     }
-    if (code === "VERSION_MISMATCH" || code === "GIOF_ASSIGNMENT_VERSION_STALE") {
+    if (
+      code === "VERSION_MISMATCH" ||
+      code === "GIOF_ASSIGNMENT_VERSION_STALE"
+    ) {
       return "La versión de asignación cambió. Actualiza la cola antes de reintentar.";
     }
     if (code === "ASSIGNEE_MISMATCH") {
       return "La solicitud está asignada a otra persona y no puede tomarse desde este lote.";
     }
     if (code === "INELIGIBLE_LIFECYCLE") {
-      return "La solicitud ya no es elegible para pago. Actualiza la cola.";
+      return "El trabajo ya no es elegible para esta etapa. Actualiza la cola.";
     }
     return "La asignación o sesión de trabajo cambió, venció o pertenece a otra persona. Actualiza la bandeja antes de continuar.";
   }
-  return error instanceof Error ? error.message : "No se pudo completar la operación GIOF.";
+  return error instanceof Error
+    ? error.message
+    : "No se pudo completar la operación GIOF.";
 }
 
 export function useGiofWorkLease() {
@@ -58,7 +77,10 @@ export function useGiofWorkLease() {
   const leaseRef = useRef<GiofWorkLease | null>(null);
   const aliasesRef = useRef<readonly string[]>([]);
 
-  function storeLease(nextLease: GiofWorkLease | null, aliases?: readonly string[]): void {
+  function storeLease(
+    nextLease: GiofWorkLease | null,
+    aliases?: readonly string[],
+  ): void {
     if (leaseRef.current) unbindGiofLeaseCredential(leaseRef.current);
     if (aliases) aliasesRef.current = aliases;
     leaseRef.current = nextLease;
@@ -71,26 +93,38 @@ export function useGiofWorkLease() {
     const current = leaseRef.current;
     if (!current) return;
     storeLease(null);
-    await api.post<{ released: true }>("/giof-work/leases/release", {
-      pool: current.pool,
-      requestId: current.requestId,
-      expectedVersion: toExpectedVersion(current.assignmentVersion),
-      token: current.token,
-    }).catch(() => undefined);
+    await api
+      .post<{ released: true }>("/giof-work/leases/release", {
+        pool: current.pool,
+        requestId: current.requestId,
+        expectedVersion: toExpectedVersion(current.assignmentVersion),
+        token: current.token,
+      })
+      .catch(() => undefined);
     invalidateRequestDomain(current.requestId);
   }
 
-  async function acquire(requestId: string, work: GiofWorkMetadata, aliases: readonly string[] = []): Promise<GiofWorkLease> {
-    if (!work.canAcquire) throw new Error("Este trabajo está disponible únicamente en modo de solo lectura.");
+  async function acquire(
+    requestId: string,
+    work: GiofWorkMetadata,
+    aliases: readonly string[] = [],
+  ): Promise<GiofWorkLease> {
+    if (!work.canAcquire)
+      throw new Error(
+        "Este trabajo está disponible únicamente en modo de solo lectura.",
+      );
     if (leaseRef.current?.requestId !== requestId) await release();
     setIsLoading(true);
     setError(null);
     try {
-      const nextLease = await api.post<GiofWorkLease>("/giof-work/leases/acquire", {
-        pool: work.pool,
-        requestId,
-        expectedVersion: toExpectedVersion(work.assignmentVersion),
-      });
+      const nextLease = await api.post<GiofWorkLease>(
+        "/giof-work/leases/acquire",
+        {
+          pool: work.pool,
+          requestId,
+          expectedVersion: toExpectedVersion(work.assignmentVersion),
+        },
+      );
       storeLease(nextLease, aliases);
       invalidateRequestDomain(requestId);
       return nextLease;
@@ -105,36 +139,131 @@ export function useGiofWorkLease() {
 
   useEffect(() => {
     if (!lease) return;
-    const intervalMs = Math.max(10_000, (lease.heartbeatIntervalSeconds || 60) * 1_000 || DEFAULT_HEARTBEAT_MS);
+    const intervalMs = Math.max(
+      10_000,
+      (lease.heartbeatIntervalSeconds || 60) * 1_000 || DEFAULT_HEARTBEAT_MS,
+    );
     const intervalId = window.setInterval(() => {
       const current = leaseRef.current;
       if (!current) return;
-      void api.post<GiofWorkLease>("/giof-work/leases/heartbeat", {
-        pool: current.pool,
-        requestId: current.requestId,
-        expectedVersion: toExpectedVersion(current.assignmentVersion),
-        token: current.token,
-      }).then((renewed) => storeLease(renewed)).catch((reason: unknown) => {
-        storeLease(null);
-        setError(new Error(getGiofConflictMessage(reason)));
-      });
+      void api
+        .post<GiofWorkLease>("/giof-work/leases/heartbeat", {
+          pool: current.pool,
+          requestId: current.requestId,
+          expectedVersion: toExpectedVersion(current.assignmentVersion),
+          token: current.token,
+        })
+        .then((renewed) => storeLease(renewed))
+        .catch((reason: unknown) => {
+          storeLease(null);
+          setError(new Error(getGiofConflictMessage(reason)));
+        });
     }, intervalMs);
     return () => window.clearInterval(intervalId);
   }, [lease?.token]);
 
-  useEffect(() => () => {
-    const current = leaseRef.current;
-    if (!current) return;
-    unbindGiofLeaseCredential(current);
-    void api.post("/giof-work/leases/release", {
-      pool: current.pool,
-      requestId: current.requestId,
-      expectedVersion: toExpectedVersion(current.assignmentVersion),
-      token: current.token,
-    }).catch(() => undefined);
-  }, []);
+  useEffect(
+    () => () => {
+      const current = leaseRef.current;
+      if (!current) return;
+      unbindGiofLeaseCredential(current);
+      void api
+        .post("/giof-work/leases/release", {
+          pool: current.pool,
+          requestId: current.requestId,
+          expectedVersion: toExpectedVersion(current.assignmentVersion),
+          token: current.token,
+        })
+        .catch(() => undefined);
+    },
+    [],
+  );
 
-  return { lease, acquire, release, isLoading, error, clearError: () => setError(null) };
+  return {
+    lease,
+    acquire,
+    release,
+    isLoading,
+    error,
+    clearError: () => setError(null),
+  };
+}
+
+interface AutoAcquireGiofWorkLeaseOptions {
+  requestId?: string;
+  work?: GiofWorkMetadata | null;
+  aliases?: readonly string[];
+  enabled?: boolean;
+  onAcquired?: (lease: GiofWorkLease) => void | Promise<void>;
+  onError?: (error: Error) => void;
+}
+
+function getGiofLeaseAttemptIdentity(
+  requestId: string,
+  work: GiofWorkMetadata,
+): string {
+  const parsedVersion = Number(work.assignmentVersion);
+  const expectedVersion =
+    Number.isSafeInteger(parsedVersion) && parsedVersion >= 0
+      ? parsedVersion
+      : work.assignmentVersion;
+  return JSON.stringify([
+    requestId,
+    work.pool,
+    expectedVersion,
+    work.assigneeId ?? null,
+  ]);
+}
+
+export function useAutoAcquireGiofWorkLease({
+  requestId,
+  work,
+  aliases = [],
+  enabled = true,
+  onAcquired,
+  onError,
+}: AutoAcquireGiofWorkLeaseOptions) {
+  const leaseSession = useGiofWorkLease();
+  const attemptedIdentityRef = useRef<string | null>(null);
+  const attemptIdentity =
+    requestId && work ? getGiofLeaseAttemptIdentity(requestId, work) : null;
+
+  useEffect(() => {
+    if (
+      !enabled ||
+      !requestId ||
+      !work ||
+      !attemptIdentity ||
+      leaseSession.lease ||
+      leaseSession.isLoading ||
+      attemptedIdentityRef.current === attemptIdentity
+    )
+      return;
+
+    attemptedIdentityRef.current = attemptIdentity;
+    void leaseSession
+      .acquire(requestId, work, aliases)
+      .then((nextLease) => onAcquired?.(nextLease))
+      .catch((reason: unknown) => {
+        const nextError =
+          reason instanceof Error
+            ? reason
+            : new Error("Actualiza la solicitud antes de continuar.");
+        onError?.(nextError);
+      });
+  }, [
+    aliases,
+    attemptIdentity,
+    enabled,
+    leaseSession.isLoading,
+    leaseSession.lease,
+    onAcquired,
+    onError,
+    requestId,
+    work,
+  ]);
+
+  return leaseSession;
 }
 
 export function useGiofWorkLeaseSet() {
@@ -147,17 +276,36 @@ export function useGiofWorkLeaseSet() {
     setLeases(next);
   }
 
-  async function acquire(requestId: string, work: GiofWorkMetadata, aliases: readonly string[] = []): Promise<GiofWorkLease> {
-    const existing = leasesRef.current.find((candidate) => candidate.requestId === requestId);
-    if (isGiofLeaseCurrent(existing, { requestId, pool: work.pool, assignmentVersion: work.assignmentVersion })) return existing;
-    if (existing) await release(requestId);
-    if (!work.canAcquire) throw new Error("Este trabajo está disponible únicamente en modo de solo lectura.");
-    try {
-      const nextLease = await api.post<GiofWorkLease>("/giof-work/leases/acquire", {
-        pool: work.pool,
+  async function acquire(
+    requestId: string,
+    work: GiofWorkMetadata,
+    aliases: readonly string[] = [],
+  ): Promise<GiofWorkLease> {
+    const existing = leasesRef.current.find(
+      (candidate) => candidate.requestId === requestId,
+    );
+    if (
+      isGiofLeaseCurrent(existing, {
         requestId,
-        expectedVersion: toExpectedVersion(work.assignmentVersion),
-      });
+        pool: work.pool,
+        assignmentVersion: work.assignmentVersion,
+      })
+    )
+      return existing;
+    if (existing) await release(requestId);
+    if (!work.canAcquire)
+      throw new Error(
+        "Este trabajo está disponible únicamente en modo de solo lectura.",
+      );
+    try {
+      const nextLease = await api.post<GiofWorkLease>(
+        "/giof-work/leases/acquire",
+        {
+          pool: work.pool,
+          requestId,
+          expectedVersion: toExpectedVersion(work.assignmentVersion),
+        },
+      );
       aliasesRef.current.set(requestId, aliases);
       bindGiofLeaseCredential(nextLease, aliases);
       replaceLeases([...leasesRef.current, nextLease]);
@@ -169,52 +317,100 @@ export function useGiofWorkLeaseSet() {
   }
 
   async function release(requestId: string): Promise<void> {
-    const current = leasesRef.current.find((candidate) => candidate.requestId === requestId);
+    const current = leasesRef.current.find(
+      (candidate) => candidate.requestId === requestId,
+    );
     if (!current) return;
     unbindGiofLeaseCredential(current);
     aliasesRef.current.delete(requestId);
-    replaceLeases(leasesRef.current.filter((candidate) => candidate.requestId !== requestId));
-    await api.post("/giof-work/leases/release", { pool: current.pool, requestId, expectedVersion: toExpectedVersion(current.assignmentVersion), token: current.token }).catch(() => undefined);
+    replaceLeases(
+      leasesRef.current.filter(
+        (candidate) => candidate.requestId !== requestId,
+      ),
+    );
+    await api
+      .post("/giof-work/leases/release", {
+        pool: current.pool,
+        requestId,
+        expectedVersion: toExpectedVersion(current.assignmentVersion),
+        token: current.token,
+      })
+      .catch(() => undefined);
   }
 
   async function releaseAll(): Promise<void> {
-    await Promise.all(leasesRef.current.map((current) => release(current.requestId)));
+    await Promise.all(
+      leasesRef.current.map((current) => release(current.requestId)),
+    );
   }
 
   useEffect(() => {
     if (leases.length === 0) return;
     const intervalId = window.setInterval(() => {
       for (const current of leasesRef.current) {
-        void api.post<GiofWorkLease>("/giof-work/leases/heartbeat", { pool: current.pool, requestId: current.requestId, expectedVersion: toExpectedVersion(current.assignmentVersion), token: current.token })
+        void api
+          .post<GiofWorkLease>("/giof-work/leases/heartbeat", {
+            pool: current.pool,
+            requestId: current.requestId,
+            expectedVersion: toExpectedVersion(current.assignmentVersion),
+            token: current.token,
+          })
           .then((renewed) => {
             unbindGiofLeaseCredential(current);
-            bindGiofLeaseCredential(renewed, aliasesRef.current.get(renewed.requestId));
-            replaceLeases(leasesRef.current.map((candidate) => candidate.requestId === renewed.requestId ? renewed : candidate));
+            bindGiofLeaseCredential(
+              renewed,
+              aliasesRef.current.get(renewed.requestId),
+            );
+            replaceLeases(
+              leasesRef.current.map((candidate) =>
+                candidate.requestId === renewed.requestId ? renewed : candidate,
+              ),
+            );
           })
           .catch(() => {
             unbindGiofLeaseCredential(current);
             aliasesRef.current.delete(current.requestId);
-            replaceLeases(leasesRef.current.filter((candidate) => candidate.requestId !== current.requestId));
+            replaceLeases(
+              leasesRef.current.filter(
+                (candidate) => candidate.requestId !== current.requestId,
+              ),
+            );
           });
       }
     }, DEFAULT_HEARTBEAT_MS);
     return () => window.clearInterval(intervalId);
   }, [leases.length]);
 
-  useEffect(() => () => {
-    for (const current of leasesRef.current) {
-      unbindGiofLeaseCredential(current);
-      void api.post("/giof-work/leases/release", { pool: current.pool, requestId: current.requestId, expectedVersion: toExpectedVersion(current.assignmentVersion), token: current.token }).catch(() => undefined);
-    }
-  }, []);
+  useEffect(
+    () => () => {
+      for (const current of leasesRef.current) {
+        unbindGiofLeaseCredential(current);
+        void api
+          .post("/giof-work/leases/release", {
+            pool: current.pool,
+            requestId: current.requestId,
+            expectedVersion: toExpectedVersion(current.assignmentVersion),
+            token: current.token,
+          })
+          .catch(() => undefined);
+      }
+    },
+    [],
+  );
 
   return { leases, acquire, release, releaseAll };
 }
 
-export async function fetchGiofAssignees(search?: string, signal?: AbortSignal): Promise<GiofAssigneeCandidate[]> {
+export async function fetchGiofAssignees(
+  search?: string,
+  signal?: AbortSignal,
+): Promise<GiofAssigneeCandidate[]> {
   const params = new URLSearchParams();
   if (search?.trim()) params.set("search", search.trim());
-  return api.get<GiofAssigneeCandidate[]>(`/giof-work/assignees${params.size ? `?${params.toString()}` : ""}`, { signal });
+  return api.get<GiofAssigneeCandidate[]>(
+    `/giof-work/assignees${params.size ? `?${params.toString()}` : ""}`,
+    { signal },
+  );
 }
 
 interface GiofAssigneesOptions {
@@ -222,7 +418,10 @@ interface GiofAssigneesOptions {
   search?: string;
 }
 
-export function useGiofAssignees({ enabled = true, search }: GiofAssigneesOptions = {}) {
+export function useGiofAssignees({
+  enabled = true,
+  search,
+}: GiofAssigneesOptions = {}) {
   const normalizedSearch = search?.trim() ?? "";
   const resource = useCachedResource<GiofAssigneeCandidate[]>({
     enabled,
@@ -231,7 +430,8 @@ export function useGiofAssignees({ enabled = true, search }: GiofAssigneesOption
     tags: [QUERY_TAGS.CATALOGS, QUERY_TAGS.USERS],
     keepPreviousData: false,
     errorMessage: "No se pudo obtener el catálogo de responsables GIOF.",
-    queryFn: (signal) => fetchGiofAssignees(normalizedSearch || undefined, signal),
+    queryFn: (signal) =>
+      fetchGiofAssignees(normalizedSearch || undefined, signal),
   });
 
   return {
@@ -244,29 +444,157 @@ export function useGiofAssignees({ enabled = true, search }: GiofAssigneesOption
   };
 }
 
-export async function fetchGiofHistory(requestId: string, pool: GiofWorkPool): Promise<GiofAssignmentHistoryItem[]> {
+export async function fetchGiofHistory(
+  requestId: string,
+  pool: GiofWorkPool,
+): Promise<GiofAssignmentHistoryItem[]> {
   const params = new URLSearchParams({ requestId, pool });
-  return api.get<GiofAssignmentHistoryItem[]>(`/giof-work/history?${params.toString()}`);
+  return api.get<GiofAssignmentHistoryItem[]>(
+    `/giof-work/history?${params.toString()}`,
+  );
 }
 
-export async function bulkAssignGiofWork(input: GiofBulkAssignInput): Promise<GiofBulkAssignResponse> {
-  const result = await api.post<GiofBulkAssignResponse>("/giof-work/assignments/bulk", input);
+export async function bulkAssignGiofWork(
+  input: GiofBulkAssignInput,
+): Promise<GiofBulkAssignResponse> {
+  const result = await api.post<GiofBulkAssignResponse>(
+    "/giof-work/assignments/bulk",
+    input,
+  );
   invalidateRequestDomain();
   return result;
 }
 
-export async function selfAssignPaymentWork(
-  requestId: string,
-  expectedVersion: number,
-): Promise<GiofSelfAssignmentResult> {
-  try {
-    const result = await api.post<GiofSelfAssignmentResult>(
-      "/giof-work/assignments/self",
-      { requestId, expectedVersion },
-    );
-    invalidateRequestDomain(requestId);
-    return result;
-  } catch (error) {
-    throw new Error(getGiofConflictMessage(error));
+export async function fetchGiofClaimableWork(
+  pool: GiofWorkPool,
+  page = 1,
+  limit = 20,
+  signal?: AbortSignal,
+): Promise<GiofClaimableWorkPage> {
+  const params = new URLSearchParams({
+    pool,
+    page: String(page),
+    limit: String(limit),
+  });
+  return api.get<GiofClaimableWorkPage>(
+    `/giof-work/claimable?${params.toString()}`,
+    { signal },
+  );
+}
+
+interface GiofClaimableWorkOptions {
+  pool: GiofWorkPool;
+  page?: number;
+  limit?: number;
+  enabled?: boolean;
+}
+
+export function useGiofClaimableWork({
+  pool,
+  page = 1,
+  limit = 20,
+  enabled = true,
+}: GiofClaimableWorkOptions) {
+  const resource = useCachedResource<GiofClaimableWorkPage>({
+    enabled,
+    key: [QUERY_TAGS.GIOF_WORK, "claimable", pool, { page, limit }],
+    ttlMs: QUERY_CACHE_TTL_MS.MUTABLE_LIST,
+    tags: [QUERY_TAGS.GIOF_WORK],
+    keepPreviousData: false,
+    errorMessage: "No se pudo obtener el trabajo disponible.",
+    queryFn: (signal) => fetchGiofClaimableWork(pool, page, limit, signal),
+  });
+
+  return {
+    items: resource.data?.items ?? [],
+    total: resource.data?.total ?? 0,
+    page: resource.data?.page ?? page,
+    limit: resource.data?.limit ?? limit,
+    isLoading: resource.isLoading,
+    isInitialLoading: resource.isInitialLoading,
+    isRefreshing: resource.isRefreshing,
+    error: resource.error,
+    refetch: resource.refetch,
+    isAdvisory: true as const,
+  };
+}
+
+export async function claimGiofWork(
+  command: GiofSelfClaimCommand,
+): Promise<GiofSelfClaimResult> {
+  return api.post<GiofSelfClaimResult>("/giof-work/assignments/self", command);
+}
+
+type GiofClaimRefetch = (options?: { force?: boolean }) => Promise<void>;
+
+interface GiofSelfClaimOptions {
+  pool: GiofWorkPool;
+  refetchClaimable: GiofClaimRefetch;
+  refetchPoolQueue: GiofClaimRefetch;
+}
+
+interface GiofSelfClaimInput {
+  requestId: string;
+  expectedVersion: number;
+}
+
+export function useGiofSelfClaim({
+  pool,
+  refetchClaimable,
+  refetchPoolQueue,
+}: GiofSelfClaimOptions) {
+  const [pendingRequestId, setPendingRequestId] = useState<string | null>(null);
+  const [error, setError] = useState<Error | null>(null);
+  const inFlightRef = useRef<string | null>(null);
+
+  async function claim(
+    input: GiofSelfClaimInput,
+  ): Promise<GiofSelfClaimResult> {
+    const expectedVersion = toExpectedVersion(String(input.expectedVersion));
+    const commandIdentity = JSON.stringify([
+      pool,
+      input.requestId,
+      expectedVersion,
+    ]);
+    if (inFlightRef.current !== null) {
+      throw new Error("Ya hay una toma de trabajo en curso.");
+    }
+
+    inFlightRef.current = commandIdentity;
+    setPendingRequestId(input.requestId);
+    setError(null);
+    try {
+      const result = await claimGiofWork({
+        pool,
+        requestId: input.requestId,
+        expectedVersion,
+      });
+      invalidateQueryPrefixes([[QUERY_TAGS.GIOF_WORK, "claimable", pool]]);
+      invalidateRequestDomain(input.requestId);
+      await refetchPoolQueue({ force: true });
+      await refetchClaimable({ force: true });
+      return result;
+    } catch (reason) {
+      if (reason instanceof ApiRequestError && reason.status === 409) {
+        invalidateQueryPrefixes([[QUERY_TAGS.GIOF_WORK, "claimable", pool]]);
+        invalidateRequestDomain(input.requestId);
+        await refetchPoolQueue({ force: true }).catch(() => undefined);
+        await refetchClaimable({ force: true }).catch(() => undefined);
+      }
+      const nextError = new Error(getGiofConflictMessage(reason));
+      setError(nextError);
+      throw nextError;
+    } finally {
+      if (inFlightRef.current === commandIdentity) inFlightRef.current = null;
+      setPendingRequestId(null);
+    }
   }
+
+  return {
+    claim,
+    pendingRequestId,
+    isSubmitting: pendingRequestId !== null,
+    error,
+    clearError: () => setError(null),
+  };
 }

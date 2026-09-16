@@ -26,7 +26,9 @@ function isPaymentCompletenessState(value: unknown): value is PaymentCompletenes
 function deriveFromAliases(source: PaymentCompletenessSource): PaymentCompletenessState {
   const missing = new Set(source.missing_fields ?? []);
   const referencePending = source.details_pending === true
-    || missing.has(PAYMENT_MISSING_FIELD.OPERATION_REFERENCE);
+    || missing.has(PAYMENT_MISSING_FIELD.OPERATION_REFERENCE)
+    || missing.has(PAYMENT_MISSING_FIELD.FINAL_FX_RATE)
+    || missing.has(PAYMENT_MISSING_FIELD.FINAL_FX_CONFIRMED);
   const proofPending = source.proof_pending === true
     || missing.has(PAYMENT_MISSING_FIELD.PROOF);
   if (referencePending && proofPending) return PAYMENT_COMPLETENESS_STATE.BOTH_PENDING;
@@ -41,10 +43,15 @@ export function getPaymentCompletenessPresentation(
   const completeness = isPaymentCompletenessState(source.completeness)
     ? source.completeness
     : deriveFromAliases(source);
-  const referencePending = completeness === PAYMENT_COMPLETENESS_STATE.REFERENCE_PENDING
-    || completeness === PAYMENT_COMPLETENESS_STATE.BOTH_PENDING;
-  const proofPending = completeness === PAYMENT_COMPLETENESS_STATE.PROOF_PENDING
-    || completeness === PAYMENT_COMPLETENESS_STATE.BOTH_PENDING;
+  // The legacy REFERENCE_PENDING enum also covers FX-only pending now.
+  // An explicit server missing-fields list takes precedence over aliases.
+  const explicit = source.missing_fields;
+  const referencePending = explicit != null
+    ? explicit.includes(PAYMENT_MISSING_FIELD.OPERATION_REFERENCE)
+    : completeness === PAYMENT_COMPLETENESS_STATE.REFERENCE_PENDING || completeness === PAYMENT_COMPLETENESS_STATE.BOTH_PENDING;
+  const proofPending = explicit != null
+    ? explicit.includes(PAYMENT_MISSING_FIELD.PROOF)
+    : completeness === PAYMENT_COMPLETENESS_STATE.PROOF_PENDING || completeness === PAYMENT_COMPLETENESS_STATE.BOTH_PENDING;
   const missingFields: PaymentMissingField[] = [];
   const labels: string[] = [];
   if (referencePending) {
@@ -55,11 +62,14 @@ export function getPaymentCompletenessPresentation(
     missingFields.push(PAYMENT_MISSING_FIELD.PROOF);
     labels.push("Falta constancia");
   }
+  const fxMissing = (explicit ?? []).filter((field) => field === PAYMENT_MISSING_FIELD.FINAL_FX_RATE || field === PAYMENT_MISSING_FIELD.FINAL_FX_CONFIRMED) as PaymentMissingField[];
+  missingFields.push(...fxMissing);
+  if (fxMissing.length) labels.push("Falta TC final confirmado");
   if (labels.length === 0) labels.push("Pago completo");
   return {
     completeness,
     missingFields,
     labels,
-    hasPendingDetails: completeness !== PAYMENT_COMPLETENESS_STATE.COMPLETE,
+    hasPendingDetails: missingFields.length > 0 || completeness !== PAYMENT_COMPLETENESS_STATE.COMPLETE,
   };
 }

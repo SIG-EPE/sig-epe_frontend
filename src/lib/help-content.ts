@@ -69,14 +69,14 @@ export const FAQ_ITEMS = [
     id: "adjuntar-pxq",
     category: FAQ_CATEGORIES.DOCUMENTS,
     question: "¿Cuándo debo adjuntar un archivo PxQ (presupuesto por cantidad)?",
-    answer: "PXQ significa presupuesto por cantidad y es el único documento obligatorio para avanzar una solicitud. Un único PXQ activo asociado a la solicitud es suficiente, ya sea general o vinculado a cualquiera de sus líneas POA.",
+    answer: "PXQ significa presupuesto por cantidad y es obligatorio para anticipos. Un PXQ activo asociado al anticipo es suficiente, ya sea general o vinculado a una línea POA. Los reembolsos requieren un comprobante real vinculado, no PXQ. Los pagos a proveedor tienen sus propias reglas de comprobantes y contrato.",
     keywords: ["excel", "anticipo", "línea POA", "presupuesto por cantidad"],
   },
   {
     id: "documentos-por-tipo",
     category: FAQ_CATEGORIES.DOCUMENTS,
     question: "¿Qué documentos necesito según mi solicitud?",
-    answer: "Para enviar, aprobar y pagar una solicitud, el único documento obligatorio es un PXQ activo asociado a la solicitud. Un solo PXQ es suficiente aunque pertenezca a cualquiera de sus líneas POA; los comprobantes, contratos, informes y otros sustentos son opcionales en esta etapa.",
+    answer: "Depende del tipo: anticipo requiere PXQ; reembolso requiere un comprobante real activo vinculado a la solicitud. Pago a proveedor requiere factura o RHE, boleta solo con declaración RUS, o recibo de caja solo con Casa de Retiro. El contrato PDF es obligatorio para pagos a proveedor en soles que superan estrictamente ½ UIT del año de la solicitud; en dólares es opcional. Las rendiciones conservan comprobantes por línea, informe actualizado y confirmación manual.",
     keywords: ["factura", "recibo por honorarios", "informe de rendición", "sustento"],
   },
   {

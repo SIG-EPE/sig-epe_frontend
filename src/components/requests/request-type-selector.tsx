@@ -13,6 +13,8 @@ import type { RequestFormValues } from "./request-form";
 
 interface RequestTypeSelectorProps {
   control: Control<RequestFormValues>;
+  disabled?: boolean;
+  persistedType?: RequestType;
 }
 
 export function shouldShowReimbursementSstWarning(previousType: RequestType, nextType: RequestType): boolean {
@@ -47,7 +49,7 @@ export function ReimbursementSstWarningDialog({ open, onOpenChange }: Reimbursem
   );
 }
 
-export function RequestTypeSelector({ control }: RequestTypeSelectorProps) {
+export function RequestTypeSelector({ control, disabled = false, persistedType }: RequestTypeSelectorProps) {
   const [showReimbursementWarning, setShowReimbursementWarning] = useState(false);
 
   return (
@@ -68,7 +70,7 @@ export function RequestTypeSelector({ control }: RequestTypeSelectorProps) {
           return (
             <FormItem>
               <FormLabel>Tipo de solicitud *</FormLabel>
-              <Select value={field.value} onValueChange={handleRequestTypeChange}>
+              <Select value={persistedType ?? field.value} onValueChange={handleRequestTypeChange} disabled={disabled}>
                 <FormControl>
                   <SelectTrigger data-testid="request-type-select">
                     <SelectValue placeholder="Selecciona un tipo" />
@@ -80,7 +82,11 @@ export function RequestTypeSelector({ control }: RequestTypeSelectorProps) {
                   ))}
                 </SelectContent>
               </Select>
-              <FormDescription>Solo se incluyen Anticipo, Pago a Proveedor y Reembolso.</FormDescription>
+              <FormDescription>
+                {disabled
+                  ? "El tipo de una solicitud guardada no se puede cambiar. Crea una nueva solicitud para usar otro tipo."
+                  : "Solo se incluyen Anticipo, Pago a Proveedor y Reembolso."}
+              </FormDescription>
               <FormMessage />
             </FormItem>
           );

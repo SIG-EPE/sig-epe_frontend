@@ -173,6 +173,7 @@ export function recoverFromPlanningLineStateConflict(
 function invalidateBudgetCatalogMutationCaches(): void {
   invalidateBudgetMutationCaches();
   invalidateQueryTag("catalog");
+  invalidateQueryTag(QUERY_TAGS.ANNUAL_UIT);
 }
 
 // -------------------------------------------------------
@@ -185,7 +186,7 @@ interface UseFiscalYearsReturn {
   data: FiscalYear[] | null;
   isLoading: boolean;
   error: Error | null;
-  refetch: () => Promise<void>;
+  refetch: (options?: { force?: boolean }) => Promise<void>;
 }
 
 export function useFiscalYears(): UseFiscalYearsReturn {
@@ -196,7 +197,7 @@ export function useFiscalYears(): UseFiscalYearsReturn {
   const authIsLoading = useAuthStore((state) => state.isLoading);
   const accessToken = useAuthStore((state) => state.accessToken);
 
-  const refetch = useCallback(async () => {
+  const refetch = useCallback(async (options?: { force?: boolean }) => {
     if (authIsLoading || !accessToken) return;
     setIsLoading(true);
     setError(null);
@@ -205,6 +206,7 @@ export function useFiscalYears(): UseFiscalYearsReturn {
         key: ["budget", "fiscal-years"],
         ttlMs: QUERY_CACHE_TTL_MS.CATALOG,
         tags: ["budget", "catalog"],
+        force: options?.force === true,
         queryFn: () => api.get<FiscalYear[]>("/budget/fiscal-years"),
       });
       setData(result);
@@ -641,6 +643,7 @@ export function useFiscalYear(id: string): UseFiscalYearReturn {
 
 export interface CreateFiscalYearDto {
   year: number;
+  annual_uit?: number;
   notes?: string;
 }
 
@@ -654,6 +657,7 @@ export function useCreateFiscalYear() {
       invalidateBudgetCatalogMutationCaches();
       return result;
     } catch (error) {
+      invalidateBudgetCatalogMutationCaches();
       throw error;
     } finally {
       setIsLoading(false);
@@ -669,21 +673,29 @@ export function useCreateFiscalYear() {
 // -------------------------------------------------------
 
 export interface UpdateFiscalYearDto {
-  notes: string;
+  notes?: string;
+  annual_uit?: number;
+  annual_uit_source?: string;
+  annual_uit_reason?: string;
 }
 
 export function useUpdateFiscalYear(id: string) {
   const [isLoading, setIsLoading] = useState(false);
+  const pending = useRef(false);
 
   const update = async (dto: UpdateFiscalYearDto): Promise<FiscalYear> => {
+    if (pending.current) throw new Error("Operación en curso");
+    pending.current = true;
     setIsLoading(true);
     try {
       const result = await api.patch<FiscalYear>(`/budget/fiscal-years/${id}`, dto);
       invalidateBudgetCatalogMutationCaches();
       return result;
     } catch (error) {
+      invalidateBudgetCatalogMutationCaches();
       throw error;
     } finally {
+      pending.current = false;
       setIsLoading(false);
     }
   };
@@ -706,9 +718,7 @@ export function useActivateFiscalYear(id: string) {
       invalidateBudgetCatalogMutationCaches();
       return result;
     } catch (error) {
-      if (error instanceof ApiRequestError && error.status === 409) {
-        toast.error("Ya existe otro año fiscal activo");
-      }
+      invalidateBudgetCatalogMutationCaches();
       throw error;
     } finally {
       setIsLoading(false);

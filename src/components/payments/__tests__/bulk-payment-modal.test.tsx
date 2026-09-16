@@ -1,4 +1,10 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -8,8 +14,14 @@ import {
   REQUEST_CURRENCY,
   REQUEST_STATUS,
   REQUEST_TYPE,
+  type BulkMarkPaidInput,
   type PaymentRequest,
 } from "@/types/requests";
+import { createBulkMarkPaidRun } from "@/hooks/use-bulk-mark-paid-orchestrator";
+import {
+  saveBulkMarkPaidRun,
+  type BulkMarkPaidRunScope,
+} from "@/lib/bulk-mark-paid-run-storage";
 
 const mocks = vi.hoisted(() => ({
   bulkMarkPaid: vi.fn(),
@@ -92,7 +104,9 @@ function makeRequest(overrides: Partial<PaymentRequest> = {}): PaymentRequest {
   };
 }
 
-function makeIncompletePaidRequest(overrides: Partial<PaymentRequest> = {}): PaymentRequest {
+function makeIncompletePaidRequest(
+  overrides: Partial<PaymentRequest> = {},
+): PaymentRequest {
   return makeRequest({
     status: REQUEST_STATUS.PAID,
     paid_at: "2026-08-28T10:00:00-05:00",
@@ -127,17 +141,44 @@ describe("bulk payment modals", () => {
     mocks.completePaymentDetails.mockReset();
     mocks.uploadDocument.mockReset();
     mocks.push.mockReset();
+    sessionStorage.clear();
   });
 
-  it("muestra preview, exige fecha/cuenta y envía referencia por solicitud", async () => {
+  it("muestra principal separado y confirma pagos sin cuenta compartida", async () => {
     const user = userEvent.setup();
-    mocks.bulkMarkPaid.mockResolvedValueOnce({
-      batch_id: "batch-1", item_count: 2, success_count: 2, failed_count: 0,
-      total_amount: 150, results: [
-        { request_id: "req-1", status: "SUCCESS" },
-        { request_id: "req-2", status: "ALREADY_PROCESSED" },
-      ], rexan_metrics: {},
-    });
+    mocks.bulkMarkPaid.mockImplementationOnce(async (input) => ({
+      amounts_by_currency: { PEN: "150.00" },
+      totals_complete: true,
+      unresolved_count: 0,
+      items: [
+        {
+          request_id: "req-1",
+          command_id: input.items[0].command_id,
+          outcome: "SUCCESS",
+          payment_id: null,
+          code: "PAID",
+          message: "Pago registrado",
+          original: { amount: "100.00", currency: "PEN" },
+          actual_disbursement: null,
+          valuation: null,
+          missing_fields: ["proof"],
+          rexan_activation: null,
+        },
+        {
+          request_id: "req-2",
+          command_id: input.items[1].command_id,
+          outcome: "ALREADY_PROCESSED",
+          payment_id: null,
+          code: "PAID",
+          message: "Pago registrado",
+          original: { amount: "50.00", currency: "PEN" },
+          actual_disbursement: null,
+          valuation: null,
+          missing_fields: ["proof"],
+          rexan_activation: null,
+        },
+      ],
+    }));
     render(
       <BulkMarkPaidModal
         requests={[
@@ -154,64 +195,261 @@ describe("bulk payment modals", () => {
       />,
     );
 
-    expect(screen.getAllByText("SOL-1")).toHaveLength(2);
-    expect(screen.getAllByTestId("bulk-payment-reference-input")).toHaveLength(2);
-    await user.click(screen.getByRole("button", { name: "Registrar 2 pagos" }));
-    expect(await screen.findByText(/selecciona la cuenta de origen/i)).toBeInTheDocument();
+    expect(screen.getAllByText(/SOL-1/)).toHaveLength(2);
+    expect(screen.queryByLabelText("Cuenta de origen")).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Marcar 2 pagos" }),
+    ).toBeDisabled();
+    fireEvent.change(screen.getByLabelText(/Fecha efectiva/), {
+      target: { value: "2026-09-10T10:30" },
+    });
+    await user.click(screen.getByLabelText(/Confirmo que las transferencias/));
+    await user.click(screen.getByRole("button", { name: "Marcar 2 pagos" }));
 
-    await user.selectOptions(screen.getByTestId("bulk-payment-source-account-select"), "BCP_PEN");
-    await user.type(screen.getAllByTestId("bulk-payment-reference-input")[0], "OP-UNO");
-    await user.click(screen.getByRole("button", { name: "Registrar 2 pagos" }));
-
-    await waitFor(() => expect(mocks.bulkMarkPaid).toHaveBeenCalledWith(expect.objectContaining({
-      source_account_key: "BCP_PEN",
-      items: [
-        expect.objectContaining({ request_id: "req-1", operation_reference: "OP-UNO" }),
-        expect.objectContaining({ request_id: "req-2", operation_reference: undefined }),
-      ],
-    })));
-    expect(screen.getByText("Procesado correctamente")).toBeInTheDocument();
-    expect(screen.getByText("Ya estaba procesado")).toBeInTheDocument();
+    await waitFor(() =>
+      expect(mocks.bulkMarkPaid).toHaveBeenCalledWith(
+        expect.objectContaining({
+          items: [
+            expect.objectContaining({
+              request_id: "req-1",
+              expected_original_amount: "100.00",
+            }),
+            expect.objectContaining({
+              request_id: "req-2",
+              expected_original_amount: "50.00",
+            }),
+          ],
+        }),
+      ),
+    );
+    expect(screen.getByText(/Ya procesado/)).toBeInTheDocument();
+    expect(
+      mocks.bulkMarkPaid.mock.calls[0][0].source_account_key,
+    ).toBeUndefined();
   });
 
-  it("conserva resultados y reintenta únicamente fallidos con una nueva intención estable", async () => {
+  it("conserva resultados y no reintenta conflictos de asignación ciegamente", async () => {
+    const user = userEvent.setup();
+    mocks.bulkMarkPaid.mockImplementationOnce(async (input) => ({
+      amounts_by_currency: { PEN: "100.00" },
+      totals_complete: true,
+      unresolved_count: 0,
+      items: [
+        {
+          request_id: "req-1",
+          command_id: input.items[0].command_id,
+          outcome: "SUCCESS",
+          payment_id: null,
+          code: "PAID",
+          message: "Pago registrado",
+          original: { amount: "100.00", currency: "PEN" },
+          actual_disbursement: null,
+          valuation: null,
+          missing_fields: ["proof"],
+          rexan_activation: null,
+        },
+        {
+          request_id: "req-2",
+          command_id: input.items[1].command_id,
+          outcome: "FAILED",
+          payment_id: null,
+          code: "ASSIGNMENT_VERSION_STALE",
+          message: "La asignación cambió.",
+          original: null,
+          actual_disbursement: null,
+          valuation: null,
+          missing_fields: [],
+          rexan_activation: null,
+        },
+      ],
+    }));
+    const prepareItems = vi.fn(async (requests: PaymentRequest[]) =>
+      requests.map((request, index) => ({
+        request_id: request.id,
+        assignment_version: index + 1,
+        lease_token: index === 0 ? LEASE_1 : LEASE_2,
+      })),
+    );
+    render(
+      <BulkMarkPaidModal
+        requests={[
+          makeRequest({ id: "req-1" }),
+          makeRequest({ id: "req-2", request_code: "SOL-2" }),
+        ]}
+        open
+        onOpenChange={vi.fn()}
+        onSuccess={vi.fn()}
+        prepareItems={prepareItems}
+      />,
+    );
+    fireEvent.change(screen.getByLabelText(/Fecha efectiva/), {
+      target: { value: "2026-09-10T10:30" },
+    });
+    await user.click(screen.getByLabelText(/Confirmo que las transferencias/));
+    await user.click(screen.getByRole("button", { name: "Marcar 2 pagos" }));
+    expect(await screen.findByText(/La asignación cambió/)).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /Reintentar/ }),
+    ).not.toBeInTheDocument();
+    expect(mocks.bulkMarkPaid).toHaveBeenCalledOnce();
+  });
+
+  it("mantiene command_id al reintentar la misma intención tras un error de transporte", async () => {
     const user = userEvent.setup();
     mocks.bulkMarkPaid
-      .mockResolvedValueOnce({ batch_id: "batch-1", item_count: 2, success_count: 1, failed_count: 1, total_amount: 100, rexan_metrics: {}, results: [
-        { request_id: "req-1", status: "SUCCESS" },
-        { request_id: "req-2", status: "FAILED", error_code: "ASSIGNMENT_VERSION_STALE", error: "La asignación cambió." },
-      ] })
-      .mockResolvedValueOnce({ batch_id: "batch-2", item_count: 1, success_count: 1, failed_count: 0, total_amount: 50, rexan_metrics: {}, results: [
-        { request_id: "req-2", status: "SUCCESS" },
-      ] });
-    const prepareItems = vi.fn(async (requests: PaymentRequest[]) => requests.map((request, index) => ({
-      request_id: request.id, assignment_version: index + 1, lease_token: index === 0 ? LEASE_1 : LEASE_2,
-    })));
-    render(<BulkMarkPaidModal requests={[makeRequest({ id: "req-1" }), makeRequest({ id: "req-2", request_code: "SOL-2" })]} open onOpenChange={vi.fn()} onSuccess={vi.fn()} prepareItems={prepareItems} />);
-    await user.selectOptions(screen.getByTestId("bulk-payment-source-account-select"), "BCP_PEN");
-    await user.click(screen.getByRole("button", { name: "Registrar 2 pagos" }));
-    expect(await screen.findByText("La asignación cambió.")).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Reintentar 1 fallido" }));
+      .mockRejectedValueOnce(new Error("No se pudo conectar"))
+      .mockImplementationOnce(async (input) => ({
+        amounts_by_currency: { PEN: "100.00" },
+        totals_complete: true,
+        unresolved_count: 0,
+        items: [
+          {
+            request_id: "req-1",
+            command_id: input.items[0].command_id,
+            outcome: "SUCCESS",
+            payment_id: null,
+            code: "PAID",
+            message: "Pago registrado",
+            original: { amount: "100.00", currency: "PEN" },
+            actual_disbursement: null,
+            valuation: null,
+            missing_fields: ["proof"],
+            rexan_activation: null,
+          },
+        ],
+      }));
+    render(
+      <BulkMarkPaidModal
+        requests={[makeRequest()]}
+        open
+        onOpenChange={vi.fn()}
+        onSuccess={vi.fn()}
+        prepareItems={async () => [
+          { request_id: "req-1", assignment_version: 1, lease_token: LEASE_1 },
+        ]}
+      />,
+    );
+    fireEvent.change(screen.getByLabelText(/Fecha efectiva/), {
+      target: { value: "2026-09-10T10:30" },
+    });
+    await user.click(screen.getByLabelText(/Confirmo que las transferencias/));
+    await user.click(screen.getByRole("button", { name: "Marcar 1 pagos" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "No se pudo conectar",
+    );
+    const retry = screen.getByRole("button", { name: /Reintentar misma/ });
+    expect(retry).toHaveFocus();
+    await user.click(retry);
     await waitFor(() => expect(mocks.bulkMarkPaid).toHaveBeenCalledTimes(2));
-    expect(mocks.bulkMarkPaid.mock.calls[1][0].items).toHaveLength(1);
-    expect(mocks.bulkMarkPaid.mock.calls[1][0].items[0].request_id).toBe("req-2");
-    expect(mocks.bulkMarkPaid.mock.calls[1][0].client_batch_id).not.toBe(mocks.bulkMarkPaid.mock.calls[0][0].client_batch_id);
-    expect(screen.getAllByText("Procesado correctamente")).toHaveLength(2);
+    expect(mocks.bulkMarkPaid.mock.calls[1][0].items[0].command_id).toBe(
+      mocks.bulkMarkPaid.mock.calls[0][0].items[0].command_id,
+    );
   });
 
-  it("mantiene client_batch_id al reintentar la misma intención tras un error de transporte", async () => {
+  it("procesa veinte en cuatro grupos internos de hasta cinco y anuncia totales exactos", async () => {
+    const requests = Array.from({ length: 20 }, (_, index) =>
+      makeRequest({
+        id: `req-${index + 1}`,
+        request_code: `SOL-${index + 1}`,
+        requested_amount: 1,
+      }),
+    );
+    mocks.bulkMarkPaid.mockImplementation(async (input: BulkMarkPaidInput) => ({
+      items: input.items.map((item) => ({
+        request_id: item.request_id,
+        command_id: item.command_id,
+        outcome: "SUCCESS",
+        payment_id: null,
+        code: "PAID",
+        message: "Pago registrado",
+        original: { amount: "1.00", currency: "PEN" },
+        actual_disbursement: null,
+        valuation: null,
+        missing_fields: ["proof"],
+        rexan_activation: null,
+      })),
+      amounts_by_currency: { PEN: `${input.items.length}.00` },
+      unresolved_count: 0,
+      totals_complete: true,
+    }));
     const user = userEvent.setup();
-    mocks.bulkMarkPaid.mockRejectedValueOnce(new Error("No se pudo conectar")).mockResolvedValueOnce({
-      batch_id: "batch-1", item_count: 1, success_count: 1, failed_count: 0,
-      total_amount: 100, results: [{ request_id: "req-1", status: "SUCCESS" }], rexan_metrics: {},
+    render(
+      <BulkMarkPaidModal
+        requests={requests}
+        open
+        onOpenChange={vi.fn()}
+        onSuccess={vi.fn()}
+        prepareItems={async (rows) =>
+          rows.map((row, index) => ({
+            request_id: row.id,
+            assignment_version: index + 1,
+            lease_token: `lease-${index + 1}`,
+          }))
+        }
+      />,
+    );
+    fireEvent.change(screen.getByLabelText(/Fecha efectiva/), {
+      target: { value: "2026-09-10T10:30" },
     });
-    render(<BulkMarkPaidModal requests={[makeRequest()]} open onOpenChange={vi.fn()} onSuccess={vi.fn()} prepareItems={async () => [{ request_id: "req-1", assignment_version: 1, lease_token: LEASE_1 }]} />);
-    await user.selectOptions(screen.getByTestId("bulk-payment-source-account-select"), "BCP_PEN");
-    await user.click(screen.getByRole("button", { name: "Registrar 1 pago" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent("No se pudo conectar");
-    await user.click(screen.getByRole("button", { name: "Registrar 1 pago" }));
-    await waitFor(() => expect(mocks.bulkMarkPaid).toHaveBeenCalledTimes(2));
-    expect(mocks.bulkMarkPaid.mock.calls[1][0].client_batch_id).toBe(mocks.bulkMarkPaid.mock.calls[0][0].client_batch_id);
+    await user.click(screen.getByLabelText(/Confirmo que las transferencias/));
+    await user.click(screen.getByRole("button", { name: "Marcar 20 pagos" }));
+
+    await waitFor(() => expect(mocks.bulkMarkPaid).toHaveBeenCalledTimes(4));
+    expect(
+      mocks.bulkMarkPaid.mock.calls.every(([input]) => input.items.length <= 5),
+    ).toBe(true);
+    expect(screen.getByRole("status")).toHaveTextContent("Procesados 20 de 20");
+    expect(
+      screen.getByText("Principal confirmado: PEN 20.00"),
+    ).toBeInTheDocument();
+  });
+
+  it("bloquea una intención nueva y enfoca la reconciliación al recuperar", async () => {
+    const scope: BulkMarkPaidRunScope = {
+      userId: "user-1",
+      sessionId: "safe-session-hash",
+      pageIdentity: "payments-default",
+    };
+    const request = makeRequest();
+    saveBulkMarkPaidRun(
+      scope,
+      createBulkMarkPaidRun({
+        scope,
+        pageRequestIds: [request.id],
+        selected: [
+          {
+            requestId: request.id,
+            originalAmount: "100.00",
+            originalCurrency: REQUEST_CURRENCY.PEN,
+          },
+        ],
+        paidAt: "2026-09-10T15:30:00.000Z",
+      }),
+    );
+
+    render(
+      <BulkMarkPaidModal
+        requests={[request]}
+        open
+        scope={scope}
+        pageRequestIds={[request.id]}
+        onOpenChange={vi.fn()}
+        onSuccess={vi.fn()}
+        acquireLease={vi.fn()}
+        releaseLease={vi.fn()}
+        refetchQueue={vi.fn()}
+        reconcileRun={vi.fn()}
+      />,
+    );
+
+    const recovery = await screen.findByRole("button", {
+      name: "Reconciliar y reanudar",
+    });
+    expect(screen.getByRole("alert")).toHaveTextContent("operación recuperada");
+    expect(recovery).toHaveFocus();
+    expect(
+      screen.queryByRole("button", { name: /Marcar 1 pagos/ }),
+    ).not.toBeInTheDocument();
   });
 
   it("sube constancia y completa por PATCH sin exponer monto ni fecha", async () => {
@@ -254,8 +492,12 @@ describe("bulk payment modals", () => {
         }),
       ),
     );
-    expect(mocks.uploadDocument).toHaveBeenCalledBefore(mocks.completePaymentDetails);
-    expect(mocks.completePaymentDetails.mock.calls[0][1].bank_commission).toBeUndefined();
+    expect(mocks.uploadDocument).toHaveBeenCalledBefore(
+      mocks.completePaymentDetails,
+    );
+    expect(
+      mocks.completePaymentDetails.mock.calls[0][1].bank_commission,
+    ).toBeUndefined();
   });
 
   it("mantiene chrome fijo, un solo scroll interno, foco y error asociado en Completar pago", async () => {
@@ -293,12 +535,18 @@ describe("bulk payment modals", () => {
     const proofInput = screen.getByTestId("complete-payment-proof-input");
     await waitFor(() => expect(document.activeElement).toBe(initialInput));
     expect(dialog.querySelectorAll(".overflow-y-auto")).toHaveLength(1);
-    expect(screen.getByRole("heading", { name: "Completar pago" }).parentElement).toHaveClass("shrink-0");
-    expect(screen.getByRole("button", { name: "Completar pago" }).parentElement).toHaveClass("shrink-0");
+    expect(
+      screen.getByRole("heading", { name: "Completar pago" }).parentElement,
+    ).toHaveClass("shrink-0");
+    expect(
+      screen.getByRole("button", { name: "Completar pago" }).parentElement,
+    ).toHaveClass("shrink-0");
 
     fireEvent.change(proofInput, {
       target: {
-        files: [new File(["invalid"], "constancia.txt", { type: "text/plain" })],
+        files: [
+          new File(["invalid"], "constancia.txt", { type: "text/plain" }),
+        ],
       },
     });
     await waitFor(() =>
@@ -307,6 +555,8 @@ describe("bulk payment modals", () => {
         "complete-payment-proof-error",
       ),
     );
-    expect(document.getElementById("complete-payment-proof-error")).toHaveTextContent(/formato/i);
+    expect(
+      document.getElementById("complete-payment-proof-error"),
+    ).toHaveTextContent(/formato/i);
   });
 });

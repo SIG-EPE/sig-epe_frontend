@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
@@ -13,6 +13,8 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogBody, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
+import { formatExactMoney, isPaymentConflict, multiplyMoneyByRateHalfUp, normalizeFinalRate, PAYMENT_CONFLICT_MESSAGE } from "@/lib/payment-fx";
+import { PaymentValuation } from "./payment-valuation";
 import { useUploadNavigationGuard } from "@/hooks/use-upload-navigation-guard";
 import { useCompletePaymentDetails, useUploadRequestDocument } from "@/hooks/use-requests";
 import { getPaymentCompletenessPresentation } from "@/lib/payment-completeness";
@@ -20,6 +22,7 @@ import { getApiErrorMessage, getPaymentId, getRequestDisplayCode, validatePaymen
 import {
   PAYMENT_MISSING_FIELD,
   REQUEST_DOCUMENT_CATEGORY,
+  type CompletePaymentDetailsInput,
   type PaymentRequest,
 } from "@/types/requests";
 
@@ -42,6 +45,12 @@ export function CompletePaymentDetailsModal({ request, open, onOpenChange, onSuc
   const [proofFile, setProofFile] = useState<File | null>(null);
   const [proofError, setProofError] = useState<string | null>(null);
   const [submitError, setSubmitError] = useState<string | null>(null);
+  const [finalRate, setFinalRate] = useState("");
+  const [confirmed, setConfirmed] = useState(false);
+  const [conflict, setConflict] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const attempt = useRef<{ commandId: string; proofId?: string; payload?: CompletePaymentDetailsInput } | null>(null);
+  const inFlight = useRef(false);
   const form = useForm<CompletePaymentDetailsFormValues>({
     resolver: zodResolver(completePaymentDetailsSchema),
     defaultValues: { operation_reference: "" },
@@ -55,9 +64,14 @@ export function CompletePaymentDetailsModal({ request, open, onOpenChange, onSuc
   });
   const referenceMissing = presentation.missingFields.includes(PAYMENT_MISSING_FIELD.OPERATION_REFERENCE);
   const proofMissing = presentation.missingFields.includes(PAYMENT_MISSING_FIELD.PROOF);
-  const isLoading = completion.isLoading || upload.isLoading;
+  const fxMissing = request?.currency === "USD" && payment?.valuation?.state !== "FINAL";
+  const hasPending = presentation.hasPendingDetails || fxMissing;
+  const isLoading = submitting || completion.isLoading || upload.isLoading;
   const canonicalPaidAt = payment?.paid_at ?? request?.paid_at;
-  const canonicalAmount = payment ? Number(payment.amount_paid) : request?.amount_disbursed;
+  const canonicalAmount = payment?.original?.amount ?? payment?.amount_paid ?? request?.amount_disbursed;
+  const originalAmount = payment?.original?.amount ?? String(payment?.amount_paid ?? request?.amount_disbursed ?? "");
+  let preview: string | null = null;
+  try { if (fxMissing && finalRate) preview = multiplyMoneyByRateHalfUp(originalAmount, finalRate); } catch { /* Validation is shown on submit. */ }
 
   useUploadNavigationGuard({ active: isLoading, message: "Hay una constancia de pago cargándose. Si sales o actualizas la página, la carga en curso puede cancelarse." });
 
@@ -67,7 +81,11 @@ export function CompletePaymentDetailsModal({ request, open, onOpenChange, onSuc
     setProofFile(null);
     setProofError(null);
     setSubmitError(null);
-  }, [form, open, payment]);
+    setFinalRate("");
+    setConfirmed(false);
+    setConflict(false);
+    attempt.current = null;
+  }, [form, open, payment?.id]);
 
   function handleOpenChange(nextOpen: boolean): void {
     if (!nextOpen && isLoading) return;
@@ -80,6 +98,7 @@ export function CompletePaymentDetailsModal({ request, open, onOpenChange, onSuc
   }
 
   async function submit(values: CompletePaymentDetailsFormValues): Promise<void> {
+    if (inFlight.current || isLoading || conflict) return;
     const paymentId = request ? getPaymentId(request) : null;
     const nextProofError = proofFile ? validatePaymentProofFile(proofFile) : null;
     const missingProofError = proofMissing && !proofFile ? "Adjunta la constancia de pago." : nextProofError;
@@ -87,23 +106,39 @@ export function CompletePaymentDetailsModal({ request, open, onOpenChange, onSuc
     setProofError(missingProofError);
     if (missingReference) form.setError("operation_reference", { message: "Ingresa la referencia de operación." });
     setSubmitError(null);
-    if (!request || !paymentId || !presentation.hasPendingDetails || missingProofError || missingReference) return;
+    if (!request || !paymentId || !hasPending || missingProofError || missingReference) return;
+    let rate: string | undefined;
+    if (fxMissing) {
+      try { rate = normalizeFinalRate(finalRate); } catch (error) { setSubmitError(getApiErrorMessage(error)); return; }
+      if (!confirmed) { setSubmitError("Confirma manualmente el TC final."); return; }
+    }
 
+    setSubmitting(true);
+    inFlight.current = true;
+    attempt.current ??= { commandId: crypto.randomUUID() };
     try {
-      const uploadedProof = proofMissing && proofFile
+      const uploadedProof = proofMissing && proofFile && !attempt.current.proofId
         ? await upload.uploadDocument(request.id, {
           file: proofFile,
           document_category: REQUEST_DOCUMENT_CATEGORY.PAYMENT_PROOF,
         })
         : null;
-      await completion.completePaymentDetails(paymentId, {
+      if (uploadedProof) attempt.current.proofId = uploadedProof.id;
+      attempt.current.payload ??= {
+        command_id: attempt.current.commandId,
+        ...(fxMissing ? { final_fx_rate: rate, final_fx_confirmed: true } : {}),
         operation_reference: referenceMissing ? values.operation_reference?.trim() : undefined,
-        proof_document_id: uploadedProof?.id,
-      });
-      await onSuccess();
+        proof_document_id: attempt.current.proofId,
+      };
+      await completion.completePaymentDetails(paymentId, attempt.current.payload);
+      try { await onSuccess(); } catch { /* A refresh failure cannot undo a committed completion. */ }
       onOpenChange(false);
     } catch (error) {
-      setSubmitError(getApiErrorMessage(error));
+      setConflict(isPaymentConflict(error));
+      setSubmitError(isPaymentConflict(error) ? PAYMENT_CONFLICT_MESSAGE : getApiErrorMessage(error));
+    } finally {
+      setSubmitting(false);
+      inFlight.current = false;
     }
   }
 
@@ -132,9 +167,12 @@ export function CompletePaymentDetailsModal({ request, open, onOpenChange, onSuc
                 />
               ) : null}
               {request ? <PaymentCompletenessStatus request={request} /> : null}
-              {!presentation.hasPendingDetails ? (
+              {request?.currency && originalAmount ? <p>Principal de solicitud confirmado: {formatExactMoney(originalAmount, request.currency)}. No determina la moneda de desembolso bancario.</p> : null}
+              <PaymentValuation valuation={payment?.valuation ?? request?.valuation} />
+              {!hasPending ? (
                 <p className="rounded-md border bg-muted/30 p-3 text-sm">Este pago ya tiene referencia y constancia.</p>
               ) : null}
+              <fieldset disabled={isLoading || !!attempt.current?.payload} className="space-y-5">
               {referenceMissing ? (
                 <FormField control={form.control} name="operation_reference" render={({ field }) => (
                   <FormItem>
@@ -145,12 +183,20 @@ export function CompletePaymentDetailsModal({ request, open, onOpenChange, onSuc
                 )} />
               ) : null}
               {proofMissing ? <PaymentProofField id="complete-payment-proof-input" required error={proofError} errorId="complete-payment-proof-error" testId="complete-payment-proof-input" autoFocus={!referenceMissing} onChange={handleProofChange} /> : null}
+              </fieldset>
+              {fxMissing ? <div className="space-y-3">
+                <label htmlFor="final-fx-rate" className="text-sm font-medium">TC final (PEN por USD)</label>
+                <Input id="final-fx-rate" inputMode="decimal" value={finalRate} onChange={(event) => { setFinalRate(event.target.value); setConfirmed(false); }} disabled={isLoading || !!attempt.current} aria-describedby="fx-preview" />
+                <p id="fx-preview" className="text-sm">{preview ? `Valoración contable: ${formatExactMoney(preview, "PEN")}. El principal USD no cambia.` : "Ingresa el TC real manualmente; el referencial no se confirma automáticamente."}</p>
+                <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={confirmed} disabled={isLoading || !!attempt.current} onChange={(event) => setConfirmed(event.target.checked)} />Confirmo el TC final ingresado para este pago</label>
+                <p className="text-sm text-muted-foreground">Un saldo presupuestal negativo por esta valoración no bloquea completar el pago.</p>
+              </div> : null}
               {submitError ? <p role="alert" className="rounded-md border border-destructive/40 p-3 text-sm text-destructive">{submitError}</p> : null}
               {isLoading ? <Alert className="border-amber-500/50 bg-amber-50 text-amber-950 dark:bg-amber-950/20 dark:text-amber-100"><Info className="h-4 w-4" /><AlertDescription>No cierres esta ventana mientras se guarda la constancia</AlertDescription></Alert> : null}
             </DialogBody>
             <DialogFooter>
               <Button type="button" variant="outline" onClick={() => handleOpenChange(false)} disabled={isLoading}>Cerrar</Button>
-              {presentation.hasPendingDetails ? <Button type="submit" disabled={isLoading || !request}>{isLoading ? "Guardando..." : "Completar pago"}</Button> : null}
+              {hasPending ? <Button type="submit" disabled={isLoading || !request || conflict}>{isLoading ? "Guardando..." : "Completar pago"}</Button> : null}
             </DialogFooter>
           </form>
         </Form>

@@ -1,8 +1,15 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { RegisterPaymentModal } from "@/components/payments/register-payment-modal";
+import { BulkMarkPaidModal } from "@/components/payments/bulk-mark-paid-modal";
 import { PaymentQueuePage } from "@/components/payments/payment-queue-page";
 import { PaymentQueueTable } from "@/components/payments/payment-queue-table";
 import {
@@ -13,6 +20,8 @@ import {
   REQUEST_STATUS,
   REQUEST_TYPE,
   REXAN_OUTCOME,
+  type BulkMarkPaidInput,
+  type BulkMarkPaidResponse,
   type PaymentRequest,
   type RequestAllocation,
 } from "@/types/requests";
@@ -24,6 +33,7 @@ const mocks = vi.hoisted(() => ({
   attachPaymentProofLoading: vi.fn(() => false),
   usePaymentQueue: vi.fn(),
   retryRexanActivation: vi.fn(),
+  bulkMarkPaid: vi.fn(),
   roleCode: vi.fn(() => "GIOF_GESTOR"),
 }));
 
@@ -39,7 +49,7 @@ vi.mock("@/hooks/use-requests", () => ({
     error: null,
   }),
   useBulkMarkPaid: () => ({
-    bulkMarkPaid: vi.fn(),
+    bulkMarkPaid: mocks.bulkMarkPaid,
     isLoading: false,
     error: null,
   }),
@@ -83,7 +93,14 @@ vi.mock("@/hooks/use-giof-work", () => ({
     releaseAll: vi.fn().mockResolvedValue(undefined),
   }),
   fetchGiofAssignees: vi.fn().mockResolvedValue([]),
-  useGiofAssignees: vi.fn(() => ({ data: [], isLoading: false, isInitialLoading: false, isRefreshing: false, error: null, refetch: vi.fn() })),
+  useGiofAssignees: vi.fn(() => ({
+    data: [],
+    isLoading: false,
+    isInitialLoading: false,
+    isRefreshing: false,
+    error: null,
+    refetch: vi.fn(),
+  })),
   fetchGiofHistory: vi.fn().mockResolvedValue([]),
   bulkAssignGiofWork: vi.fn(),
   getGiofConflictMessage: (error: unknown) =>
@@ -204,6 +221,7 @@ describe("REXAN payment queue and modal", () => {
     mocks.attachPaymentProof.mockResolvedValue(makeRequest());
     mocks.registerPaymentLoading.mockReturnValue(false);
     mocks.attachPaymentProofLoading.mockReturnValue(false);
+    mocks.bulkMarkPaid.mockReset();
     mocks.usePaymentQueue.mockReturnValue({
       requests: [],
       total: 0,
@@ -479,18 +497,27 @@ describe("REXAN payment queue and modal", () => {
     expect(paymentHeader).toHaveClass("min-w-28");
     expect(assignmentHeader).toHaveClass("min-w-40");
     expect(paymentHeader?.firstElementChild).toHaveClass("flex-col", "gap-1.5");
-    expect(assignmentHeader?.firstElementChild).toHaveClass("flex-col", "gap-1.5");
+    expect(assignmentHeader?.firstElementChild).toHaveClass(
+      "flex-col",
+      "gap-1.5",
+    );
     expect(
       screen
         .getByRole("checkbox", { name: "Seleccionar SOL-1 para asignar" })
         .closest("td")?.firstElementChild,
     ).toHaveClass("min-w-36", "items-start", "gap-2");
-    expect(within(paymentHeader!).getByText("Máximo 5 de esta página")).toBeInTheDocument();
-    expect(within(assignmentHeader!).getByText("Seleccionar esta página")).toBeInTheDocument();
+    expect(
+      within(paymentHeader!).getByText("Máximo 50 de esta página"),
+    ).toBeInTheDocument();
+    expect(
+      within(assignmentHeader!).getByText("Seleccionar esta página"),
+    ).toBeInTheDocument();
     for (const control of screen.getAllByRole("checkbox")) {
       expect(control).toHaveAttribute("data-slot", "checkbox");
     }
-    expect(screen.queryByText("Seleccionar trabajos asignables visibles")).not.toBeInTheDocument();
+    expect(
+      screen.queryByText("Seleccionar trabajos asignables visibles"),
+    ).not.toBeInTheDocument();
 
     assignmentSelectAll.focus();
     await user.keyboard(" ");
@@ -772,12 +799,18 @@ describe("REXAN payment queue and modal", () => {
       />,
     );
 
-    expect(screen.queryByTestId("payment-amount-input")).not.toBeInTheDocument();
+    expect(
+      screen.queryByTestId("payment-amount-input"),
+    ).not.toBeInTheDocument();
     expect(screen.getByText("Importe completo")).toBeInTheDocument();
-    expect(screen.getByText(/No se admiten pagos parciales/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/No se admiten pagos parciales/),
+    ).toBeInTheDocument();
 
     await user.type(screen.getByTestId("payment-reference-input"), "OP-12345");
-    expect(screen.queryByTestId("payment-source-account-select")).not.toBeInTheDocument();
+    expect(
+      screen.queryByTestId("payment-source-account-select"),
+    ).not.toBeInTheDocument();
     await user.upload(
       screen.getByTestId("payment-proof-input"),
       new File(["proof"], "constancia.pdf", { type: "application/pdf" }),
@@ -982,8 +1015,12 @@ describe("REXAN payment queue and modal", () => {
     ).toBeInTheDocument();
     expect(screen.getByText(/POA-001/)).toBeInTheDocument();
     expect(screen.getAllByText(/Tesoro Público/)).toHaveLength(2);
-    expect(screen.getAllByText("Cubierta por la constancia global")).toHaveLength(2);
-    expect(screen.queryByText("Sin comprobante específico")).not.toBeInTheDocument();
+    expect(
+      screen.getAllByText("Cubierta por la constancia global"),
+    ).toHaveLength(2);
+    expect(
+      screen.queryByText("Sin comprobante específico"),
+    ).not.toBeInTheDocument();
     expect(
       screen.queryByRole("button", { name: "Agregar constancia de pago" }),
     ).not.toBeInTheDocument();
@@ -1066,7 +1103,9 @@ describe("REXAN payment queue and modal", () => {
       />,
     );
 
-    expect(screen.getAllByText("Cubierta por la constancia global")).toHaveLength(2);
+    expect(
+      screen.getAllByText("Cubierta por la constancia global"),
+    ).toHaveLength(2);
     expect(
       screen.queryByRole("button", { name: "Agregar constancia de pago" }),
     ).not.toBeInTheDocument();
@@ -1082,29 +1121,46 @@ describe("REXAN payment queue and modal", () => {
     );
     render(
       <RegisterPaymentModal
-        request={makeRequest({ allocations, allocation_count: allocations.length })}
+        request={makeRequest({
+          allocations,
+          allocation_count: allocations.length,
+        })}
         open
         onOpenChange={vi.fn()}
         onSuccess={vi.fn()}
       />,
     );
 
-    const dialog = await screen.findByRole("dialog", { name: "Registrar pago" });
+    const dialog = await screen.findByRole("dialog", {
+      name: "Registrar pago",
+    });
     const proofInput = screen.getByTestId("payment-proof-input");
     await waitFor(() => expect(document.activeElement).toBe(proofInput));
     expect(dialog.querySelectorAll(".overflow-y-auto")).toHaveLength(1);
-    expect(screen.getByRole("heading", { name: "Registrar pago" }).parentElement).toHaveClass("shrink-0");
-    expect(screen.getAllByRole("button", { name: "Registrar pago" }).at(-1)?.parentElement).toHaveClass("shrink-0");
+    expect(
+      screen.getByRole("heading", { name: "Registrar pago" }).parentElement,
+    ).toHaveClass("shrink-0");
+    expect(
+      screen.getAllByRole("button", { name: "Registrar pago" }).at(-1)
+        ?.parentElement,
+    ).toHaveClass("shrink-0");
 
     fireEvent.change(proofInput, {
       target: {
-        files: [new File(["invalid"], "constancia.txt", { type: "text/plain" })],
+        files: [
+          new File(["invalid"], "constancia.txt", { type: "text/plain" }),
+        ],
       },
     });
     await waitFor(() =>
-      expect(proofInput).toHaveAttribute("aria-describedby", "payment-proof-error"),
+      expect(proofInput).toHaveAttribute(
+        "aria-describedby",
+        "payment-proof-error",
+      ),
     );
-    expect(document.getElementById("payment-proof-error")).toHaveTextContent(/formato/i);
+    expect(document.getElementById("payment-proof-error")).toHaveTextContent(
+      /formato/i,
+    );
   });
 
   it("mantiene abierto el modal de registro mientras se carga la constancia", async () => {
@@ -1132,4 +1188,108 @@ describe("REXAN payment queue and modal", () => {
     expect(onOpenChange).not.toHaveBeenCalledWith(false);
   });
 
+  it("mantiene progreso durante una respuesta REXAN demorada y no inicia el siguiente grupo en paralelo", async () => {
+    let resolveFirst: ((value: BulkMarkPaidResponse) => void) | undefined;
+    const rows = Array.from({ length: 6 }, (_, index) =>
+      makeRequest({
+        id: `delayed-${index + 1}`,
+        request_code: `ADV-${index + 1}`,
+        request_type: REQUEST_TYPE.ADVANCE,
+      }),
+    );
+    function bulkResult(
+      item: { request_id: string; command_id: string },
+      failed = false,
+    ) {
+      return {
+        request_id: item.request_id,
+        command_id: item.command_id,
+        outcome: failed ? ("FAILED" as const) : ("SUCCESS" as const),
+        payment_id: failed ? null : `payment-${item.request_id}`,
+        code: failed ? "REXAN_ACTIVATION_FAILED" : "PAID",
+        message: failed
+          ? "REXAN respondió tarde y falló este pago"
+          : "Pago registrado",
+        original: failed
+          ? null
+          : { amount: "100.00", currency: "PEN" as const },
+        actual_disbursement: null,
+        valuation: null,
+        missing_fields: [],
+        rexan_activation: null,
+      };
+    }
+    mocks.bulkMarkPaid
+      .mockImplementationOnce(
+        (input: BulkMarkPaidInput) =>
+          new Promise<BulkMarkPaidResponse>((resolve) => {
+            resolveFirst = resolve;
+            void input;
+          }),
+      )
+      .mockImplementationOnce(async (input: BulkMarkPaidInput) => ({
+        items: input.items.map((item) => bulkResult(item)),
+        amounts_by_currency: { PEN: "100.00" },
+        unresolved_count: 0,
+        totals_complete: true,
+      }));
+    const user = userEvent.setup();
+    render(
+      <BulkMarkPaidModal
+        requests={rows}
+        open
+        onOpenChange={vi.fn()}
+        onSuccess={vi.fn()}
+        prepareItems={async (requests) =>
+          requests.map((request, index) => ({
+            request_id: request.id,
+            assignment_version: index + 1,
+            lease_token: `lease-${index + 1}`,
+          }))
+        }
+      />,
+    );
+    fireEvent.change(screen.getByLabelText(/Fecha efectiva/), {
+      target: { value: "2026-09-10T10:30" },
+    });
+    await user.click(screen.getByLabelText(/Confirmo que las transferencias/));
+    await user.click(screen.getByRole("button", { name: "Marcar 6 pagos" }));
+
+    await waitFor(() => expect(mocks.bulkMarkPaid).toHaveBeenCalledOnce());
+    expect(screen.getByRole("status")).toHaveTextContent("pendientes 6");
+    expect(
+      screen.getAllByText(/Esperando respuesta del servidor/),
+    ).toHaveLength(5);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(mocks.bulkMarkPaid).toHaveBeenCalledOnce();
+    expect(
+      screen.queryByText(/tiempo de espera|timeout/i),
+    ).not.toBeInTheDocument();
+
+    const firstInput = mocks.bulkMarkPaid.mock.calls[0][0];
+    resolveFirst?.({
+      items: firstInput.items.map(
+        (item: BulkMarkPaidInput["items"][number], index: number) =>
+          bulkResult(item, index === 0),
+      ),
+      amounts_by_currency: { PEN: "400.00" },
+      unresolved_count: 0,
+      totals_complete: true,
+    });
+
+    await waitFor(() => expect(mocks.bulkMarkPaid).toHaveBeenCalledTimes(2));
+    await waitFor(() =>
+      expect(screen.getByRole("status")).toHaveTextContent(
+        "Procesados 6 de 6. Exitosos 5; fallidos 1",
+      ),
+    );
+    expect(
+      screen.getByText(
+        "REXAN respondió tarde y falló este pago (REXAN_ACTIVATION_FAILED)",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("Principal confirmado: PEN 500.00"),
+    ).toBeInTheDocument();
+  });
 });
