@@ -7,11 +7,6 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import {
   ACCOUNT_TYPE_OPTIONS,
   BANK_OPTIONS,
-  BENEFICIARY_DOCUMENT_TYPE_OPTIONS,
-  getBeneficiaryDocumentInputMode,
-  getBeneficiaryDocumentHelp,
-  getBeneficiaryDocumentMaxLength,
-  getBeneficiaryDocumentPlaceholder,
   isBcpBank,
   isBankCciRequired,
   isKnownBankCode,
@@ -22,6 +17,7 @@ import {
 import type { AuthUser } from "@/types/auth";
 import { BENEFICIARY_DOCUMENT_TYPE, type BankCode, type BeneficiaryDocumentType } from "@/types/requests";
 import type { RequestFormValues } from "./request-form";
+import { RequestPartyIdentityFields } from "./request-party-identity-fields";
 
 interface BeneficiaryFieldsProps {
   control: Control<RequestFormValues>;
@@ -29,9 +25,10 @@ interface BeneficiaryFieldsProps {
   setValue: UseFormSetValue<RequestFormValues>;
   watch: UseFormWatch<RequestFormValues>;
   onDocumentFieldsChange?: () => void;
+  bankOnly?: boolean;
 }
 
-export function BeneficiaryFields({ control, user, setValue, watch, onDocumentFieldsChange }: BeneficiaryFieldsProps) {
+export function BeneficiaryFields({ control, user, setValue, watch, onDocumentFieldsChange, bankOnly = false }: BeneficiaryFieldsProps) {
   const { clearErrors, getFieldState, trigger } = useFormContext<RequestFormValues>();
   const documentType = watch("beneficiary_document_type") as BeneficiaryDocumentType | "" | undefined;
   const documentNumber = watch("beneficiary_document_number") ?? "";
@@ -90,50 +87,13 @@ export function BeneficiaryFields({ control, user, setValue, watch, onDocumentFi
   return (
     <section className="space-y-4">
       <div className="flex flex-col gap-3 border-b pb-2 sm:flex-row sm:items-center sm:justify-between">
-        <h2 className="text-base font-semibold">3. Beneficiario y cuenta bancaria</h2>
-        <Button type="button" variant="outline" size="sm" onClick={useRequesterAsBeneficiary} disabled={!user} data-testid="request-use-my-data-button">
+        <h2 className="text-base font-semibold">{bankOnly ? "Cuenta bancaria del proveedor" : "3. Beneficiario y cuenta bancaria"}</h2>
+        {!bankOnly && <Button type="button" variant="outline" size="sm" onClick={useRequesterAsBeneficiary} disabled={!user} data-testid="request-use-my-data-button">
           Usar mis datos como beneficiario
-        </Button>
+        </Button>}
       </div>
       <div className="grid gap-4 md:grid-cols-2">
-        <FormField control={control} name="beneficiary_document_type" render={({ field }) => (
-          <FormItem>
-            <FormLabel>Tipo de documento *</FormLabel>
-            <Select value={field.value ?? ""} onValueChange={changeDocumentType}>
-              <FormControl><SelectTrigger data-testid="request-beneficiary-document-type-select"><SelectValue placeholder="Selecciona tipo" /></SelectTrigger></FormControl>
-              <SelectContent>
-                {BENEFICIARY_DOCUMENT_TYPE_OPTIONS.map((option) => (
-                  <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <FormMessage />
-          </FormItem>
-        )} />
-        <FormField control={control} name="beneficiary_document_number" render={({ field }) => (
-          <FormItem>
-            <FormLabel>Número de documento *</FormLabel>
-            <FormControl>
-              <Input
-                {...field}
-                inputMode={getBeneficiaryDocumentInputMode(documentType)}
-                maxLength={getBeneficiaryDocumentMaxLength(documentType)}
-                placeholder={getBeneficiaryDocumentPlaceholder(documentType)}
-                data-testid="request-beneficiary-document-number-input"
-                onChange={(event) => changeDocumentNumber(event.target.value)}
-              />
-            </FormControl>
-            <FormDescription>{getBeneficiaryDocumentHelp(documentType)}</FormDescription>
-            <FormMessage />
-          </FormItem>
-        )} />
-        <FormField control={control} name="beneficiary_name" render={({ field }) => (
-          <FormItem>
-            <FormLabel>Nombre del beneficiario *</FormLabel>
-            <FormControl><Input {...field} placeholder="Nombre completo o razón social" /></FormControl>
-            <FormMessage />
-          </FormItem>
-        )} />
+        {!bankOnly && <RequestPartyIdentityFields control={control} onDocumentTypeChange={changeDocumentType} onDocumentNumberChange={changeDocumentNumber} />}
         <FormField control={control} name="bank_code" render={({ field }) => (
           <FormItem>
             <FormLabel>Banco *</FormLabel>

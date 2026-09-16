@@ -1,9 +1,9 @@
 import { Input } from "@/components/ui/input";
+import { formatExactMoney } from "@/lib/payment-fx";
 import { formatBusinessDate } from "@/lib/business-timezone";
 import {
   PAYMENT_PROOF_ACCEPT,
   PAYMENT_PROOF_ACCEPTED_FORMATS_LABEL,
-  formatRequestCurrency,
   formatRequestDateTime,
 } from "@/lib/requests";
 import {
@@ -23,8 +23,8 @@ const SOURCE_ACCOUNT_LABEL: Readonly<Record<DriveSourceAccount, string>> = {
 
 interface PaymentImmutableContextProps {
   paidAt?: string | null;
-  amountPaid?: number | null;
-  currency: RequestCurrency;
+  amountPaid?: number | string | null;
+  currency: RequestCurrency | null;
   sourceAccountKey?: DriveSourceAccount | null;
   paymentCycleDate?: string | null;
   driveRouteModel?: string | null;
@@ -34,6 +34,7 @@ interface PaymentImmutableContextProps {
 
 export function getDriveRouteModelLabel(model?: string | null): string {
   if (model === DRIVE_PAYMENT_ROUTE_MODEL.DAILY_V1) return "Destino diario";
+  if (model === DRIVE_PAYMENT_ROUTE_MODEL.STABLE_V1) return "Carpeta estable de solicitud";
   return "Ruta V2 no disponible";
 }
 
@@ -67,7 +68,7 @@ export function PaymentImmutableContext({
   driveRoutingDate,
   driveRouteClassifiedAt,
 }: PaymentImmutableContextProps) {
-  const hasAmount = typeof amountPaid === "number" && Number.isFinite(amountPaid);
+  const hasAmount = amountPaid != null && /^\d+(?:\.\d{1,2})?$/.test(String(amountPaid));
   return (
     <section aria-label="Resumen del pago" className="rounded-md border bg-muted/20 p-3">
       <div className="mb-3 flex items-center justify-between gap-3">
@@ -83,8 +84,8 @@ export function PaymentImmutableContext({
         ) : null}
         {hasAmount ? (
           <div>
-            <dt className="text-xs text-muted-foreground">Monto</dt>
-            <dd className="text-sm font-medium">{formatRequestCurrency(amountPaid, currency)}</dd>
+            <dt className="text-xs text-muted-foreground">Principal de solicitud confirmado</dt>
+            <dd className="text-sm font-medium">{formatExactMoney(amountPaid!, currency ?? "Moneda sin resolver")}</dd>
           </div>
         ) : null}
         <div>

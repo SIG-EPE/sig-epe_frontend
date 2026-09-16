@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { toast } from "sonner";
 
@@ -13,7 +13,7 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { useApproveRequest, useObserveRequest, useRejectRequest, useRequest, useRequestDocuments, useRequestRenditionReport, useRetryRexanActivation, useSettlementContext, useStartAdvanceSettlement } from "@/hooks/use-requests";
-import { useGiofWorkLease } from "@/hooks/use-giof-work";
+import { useAutoAcquireGiofWorkLease } from "@/hooks/use-giof-work";
 import { useDriveProjectionPolling } from "@/hooks/use-drive-projection-polling";
 import { GiofWorkStatus } from "@/components/giof-work/giof-work-controls";
 import { canEditAssignedGiofWork, canOperateAssignedGiofWork, canRetryGiofWork, isGiofManagerRole, isGiofOperationalRole } from "@/lib/role-capabilities";
@@ -58,6 +58,7 @@ import { RequestDocumentsCard } from "./request-documents-card";
 import { StructuredRenditionReportCard } from "./structured-rendition-report-card";
 import { StatusBadge } from "./status-badge";
 import { DriveProjectionState } from "./drive-projection-state";
+import { RequestStatusHistory } from "./request-status-history";
 import { REQUEST_STATUS_SURFACE } from "@/lib/request-status-vocabulary";
 
 function getStructuredReportTotal(report: RequestRenditionReport | null): number | null {
@@ -160,7 +161,7 @@ function getStructuredReturnChecklistRows(report: RequestRenditionReport | null,
     .filter((row): row is StructuredReturnChecklistRow => row !== null);
 }
 
-function PaymentProofRows({ items, currency }: { items: PaymentProofDisplayItem[]; currency: string }) {
+function PaymentProofRows({ items, currency }: { items: PaymentProofDisplayItem[]; currency: string | null }) {
   if (items.length === 0) {
     return <p className="text-sm text-muted-foreground">No hay constancias de pago registradas.</p>;
   }
@@ -191,7 +192,7 @@ function PaymentProofRows({ items, currency }: { items: PaymentProofDisplayItem[
   );
 }
 
-function PaymentProofCard({ items, currency }: { items: PaymentProofDisplayItem[]; currency: string }) {
+function PaymentProofCard({ items, currency }: { items: PaymentProofDisplayItem[]; currency: string | null }) {
   return (
     <Card data-testid="request-payment-proof-card">
       <CardHeader><CardTitle>Pago y constancia</CardTitle></CardHeader>
@@ -222,8 +223,19 @@ export function RequestDetailPage() {
   const roleCode = user?.role?.code;
   const isGiofOperational = isGiofOperationalRole(roleCode);
   const isGiofManager = isGiofManagerRole(roleCode);
-  const leaseSession = useGiofWorkLease();
   const shouldProcess = searchParams.get("mode") === "process";
+  const leaseSession = useAutoAcquireGiofWorkLease({
+    requestId: request?.id,
+    work: request?.giof_work,
+    aliases: [request?.payment?.id ?? request?.payment_id ?? ""],
+    enabled: Boolean(
+      request
+      && shouldProcess
+      && canOperateAssignedGiofWork(request.giof_work, user?.id),
+    ),
+    onAcquired: () => refetch({ background: true }),
+    onError: (leaseError) => toast.error(leaseError.message),
+  });
   const [observeOpen, setObserveOpen] = useState(false);
   const [approveOpen, setApproveOpen] = useState(false);
   const [rejectOpen, setRejectOpen] = useState(false);
@@ -238,14 +250,6 @@ export function RequestDetailPage() {
   const { rejectRequest, isLoading: rejecting } = useRejectRequest();
   const { startAdvanceSettlement, isLoading: startingSettlement } = useStartAdvanceSettlement();
   const { retryRexanActivation, isLoading: retryingRexan } = useRetryRexanActivation();
-
-  useEffect(() => {
-    const giofWork = request?.giof_work;
-    if (!request || !giofWork || !shouldProcess || !canOperateAssignedGiofWork(giofWork, user?.id) || leaseSession.lease || leaseSession.isLoading) return;
-    void leaseSession.acquire(request.id, giofWork, [request.payment?.id ?? request.payment_id ?? ""])
-      .then(() => refetch({ background: true }))
-      .catch((reason: unknown) => toast.error(reason instanceof Error ? reason.message : "Actualiza la solicitud antes de continuar."));
-  }, [request?.id, request?.giof_work?.assignmentVersion, request?.giof_work?.canAcquire, request?.giof_work?.assigneeId, user?.id, shouldProcess, leaseSession.lease?.token, leaseSession.isLoading]);
 
   const RETURN_PROOF_OBSERVATION_FIELD = "Constancia de devolución";
 
@@ -778,19 +782,7 @@ export function RequestDetailPage() {
       <Card>
         <CardHeader><CardTitle>Historial de estados</CardTitle></CardHeader>
         <CardContent className="space-y-3">
-          {(request.statusHistory ?? []).length === 0 ? (
-            <p className="text-sm text-muted-foreground">Sin historial disponible.</p>
-          ) : (
-            request.statusHistory?.map((item) => (
-              <div key={item.id} className="rounded-md border p-3">
-                <div className="flex items-center justify-between gap-3">
-                  <StatusBadge status={item.to_status} context={request} />
-                  <span className="text-xs text-muted-foreground">{formatRequestDate(item.created_at)}</span>
-                </div>
-                <p className="mt-2 text-sm text-muted-foreground">{item.comment ?? item.reason ?? "Cambio de estado"}</p>
-              </div>
-            ))
-          )}
+          <RequestStatusHistory items={request.statusHistory ?? []} />
         </CardContent>
       </Card>
 

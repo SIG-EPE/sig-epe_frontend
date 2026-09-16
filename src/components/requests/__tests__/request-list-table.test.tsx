@@ -1,10 +1,15 @@
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { RequestListTable } from "@/components/requests/request-list-table";
 import { ROLE_CODE } from "@/lib/constants";
 import { REQUEST_STATUS_SURFACE } from "@/lib/request-status-vocabulary";
+import {
+  GIOF_WORK_ASSIGNMENT_STATE,
+  GIOF_WORK_LEASE_STATE,
+  GIOF_WORK_POOL,
+} from "@/types/giof-work";
 import { REQUEST_CURRENCY, REQUEST_DOCUMENT_CATEGORY, REQUEST_DOCUMENT_STORAGE_PROVIDER, REQUEST_DOCUMENT_UPLOAD_STATUS, REQUEST_STATUS, REQUEST_TYPE, type PaymentRequest, type RequestAllocation, type RequestDocument } from "@/types/requests";
 
 function makeRequest(overrides: Partial<PaymentRequest> = {}): PaymentRequest {
@@ -192,6 +197,87 @@ describe("RequestListTable", () => {
     await user.click(screen.getByRole("button", { name: "Más acciones de solicitud" }));
 
     expect(await screen.findByRole("menuitem", { name: "Gestionar" })).toBeInTheDocument();
+  });
+
+  it("mantiene Procesar junto a Liberar para REQUEST SUBMITTED asignada al Gestor", async () => {
+    const user = userEvent.setup();
+    render(
+      <RequestListTable
+        requests={[
+          makeRequest({
+            status: REQUEST_STATUS.SUBMITTED,
+            giof_work: {
+              pool: GIOF_WORK_POOL.REQUEST,
+              assignmentState: GIOF_WORK_ASSIGNMENT_STATE.SELF,
+              assignmentVersion: "7",
+              leaseState: GIOF_WORK_LEASE_STATE.NONE,
+              canAssign: true,
+              canAcquire: true,
+              canEdit: false,
+              readOnly: true,
+            },
+          }),
+        ]}
+        isLoading={false}
+        roleCode={ROLE_CODE.GIOF_GESTOR}
+        currentUserId="giof-1"
+        showAssignment
+        refetchPoolQueue={vi.fn().mockResolvedValue(undefined)}
+      />,
+    );
+
+    expect(
+      screen.getByRole("button", { name: "Liberar trabajo" }),
+    ).toBeInTheDocument();
+    await user.click(
+      screen.getByRole("button", { name: "Más acciones de solicitud" }),
+    );
+    expect(
+      await screen.findByRole("menuitem", { name: "Procesar" }),
+    ).toHaveAttribute("href", "/requests/req-1?mode=process");
+  });
+
+  it("no muestra estado ni acciones de ownership/proceso para REQUEST DRAFT", async () => {
+    const user = userEvent.setup();
+    render(
+      <RequestListTable
+        requests={[
+          makeRequest({
+            status: REQUEST_STATUS.DRAFT,
+            giof_work: {
+              pool: GIOF_WORK_POOL.REQUEST,
+              assignmentState: GIOF_WORK_ASSIGNMENT_STATE.OTHER,
+              assignmentVersion: "4",
+              leaseState: GIOF_WORK_LEASE_STATE.NONE,
+              canAssign: false,
+              canAcquire: false,
+              canEdit: false,
+              readOnly: true,
+            },
+          }),
+        ]}
+        isLoading={false}
+        roleCode={ROLE_CODE.GIOF_MANAGER}
+        currentUserId="manager-1"
+        showAssignment
+        isGiofManager
+        refetchPoolQueue={vi.fn().mockResolvedValue(undefined)}
+      />,
+    );
+
+    expect(screen.queryByTestId("giof-work-status")).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Tomar para mí" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Forzar reasignación" }),
+    ).not.toBeInTheDocument();
+    await user.click(
+      screen.getByRole("button", { name: "Más acciones de solicitud" }),
+    );
+    expect(
+      screen.queryByRole("menuitem", { name: "Procesar" }),
+    ).not.toBeInTheDocument();
   });
 
   it("marca REXAN con sustentos completos en la bandeja de revisión", () => {

@@ -3,6 +3,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { api, ApiRequestError } from "@/lib/api-client";
+export {
+  useBudgetPreview,
+  useRequestFxReference,
+} from "@/hooks/use-request-currency";
 import {
   useCachedResource,
   type CachedResourceCacheMode,
@@ -15,15 +19,19 @@ import {
 import { QUERY_TAGS, invalidateRequestDomain } from "@/lib/query-tags";
 import { useAuthStore } from "@/stores/auth-store";
 import { REQUEST_DOCUMENT_CATEGORY } from "@/types/requests";
-import { GIOF_WORK_POOL, type GiofWorkLease, type GiofWorkScope } from "@/types/giof-work";
+import {
+  GIOF_WORK_POOL,
+  type GiofWorkLease,
+  type GiofWorkScope,
+} from "@/types/giof-work";
 import { isGiofLeaseCurrent } from "@/lib/giof-work-lease-session";
 import {
   normalizeRequestReviewFilters,
+  rejectApprovedPayment as submitApprovedPaymentRejection,
   serializeRequestReviewUrl,
 } from "@/lib/requests";
 import type {
   AttachPaymentProofInput,
-  BudgetPreviewInput,
   BulkMarkPaidInput,
   BulkMarkPaidResponse,
   CompletePaymentDetailsInput,
@@ -40,8 +48,6 @@ import type {
   RenditionsInboxFilters,
   RenditionsInboxResponse,
   RenditionInboxCounts,
-  RequestBudgetPreview,
-  RequestAllocationsBudgetPreview,
   RequestPlanningLineLookupResponse,
   RequestPlanningLineFacetsResponse,
   RequestPlanningLineHydrateResponse,
@@ -63,6 +69,8 @@ import type {
   UpsertRenditionLineReturnInput,
   UploadRequestDocumentInput,
   RejectRequestDto,
+  RejectApprovedPaymentDto,
+  RejectApprovedPaymentResponse,
   RequestsListFilters,
   RequestsListResponse,
   SettlementContextResponse,
@@ -103,7 +111,9 @@ export const RENDITION_ACTION_TIMEOUT_MS = 30_000;
 
 export class RenditionActionTimeoutError extends Error {
   constructor() {
-    super("La operación superó el tiempo de espera y su resultado es incierto.");
+    super(
+      "La operación superó el tiempo de espera y su resultado es incierto.",
+    );
     this.name = "RenditionActionTimeoutError";
   }
 }
@@ -147,7 +157,9 @@ export function getRequestsPath(filters?: RequestsListFilters): string {
   return `/requests${query ? `?${query}` : ""}`;
 }
 
-export function getRequestReviewPath(filters: RequestReviewFilters = {}): string {
+export function getRequestReviewPath(
+  filters: RequestReviewFilters = {},
+): string {
   const query = serializeRequestReviewUrl(filters).toString();
   return `/requests/review${query ? `?${query}` : ""}`;
 }
@@ -177,6 +189,8 @@ export function getPaymentQueuePath(filters?: PaymentQueueFilters): string {
   appendIfPresent(params, "approved_to", filters?.approved_to);
   appendIfPresent(params, "paid_from", filters?.paid_from);
   appendIfPresent(params, "paid_to", filters?.paid_to);
+  appendIfPresent(params, "rejected_from", filters?.rejected_from);
+  appendIfPresent(params, "rejected_to", filters?.rejected_to);
   appendIfPresent(params, "source_account_key", filters?.source_account_key);
   appendIfPresent(params, "completeness", filters?.completeness);
   appendIfPresent(params, "drive_status", filters?.drive_status);
@@ -369,7 +383,10 @@ export function useRequestReview(
   };
 }
 
-export function usePaymentQueue(filters?: PaymentQueueFilters, options?: UseRequestsOptions) {
+export function usePaymentQueue(
+  filters?: PaymentQueueFilters,
+  options?: UseRequestsOptions,
+) {
   const pageFilter = filters?.page;
   const limitFilter = filters?.limit;
   const statusFilter = filters?.status;
@@ -383,7 +400,8 @@ export function usePaymentQueue(filters?: PaymentQueueFilters, options?: UseRequ
     ttlMs: QUERY_CACHE_TTL_MS.MUTABLE_LIST,
     tags: [QUERY_TAGS.PAYMENTS, QUERY_TAGS.REQUESTS, QUERY_TAGS.DASHBOARD],
     errorMessage: "Error al cargar cola de pagos",
-    queryFn: (signal) => api.get<PaymentQueueResponse>(getPaymentQueuePath(filters), { signal }),
+    queryFn: (signal) =>
+      api.get<PaymentQueueResponse>(getPaymentQueuePath(filters), { signal }),
   });
   const data = resource.data;
 
@@ -391,7 +409,7 @@ export function usePaymentQueue(filters?: PaymentQueueFilters, options?: UseRequ
     requests: data?.requests ?? [],
     total: data?.total ?? 0,
     page: data?.page ?? pageFilter ?? 1,
-    limit: data?.limit ?? limitFilter ?? 20,
+    limit: data?.limit ?? limitFilter ?? 50,
     summary: data?.summary ?? null,
     isLoading: resource.isLoading,
     isInitialLoading: resource.isInitialLoading,
@@ -401,7 +419,10 @@ export function usePaymentQueue(filters?: PaymentQueueFilters, options?: UseRequ
   };
 }
 
-export function useRenditionsInbox(filters?: RenditionsInboxFilters, options?: UseRequestsOptions) {
+export function useRenditionsInbox(
+  filters?: RenditionsInboxFilters,
+  options?: UseRequestsOptions,
+) {
   const pageFilter = filters?.page;
   const limitFilter = filters?.limit;
   const statusFilter = filters?.status;
@@ -420,7 +441,10 @@ export function useRenditionsInbox(filters?: RenditionsInboxFilters, options?: U
     errorMessage: "Error al cargar rendiciones",
     queryFn: (signal) =>
       fetchGiofCompatibleQueue(
-        () => api.get<RenditionsInboxResponse>(getRenditionsPath(filters), { signal }),
+        () =>
+          api.get<RenditionsInboxResponse>(getRenditionsPath(filters), {
+            signal,
+          }),
         () =>
           api.get<RenditionsInboxResponse>(
             getRenditionsPath(
@@ -504,12 +528,17 @@ export function useRegisterPayment() {
         formData.append("notes", input.notes.trim());
       }
       formData.append("proof", input.proof);
-      if (!operationalContext || !isGiofLeaseCurrent(operationalContext, {
-        requestId,
-        pool: GIOF_WORK_POOL.PAYMENT,
-        assignmentVersion: operationalContext.assignmentVersion,
-      })) {
-        throw new Error("La sesión de pago no está vigente. Cierra esta ventana y vuelve a Procesar desde la cola.");
+      if (
+        !operationalContext ||
+        !isGiofLeaseCurrent(operationalContext, {
+          requestId,
+          pool: GIOF_WORK_POOL.PAYMENT,
+          assignmentVersion: operationalContext.assignmentVersion,
+        })
+      ) {
+        throw new Error(
+          "La sesión de pago no está vigente. Cierra esta ventana y vuelve a Procesar desde la cola.",
+        );
       }
       const result = await api.postForm<RegisterPaymentResponse>(
         `/requests/${requestId}/register-payment`,
@@ -534,6 +563,46 @@ export function useRegisterPayment() {
   };
 
   return { registerPayment, isLoading, error };
+}
+
+export function useRejectApprovedPayment() {
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<Error | null>(null);
+  const inFlightRef = useRef<Promise<RejectApprovedPaymentResponse> | null>(
+    null,
+  );
+
+  const rejectApprovedPayment = (
+    requestId: string,
+    input: RejectApprovedPaymentDto,
+    lease: GiofWorkLease,
+  ): Promise<RejectApprovedPaymentResponse> => {
+    if (inFlightRef.current) return inFlightRef.current;
+
+    setIsLoading(true);
+    setError(null);
+    const request = submitApprovedPaymentRejection(requestId, input, lease)
+      .then((result) => {
+        invalidateRequestDomain(requestId);
+        return result;
+      })
+      .catch((caught: unknown) => {
+        const nextError =
+          caught instanceof Error
+            ? caught
+            : new Error("No se pudo rechazar el pago");
+        setError(nextError);
+        throw caught;
+      })
+      .finally(() => {
+        inFlightRef.current = null;
+        setIsLoading(false);
+      });
+    inFlightRef.current = request;
+    return request;
+  };
+
+  return { rejectApprovedPayment, isLoading, error };
 }
 
 export function useRetryRexanActivation() {
@@ -606,7 +675,7 @@ export function useBulkMarkPaid() {
     setError(null);
     try {
       const result = await api.post<BulkMarkPaidResponse>(
-        "/requests/bulk/register-payments",
+        "/requests/bulk/mark-paid",
         input,
       );
       invalidateRequestCaches();
@@ -636,6 +705,11 @@ export function useCompletePaymentDetails() {
     setError(null);
     try {
       const formData = new FormData();
+      if (input.command_id) formData.append("command_id", input.command_id);
+      if (input.final_fx_rate !== undefined)
+        formData.append("final_fx_rate", input.final_fx_rate);
+      if (input.final_fx_confirmed !== undefined)
+        formData.append("final_fx_confirmed", String(input.final_fx_confirmed));
       if (input.proof) formData.append("proof", input.proof);
       if (input.operation_reference?.trim())
         formData.append(
@@ -1044,9 +1118,10 @@ export function useRequestRenditionReport(requestId?: string, enabled = true) {
         );
         hasLoadedReportRef.current = true;
       } catch (e) {
-        const nextError = e instanceof Error
-          ? e
-          : new Error("Error al cargar informe de rendición");
+        const nextError =
+          e instanceof Error
+            ? e
+            : new Error("Error al cargar informe de rendición");
         setError(nextError);
         if (throwOnError) throw nextError;
       } finally {
@@ -1145,7 +1220,11 @@ export function useRequestRenditionReportActions() {
       try {
         return await action(signal);
       } catch (error) {
-        if (signal.aborted || (error instanceof DOMException && (error.name === "AbortError" || error.name === "TimeoutError"))) {
+        if (
+          signal.aborted ||
+          (error instanceof DOMException &&
+            (error.name === "AbortError" || error.name === "TimeoutError"))
+        ) {
           throw new RenditionActionTimeoutError();
         }
         throw error;
@@ -1330,6 +1409,11 @@ export function useUploadRequestDocument() {
       const result = await api.postForm<RequestDocument>(
         `/requests/${requestId}/documents`,
         formData,
+        {
+          headers: {
+            "Idempotency-Key": input.idempotency_key ?? crypto.randomUUID(),
+          },
+        },
       );
       invalidateRequestCaches();
       return result;
@@ -1532,6 +1616,8 @@ function mapLightPlanningLine(
 ): RequestPlanningLineLookupItem {
   return {
     id: item.id,
+    currency:
+      item.currency === "PEN" || item.currency === "USD" ? item.currency : null,
     line_code: item.line_code,
     resource_description: item.resource_description,
     planning_type: item.planning_type,
@@ -1779,98 +1865,6 @@ export function useHydrateRequestPlanningLines(ids: string[]) {
     error,
     retry: () => setRetryNonce((current) => current + 1),
   };
-}
-
-export function useBudgetPreview(input: BudgetPreviewInput) {
-  const [data, setData] = useState<
-    RequestBudgetPreview | RequestAllocationsBudgetPreview | null
-  >(null);
-  const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState<Error | null>(null);
-
-  const authIsLoading = useAuthStore((state) => state.isLoading);
-  const accessToken = useAuthStore((state) => state.accessToken);
-
-  const allocationKey =
-    input.allocations
-      ?.map(
-        (allocation) =>
-          `${allocation.budget_planning_line_id}:${allocation.amount}`,
-      )
-      .join("|") ?? "";
-  const validAllocations =
-    input.allocations?.filter(
-      (allocation) =>
-        allocation.budget_planning_line_id && allocation.amount > 0,
-    ) ?? [];
-  const hasBatchInput = validAllocations.length > 0;
-  const hasLegacyInput = Boolean(
-    input.planningLineId && input.amount && input.amount > 0,
-  );
-  const hasValidInput = hasBatchInput || hasLegacyInput;
-
-  const refetch = useCallback(async () => {
-    if (!hasValidInput || authIsLoading || !accessToken) {
-      return;
-    }
-    setIsLoading(true);
-    setError(null);
-    try {
-      if (hasBatchInput) {
-        const result = await api.post<RequestAllocationsBudgetPreview>(
-          "/requests/lookups/planning-lines/budget-preview",
-          {
-            allocations: validAllocations,
-            month: input.month,
-            request_id: input.requestId,
-          },
-        );
-        setData(result);
-        return;
-      }
-
-      const params = new URLSearchParams({ amount: String(input.amount) });
-      if (input.month) params.set("month", String(input.month));
-      if (input.requestId) params.set("request_id", input.requestId);
-      const result = await api.get<RequestBudgetPreview>(
-        `/requests/lookups/planning-lines/${input.planningLineId}/budget-preview?${params.toString()}`,
-      );
-      setData(result);
-    } catch (e) {
-      setError(
-        e instanceof Error
-          ? e
-          : new Error("Error al obtener vista previa presupuestal"),
-      );
-    } finally {
-      setIsLoading(false);
-    }
-  }, [
-    accessToken,
-    authIsLoading,
-    allocationKey,
-    hasBatchInput,
-    hasValidInput,
-    input.amount,
-    input.month,
-    input.planningLineId,
-    input.requestId,
-  ]);
-
-  useEffect(() => {
-    if (!hasValidInput) {
-      setData(null);
-      setError(null);
-      setIsLoading(false);
-      return;
-    }
-    const timeoutId = window.setTimeout(() => {
-      void refetch();
-    }, 500);
-    return () => window.clearTimeout(timeoutId);
-  }, [hasValidInput, refetch]);
-
-  return { data, isLoading, error, refetch, canPreview: hasValidInput };
 }
 
 export function useCreateRequest() {

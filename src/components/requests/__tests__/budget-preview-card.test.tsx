@@ -44,7 +44,7 @@ describe("BudgetPreviewCard", () => {
     render(<BudgetPreviewCard preview={null} isLoading={false} error={null} canPreview={false} onRetry={vi.fn()} />);
 
     expect(screen.getByText("Resumen presupuestal")).toBeInTheDocument();
-    expect(screen.getByText("Agrega una o más líneas POA con monto para calcular la validación presupuestal.")).toBeInTheDocument();
+    expect(screen.getByText("Agrega una o más líneas POA con monto y moneda PEN resuelta para calcular la validación presupuestal.")).toBeInTheDocument();
     expect(screen.queryByText(/Selecciona línea POA y monto válido/i)).not.toBeInTheDocument();
   });
 

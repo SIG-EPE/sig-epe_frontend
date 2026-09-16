@@ -13,6 +13,7 @@ export const QUERY_TAGS = {
   DASHBOARD_OPTIONS: "dashboard-options",
   POA: "poa",
   GIOF_WORK: "giof-work",
+  ANNUAL_UIT: "annual-uit",
 } as const;
 
 export type QueryTag = (typeof QUERY_TAGS)[keyof typeof QUERY_TAGS];

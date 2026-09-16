@@ -91,6 +91,11 @@ describe("useRequestDocumentUploadQueue", () => {
     expect(refreshDocuments).toHaveBeenCalledTimes(1);
     expect(refreshReceipts).toHaveBeenCalledTimes(1);
     expect(toastSuccess).toHaveBeenCalledWith("2 documentos adjuntados correctamente.");
+    expect(uploadDocument.mock.calls[0][1].idempotency_key).toBeTruthy();
+    expect(uploadDocument.mock.calls[1][1].idempotency_key).toBeTruthy();
+    expect(uploadDocument.mock.calls[0][1].idempotency_key).not.toBe(
+      uploadDocument.mock.calls[1][1].idempotency_key,
+    );
   });
 
   it("pausa después del activo y reanuda desde el siguiente en cola", async () => {
@@ -186,6 +191,9 @@ describe("useRequestDocumentUploadQueue", () => {
     await act(async () => vi.runAllTimersAsync());
     expect(uploadDocument).toHaveBeenCalledTimes(3);
     expect(uploadDocument.mock.calls[2][1].file.name).toBe("uno.pdf");
+    expect(uploadDocument.mock.calls[2][1].idempotency_key).toBe(
+      uploadDocument.mock.calls[0][1].idempotency_key,
+    );
     vi.useRealTimers();
   });
 

@@ -11,6 +11,7 @@ import {
   getSettlementContextPath,
   getStartAdvanceSettlementPath,
   invalidateRequestCaches,
+  useRejectApprovedPayment,
   useBulkMarkPaid,
   useCompletePaymentDetails,
   useHydrateRequestPlanningLines,
@@ -24,12 +25,14 @@ import {
   useRequestReceiptReviews,
   useRequestRenditionReport,
   useRequestRenditionReportActions,
+  useUploadRequestDocument,
   RENDITION_ACTION_TIMEOUT_MS,
   useRenditionsInbox,
   useSettlementContext,
   useStartAdvanceSettlement,
 } from "@/hooks/use-requests";
-import { api } from "@/lib/api-client";
+import { api, ApiRequestError } from "@/lib/api-client";
+import * as queryTags from "@/lib/query-tags";
 import { clearQueryCache } from "@/lib/query-cache";
 import { parseRenditionsQueueUrl } from "@/lib/queue-filters/renditions";
 import { GIOF_WORK_POOL, type GiofWorkLease } from "@/types/giof-work";
@@ -38,6 +41,7 @@ import {
   RENDITION_SORT_DIRECTION,
   RENDITION_SORT_FIELD,
   RENDITION_STATUS,
+  REQUEST_DOCUMENT_CATEGORY,
   REQUEST_CURRENCY,
   REQUEST_STATUS,
   REQUEST_TYPE,
@@ -54,6 +58,14 @@ import {
 } from "@/types/requests";
 
 vi.mock("@/lib/api-client", () => ({
+  ApiRequestError: class ApiRequestError extends Error {
+    constructor(
+      public status: number,
+      public body: Record<string, unknown>,
+    ) {
+      super(typeof body.message === "string" ? body.message : "API error");
+    }
+  },
   api: {
     get: vi.fn(),
     post: vi.fn(),
@@ -443,13 +455,19 @@ describe("request hook URL helpers", () => {
   });
 
   it("does not retry the review route after a server filter rejection", async () => {
-    vi.mocked(api.get).mockRejectedValueOnce(new Error("invalid review filter"));
-    const { result } = renderHook(() => useRequestReview({
-      work_scope: "assignee",
-      assignee_id: "123e4567-e89b-12d3-a456-426614174001",
-    }));
+    vi.mocked(api.get).mockRejectedValueOnce(
+      new Error("invalid review filter"),
+    );
+    const { result } = renderHook(() =>
+      useRequestReview({
+        work_scope: "assignee",
+        assignee_id: "123e4567-e89b-12d3-a456-426614174001",
+      }),
+    );
 
-    await waitFor(() => expect(result.current.error?.message).toBe("invalid review filter"));
+    await waitFor(() =>
+      expect(result.current.error?.message).toBe("invalid review filter"),
+    );
     expect(api.get).toHaveBeenCalledTimes(1);
     expect(api.get).toHaveBeenCalledWith(
       "/requests/review?work_scope=assignee&assignee_id=123e4567-e89b-12d3-a456-426614174001",
@@ -494,10 +512,11 @@ describe("request hook URL helpers", () => {
   });
 
   it("serializa el contrato allowlisted completo de Payment sin perder precisión", () => {
-    expect(getPaymentQueuePath({
-      page: 3,
-      limit: 20,
-      status: REQUEST_STATUS.PAID,
+    expect(
+      getPaymentQueuePath({
+        page: 3,
+        limit: 20,
+        status: REQUEST_STATUS.PAID,
       search: "REXAN 2026",
       work_scope: "assignee",
       assignee_id: "123e4567-e89b-12d3-a456-426614174001",
@@ -510,11 +529,27 @@ describe("request hook URL helpers", () => {
       drive_status: "SUCCEEDED",
       rexan_status: "CREATED",
       currency: REQUEST_CURRENCY.PEN,
-      amount_min: "10.00",
-      amount_max: "2500.50",
-      sort: "payable_amount_desc",
-    })).toBe(
+        amount_min: "10.00",
+        amount_max: "2500.50",
+        sort: "payable_amount_desc",
+      }),
+    ).toBe(
       "/requests/payment-queue?page=3&limit=20&status=PAID&search=REXAN+2026&work_scope=assignee&assignee_id=123e4567-e89b-12d3-a456-426614174001&approved_from=2026-08-01&approved_to=2026-08-10&paid_from=2026-08-11&paid_to=2026-08-28&source_account_key=BCP_PEN&completeness=complete&drive_status=SUCCEEDED&rexan_status=CREATED&currency=PEN&amount_min=10.00&amount_max=2500.50&sort=payable_amount_desc",
+    );
+  });
+
+  it("serializa el historial de pagos rechazados y sus fechas inclusivas", () => {
+    expect(
+      getPaymentQueuePath({
+        status: REQUEST_STATUS.REJECTED,
+        rejected_from: "2026-09-01",
+        rejected_to: "2026-09-15",
+        page: 2,
+        limit: 50,
+        sort: "queue_date_asc",
+      }),
+    ).toBe(
+      "/requests/payment-queue?page=2&limit=50&status=REJECTED&rejected_from=2026-09-01&rejected_to=2026-09-15&sort=queue_date_asc",
     );
   });
 
@@ -532,13 +567,17 @@ describe("request hook URL helpers", () => {
     };
     vi.mocked(api.get).mockResolvedValueOnce(response);
 
-    const { result } = renderHook(() => usePaymentQueue({
-      status: REQUEST_STATUS.PAID,
-      completeness: "complete",
-    }));
+    const { result } = renderHook(() =>
+      usePaymentQueue({
+        status: REQUEST_STATUS.PAID,
+        completeness: "complete",
+      }),
+    );
 
     await waitFor(() => expect(result.current.summary?.count).toBe(2));
-    expect(result.current.summary?.payable_amount_by_currency.PEN).toBe("270.00");
+    expect(result.current.summary?.payable_amount_by_currency.PEN).toBe(
+      "270.00",
+    );
     expect(api.get).toHaveBeenCalledTimes(1);
   });
 
@@ -546,18 +585,31 @@ describe("request hook URL helpers", () => {
     const approved = deferred<PaymentQueueResponse>();
     const paid = deferred<PaymentQueueResponse>();
     const approvedSignals: AbortSignal[] = [];
-    vi.mocked(api.get).mockImplementation((path: string, options?: RequestInit) => {
-      const signal = options?.signal as AbortSignal;
-      const pending = path.includes("status=PAID") ? paid : approved;
-      if (!path.includes("status=PAID")) approvedSignals.push(signal);
-      return new Promise((resolve, reject) => {
-        signal.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), { once: true });
-        pending.promise.then(resolve, reject);
-      });
-    });
+    vi.mocked(api.get).mockImplementation(
+      (path: string, options?: RequestInit) => {
+        const signal = options?.signal as AbortSignal;
+        const pending = path.includes("status=PAID") ? paid : approved;
+        if (!path.includes("status=PAID")) approvedSignals.push(signal);
+        return new Promise((resolve, reject) => {
+          signal.addEventListener(
+            "abort",
+            () => reject(new DOMException("Aborted", "AbortError")),
+            { once: true },
+          );
+          pending.promise.then(resolve, reject);
+        });
+      },
+    );
     const { result, rerender } = renderHook(
-      ({ status }: { status: NonNullable<PaymentQueueFilters["status"]> }) => usePaymentQueue({ status }),
-      { initialProps: { status: REQUEST_STATUS.APPROVED as NonNullable<PaymentQueueFilters["status"]> } },
+      ({ status }: { status: NonNullable<PaymentQueueFilters["status"]> }) =>
+        usePaymentQueue({ status }),
+      {
+        initialProps: {
+          status: REQUEST_STATUS.APPROVED as NonNullable<
+            PaymentQueueFilters["status"]
+          >,
+        },
+      },
     );
 
     rerender({ status: REQUEST_STATUS.PAID });
@@ -565,7 +617,17 @@ describe("request hook URL helpers", () => {
     rerender({ status: REQUEST_STATUS.APPROVED });
 
     await act(async () => {
-      approved.resolve({ requests: [], total: 7, page: 1, limit: 20, summary: { count: 7, payable_amount_by_currency: {}, status_counts: {} } });
+      approved.resolve({
+        requests: [],
+        total: 7,
+        page: 1,
+        limit: 20,
+        summary: {
+          count: 7,
+          payable_amount_by_currency: {},
+          status_counts: {},
+        },
+      });
       await approved.promise;
     });
 
@@ -574,7 +636,17 @@ describe("request hook URL helpers", () => {
     expect(approvedSignals[0]?.aborted).toBe(false);
 
     await act(async () => {
-      paid.resolve({ requests: [], total: 3, page: 1, limit: 20, summary: { count: 3, payable_amount_by_currency: {}, status_counts: {} } });
+      paid.resolve({
+        requests: [],
+        total: 3,
+        page: 1,
+        limit: 20,
+        summary: {
+          count: 3,
+          payable_amount_by_currency: {},
+          status_counts: {},
+        },
+      });
       await paid.promise;
     });
   });
@@ -633,9 +705,12 @@ describe("request hook URL helpers", () => {
         sort: RENDITION_SORT_FIELD.DUE_DATE,
       }),
     ).toBe("/requests/renditions/counts?search=SOL-2026&sort=due_date");
-    expect(getRenditionsPath({ due_from: "2026-05-01", bucket: RENDITION_BUCKET.DUE_SOON })).toBe(
-      "/requests/renditions?due_from=2026-05-01&bucket=due_soon",
-    );
+    expect(
+      getRenditionsPath({
+        due_from: "2026-05-01",
+        bucket: RENDITION_BUCKET.DUE_SOON,
+      }),
+    ).toBe("/requests/renditions?due_from=2026-05-01&bucket=due_soon");
   });
 
   it("expone summary exacto y facets explícitas desde la misma respuesta S5", async () => {
@@ -648,33 +723,51 @@ describe("request hook URL helpers", () => {
       summary: { count: 1 },
       facets: {
         status: { excluded_filters: ["status"], counts: { PENDING: 4 } },
-        deadline_bucket: { excluded_filters: ["deadline_bucket"], counts: { due_soon: 3 } },
+        deadline_bucket: {
+          excluded_filters: ["deadline_bucket"],
+          counts: { due_soon: 3 },
+        },
       },
     });
 
-    const { result } = renderHook(() => useRenditionsInbox({ status: RENDITION_STATUS.PENDING }));
+    const { result } = renderHook(() =>
+      useRenditionsInbox({ status: RENDITION_STATUS.PENDING }),
+    );
 
     await waitFor(() => expect(result.current.summary?.count).toBe(1));
     expect(result.current.facets?.status.excluded_filters).toEqual(["status"]);
     expect(result.current.facets?.deadline_bucket.counts.due_soon).toBe(3);
-    expect(api.get).toHaveBeenCalledWith("/requests/renditions?status=PENDING", expect.any(Object));
+    expect(api.get).toHaveBeenCalledWith(
+      "/requests/renditions?status=PENDING",
+      expect.any(Object),
+    );
   });
 
   it("mantiene la consulta Renditions al reemplazar aliases por la URL canónica equivalente", async () => {
     const pending = deferred<RenditionsInboxResponse>();
     let requestSignal: AbortSignal | undefined;
-    vi.mocked(api.get).mockImplementation((_path: string, options?: RequestInit) => {
-      requestSignal = options?.signal as AbortSignal;
-      return new Promise((resolve, reject) => {
-        requestSignal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), { once: true });
-        pending.promise.then(resolve, reject);
-      });
-    });
+    vi.mocked(api.get).mockImplementation(
+      (_path: string, options?: RequestInit) => {
+        requestSignal = options?.signal as AbortSignal;
+        return new Promise((resolve, reject) => {
+          requestSignal?.addEventListener(
+            "abort",
+            () => reject(new DOMException("Aborted", "AbortError")),
+            { once: true },
+          );
+          pending.promise.then(resolve, reject);
+        });
+      },
+    );
     const aliasFilters = parseRenditionsQueueUrl(
-      new URLSearchParams("status=ALL&bucket=due_soon&due_from=2026-06-01&page=2"),
+      new URLSearchParams(
+        "status=ALL&bucket=due_soon&due_from=2026-06-01&page=2",
+      ),
     ).filters;
     const canonicalFilters = parseRenditionsQueueUrl(
-      new URLSearchParams("page=2&deadline_from=2026-06-01&deadline_bucket=due_soon"),
+      new URLSearchParams(
+        "page=2&deadline_from=2026-06-01&deadline_bucket=due_soon",
+      ),
     ).filters;
     const { result, rerender } = renderHook(
       ({ filters }) => useRenditionsInbox(filters),
@@ -697,17 +790,24 @@ describe("request hook URL helpers", () => {
     const pending = deferred<RenditionsInboxResponse>();
     const overdue = deferred<RenditionsInboxResponse>();
     const pendingSignals: AbortSignal[] = [];
-    vi.mocked(api.get).mockImplementation((path: string, options?: RequestInit) => {
-      const signal = options?.signal as AbortSignal;
-      const request = path.includes("status=OVERDUE") ? overdue : pending;
-      if (!path.includes("status=OVERDUE")) pendingSignals.push(signal);
-      return new Promise((resolve, reject) => {
-        signal.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), { once: true });
-        request.promise.then(resolve, reject);
-      });
-    });
+    vi.mocked(api.get).mockImplementation(
+      (path: string, options?: RequestInit) => {
+        const signal = options?.signal as AbortSignal;
+        const request = path.includes("status=OVERDUE") ? overdue : pending;
+        if (!path.includes("status=OVERDUE")) pendingSignals.push(signal);
+        return new Promise((resolve, reject) => {
+          signal.addEventListener(
+            "abort",
+            () => reject(new DOMException("Aborted", "AbortError")),
+            { once: true },
+          );
+          request.promise.then(resolve, reject);
+        });
+      },
+    );
     const { result, rerender } = renderHook(
-      ({ status }: { status: RenditionStatus }) => useRenditionsInbox({ status }),
+      ({ status }: { status: RenditionStatus }) =>
+        useRenditionsInbox({ status }),
       { initialProps: { status: RENDITION_STATUS.PENDING as RenditionStatus } },
     );
 
@@ -767,7 +867,7 @@ describe("request hook URL helpers", () => {
     );
   });
 
-  it("registra el lote DAILY con el endpoint nuevo y nunca usa el legacy", async () => {
+  it("registra comandos independientes sin recuperar el lote DAILY retirado", async () => {
     vi.mocked(api.post).mockResolvedValueOnce({
       batch_id: "batch-1",
       item_count: 2,
@@ -781,27 +881,58 @@ describe("request hook URL helpers", () => {
     await act(async () => {
       await expect(
         result.current.bulkMarkPaid({
-          client_batch_id: "00000000-0000-4000-8000-000000000001",
-          paid_at: "2026-05-30T10:00:00.000Z",
-          source_account_key: "BCP_PEN",
           items: [
-            { request_id: "req-1", assignment_version: 1, lease_token: "00000000-0000-4000-8000-000000000011", operation_reference: "OP-1" },
-            { request_id: "req-2", assignment_version: 2, lease_token: "00000000-0000-4000-8000-000000000012" },
+            {
+              request_id: "req-1",
+              command_id: "command-1",
+              expected_original_amount: "100.00",
+              expected_original_currency: "USD",
+              paid_at: "2026-05-30T10:00:00.000Z",
+              assignment_version: 1,
+              lease_token: "00000000-0000-4000-8000-000000000011",
+              operation_reference: "OP-1",
+            },
+            {
+              request_id: "req-2",
+              command_id: "command-2",
+              expected_original_amount: "50.00",
+              expected_original_currency: "PEN",
+              paid_at: "2026-05-30T10:00:00.000Z",
+              assignment_version: 2,
+              lease_token: "00000000-0000-4000-8000-000000000012",
+            },
           ],
         }),
       ).resolves.toMatchObject({ batch_id: "batch-1" });
     });
 
-    expect(api.post).toHaveBeenCalledWith("/requests/bulk/register-payments", {
-      client_batch_id: "00000000-0000-4000-8000-000000000001",
-      paid_at: "2026-05-30T10:00:00.000Z",
-      source_account_key: "BCP_PEN",
+    expect(api.post).toHaveBeenCalledWith("/requests/bulk/mark-paid", {
       items: [
-        { request_id: "req-1", assignment_version: 1, lease_token: "00000000-0000-4000-8000-000000000011", operation_reference: "OP-1" },
-        { request_id: "req-2", assignment_version: 2, lease_token: "00000000-0000-4000-8000-000000000012" },
+        {
+          request_id: "req-1",
+          command_id: "command-1",
+          expected_original_amount: "100.00",
+          expected_original_currency: "USD",
+          paid_at: "2026-05-30T10:00:00.000Z",
+          assignment_version: 1,
+          lease_token: "00000000-0000-4000-8000-000000000011",
+          operation_reference: "OP-1",
+        },
+        {
+          request_id: "req-2",
+          command_id: "command-2",
+          expected_original_amount: "50.00",
+          expected_original_currency: "PEN",
+          paid_at: "2026-05-30T10:00:00.000Z",
+          assignment_version: 2,
+          lease_token: "00000000-0000-4000-8000-000000000012",
+        },
       ],
     });
-    expect(api.post).not.toHaveBeenCalledWith("/requests/bulk/mark-paid", expect.anything());
+    expect(api.post).not.toHaveBeenCalledWith(
+      "/requests/bulk/register-payments",
+      expect.anything(),
+    );
   });
 
   it("envía los datos financieros y la constancia sin source_account_key en el pago individual", async () => {
@@ -838,6 +969,79 @@ describe("request hook URL helpers", () => {
     expect(formData.get("amount_paid")).toBe("100");
     expect(formData.get("proof")).toBeInstanceOf(File);
     expect(formData.has("source_account_key")).toBe(false);
+  });
+
+  it("rechaza un pago con DTO recortado, lease PAYMENT e invalidación autoritativa", async () => {
+    const invalidate = vi.spyOn(queryTags, "invalidateRequestDomain");
+    const response = makeRequest({
+      id: "req-1",
+      status: REQUEST_STATUS.REJECTED,
+      rejected_at: "2026-09-15T18:00:00.000Z",
+    });
+    vi.mocked(api.post).mockResolvedValueOnce(response);
+    const { result } = renderHook(() => useRejectApprovedPayment());
+    const lease = makePaymentLease("req-1");
+
+    await act(async () => {
+      await expect(
+        result.current.rejectApprovedPayment(
+          "req-1",
+          { reason: "  Cuenta bloqueada  " },
+          lease,
+        ),
+      ).resolves.toBe(response);
+    });
+
+    expect(api.post).toHaveBeenCalledWith(
+      "/requests/req-1/reject-payment",
+      { reason: "Cuenta bloqueada" },
+      {
+        headers: {
+          "x-giof-assignment-version": lease.assignmentVersion,
+          "x-giof-lease-token": lease.token,
+        },
+      },
+    );
+    expect(invalidate).toHaveBeenCalledWith("req-1");
+  });
+
+  it("conserva ApiRequestError y evita envíos duplicados mientras el rechazo está pendiente", async () => {
+    const invalidate = vi.spyOn(queryTags, "invalidateRequestDomain");
+    const pending = deferred<PaymentRequest>();
+    vi.mocked(api.post).mockReturnValueOnce(pending.promise);
+    const { result } = renderHook(() => useRejectApprovedPayment());
+    const lease = makePaymentLease("req-1");
+
+    let first!: Promise<PaymentRequest>;
+    let second!: Promise<PaymentRequest>;
+    act(() => {
+      first = result.current.rejectApprovedPayment(
+        "req-1",
+        { reason: "No procesable" },
+        lease,
+      );
+      second = result.current.rejectApprovedPayment(
+        "req-1",
+        { reason: "No procesable" },
+        lease,
+      );
+    });
+    expect(first).toBe(second);
+    expect(api.post).toHaveBeenCalledTimes(1);
+
+    const conflict = new ApiRequestError(409, {
+      statusCode: 409,
+      code: "PAYMENT_REJECTION_STATE_CONFLICT",
+      message: "Conflict",
+      error: "Conflict",
+      timestamp: "2026-09-15T00:00:00.000Z",
+      path: "/requests/req-1/reject-payment",
+    });
+    const rejection = expect(first).rejects.toBe(conflict);
+    await act(async () => pending.reject(conflict));
+    await rejection;
+    expect(result.current.error).toBe(conflict);
+    expect(invalidate).not.toHaveBeenCalled();
   });
 
   it("ejecuta PATCH de detalles con referencia/constancia pre-subida sin monto ni fecha", async () => {
@@ -927,6 +1131,28 @@ describe("request hook URL helpers", () => {
     expect(receiptsResult.current.isLoading).toBe(false);
   });
 
+  it("envía una Idempotency-Key estable provista por el cargador de documentos", async () => {
+    vi.mocked(api.postForm).mockResolvedValueOnce({ id: "doc-1" });
+    const { result } = renderHook(() => useUploadRequestDocument());
+    const file = new File(["document"], "factura.pdf", {
+      type: "application/pdf",
+    });
+
+    await act(async () => {
+      await result.current.uploadDocument("request-1", {
+        file,
+        document_category: REQUEST_DOCUMENT_CATEGORY.INVOICE,
+        idempotency_key: "stable-upload-key-1",
+      });
+    });
+
+    expect(api.postForm).toHaveBeenCalledWith(
+      "/requests/request-1/documents",
+      expect.any(FormData),
+      { headers: { "Idempotency-Key": "stable-upload-key-1" } },
+    );
+  });
+
   it("actualiza filas del informe localmente y conserva el informe montado", async () => {
     vi.mocked(api.get).mockResolvedValueOnce({
       rows: [],
@@ -967,12 +1193,16 @@ describe("request hook URL helpers", () => {
     await waitFor(() => expect(result.current.report).toBe(initialReport));
 
     await act(async () => {
-      await expect(result.current.refetchOrThrow({ background: true })).rejects.toBe(synchronizationError);
+      await expect(
+        result.current.refetchOrThrow({ background: true }),
+      ).rejects.toBe(synchronizationError);
     });
     expect(result.current.error).toBe(synchronizationError);
 
     await act(async () => {
-      await expect(result.current.refetch({ background: true })).resolves.toBeUndefined();
+      await expect(
+        result.current.refetch({ background: true }),
+      ).resolves.toBeUndefined();
     });
     expect(result.current.error).toBe(synchronizationError);
   });
@@ -1004,13 +1234,22 @@ describe("request hook URL helpers", () => {
     vi.useFakeTimers();
     vi.spyOn(AbortSignal, "timeout").mockImplementationOnce((delay) => {
       const controller = new AbortController();
-      setTimeout(() => controller.abort(new DOMException("Tiempo agotado", "TimeoutError")), delay);
+      setTimeout(
+        () =>
+          controller.abort(new DOMException("Tiempo agotado", "TimeoutError")),
+        delay,
+      );
       return controller.signal;
     });
-    vi.mocked(api.post).mockImplementationOnce((_path, _body, options) =>
-      new Promise((_resolve, reject) => {
-        options?.signal?.addEventListener("abort", () => reject(options.signal?.reason), { once: true });
-      }),
+    vi.mocked(api.post).mockImplementationOnce(
+      (_path, _body, options) =>
+        new Promise((_resolve, reject) => {
+          options?.signal?.addEventListener(
+            "abort",
+            () => reject(options.signal?.reason),
+            { once: true },
+          );
+        }),
     );
     const { result } = renderHook(() => useRequestRenditionReportActions());
 
@@ -1019,7 +1258,9 @@ describe("request hook URL helpers", () => {
       request = result.current.generateReport("settlement-timeout");
     });
     expect(result.current.isLoading).toBe(true);
-    const rejection = expect(request).rejects.toMatchObject({ name: "RenditionActionTimeoutError" });
+    const rejection = expect(request).rejects.toMatchObject({
+      name: "RenditionActionTimeoutError",
+    });
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(RENDITION_ACTION_TIMEOUT_MS);
@@ -1036,7 +1277,9 @@ describe("request hook URL helpers", () => {
     const { result } = renderHook(() => useRequestRenditionReportActions());
 
     await act(async () => {
-      await expect(result.current.addReceiptRow("request-1", "receipt-1", "allocation-1")).rejects.toBe(normalError);
+      await expect(
+        result.current.addReceiptRow("request-1", "receipt-1", "allocation-1"),
+      ).rejects.toBe(normalError);
     });
 
     expect(api.post).toHaveBeenCalledWith(
@@ -1052,22 +1295,37 @@ describe("request hook URL helpers", () => {
     vi.useFakeTimers();
     vi.spyOn(AbortSignal, "timeout").mockImplementationOnce((delay) => {
       const controller = new AbortController();
-      setTimeout(() => controller.abort(new DOMException("Tiempo agotado", "TimeoutError")), delay);
+      setTimeout(
+        () =>
+          controller.abort(new DOMException("Tiempo agotado", "TimeoutError")),
+        delay,
+      );
       return controller.signal;
     });
-    vi.mocked(api.post).mockImplementationOnce((_path, _body, options) =>
-      new Promise((_resolve, reject) => {
-        options?.signal?.addEventListener("abort", () => reject(options.signal?.reason), { once: true });
-      }),
+    vi.mocked(api.post).mockImplementationOnce(
+      (_path, _body, options) =>
+        new Promise((_resolve, reject) => {
+          options?.signal?.addEventListener(
+            "abort",
+            () => reject(options.signal?.reason),
+            { once: true },
+          );
+        }),
     );
     const { result } = renderHook(() => useRequestRenditionReportActions());
 
     let request!: Promise<unknown>;
     act(() => {
-      request = result.current.addReceiptRow("settlement-timeout", "receipt-1", "allocation-1");
+      request = result.current.addReceiptRow(
+        "settlement-timeout",
+        "receipt-1",
+        "allocation-1",
+      );
     });
     expect(result.current.isLoading).toBe(true);
-    const rejection = expect(request).rejects.toMatchObject({ name: "RenditionActionTimeoutError" });
+    const rejection = expect(request).rejects.toMatchObject({
+      name: "RenditionActionTimeoutError",
+    });
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(RENDITION_ACTION_TIMEOUT_MS);

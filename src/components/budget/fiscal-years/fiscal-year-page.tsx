@@ -26,6 +26,7 @@ export function FiscalYearPage() {
   const user = useAuthStore((s) => s.user);
   const router = useRouter();
   const [showCreate, setShowCreate] = useState(false);
+  const [createBusy, setCreateBusy] = useState(false);
   const [refetchKey, setRefetchKey] = useState(0);
 
   // Proteger por rol SOLICITANTE_EPE
@@ -61,14 +62,16 @@ export function FiscalYearPage() {
       <FiscalYearTable key={refetchKey} onRefetch={() => setRefetchKey((k) => k + 1)} />
 
       {/* Modal crear */}
-      <Dialog open={showCreate} onOpenChange={(o) => !o && setShowCreate(false)}>
-        <DialogContent className="max-w-md">
+      <Dialog open={showCreate} onOpenChange={(o) => !o && !createBusy && setShowCreate(false)}>
+        <DialogContent className="max-w-md" closeDisabled={createBusy}>
           <DialogHeader>
             <DialogTitle>Crear año fiscal</DialogTitle>
           </DialogHeader>
           <FiscalYearForm
             onClose={() => setShowCreate(false)}
             onSuccess={() => setRefetchKey((k) => k + 1)}
+            onRefresh={() => setRefetchKey((k) => k + 1)}
+            onBusyChange={setCreateBusy}
           />
         </DialogContent>
       </Dialog>

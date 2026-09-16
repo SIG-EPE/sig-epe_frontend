@@ -31,6 +31,9 @@ const mocks = vi.hoisted(() => ({
   unavailableIds: [] as string[],
   requestStateConflict: vi.fn(),
   uploadNavigationBlocked: false,
+  annualUit: "5500.00" as string | null | undefined,
+  annualUitLoading: false,
+  annualUitError: null as Error | null,
 }));
 
 vi.mock("next/navigation", () => ({
@@ -58,6 +61,16 @@ vi.mock("@/hooks/use-requests", () => ({
   useRequestRenditionReport: () => ({ report: mocks.renditionReport, error: mocks.renditionReportError, isLoading: false, isRefreshing: false, refetch: vi.fn(), replaceReport: vi.fn(), upsertReportRow: vi.fn(), removeReportRow: vi.fn() }),
   useSubmitRequest: () => ({ submitRequest: mocks.submitRequest, isLoading: false }),
   useUpdateRequest: () => ({ updateRequest: mocks.updateRequest, isLoading: false }),
+}));
+
+vi.mock("@/hooks/use-request-currency", () => ({
+  useRequestAnnualUit: () => ({
+    annualUit: mocks.annualUit,
+    isLoading: mocks.annualUitLoading,
+    error: mocks.annualUitError,
+    isResolved: !mocks.annualUitLoading && mocks.annualUitError === null && mocks.annualUit !== undefined,
+    refetch: vi.fn(),
+  }),
 }));
 
 vi.mock("@/hooks/use-request-document-upload-queue", () => ({
@@ -89,7 +102,7 @@ vi.mock("@/components/requests/budget-preview-card", () => ({
 }));
 
 vi.mock("@/components/requests/request-documents-card", () => ({
-  RequestDocumentsCard: (props: { documents?: RequestDocument[]; structuredReportLocked?: boolean; readOnly?: boolean; hideOptionalUploader?: boolean; uploadQueue?: unknown; hideUploadQueueMonitor?: boolean; onDocumentsChanged?: () => Promise<void> | void }) => (
+  RequestDocumentsCard: (props: { request?: PaymentRequest; documents?: RequestDocument[]; structuredReportLocked?: boolean; readOnly?: boolean; hideOptionalUploader?: boolean; uploadQueue?: unknown; hideUploadQueueMonitor?: boolean; onDocumentsChanged?: () => Promise<void> | void }) => (
     <div
       data-testid="request-documents-card"
       data-documents-count={props.documents?.length ?? 0}
@@ -98,6 +111,7 @@ vi.mock("@/components/requests/request-documents-card", () => ({
       data-hide-optional-uploader={props.hideOptionalUploader ? "true" : "false"}
       data-has-upload-queue={props.uploadQueue ? "true" : "false"}
       data-hide-upload-queue-monitor={props.hideUploadQueueMonitor ? "true" : "false"}
+      data-request-type={props.request?.request_type}
     >
       {props.onDocumentsChanged ? <button type="button" onClick={() => void props.onDocumentsChanged?.()}>Simular cambio de documentos</button> : null}
     </div>
@@ -126,10 +140,11 @@ Object.defineProperty(window.HTMLElement.prototype, "hasPointerCapture", {
 
 function makeValues(overrides: Partial<RequestFormValues> = {}): RequestFormValues {
   return {
+    currency: REQUEST_CURRENCY.PEN,
     request_type: REQUEST_TYPE.ADVANCE_SETTLEMENT,
     budget_planning_line_id: "line-1",
-    requested_amount: 250.5,
-    allocations: [{ client_key: "allocation-1", budget_planning_line_id: "line-1", amount: 250.5 }],
+    requested_amount: "250.5",
+    allocations: [{ client_key: "allocation-1", budget_planning_line_id: "line-1", amount: "250.5" }],
     concept: "Rendición del anticipo pagado",
     scheduled_rendition_at: getScheduledRenditionMinDate(),
     beneficiary_name: "Ana Solicitante",
@@ -302,10 +317,16 @@ beforeEach(() => {
   mocks.updateRequest.mockReset();
   mocks.budgetPreview = null;
   mocks.useRequestPlanningLines.mockReturnValue({ lines: [], total: 0, isLoading: false, isInitialLoading: false, isRefreshing: false, error: null, refetch: vi.fn() });
-  mocks.hydrateItems = [];
+  mocks.hydrateItems = [{
+    id: "line-1", currency: "PEN", resource_description: "POA validada", total_cost: 1000, status: "APPROVED",
+    fiscal_year: null, org_unit: null, category: null, program: null, action: null, monthly_summary: [],
+  }];
   mocks.unavailableIds = [];
   mocks.requestStateConflict.mockReset();
   mocks.uploadNavigationBlocked = false;
+  mocks.annualUit = "5500.00";
+  mocks.annualUitLoading = false;
+  mocks.annualUitError = null;
 });
 
 function makeRequestStateConflict(): ApiRequestError {
@@ -318,6 +339,163 @@ function makeRequestStateConflict(): ApiRequestError {
     path: "/requests/request-1",
   });
 }
+
+describe("supplier is the bank beneficiary", () => {
+  const supplierDraft = (overrides: Partial<PaymentRequest> = {}) => makePaymentRequest({
+    request_type: REQUEST_TYPE.SUPPLIER_PAYMENT, currency: "USD",
+    supplier_document_type: "DNI", supplier_document_number: "87654321", supplier_name: "Provider",
+    ...overrides,
+  });
+
+  it("shows one identity and no same-provider question for a new supplier payment", async () => {
+    const user = userEvent.setup();
+    render(<RequestForm mode="create" />);
+    await user.click(screen.getByTestId("request-type-select"));
+    await user.click(screen.getByRole("option", { name: "Pago a Proveedor" }));
+    expect(screen.getByTestId("request-supplier-document-number-input")).toHaveValue("");
+    expect(screen.queryByTestId("request-beneficiary-document-number-input")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("request-use-my-data-button")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("supplier-payee-mismatch")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Confirmar proveedor como beneficiario" })).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Proveedor acogido al RUS")).toBeInTheDocument();
+    expect(screen.getByLabelText("Casa de Retiro")).toBeInTheDocument();
+    expect(screen.getByTestId("request-bank-account-input")).toBeInTheDocument();
+  });
+
+  it("renders identity once and blocks a mismatched draft until explicit consent without changing bank", async () => {
+    const draft = supplierDraft();
+    mocks.updateRequest.mockResolvedValue(draft);
+    render(<RequestForm mode="edit" initialRequest={draft} />);
+    expect(screen.getByTestId("request-supplier-document-number-input")).toHaveValue("87654321");
+    expect(screen.queryByTestId("request-beneficiary-document-number-input")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("request-use-my-data-button")).not.toBeInTheDocument();
+    expect(screen.getByTestId("supplier-payee-mismatch")).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("request-save-draft-button"));
+    await waitFor(() => expect(mocks.toastError).toHaveBeenCalled());
+    expect(mocks.updateRequest).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Confirmar proveedor como beneficiario" }));
+    fireEvent.change(screen.getByLabelText("Nombre del proveedor *"), { target: { value: "Updated provider" } });
+    fireEvent.click(screen.getByTestId("request-save-draft-button"));
+    await waitFor(() => expect(mocks.updateRequest).toHaveBeenCalledWith(draft.id, expect.objectContaining({
+      supplier_name: "Updated provider", beneficiary_name: "Updated provider", beneficiary_document_type: "DNI", beneficiary_document_number: "87654321", bank_account: draft.bank_account,
+    })));
+    expect(draft.beneficiary_name).toBe("Ana Solicitante");
+  });
+
+  it("allows cancel without mutation and preserves mismatch on currency change", () => {
+    render(<RequestForm mode="edit" initialRequest={supplierDraft()} />);
+    fireEvent.change(screen.getByLabelText("Moneda de la solicitud"), { target: { value: "PEN" } });
+    expect(screen.getByTestId("supplier-payee-mismatch")).toBeInTheDocument();
+    expect(screen.getByTestId("request-supplier-document-number-input")).toHaveValue("87654321");
+    expect(screen.getByTestId("request-bank-account-input")).toHaveValue("1234567890");
+    fireEvent.click(screen.getByRole("button", { name: "Cancelar" }));
+    expect(mocks.updateRequest).not.toHaveBeenCalled();
+    expect(mocks.createRequest).not.toHaveBeenCalled();
+    expect(mocks.push).toHaveBeenCalled();
+  });
+
+  it("does not require confirmation for equal normalized identities", () => {
+    render(<RequestForm mode="edit" initialRequest={supplierDraft({
+      supplier_document_type: "CE", supplier_document_number: "ab1234", supplier_name: " Provider ",
+      beneficiary_document_type: "CE", beneficiary_document_number: "AB1234", beneficiary_name: "Provider",
+    })} />);
+    expect(screen.queryByTestId("supplier-payee-mismatch")).not.toBeInTheDocument();
+  });
+
+  it("preserves edits during delayed same-draft hydration and requires new consent for changed saved identity", () => {
+    const draft = supplierDraft();
+    const view = render(<RequestForm mode="edit" />);
+    view.rerender(<RequestForm mode="edit" initialRequest={draft} />);
+    fireEvent.change(screen.getByLabelText("Nombre del proveedor *"), { target: { value: "My edit" } });
+    fireEvent.click(screen.getByRole("button", { name: "Confirmar proveedor como beneficiario" }));
+    view.rerender(<RequestForm mode="edit" initialRequest={{ ...draft, currency: "USD" }} />);
+    expect(screen.getByLabelText("Nombre del proveedor *")).toHaveValue("My edit");
+    expect(screen.queryByTestId("supplier-payee-mismatch")).not.toBeInTheDocument();
+    view.rerender(<RequestForm mode="edit" initialRequest={{ ...draft, beneficiary_name: "Other saved payee" }} />);
+    expect(screen.getByTestId("supplier-payee-mismatch")).toBeInTheDocument();
+    expect(screen.getByLabelText("Nombre del proveedor *")).toHaveValue("My edit");
+  });
+
+  it("leaves missing legacy supplier unresolved rather than copying beneficiary", () => {
+    render(<RequestForm mode="edit" initialRequest={supplierDraft({ supplier_document_type: null, supplier_document_number: null, supplier_name: null, supplier_ruc: null })} />);
+    expect(screen.getByTestId("request-supplier-document-number-input")).toHaveValue("");
+    expect(screen.getByLabelText("Nombre del proveedor *")).toHaveValue("");
+    expect(screen.getByText(/Completa la identidad del proveedor/)).toBeInTheDocument();
+  });
+
+  it("allows explicit repair of missing legacy supplier despite invalid hidden old payee", async () => {
+    const user = userEvent.setup();
+    const draft = supplierDraft({ supplier_document_type: null, supplier_document_number: null, supplier_name: null, supplier_ruc: null, beneficiary_document_number: "invalid" });
+    mocks.updateRequest.mockResolvedValue(draft);
+    render(<RequestForm mode="edit" initialRequest={draft} />);
+    await user.click(screen.getByTestId("request-supplier-document-type-select"));
+    await user.click(screen.getByRole("option", { name: "DNI" }));
+    fireEvent.change(screen.getByTestId("request-supplier-document-number-input"), { target: { value: "87654321" } });
+    fireEvent.change(screen.getByLabelText("Nombre del proveedor *"), { target: { value: "Provider" } });
+    fireEvent.click(screen.getByRole("button", { name: "Confirmar proveedor como beneficiario" }));
+    fireEvent.click(screen.getByTestId("request-save-draft-button"));
+    await waitFor(() => expect(mocks.updateRequest).toHaveBeenCalledWith(draft.id, expect.objectContaining({ supplier_document_type: "DNI", supplier_document_number: "87654321", supplier_name: "Provider", beneficiary_document_type: "DNI", beneficiary_document_number: "87654321", beneficiary_name: "Provider", bank_account: draft.bank_account })));
+  });
+
+  it("resets identity and consent for a different draft without leaking previous edits", () => {
+    const draft = supplierDraft();
+    const view = render(<RequestForm mode="edit" initialRequest={draft} />);
+    fireEvent.change(screen.getByLabelText("Nombre del proveedor *"), { target: { value: "My edit" } });
+    fireEvent.click(screen.getByRole("button", { name: "Confirmar proveedor como beneficiario" }));
+    view.rerender(<RequestForm mode="edit" initialRequest={supplierDraft({ id: "second", supplier_name: "Second provider" })} />);
+    expect(screen.getByLabelText("Nombre del proveedor *")).toHaveValue("Second provider");
+    expect(screen.getByTestId("supplier-payee-mismatch")).toBeInTheDocument();
+  });
+
+  it.each([REQUEST_TYPE.ADVANCE, REQUEST_TYPE.REIMBURSEMENT])("retains the beneficiary editor and shortcut for %s", (request_type) => {
+    render(<RequestForm mode="edit" initialRequest={makePaymentRequest({ request_type })} />);
+    expect(screen.getByTestId("request-beneficiary-document-number-input")).toBeInTheDocument();
+    expect(screen.getByTestId("request-use-my-data-button")).toBeInTheDocument();
+    expect(screen.queryByTestId("request-supplier-document-number-input")).not.toBeInTheDocument();
+  });
+});
+
+describe("saved request type", () => {
+  it("keeps the selector enabled for a new unsaved request", () => {
+    render(<RequestForm mode="create" />);
+
+    expect(screen.getByTestId("request-type-select")).toBeEnabled();
+  });
+
+  it("shows a saved advance as immutable and keeps advance fields", () => {
+    render(<RequestForm mode="edit" initialRequest={makePaymentRequest({ request_type: REQUEST_TYPE.ADVANCE })} />);
+
+    expect(screen.getByTestId("request-type-select")).toBeDisabled();
+    expect(screen.getByTestId("request-type-select")).toHaveTextContent("Anticipo");
+    expect(screen.getByTestId("request-scheduled-rendition-input")).toBeInTheDocument();
+    expect(screen.queryByTestId("request-supplier-document-number-input")).not.toBeInTheDocument();
+  });
+
+  it("replaces an unsaved watched selection with the persisted discriminator after delayed hydration", async () => {
+    const user = userEvent.setup();
+    const view = render(<RequestForm mode="edit" />);
+    await user.click(screen.getByTestId("request-type-select"));
+    await user.click(screen.getByRole("option", { name: "Pago a Proveedor" }));
+    expect(screen.getByTestId("request-supplier-document-number-input")).toBeInTheDocument();
+
+    view.rerender(<RequestForm mode="edit" initialRequest={makePaymentRequest({ request_type: REQUEST_TYPE.ADVANCE })} />);
+
+    expect(screen.getByTestId("request-type-select")).toBeDisabled();
+    expect(screen.getByTestId("request-type-select")).toHaveTextContent("Anticipo");
+    expect(screen.getByTestId("request-scheduled-rendition-input")).toBeInTheDocument();
+    expect(screen.queryByTestId("request-supplier-document-number-input")).not.toBeInTheDocument();
+  });
+
+  it("passes the persisted request type to the document stage card", () => {
+    render(<RequestForm
+      activeStep={REQUEST_EDIT_STEP.DOCUMENTS}
+      initialRequest={makePaymentRequest({ request_type: REQUEST_TYPE.SUPPLIER_PAYMENT })}
+      mode="edit"
+    />);
+
+    expect(screen.getByTestId("request-documents-card")).toHaveAttribute("data-request-type", REQUEST_TYPE.SUPPLIER_PAYMENT);
+  });
+});
 
 function BeneficiaryFieldsErrorHarness() {
   const form = useForm<RequestFormValues>({
@@ -425,9 +603,9 @@ describe("RequestForm payload helpers", () => {
     })).success).toBe(true);
   });
 
-  it("normaliza ceros iniciales en el monto sin romper decimales o vacío", () => {
-    expect(normalizeRequestAmountInput("0123")).toBe("123");
-    expect(normalizeRequestAmountInput("01.50")).toBe("1.5");
+  it("preserva el texto decimal para que la validación detecte precisión y formato", () => {
+    expect(normalizeRequestAmountInput("0123")).toBe("0123");
+    expect(normalizeRequestAmountInput("01.50")).toBe("01.50");
     expect(normalizeRequestAmountInput("")).toBe("");
   });
 
@@ -514,8 +692,8 @@ describe("RequestForm payload helpers", () => {
     expect(dto).toMatchObject({
       request_type: REQUEST_TYPE.ADVANCE_SETTLEMENT,
       budget_planning_line_id: "line-1",
-      requested_amount: 250.5,
-      allocations: [{ client_key: "allocation-1", budget_planning_line_id: "line-1", amount: 250.5 }],
+      requested_amount: "250.50",
+      allocations: [{ client_key: "allocation-1", budget_planning_line_id: "line-1", amount: "250.5" }],
       currency: REQUEST_CURRENCY.PEN,
     });
     expect(dto).not.toHaveProperty("budget_month");
@@ -564,25 +742,25 @@ describe("RequestForm payload helpers", () => {
     const values = makeValues({
       request_type: REQUEST_TYPE.ADVANCE,
       allocations: [
-        { client_key: "allocation-1", budget_planning_line_id: "line-1", amount: 100.25 },
-        { client_key: "allocation-2", budget_planning_line_id: "line-2", amount: 200.75 },
+        { client_key: "allocation-1", budget_planning_line_id: "line-1", amount: "100.25" },
+        { client_key: "allocation-2", budget_planning_line_id: "line-2", amount: "200.75" },
       ],
     });
 
     expect(toCreateRequestDto(values)).toMatchObject({
       budget_planning_line_id: "line-1",
-      requested_amount: 301,
+      requested_amount: "301.00",
       allocations: [
-        { client_key: "allocation-1", budget_planning_line_id: "line-1", amount: 100.25 },
-        { client_key: "allocation-2", budget_planning_line_id: "line-2", amount: 200.75 },
+        { client_key: "allocation-1", budget_planning_line_id: "line-1", amount: "100.25" },
+        { client_key: "allocation-2", budget_planning_line_id: "line-2", amount: "200.75" },
       ],
     });
     expect(toUpdateRequestDto(values)).toMatchObject({
       budget_planning_line_id: "line-1",
-      requested_amount: 301,
+      requested_amount: "301.00",
       allocations: [
-        { client_key: "allocation-1", budget_planning_line_id: "line-1", amount: 100.25 },
-        { client_key: "allocation-2", budget_planning_line_id: "line-2", amount: 200.75 },
+        { client_key: "allocation-1", budget_planning_line_id: "line-1", amount: "100.25" },
+        { client_key: "allocation-2", budget_planning_line_id: "line-2", amount: "200.75" },
       ],
     });
   });
@@ -590,8 +768,8 @@ describe("RequestForm payload helpers", () => {
   it("rechaza líneas POA duplicadas en el formulario", () => {
     const result = requestFormSchema.safeParse(makeValues({
       allocations: [
-        { client_key: "allocation-1", budget_planning_line_id: "line-1", amount: 100 },
-        { client_key: "allocation-2", budget_planning_line_id: "line-1", amount: 50 },
+        { client_key: "allocation-1", budget_planning_line_id: "line-1", amount: "100" },
+        { client_key: "allocation-2", budget_planning_line_id: "line-1", amount: "50" },
       ],
     }));
 
@@ -916,6 +1094,47 @@ describe("RequestForm payload helpers", () => {
     expect(screen.queryByRole("button", { name: "Reenviar solicitud" })).not.toBeInTheDocument();
   });
 
+  it.each([
+    {
+      state: "loading",
+      annualUit: undefined,
+      loading: true,
+      error: null,
+      message: /Consultando el Valor UIT/,
+    },
+    {
+      state: "error",
+      annualUit: undefined,
+      loading: false,
+      error: new Error("403"),
+      message: /No se pudo consultar el Valor UIT/,
+    },
+  ])("blocks supplier submit while the annual UIT lookup is $state without claiming it is unconfigured", ({ annualUit, loading, error, message }) => {
+    mocks.annualUit = annualUit;
+    mocks.annualUitLoading = loading;
+    mocks.annualUitError = error;
+    mocks.requestDocuments = [makeDocument({ document_category: REQUEST_DOCUMENT_CATEGORY.INVOICE })];
+    const supplier = makePaymentRequest({
+      request_type: REQUEST_TYPE.SUPPLIER_PAYMENT,
+      supplier_document_type: "DNI",
+      supplier_document_number: "87654321",
+      supplier_name: "Provider",
+      beneficiary_document_type: BENEFICIARY_DOCUMENT_TYPE.DNI,
+      beneficiary_document_number: "87654321",
+      beneficiary_name: "Provider",
+      declares_rus: false,
+      declares_casa_de_retiro: false,
+      uit_year_applied: null,
+      uit_amount_applied: null,
+    });
+
+    render(<RequestForm activeStep={REQUEST_EDIT_STEP.REVIEW} initialRequest={supplier} mode="edit" />);
+
+    expect(screen.getByText(message)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Enviar a revisión" })).toBeDisabled();
+    expect(screen.queryByText(/UIT no configurada para el año de la solicitud/)).not.toBeInTheDocument();
+  });
+
   it("usa CTA de corrección para solicitudes observadas", () => {
     mocks.requestDocuments = [makeDocument({
       document_category: REQUEST_DOCUMENT_CATEGORY.PXQ,
@@ -1043,6 +1262,27 @@ describe("RequestForm payload helpers", () => {
     await user.click(screen.getByRole("button", { name: "Enviar a revisión" }));
 
     await waitFor(() => expect(mocks.requestStateConflict).toHaveBeenCalledTimes(1));
+    expect(mocks.submitRequest).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ["SUPPLIER_IDENTITY_REQUIRED", REQUEST_EDIT_STEP.DATA],
+    ["POA_CURRENCY_MISMATCH", REQUEST_EDIT_STEP.DATA],
+    ["UIT_NOT_CONFIGURED", REQUEST_EDIT_STEP.DOCUMENTS],
+    ["CONTRACT_REQUIRED_BY_UIT", REQUEST_EDIT_STEP.DOCUMENTS],
+  ])("dirige el rechazo API %s al paso correctivo sin reenviar", async (code, step) => {
+    const user = userEvent.setup();
+    mocks.requestDocuments = [makeDocument({ document_category: REQUEST_DOCUMENT_CATEGORY.PXQ })];
+    const draft = makePaymentRequest({ request_type: REQUEST_TYPE.ADVANCE });
+    mocks.updateRequest.mockResolvedValue(draft);
+    mocks.submitRequest.mockRejectedValue(new ApiRequestError(400, {
+      statusCode: 400, code, message: "Validation failed", error: "Bad Request",
+      timestamp: "2026-09-11T00:00:00.000Z", path: "/requests/request-1/submit",
+    }));
+    render(<RequestForm activeStep={REQUEST_EDIT_STEP.REVIEW} initialRequest={draft} mode="edit" />);
+    await user.click(screen.getByRole("button", { name: "Enviar a revisión" }));
+    await waitFor(() => expect(mocks.push).toHaveBeenCalledWith(`/requests/request-1/edit?step=${step}`));
+    expect(mocks.updateRequest).toHaveBeenCalledTimes(1);
     expect(mocks.submitRequest).toHaveBeenCalledTimes(1);
   });
 

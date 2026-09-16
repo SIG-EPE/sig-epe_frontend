@@ -1,117 +1,168 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { useForm } from "react-hook-form";
+import { zodResolver } from "@hookform/resolvers/zod";
 import { toast } from "sonner";
 import { z } from "zod";
-
+import { useCreateFiscalYear } from "@/hooks/use-budget";
 import {
-  useCreateFiscalYear,
-  type CreateFiscalYearDto,
-} from "@/hooks/use-budget";
+  annualUitInputSchema,
+  draftUitChange,
+  fiscalYearErrorMessage,
+} from "@/lib/fiscal-year-uit";
+import { useAuthStore } from "@/stores/auth-store";
+import { ROLE_CAPABILITY, hasRoleCapability } from "@/lib/role-capabilities";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
+import {
+  Form,
+  FormControl,
+  FormField,
+  FormItem,
+  FormLabel,
+  FormMessage,
+} from "@/components/ui/form";
 
-// -------------------------------------------------------
-// Zod schema for fiscal year creation
-// -------------------------------------------------------
-
-const CreateFiscalYearSchema = z.object({
-  year: z.number().min(2000, "El año debe ser mayor o igual a 2000").max(2100, "El año debe ser menor o igual a 2100"),
-  notes: z.string().optional(),
+const schema = z.object({
+  year: z
+    .string()
+    .regex(/^\d{4}$/, "Ingrese un año válido.")
+    .refine(
+      (value) => Number(value) >= 2020 && Number(value) <= 2100,
+      "El año debe estar entre 2020 y 2100.",
+    ),
+  uit: z.union([z.literal(""), annualUitInputSchema]),
+  notes: z.string(),
 });
-
-type CreateFiscalYearFormData = z.infer<typeof CreateFiscalYearSchema>;
-
-// -------------------------------------------------------
-// Props
-// -------------------------------------------------------
-
 interface FiscalYearFormProps {
   onClose: () => void;
   onSuccess: () => void;
+  onRefresh?: () => void;
+  onBusyChange?: (busy: boolean) => void;
 }
 
-// -------------------------------------------------------
-// FiscalYearForm component
-// -------------------------------------------------------
-
-export function FiscalYearForm({ onClose, onSuccess }: FiscalYearFormProps) {
+export function FiscalYearForm({
+  onClose,
+  onSuccess,
+  onRefresh,
+  onBusyChange,
+}: FiscalYearFormProps) {
   const { create, isLoading } = useCreateFiscalYear();
-
-  const [form, setForm] = useState<CreateFiscalYearDto>({
-    year: new Date().getFullYear(),
-    notes: "",
+  const role = useAuthStore((s) => s.user?.role?.code);
+  const authorized = hasRoleCapability(role, ROLE_CAPABILITY.BUDGET_ADMIN);
+  const pending = useRef(false);
+  const [error, setError] = useState<string | null>(null);
+  const form = useForm<z.infer<typeof schema>>({
+    resolver: zodResolver(schema),
+    defaultValues: { year: "", uit: "", notes: "" },
   });
-
-  const [errors, setErrors] = useState<Partial<Record<keyof CreateFiscalYearDto, string>>>({});
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-
-    // Validar con Zod
-    const parsed = CreateFiscalYearSchema.safeParse(form);
-    if (!parsed.success) {
-      const fieldErrors: Partial<Record<keyof CreateFiscalYearDto, string>> = {};
-      for (const issue of parsed.error.issues) {
-        const field = issue.path[0] as keyof CreateFiscalYearDto;
-        fieldErrors[field] = issue.message;
-      }
-      setErrors(fieldErrors);
-      return;
-    }
-
-    setErrors({});
-
+  const busy = isLoading || form.formState.isSubmitting;
+  useEffect(() => {
+    onBusyChange?.(busy);
+  }, [busy, onBusyChange]);
+  const submit = form.handleSubmit(async (values) => {
+    if (!authorized || error) return;
     try {
-      await create(form);
+      await create({
+        year: Number(values.year),
+        notes: values.notes,
+        ...draftUitChange(values.uit),
+      });
       toast.success("Año fiscal creado exitosamente");
       onSuccess();
       onClose();
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Error al crear año fiscal");
+    } catch (cause) {
+      setError(
+        `${fiscalYearErrorMessage(cause)} Cierre y actualice la lista antes de volver a crear.`,
+      );
+      onRefresh?.();
     }
-  };
-
+  });
+  if (!authorized)
+    return <p>No tienes permisos para administrar años fiscales.</p>;
   return (
-    <form onSubmit={handleSubmit} className="space-y-4">
-      {/* Año */}
-      <div className="space-y-1">
-        <Label htmlFor="year">Año *</Label>
-        <Input
-          id="year"
-          type="number"
-          min={2000}
-          max={2100}
-          value={form.year}
-          onChange={(e) => setForm((f) => ({ ...f, year: parseInt(e.target.value, 10) || 0 }))}
-          className={errors.year ? "border-destructive" : ""}
-        />
-        {errors.year && <p className="text-xs text-destructive">{errors.year}</p>}
-      </div>
-
-      {/* Notas */}
-      <div className="space-y-1">
-        <Label htmlFor="notes">Notas (opcional)</Label>
-        <textarea
-          id="notes"
-          value={form.notes ?? ""}
-          onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))}
-          rows={3}
-          className="flex w-full rounded-md border border-input bg-transparent px-3 py-1 text-base shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 md:text-sm"
-          placeholder="Observaciones adicionales..."
-        />
-      </div>
-
-      {/* Acciones */}
-      <div className="flex justify-end gap-2 pt-2">
-        <Button type="button" variant="outline" onClick={onClose} disabled={isLoading}>
-          Cancelar
-        </Button>
-        <Button type="submit" disabled={isLoading}>
-          {isLoading ? "Creando..." : "Crear año fiscal"}
-        </Button>
-      </div>
-    </form>
+    <Form {...form}>
+      <form
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (pending.current) return;
+          pending.current = true;
+          void submit(event).finally(() => {
+            pending.current = false;
+          });
+        }}
+        className="space-y-4"
+        aria-busy={busy}
+      >
+        <fieldset disabled={busy || Boolean(error)} className="space-y-4">
+          <FormField
+            control={form.control}
+            name="year"
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>Año *</FormLabel>
+                <FormControl>
+                  <Input {...field} inputMode="numeric" />
+                </FormControl>
+                <FormMessage role="alert" />
+              </FormItem>
+            )}
+          />
+          <FormField
+            control={form.control}
+            name="uit"
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>Valor UIT (PEN, opcional)</FormLabel>
+                <FormControl>
+                  <Input {...field} inputMode="decimal" />
+                </FormControl>
+                <FormMessage role="alert" />
+              </FormItem>
+            )}
+          />
+          <p>
+            Sin valor, se crea sin UIT configurada. Debe configurarla antes de
+            activar; no se usa un valor predeterminado.
+          </p>
+          <FormField
+            control={form.control}
+            name="notes"
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>Notas (opcional)</FormLabel>
+                <FormControl>
+                  <textarea
+                    {...field}
+                    rows={3}
+                    className="flex w-full rounded-md border border-input bg-transparent px-3 py-1 text-base shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50 md:text-sm"
+                  />
+                </FormControl>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+        </fieldset>
+        {error && (
+          <p role="alert" className="text-destructive">
+            {error}
+          </p>
+        )}
+        <div className="flex justify-end gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            onClick={onClose}
+            disabled={busy}
+          >
+            Cancelar
+          </Button>
+          <Button type="submit" disabled={busy || Boolean(error)}>
+            {busy ? "Creando..." : "Crear año fiscal"}
+          </Button>
+        </div>
+      </form>
+    </Form>
   );
 }

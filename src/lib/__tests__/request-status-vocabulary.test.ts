@@ -21,41 +21,71 @@ describe("request status vocabulary", () => {
     ] as const;
 
     for (const [status, label] of cases) {
-      expect(formatRequestStatus(status, { surface: REQUEST_STATUS_SURFACE.DETAIL })).toBe(label);
+      expect(
+        formatRequestStatus(status, { surface: REQUEST_STATUS_SURFACE.DETAIL }),
+      ).toBe(label);
     }
   });
 
   it("uses contextual labels in Review, Payment and dashboard surfaces", () => {
-    expect(formatRequestStatus(REQUEST_STATUS.SUBMITTED, {
-      surface: REQUEST_STATUS_SURFACE.REVIEW,
-    })).toBe("Por revisar");
-    expect(formatRequestStatus(REQUEST_STATUS.APPROVED, {
-      surface: REQUEST_STATUS_SURFACE.PAYMENT,
-    })).toBe("Pendiente de pago");
-    expect(formatRequestStatus(REQUEST_STATUS.PAID, {
-      surface: REQUEST_STATUS_SURFACE.PAYMENT,
-    })).toBe("Pago registrado");
-    expect(formatRequestStatus(REQUEST_STATUS.SUBMITTED, {
-      surface: REQUEST_STATUS_SURFACE.DASHBOARD,
-    })).toBe("Enviadas a revisión");
-    expect(formatRequestStatus(REQUEST_STATUS.APPROVED, {
-      surface: REQUEST_STATUS_SURFACE.DASHBOARD,
-    })).toBe("Aprobadas · pendientes de pago");
-    expect(formatRequestStatus(REQUEST_STATUS.PAID, {
-      surface: REQUEST_STATUS_SURFACE.DASHBOARD,
-    })).toBe("Pagadas");
+    expect(
+      formatRequestStatus(REQUEST_STATUS.SUBMITTED, {
+        surface: REQUEST_STATUS_SURFACE.REVIEW,
+      }),
+    ).toBe("Por revisar");
+    expect(
+      formatRequestStatus(REQUEST_STATUS.APPROVED, {
+        surface: REQUEST_STATUS_SURFACE.PAYMENT,
+      }),
+    ).toBe("Pendiente de pago");
+    expect(
+      formatRequestStatus(REQUEST_STATUS.PAID, {
+        surface: REQUEST_STATUS_SURFACE.PAYMENT,
+      }),
+    ).toBe("Pago registrado");
+    expect(
+      formatRequestStatus(REQUEST_STATUS.REJECTED, {
+        surface: REQUEST_STATUS_SURFACE.PAYMENT,
+      }),
+    ).toBe("Pago rechazado");
+    expect(
+      formatRequestStatus(REQUEST_STATUS.REJECTED, {
+        surface: REQUEST_STATUS_SURFACE.REVIEW,
+      }),
+    ).toBe("Rechazada");
+    expect(
+      formatRequestStatus(REQUEST_STATUS.SUBMITTED, {
+        surface: REQUEST_STATUS_SURFACE.DASHBOARD,
+      }),
+    ).toBe("Enviadas a revisión");
+    expect(
+      formatRequestStatus(REQUEST_STATUS.APPROVED, {
+        surface: REQUEST_STATUS_SURFACE.DASHBOARD,
+      }),
+    ).toBe("Aprobadas · pendientes de pago");
+    expect(
+      formatRequestStatus(REQUEST_STATUS.PAID, {
+        surface: REQUEST_STATUS_SURFACE.DASHBOARD,
+      }),
+    ).toBe("Pagadas");
   });
 
   it("keeps reserved request codes renderable without making them selectable", () => {
-    expect(formatRequestStatus(REQUEST_STATUS.IN_VALIDATION, {
-      surface: REQUEST_STATUS_SURFACE.DETAIL,
-    })).toBe("En validación");
-    expect(formatRequestStatus(REQUEST_STATUS.CLOSED, {
-      surface: REQUEST_STATUS_SURFACE.DETAIL,
-    })).toBe("Cerrada");
-    expect(formatRequestStatus(REQUEST_STATUS.VOIDED, {
-      surface: REQUEST_STATUS_SURFACE.DETAIL,
-    })).toBe("Anulada");
+    expect(
+      formatRequestStatus(REQUEST_STATUS.IN_VALIDATION, {
+        surface: REQUEST_STATUS_SURFACE.DETAIL,
+      }),
+    ).toBe("En validación");
+    expect(
+      formatRequestStatus(REQUEST_STATUS.CLOSED, {
+        surface: REQUEST_STATUS_SURFACE.DETAIL,
+      }),
+    ).toBe("Cerrada");
+    expect(
+      formatRequestStatus(REQUEST_STATUS.VOIDED, {
+        surface: REQUEST_STATUS_SURFACE.DETAIL,
+      }),
+    ).toBe("Anulada");
 
     expect(REQUEST_REVIEW_SELECTOR_STATUSES).toEqual([
       REQUEST_STATUS.DRAFT,
@@ -65,13 +95,20 @@ describe("request status vocabulary", () => {
       REQUEST_STATUS.REJECTED,
       REQUEST_STATUS.PAID,
     ]);
-    expect(REQUEST_REVIEW_SELECTOR_STATUSES).not.toContain(REQUEST_STATUS.IN_VALIDATION);
-    expect(REQUEST_REVIEW_SELECTOR_STATUSES).not.toContain(REQUEST_STATUS.CLOSED);
-    expect(REQUEST_REVIEW_SELECTOR_STATUSES).not.toContain(REQUEST_STATUS.VOIDED);
+    expect(REQUEST_REVIEW_SELECTOR_STATUSES).not.toContain(
+      REQUEST_STATUS.IN_VALIDATION,
+    );
+    expect(REQUEST_REVIEW_SELECTOR_STATUSES).not.toContain(
+      REQUEST_STATUS.CLOSED,
+    );
+    expect(REQUEST_REVIEW_SELECTOR_STATUSES).not.toContain(
+      REQUEST_STATUS.VOIDED,
+    );
     expect(REQUEST_REVIEW_SELECTOR_STATUSES).not.toContain("IN_REVIEW");
     expect(REQUEST_PAYMENT_SELECTOR_STATUSES).toEqual([
       REQUEST_STATUS.APPROVED,
       REQUEST_STATUS.PAID,
+      REQUEST_STATUS.REJECTED,
     ]);
     expect(REQUEST_RENDITION_SELECTOR_STATUSES).toEqual([
       RENDITION_STATUS.PENDING,
@@ -83,20 +120,30 @@ describe("request status vocabulary", () => {
   });
 
   it("formats rendition lifecycle separately and provides a readable unknown fallback", () => {
-    expect(formatRequestStatus(REQUEST_STATUS.DRAFT, {
-      surface: REQUEST_STATUS_SURFACE.RENDITION_LIFECYCLE,
-    })).toBe("En preparación");
-    expect(formatRequestStatus(REQUEST_STATUS.SUBMITTED, {
-      surface: REQUEST_STATUS_SURFACE.RENDITION_LIFECYCLE,
-    })).toBe("Enviada a revisión");
-    expect(formatRequestStatus(REQUEST_STATUS.APPROVED, {
-      surface: REQUEST_STATUS_SURFACE.RENDITION_LIFECYCLE,
-    })).toBe("Rendición aprobada");
-    expect(formatRequestStatus(REQUEST_STATUS.REJECTED, {
-      surface: REQUEST_STATUS_SURFACE.RENDITION_LIFECYCLE,
-    })).toBe("Rendición rechazada");
-    expect(formatRequestStatus("LEGACY_UNKNOWN", {
-      surface: REQUEST_STATUS_SURFACE.DETAIL,
-    })).toBe("Estado no reconocido (LEGACY_UNKNOWN)");
+    expect(
+      formatRequestStatus(REQUEST_STATUS.DRAFT, {
+        surface: REQUEST_STATUS_SURFACE.RENDITION_LIFECYCLE,
+      }),
+    ).toBe("En preparación");
+    expect(
+      formatRequestStatus(REQUEST_STATUS.SUBMITTED, {
+        surface: REQUEST_STATUS_SURFACE.RENDITION_LIFECYCLE,
+      }),
+    ).toBe("Enviada a revisión");
+    expect(
+      formatRequestStatus(REQUEST_STATUS.APPROVED, {
+        surface: REQUEST_STATUS_SURFACE.RENDITION_LIFECYCLE,
+      }),
+    ).toBe("Rendición aprobada");
+    expect(
+      formatRequestStatus(REQUEST_STATUS.REJECTED, {
+        surface: REQUEST_STATUS_SURFACE.RENDITION_LIFECYCLE,
+      }),
+    ).toBe("Rendición rechazada");
+    expect(
+      formatRequestStatus("LEGACY_UNKNOWN", {
+        surface: REQUEST_STATUS_SURFACE.DETAIL,
+      }),
+    ).toBe("Estado no reconocido (LEGACY_UNKNOWN)");
   });
 });

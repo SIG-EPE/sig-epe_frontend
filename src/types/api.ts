@@ -18,6 +18,8 @@ export interface ApiError {
   path: string;
   retryable?: boolean;
   retry_after_ms?: number;
+  count?: number;
+  max?: number;
 }
 
 /** Paginated list metadata */

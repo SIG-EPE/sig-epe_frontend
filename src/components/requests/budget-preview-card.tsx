@@ -7,6 +7,7 @@ import { formatRequestCurrency, isBudgetPreviewBlocking, sanitizeBudgetMessage }
 import type { RequestAllocationsBudgetPreview, RequestBudgetPreview } from "@/types/requests";
 
 interface BudgetPreviewCardProps {
+  currency?: string | null;
   preview: RequestBudgetPreview | RequestAllocationsBudgetPreview | null;
   isLoading: boolean;
   error: Error | null;
@@ -14,7 +15,7 @@ interface BudgetPreviewCardProps {
   onRetry: () => void;
 }
 
-export function BudgetPreviewCard({ preview, isLoading, error, canPreview, onRetry }: BudgetPreviewCardProps) {
+export function BudgetPreviewCard({ preview, isLoading, error, canPreview, onRetry, currency }: BudgetPreviewCardProps) {
   if (!canPreview) {
     return (
       <Card>
@@ -22,7 +23,9 @@ export function BudgetPreviewCard({ preview, isLoading, error, canPreview, onRet
           <CardTitle className="text-base">Resumen presupuestal</CardTitle>
         </CardHeader>
         <CardContent>
-          <p className="text-sm text-muted-foreground">Agrega una o más líneas POA con monto para calcular la validación presupuestal.</p>
+          <p className="text-sm text-muted-foreground">{currency === "USD"
+            ? "Vista previa no disponible para solicitudes en dólares. Los montos originales no se convierten aquí; la validación presupuestal del servidor sigue siendo obligatoria."
+            : "Agrega una o más líneas POA con monto y moneda PEN resuelta para calcular la validación presupuestal."}</p>
         </CardContent>
       </Card>
     );

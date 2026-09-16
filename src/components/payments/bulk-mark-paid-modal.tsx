@@ -1,263 +1,546 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { zodResolver } from "@hookform/resolvers/zod";
-import { useForm } from "react-hook-form";
-import { z } from "zod";
 
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
+import {
+  Dialog,
+  DialogBody,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import {
+  aggregateBulkMarkPaidTotals,
+  createBulkMarkPaidOrchestrator,
+  createBulkMarkPaidRun,
+  getBulkMarkPaidRunProgress,
+  type BulkMarkPaidLease,
+  type BulkMarkPaidOrchestrator,
+} from "@/hooks/use-bulk-mark-paid-orchestrator";
 import { useBulkMarkPaid } from "@/hooks/use-requests";
-import { getBusinessDateTimeLocalValue, parseBusinessDateTimeLocalToIso } from "@/lib/business-timezone";
-import { formatRequestCurrency, getApiErrorMessage, getRequestDisplayCode, getRequestPayableAmount } from "@/lib/requests";
+import { parseBusinessDateTimeLocalToIso } from "@/lib/business-timezone";
+import {
+  BULK_MARK_PAID_ITEM_STATUS,
+  BULK_MARK_PAID_RUN_PHASE,
+  loadBulkMarkPaidRun,
+  removeBulkMarkPaidRun,
+  saveBulkMarkPaidRun,
+  type BulkMarkPaidCommand,
+  type BulkMarkPaidRunScope,
+  type BulkMarkPaidRunState,
+} from "@/lib/bulk-mark-paid-run-storage";
+import { formatExactMoney, getExactPayablePrincipal } from "@/lib/payment-fx";
+import { getPaymentCompletenessPresentation } from "@/lib/payment-completeness";
+import { getRequestDisplayCode } from "@/lib/requests";
 import {
   BULK_PAYMENT_RESULT_STATUS,
-  DRIVE_SOURCE_ACCOUNT,
   type BulkMarkPaidResponse,
-  type BulkPaymentItemResult,
   type BulkRegisterPaymentItemInput,
-  type DriveSourceAccount,
+  type MarkPaidItemResult,
   type PaymentRequest,
 } from "@/types/requests";
+import { PaymentValuation } from "./payment-valuation";
 
-const BULK_PAYMENT_MAX_ITEMS = 5;
-
-const SOURCE_ACCOUNT_LABELS: Record<DriveSourceAccount, string> = {
-  [DRIVE_SOURCE_ACCOUNT.BCP_PEN]: "BCP-SOLES",
-  [DRIVE_SOURCE_ACCOUNT.BCP_USD]: "BCP-DOLARES",
-  [DRIVE_SOURCE_ACCOUNT.BCP_ODF]: "BCP-ODF",
-  [DRIVE_SOURCE_ACCOUNT.BBVA_PEN]: "BBVA-SOLES",
-  [DRIVE_SOURCE_ACCOUNT.BBVA_USD]: "BBVA-DOLARES",
-};
-
-const bulkRegisterPaymentsSchema = z.object({
-  paid_at: z.string().min(1, "Indica la fecha y hora de pago."),
-  source_account_key: z.enum([
-    DRIVE_SOURCE_ACCOUNT.BCP_PEN,
-    DRIVE_SOURCE_ACCOUNT.BCP_USD,
-    DRIVE_SOURCE_ACCOUNT.BCP_ODF,
-    DRIVE_SOURCE_ACCOUNT.BBVA_PEN,
-    DRIVE_SOURCE_ACCOUNT.BBVA_USD,
-  ], { message: "Selecciona la cuenta de origen." }),
-});
-
-type BulkRegisterPaymentsFormValues = z.infer<typeof bulkRegisterPaymentsSchema>;
+export type PreparedPaymentLease = Pick<
+  BulkRegisterPaymentItemInput,
+  "request_id" | "assignment_version" | "lease_token"
+>;
 
 interface BulkMarkPaidModalProps {
   requests: PaymentRequest[];
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onSuccess: (result: BulkMarkPaidResponse) => Promise<void> | void;
-  prepareItems: (requests: PaymentRequest[]) => Promise<BulkRegisterPaymentItemInput[]>;
+  prepareItems?: (
+    requests: PaymentRequest[],
+  ) => Promise<PreparedPaymentLease[]>;
+  scope?: BulkMarkPaidRunScope | null;
+  pageRequestIds?: string[];
+  acquireLease?: (command: BulkMarkPaidCommand) => Promise<BulkMarkPaidLease>;
+  releaseLease?: (requestId: string) => Promise<void>;
+  refetchQueue?: (options: { force: boolean }) => Promise<void>;
+  reconcileRun?: (run: BulkMarkPaidRunState) => Promise<MarkPaidItemResult[]>;
 }
 
-function createClientBatchId(): string {
-  return crypto.randomUUID();
+const VOLATILE_SCOPE: BulkMarkPaidRunScope = {
+  userId: "volatile",
+  sessionId: "volatile",
+  pageIdentity: "volatile",
+};
+
+function isRunSettled(run: BulkMarkPaidRunState | null): boolean {
+  return (
+    run === null ||
+    run.phase === BULK_MARK_PAID_RUN_PHASE.COMPLETED ||
+    run.phase === BULK_MARK_PAID_RUN_PHASE.CANCELLED
+  );
 }
 
-function getResultLabel(status: string): string {
-  if (status === BULK_PAYMENT_RESULT_STATUS.SUCCESS) return "Procesado correctamente";
-  if (status === BULK_PAYMENT_RESULT_STATUS.ALREADY_PROCESSED) return "Ya estaba procesado";
-  return "No se pudo procesar";
+function toResponse(run: BulkMarkPaidRunState): BulkMarkPaidResponse {
+  const totals = aggregateBulkMarkPaidTotals(run.results);
+  return {
+    items: Object.values(run.results),
+    amounts_by_currency: totals.amountsByCurrency,
+    unresolved_count: totals.unresolvedCount,
+    totals_complete: totals.totalsComplete,
+  };
 }
 
-function getItemErrorMessage(item: BulkPaymentItemResult): string | null {
-  if (item.error_code === "GIOF_LEASE_FOREIGN" || item.error_code === "ACTIVE_FOREIGN_LEASE") {
-    return "La solicitud tiene un lease activo de otra persona. No se registró el pago.";
-  }
-  if (item.error_code === "GIOF_ASSIGNMENT_VERSION_STALE" || item.error_code === "VERSION_MISMATCH") {
-    return "La versión de asignación cambió. Actualiza la cola antes de reintentar.";
-  }
-  if (item.error_code === "INELIGIBLE_LIFECYCLE" || item.error_code === "PAYMENT_REQUEST_NOT_ELIGIBLE") {
-    return "La solicitud ya no es elegible para pago.";
-  }
-  return item.error ?? null;
+function getStatusLabel(status: string): string {
+  if (status === BULK_MARK_PAID_ITEM_STATUS.SUCCESS) return "Pagada";
+  if (status === BULK_MARK_PAID_ITEM_STATUS.ALREADY_PROCESSED)
+    return "Ya procesado · Pagada";
+  if (status === BULK_MARK_PAID_ITEM_STATUS.FAILED) return "No registrada";
+  if (status === BULK_MARK_PAID_ITEM_STATUS.LEASE_FAILED)
+    return "Conflicto de asignación";
+  if (status === BULK_MARK_PAID_ITEM_STATUS.AMBIGUOUS)
+    return "Respuesta no confirmada";
+  if (status === BULK_MARK_PAID_ITEM_STATUS.CANCELLED) return "No iniciada";
+  if (status === BULK_MARK_PAID_ITEM_STATUS.ACQUIRING)
+    return "Preparando sesión PAYMENT";
+  if (status === BULK_MARK_PAID_ITEM_STATUS.SUBMITTING)
+    return "Esperando respuesta del servidor";
+  return "Pendiente";
 }
 
-function mergeResults(
-  previous: BulkPaymentItemResult[],
-  next: BulkPaymentItemResult[],
-): BulkPaymentItemResult[] {
-  const byRequestId = new Map(previous.map((item) => [item.request_id, item]));
-  next.forEach((item) => byRequestId.set(item.request_id, item));
-  return [...byRequestId.values()];
-}
-
-export function BulkMarkPaidModal({ requests, open, onOpenChange, onSuccess, prepareItems }: BulkMarkPaidModalProps) {
+export function BulkMarkPaidModal({
+  requests,
+  open,
+  onOpenChange,
+  onSuccess,
+  prepareItems,
+  scope,
+  pageRequestIds,
+  acquireLease,
+  releaseLease,
+  refetchQueue,
+  reconcileRun,
+}: BulkMarkPaidModalProps) {
   const { bulkMarkPaid } = useBulkMarkPaid();
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [submitError, setSubmitError] = useState<string | null>(null);
-  const [result, setResult] = useState<BulkMarkPaidResponse | null>(null);
-  const [references, setReferences] = useState<Record<string, string>>({});
-  const initialBatchIdRef = useRef<string>("");
-  const retryBatchIdRef = useRef<string | null>(null);
-  const totalAmount = requests.reduce((total, request) => total + getRequestPayableAmount(request), 0);
-  const currency = requests[0]?.currency ?? "PEN";
-  const form = useForm<BulkRegisterPaymentsFormValues>({
-    resolver: zodResolver(bulkRegisterPaymentsSchema),
-    defaultValues: { paid_at: getBusinessDateTimeLocalValue(), source_account_key: undefined },
-  });
+  const [paidAt, setPaidAt] = useState("");
+  const [confirmed, setConfirmed] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [run, setRun] = useState<BulkMarkPaidRunState | null>(null);
+  const controllerRef = useRef<BulkMarkPaidOrchestrator | null>(null);
+  const actionRef = useRef<HTMLButtonElement | null>(null);
+  const leaseCacheRef = useRef<Map<string, PreparedPaymentLease>>(new Map());
+  const effectiveScope = scope ?? VOLATILE_SCOPE;
+  const persistent = Boolean(scope);
 
   useEffect(() => {
     if (!open) return;
-    initialBatchIdRef.current = createClientBatchId();
-    retryBatchIdRef.current = null;
-    form.reset({ paid_at: getBusinessDateTimeLocalValue(), source_account_key: undefined });
-    setReferences(Object.fromEntries(requests.map((request) => [request.id, ""])));
-    setSubmitError(null);
-    setResult(null);
-  }, [form, open]);
+    setPaidAt("");
+    setConfirmed(false);
+    setError(null);
+    setRun(scope ? loadBulkMarkPaidRun(scope) : null);
+    controllerRef.current = null;
+    leaseCacheRef.current.clear();
+  }, [open, scope?.pageIdentity, scope?.sessionId, scope?.userId]);
 
-  async function runSubmission(
-    targetRequests: PaymentRequest[],
-    values: BulkRegisterPaymentsFormValues,
-    clientBatchId: string,
-  ): Promise<void> {
-    if (isSubmitting) return;
-    setIsSubmitting(true);
-    setSubmitError(null);
-    try {
-      const prepared = await prepareItems(targetRequests);
-      const preparedById = new Map(prepared.map((item) => [item.request_id, item]));
-      const items = targetRequests.map((request) => {
-        const credential = preparedById.get(request.id);
-        if (!credential) throw new Error(`No se pudo preparar ${getRequestDisplayCode(request)}. Actualiza la cola.`);
-        return {
-          ...credential,
-          operation_reference: references[request.id]?.trim() || undefined,
-        };
-      });
-      const response = await bulkMarkPaid({
-        client_batch_id: clientBatchId,
-        paid_at: parseBusinessDateTimeLocalToIso(values.paid_at),
-        source_account_key: values.source_account_key,
-        items,
-      });
-      const mergedResults = mergeResults(result?.results ?? [], response.results);
-      const mergedResponse: BulkMarkPaidResponse = {
-        ...response,
-        item_count: mergedResults.length,
-        success_count: mergedResults.filter((item) => item.status !== BULK_PAYMENT_RESULT_STATUS.FAILED).length,
-        failed_count: mergedResults.filter((item) => item.status === BULK_PAYMENT_RESULT_STATUS.FAILED).length,
-        results: mergedResults,
-      };
-      setResult(mergedResponse);
-      retryBatchIdRef.current = null;
-      await onSuccess(response);
-    } catch (error) {
-      setSubmitError(getApiErrorMessage(error));
-    } finally {
-      setIsSubmitting(false);
-    }
-  }
-
-  async function submit(values: BulkRegisterPaymentsFormValues): Promise<void> {
-    if (requests.length < 1 || requests.length > BULK_PAYMENT_MAX_ITEMS) {
-      setSubmitError("Selecciona entre 1 y 5 solicitudes visibles y elegibles.");
+  useEffect(() => {
+    if (
+      !open ||
+      (!error &&
+        run?.phase !== BULK_MARK_PAID_RUN_PHASE.PAUSED_SAFE &&
+        run?.phase !== BULK_MARK_PAID_RUN_PHASE.PAUSED_AMBIGUOUS &&
+        run?.phase !== BULK_MARK_PAID_RUN_PHASE.RECOVERY_REQUIRED)
+    )
       return;
+    actionRef.current?.focus();
+  }, [error, open, run?.phase]);
+
+  const validSize =
+    requests.length > 0 &&
+    requests.length <= 50 &&
+    new Set(requests.map((row) => row.id)).size === requests.length;
+  const progress = run ? getBulkMarkPaidRunProgress(run) : null;
+  const totals = run ? aggregateBulkMarkPaidTotals(run.results) : null;
+  const requestsById = new Map(
+    requests.map((request) => [request.id, request]),
+  );
+  const commands = run?.commands ?? [];
+  const activeRun = Boolean(run && !isRunSettled(run));
+
+  async function legacyAcquire(
+    command: BulkMarkPaidCommand,
+  ): Promise<BulkMarkPaidLease> {
+    let prepared = leaseCacheRef.current.get(command.requestId);
+    if (!prepared) {
+      if (!prepareItems)
+        throw new Error("No se pudo preparar la sesión PAYMENT.");
+      const leases = await prepareItems(requests);
+      leaseCacheRef.current = new Map(
+        leases.map((lease) => [lease.request_id, lease]),
+      );
+      prepared = leaseCacheRef.current.get(command.requestId);
     }
-    await runSubmission(requests, values, initialBatchIdRef.current);
+    if (!prepared)
+      throw new Error("No se pudo preparar la asignación. Actualiza la cola.");
+    return {
+      requestId: prepared.request_id,
+      assignmentVersion: prepared.assignment_version,
+      leaseToken: prepared.lease_token,
+    };
   }
 
-  async function retryFailed(): Promise<void> {
-    if (!result) return;
-    const failedIds = new Set(result.results.filter((item) => item.status === BULK_PAYMENT_RESULT_STATUS.FAILED).map((item) => item.request_id));
-    const failedRequests = requests.filter((request) => failedIds.has(request.id));
-    if (failedRequests.length === 0) return;
-    retryBatchIdRef.current ??= createClientBatchId();
-    await runSubmission(failedRequests, form.getValues(), retryBatchIdRef.current);
+  function createController(
+    current: BulkMarkPaidRunState,
+  ): BulkMarkPaidOrchestrator {
+    const controller = createBulkMarkPaidOrchestrator(
+      current,
+      {
+        acquireLease: acquireLease ?? legacyAcquire,
+        releaseLease: releaseLease ?? (async () => undefined),
+        postChunk: bulkMarkPaid,
+        refetchQueue: refetchQueue ?? (async () => undefined),
+        saveRun: (runScope, next) => {
+          if (persistent) saveBulkMarkPaidRun(runScope, next);
+          setRun(next);
+        },
+        removeRun: (runScope) => {
+          if (persistent) removeBulkMarkPaidRun(runScope);
+        },
+        reconcileRun,
+      },
+      effectiveScope,
+    );
+    controllerRef.current = controller;
+    return controller;
   }
 
-  const failedCount = result?.results.filter((item) => item.status === BULK_PAYMENT_RESULT_STATUS.FAILED).length ?? 0;
+  async function execute(
+    action: (
+      controller: BulkMarkPaidOrchestrator,
+    ) => Promise<BulkMarkPaidRunState>,
+    current: BulkMarkPaidRunState,
+  ): Promise<void> {
+    if (busy) return;
+    setBusy(true);
+    setError(null);
+    leaseCacheRef.current.clear();
+    try {
+      const finalRun = await action(createController(current));
+      setRun(finalRun);
+      if (finalRun.phase === BULK_MARK_PAID_RUN_PHASE.COMPLETED)
+        await onSuccess(toResponse(finalRun));
+    } catch (caught) {
+      setError(
+        caught instanceof Error
+          ? caught.message
+          : "No se pudo continuar el marcado masivo.",
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function start(): Promise<void> {
+    if (busy || run || !confirmed || !validSize) return;
+    try {
+      if (
+        requests.some(
+          (request) => request.currency !== "PEN" && request.currency !== "USD",
+        )
+      )
+        throw new Error(
+          "Moneda original sin resolver. Actualiza la solicitud.",
+        );
+      const timestamp = parseBusinessDateTimeLocalToIso(paidAt);
+      const initial = createBulkMarkPaidRun({
+        scope: effectiveScope,
+        pageRequestIds: pageRequestIds ?? requests.map((row) => row.id),
+        selected: requests.map((row) => ({
+          requestId: row.id,
+          originalAmount: getExactPayablePrincipal(row),
+          originalCurrency: row.currency,
+        })),
+        paidAt: timestamp,
+      });
+      setRun(initial);
+      if (persistent) saveBulkMarkPaidRun(effectiveScope, initial);
+      await execute((controller) => controller.start(), initial);
+    } catch (caught) {
+      setError(
+        caught instanceof Error
+          ? caught.message
+          : "No se pudo iniciar el marcado masivo.",
+      );
+    }
+  }
+
+  function cancel(): void {
+    controllerRef.current?.cancel();
+    const next = controllerRef.current?.getState();
+    if (next) setRun(next);
+  }
+
+  function discard(): void {
+    if (persistent) removeBulkMarkPaidRun(effectiveScope);
+    setRun(null);
+    onOpenChange(false);
+  }
 
   return (
-    <Dialog open={open} onOpenChange={(nextOpen) => { if (!isSubmitting) onOpenChange(nextOpen); }}>
-      <DialogContent className="max-h-[90vh] max-w-3xl overflow-y-auto">
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        if (!busy && !activeRun) onOpenChange(next);
+      }}
+    >
+      <DialogContent className="max-w-4xl" closeDisabled={busy || activeRun}>
         <DialogHeader>
-          <DialogTitle>Registrar pagos seleccionados</DialogTitle>
+          <DialogTitle>Marcar pagos realizados</DialogTitle>
           <DialogDescription>
-            {requests.length} solicitud{requests.length === 1 ? "" : "es"} visible{requests.length === 1 ? "" : "s"} por {formatRequestCurrency(totalAmount, currency)}. Fecha y cuenta son comunes; la referencia es opcional por solicitud.
+            Confirma transferencias que ya ocurrieron, no órdenes de
+            transferencia. Puedes procesar hasta 50 pagos de esta página; el
+            sistema los envía internamente en grupos de hasta 5.
           </DialogDescription>
         </DialogHeader>
-        <Form {...form}>
-          <form className="space-y-4" onSubmit={form.handleSubmit(submit)}>
-            <p className="rounded-md border bg-muted/40 p-3 text-sm text-muted-foreground">
-              El lote puede terminar con resultados parciales. La constancia no es obligatoria y podrá completarse después.
-            </p>
-            <div className="grid gap-4 md:grid-cols-2">
-              <FormField control={form.control} name="paid_at" render={({ field }) => (
-                <FormItem>
-                  <FormLabel>Fecha efectiva del pago (hora Perú)</FormLabel>
-                  <FormControl><Input type="datetime-local" {...field} data-testid="bulk-payment-paid-at-input" /></FormControl>
-                  <FormMessage />
-                </FormItem>
-              )} />
-              <FormField control={form.control} name="source_account_key" render={({ field }) => (
-                <FormItem>
-                  <FormLabel>Cuenta de origen</FormLabel>
-                  <FormControl>
-                    <select className="h-9 w-full rounded-md border bg-background px-3 text-sm" value={field.value ?? ""} onChange={field.onChange} data-testid="bulk-payment-source-account-select">
-                      <option value="">Selecciona una cuenta</option>
-                      {Object.entries(SOURCE_ACCOUNT_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
-                    </select>
-                  </FormControl>
-                  <FormMessage />
-                </FormItem>
-              )} />
-            </div>
+        <DialogBody className="space-y-4">
+          <p className="text-sm">
+            Referencia, constancia y TC final se completan después por cada
+            pago. No se comparte cuenta, constancia, referencia ni tipo de
+            cambio entre solicitudes.
+          </p>
 
-            <div className="rounded-md border">
-              <div className="border-b px-3 py-2 text-sm font-medium">Solicitudes seleccionadas (máximo 5)</div>
-              <div className="divide-y">
-                {requests.map((request) => (
-                  <div key={request.id} className="grid gap-2 px-3 py-3 md:grid-cols-[1fr_auto_1.2fr] md:items-center">
-                    <span className="text-sm font-medium">{getRequestDisplayCode(request)}</span>
-                    <span className="text-sm font-medium">{formatRequestCurrency(getRequestPayableAmount(request), request.currency)}</span>
-                    <Input
-                      value={references[request.id] ?? ""}
-                      maxLength={120}
-                      placeholder="Referencia opcional"
-                      aria-label={`Referencia de ${getRequestDisplayCode(request)}`}
-                      data-testid="bulk-payment-reference-input"
-                      onChange={(event) => setReferences((current) => ({ ...current, [request.id]: event.target.value }))}
-                    />
-                  </div>
+          {!run ? (
+            <>
+              <label htmlFor="bulk-paid-at">
+                Fecha efectiva del pago (hora Perú)
+              </label>
+              <Input
+                id="bulk-paid-at"
+                type="datetime-local"
+                value={paidAt}
+                disabled={busy}
+                onChange={(event) => setPaidAt(event.target.value)}
+              />
+              <ul className="space-y-2">
+                {requests.map((row) => (
+                  <li key={row.id} className="rounded-md border p-3">
+                    {getRequestDisplayCode(row)} · Principal original:{" "}
+                    {row.currency ?? "Moneda sin resolver"}{" "}
+                    {getExactPayablePrincipal(row)}
+                  </li>
                 ))}
+              </ul>
+              <label className="flex items-start gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  checked={confirmed}
+                  disabled={busy}
+                  onChange={(event) => setConfirmed(event.target.checked)}
+                />
+                Confirmo que las transferencias seleccionadas ya se realizaron
+                realmente ({requests.length} pagos)
+              </label>
+            </>
+          ) : null}
+
+          {run && progress && totals ? (
+            <section
+              aria-label="Progreso del marcado de pagos"
+              className="space-y-4"
+            >
+              <div
+                aria-live="polite"
+                role="status"
+                className="rounded-md border bg-muted/40 p-3 text-sm"
+              >
+                Procesados {progress.completed + progress.failed} de{" "}
+                {progress.total}. Exitosos {progress.completed}; fallidos{" "}
+                {progress.failed}; pendientes {progress.pending}; sin confirmar{" "}
+                {progress.unresolved}; reintentables {progress.retryable}.
               </div>
-            </div>
+              <p className="text-sm text-muted-foreground">
+                Grupo {Math.min(run.cursor + 1, run.chunks.length)} de{" "}
+                {run.chunks.length}. Los resultados confirmados no se revierten
+                al cancelar.
+              </p>
+              {Object.entries(totals.amountsByCurrency).map(
+                ([currency, amount]) => (
+                  <p key={currency} className="font-medium">
+                    Principal confirmado: {formatExactMoney(amount, currency)}
+                  </p>
+                ),
+              )}
+              {!totals.totalsComplete ? (
+                <p>
+                  Importes exitosos sin moneda resuelta:{" "}
+                  {totals.unresolvedCount}. No se muestra un total nominal
+                  mezclado.
+                </p>
+              ) : null}
+              <ul aria-label="Resultados por solicitud" className="space-y-2">
+                {commands.map((command) => {
+                  const item = run.items[command.requestId];
+                  const result = run.results[command.requestId];
+                  const request = requestsById.get(command.requestId);
+                  return (
+                    <li
+                      key={command.requestId}
+                      className="rounded-md border p-3 text-sm"
+                    >
+                      <p className="font-medium">
+                        {request
+                          ? getRequestDisplayCode(request)
+                          : command.requestId}{" "}
+                        · {getStatusLabel(item.status)}
+                      </p>
+                      {result ? (
+                        <p>
+                          {result.message} ({result.code})
+                        </p>
+                      ) : null}
+                      {!result &&
+                      item.errorMessage &&
+                      commands.find(
+                        (candidate) =>
+                          run.items[candidate.requestId]?.errorMessage ===
+                          item.errorMessage,
+                      )?.requestId === command.requestId ? (
+                        <p className="text-destructive">{item.errorMessage}</p>
+                      ) : null}
+                      {result?.original ? (
+                        <p>
+                          {formatExactMoney(
+                            result.original.amount,
+                            result.original.currency ?? "Moneda sin resolver",
+                          )}
+                        </p>
+                      ) : null}
+                      {result &&
+                      result.outcome !== BULK_PAYMENT_RESULT_STATUS.FAILED ? (
+                        <>
+                          <p>
+                            {getPaymentCompletenessPresentation({
+                              missing_fields: result.missing_fields,
+                            }).labels.join(" · ")}
+                          </p>
+                          <PaymentValuation valuation={result.valuation} />
+                        </>
+                      ) : result?.outcome ===
+                        BULK_PAYMENT_RESULT_STATUS.FAILED ? (
+                        <p className="text-destructive">
+                          Actualiza la cola y revisa esta solicitud antes de
+                          volver a operar. Los pagos exitosos no se reenviarán.
+                        </p>
+                      ) : null}
+                    </li>
+                  );
+                })}
+              </ul>
+            </section>
+          ) : null}
 
-            {submitError ? <p className="rounded-md border border-destructive/40 p-3 text-sm text-destructive" role="alert">{submitError}</p> : null}
-
-            {result ? (
-              <div className="space-y-3 rounded-md border p-3" data-testid="bulk-payment-result-summary">
-                <div className="flex flex-wrap gap-2 text-sm">
-                  <Badge>Procesados: {result.success_count}</Badge>
-                  <Badge variant="outline">Fallidos: {result.failed_count}</Badge>
-                </div>
-                <div className="space-y-2">
-                  {result.results.map((item) => (
-                    <div key={item.request_id} className="rounded-md border p-2 text-sm" data-testid="bulk-payment-result-row">
-                      <div className="flex flex-wrap items-center justify-between gap-2">
-                        <span className="font-medium">{getRequestDisplayCode(requests.find((request) => request.id === item.request_id) ?? { id: item.request_id } as PaymentRequest)}</span>
-                        <span>{getResultLabel(item.status)}</span>
-                      </div>
-                      {getItemErrorMessage(item) ? <p className="mt-1 text-destructive">{getItemErrorMessage(item)}</p> : null}
-                    </div>
-                  ))}
-                </div>
-                {failedCount > 0 ? <Button type="button" variant="outline" disabled={isSubmitting} onClick={() => void retryFailed()}>{isSubmitting ? "Reintentando..." : `Reintentar ${failedCount} fallido${failedCount === 1 ? "" : "s"}`}</Button> : null}
-              </div>
-            ) : null}
-
-            <DialogFooter>
-              <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={isSubmitting}>Cerrar</Button>
-              {!result ? <Button type="submit" disabled={isSubmitting || requests.length === 0 || requests.length > BULK_PAYMENT_MAX_ITEMS}>{isSubmitting ? "Registrando..." : `Registrar ${requests.length} pago${requests.length === 1 ? "" : "s"}`}</Button> : null}
-            </DialogFooter>
-          </form>
-        </Form>
+          {run?.phase === BULK_MARK_PAID_RUN_PHASE.PAUSED_AMBIGUOUS ? (
+            <p
+              role="alert"
+              className="rounded-md border border-destructive/40 p-3 text-sm"
+            >
+              La respuesta del grupo actual es ambigua. Reintenta exactamente el
+              mismo grupo para reconciliarlo antes de continuar. No inicies otra
+              operación.{" "}
+              {run.items[run.chunks[run.cursor]?.requestIds[0]]?.errorMessage}
+            </p>
+          ) : null}
+          {run?.phase === BULK_MARK_PAID_RUN_PHASE.PAUSED_SAFE ? (
+            <p
+              role="alert"
+              className="rounded-md border border-destructive/40 p-3 text-sm"
+            >
+              La operación está pausada antes de confirmar el siguiente grupo.
+              Actualiza la asignación y reanuda con los mismos comandos.
+            </p>
+          ) : null}
+          {run?.phase === BULK_MARK_PAID_RUN_PHASE.RECOVERY_REQUIRED ? (
+            <p
+              role="alert"
+              className="rounded-md border border-destructive/40 p-3 text-sm"
+            >
+              Hay una operación recuperada. Primero se consultará el estado
+              autoritativo; después se reanudarán solo los pagos pendientes con
+              sus mismas claves.
+            </p>
+          ) : null}
+          {error ? (
+            <p role="alert" className="text-sm text-destructive">
+              {error}
+            </p>
+          ) : null}
+        </DialogBody>
+        <DialogFooter>
+          {isRunSettled(run) ? (
+            <Button
+              variant="outline"
+              disabled={busy}
+              onClick={() => onOpenChange(false)}
+            >
+              Cerrar
+            </Button>
+          ) : null}
+          {run?.phase === BULK_MARK_PAID_RUN_PHASE.RECOVERY_REQUIRED ? (
+            <>
+              <Button variant="outline" disabled={busy} onClick={discard}>
+                Descartar después de revisar
+              </Button>
+              <Button
+                ref={actionRef}
+                disabled={busy}
+                onClick={() =>
+                  void execute((controller) => controller.resumeRecovery(), run)
+                }
+              >
+                {busy ? "Reconciliando..." : "Reconciliar y reanudar"}
+              </Button>
+            </>
+          ) : null}
+          {run?.phase === BULK_MARK_PAID_RUN_PHASE.PAUSED_SAFE ? (
+            <Button
+              ref={actionRef}
+              disabled={busy}
+              onClick={() =>
+                void execute((controller) => controller.resumeSafe(), run)
+              }
+            >
+              {busy ? "Reanudando..." : "Reanudar pagos pendientes"}
+            </Button>
+          ) : null}
+          {run?.phase === BULK_MARK_PAID_RUN_PHASE.PAUSED_AMBIGUOUS ? (
+            <Button
+              ref={actionRef}
+              disabled={busy}
+              onClick={() =>
+                void execute((controller) => controller.retryAmbiguous(), run)
+              }
+            >
+              {busy
+                ? "Reconciliando..."
+                : "Reintentar misma confirmación (mismo grupo)"}
+            </Button>
+          ) : null}
+          {run &&
+          activeRun &&
+          run.phase !== BULK_MARK_PAID_RUN_PHASE.RECOVERY_REQUIRED ? (
+            <Button variant="outline" onClick={cancel}>
+              Cancelar pagos restantes
+            </Button>
+          ) : null}
+          {!run ? (
+            <Button
+              ref={actionRef}
+              disabled={busy || !confirmed || !paidAt || !validSize}
+              onClick={() => void start()}
+            >
+              {busy ? "Iniciando..." : `Marcar ${requests.length} pagos`}
+            </Button>
+          ) : null}
+        </DialogFooter>
       </DialogContent>
     </Dialog>
   );

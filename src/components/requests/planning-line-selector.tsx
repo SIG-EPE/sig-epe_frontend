@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import type { Control } from "react-hook-form";
+import { useWatch, type Control } from "react-hook-form";
 
 import { Button } from "@/components/ui/button";
 import { SearchSelectModal } from "@/components/ui/search-select-modal";
@@ -7,6 +7,7 @@ import { FormControl, FormDescription, FormField, FormItem, FormLabel, FormMessa
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { PLANNING_TYPES } from "@/lib/planning-types";
 import { getPlanningLineDisplay } from "@/lib/requests";
+import { validatePoaCurrencies } from "@/lib/request-currency-policy";
 import { cn } from "@/lib/utils";
 import { useRequestPlanningLineFacets, useRequestPlanningLineSearch } from "@/hooks/use-requests";
 import { REQUEST_PLANNING_LINE_SCOPE, type RequestPlanningLineLookupItem } from "@/types/requests";
@@ -49,6 +50,7 @@ interface PlanningLineSelectorProps {
   isLoading?: boolean;
   isRefreshing?: boolean;
   error?: Error | null;
+  otherSelectedCurrencies?: readonly unknown[];
   onSelectedLineChange: (line: RequestPlanningLineLookupItem | null) => void;
 }
 
@@ -61,6 +63,7 @@ function formatCodeName(code: string | null | undefined, name: string | null | u
 
 function getLineSummaryItems(line: RequestPlanningLineLookupItem): SummaryItem[] {
   return [
+    { label: "Moneda", value: line.currency ?? "Pendiente de resolución" },
     { label: "Unidad", value: formatCodeName(line.org_unit?.code, line.org_unit?.name) },
     { label: "Componente", value: line.action?.component?.name },
     { label: "Acción", value: line.action?.name },
@@ -98,7 +101,10 @@ function fromSelectValue(value: string): string | null {
   return value === ALL_OPTION_VALUE ? null : value;
 }
 
-export function PlanningLineSelector({ control, name = "budget_planning_line_id", selectedLine, lines: seedLines = [], isLoading: legacyLoading = false, isRefreshing: legacyRefreshing = false, error: legacyError = null, onSelectedLineChange }: PlanningLineSelectorProps) {
+export function PlanningLineSelector({ control, name = "budget_planning_line_id", selectedLine, lines: seedLines = [], isLoading: legacyLoading = false, isRefreshing: legacyRefreshing = false, error: legacyError = null, otherSelectedCurrencies = [], onSelectedLineChange }: PlanningLineSelectorProps) {
+  const currency = useWatch({ control, name: "currency" });
+  const disabledReason = (line: RequestPlanningLineLookupItem) => validatePoaCurrencies(currency, [...otherSelectedCurrencies, line.currency]);
+  const selectedLineIssue = selectedLine ? disabledReason(selectedLine) : null;
   const [mode, setMode] = useState<PoaSelectorMode>(POA_SELECTOR_MODE.DIRECT);
   const [directOpen, setDirectOpen] = useState(false);
   const [directOrgUnitOpen, setDirectOrgUnitOpen] = useState(false);
@@ -263,9 +269,12 @@ export function PlanningLineSelector({ control, name = "budget_planning_line_id"
                     getItemId={(line) => line.id}
                     getItemLabel={(line) => getPlanningLineDisplay(line)}
                     getItemSubLabel={getLineSubLabel}
+                    getItemDisabledReason={disabledReason}
                     searchPlaceholder="Buscar por código, descripción, jerarquía o unidad..."
                     testId="request-planning-line-trigger"
                     onChange={(id) => {
+                      const candidate = lines.find((line) => line.id === id);
+                      if (candidate && disabledReason(candidate)) return;
                       field.onChange(id ?? "");
                       onSelectedLineChange(lines.find((line) => line.id === id) ?? null);
                     }}
@@ -316,6 +325,8 @@ export function PlanningLineSelector({ control, name = "budget_planning_line_id"
                               isSelected && "bg-muted font-medium",
                             )}
                             aria-pressed={isSelected}
+                            disabled={Boolean(disabledReason(line))}
+                            title={disabledReason(line) ?? undefined}
                             onClick={() => {
                               field.onChange(line.id);
                               onSelectedLineChange(line);
@@ -323,6 +334,7 @@ export function PlanningLineSelector({ control, name = "budget_planning_line_id"
                           >
                             <span className="block truncate">{getPlanningLineDisplay(line)}</span>
                             <span className="block truncate text-xs text-muted-foreground">{getLineSubLabel(line)}</span>
+                            {disabledReason(line) && <span className="block text-xs text-muted-foreground">{disabledReason(line)}</span>}
                           </button>
                         );
                       })
@@ -337,6 +349,11 @@ export function PlanningLineSelector({ control, name = "budget_planning_line_id"
               )}
             </div>
           </FormControl>
+          {selectedLineIssue && (
+            <p role="alert" className="text-xs text-destructive">
+              La línea POA seleccionada es incompatible: {selectedLineIssue} Cambia la moneda o selecciona otra línea antes de guardar.
+            </p>
+          )}
           {selectedLine && (
             <FormDescription className="space-y-3 rounded-md border bg-muted/40 p-3">
               <span className="block font-medium text-foreground">{getPlanningLineDisplay(selectedLine)}</span>

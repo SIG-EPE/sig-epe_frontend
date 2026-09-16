@@ -22,6 +22,7 @@ vi.mock("@/hooks/use-requests", () => ({
 function makeLine(overrides: Partial<RequestPlanningLineLookupItem> = {}): RequestPlanningLineLookupItem {
   return {
     id: "line-1",
+    currency: "PEN",
     line_code: "POA-001",
     resource_description: "Implementación territorial",
     planning_type: "PROJECT",
@@ -45,12 +46,13 @@ function makeLine(overrides: Partial<RequestPlanningLineLookupItem> = {}): Reque
   };
 }
 
-function PlanningLineSelectorHarness({ selectedLine }: { selectedLine: RequestPlanningLineLookupItem | null }) {
+function PlanningLineSelectorHarness({ selectedLine, currency = "PEN", otherSelectedCurrencies = [] }: { selectedLine: RequestPlanningLineLookupItem | null; currency?: "PEN" | "USD"; otherSelectedCurrencies?: Array<"PEN" | "USD" | null> }) {
   const form = useForm<RequestFormValues>({
     defaultValues: {
       request_type: "ADVANCE",
+      currency,
       budget_planning_line_id: selectedLine?.id ?? "",
-      requested_amount: 100,
+      requested_amount: "100",
       concept: "Solicitud de prueba",
       scheduled_rendition_at: "",
       beneficiary_name: "",
@@ -68,7 +70,9 @@ function PlanningLineSelectorHarness({ selectedLine }: { selectedLine: RequestPl
 
   return (
     <Form {...form}>
-      <PlanningLineSelector control={form.control} selectedLine={selectedLine} lines={mocks.lines} onSelectedLineChange={vi.fn()} />
+      <label>Moneda de prueba<select aria-label="Moneda de prueba" {...form.register("currency")}><option value="PEN">PEN</option><option value="USD">USD</option></select></label>
+      <output data-testid="selected-line-id">{form.watch("budget_planning_line_id")}</output>
+      <PlanningLineSelector control={form.control} selectedLine={selectedLine} lines={mocks.lines} otherSelectedCurrencies={otherSelectedCurrencies} onSelectedLineChange={vi.fn()} />
     </Form>
   );
 }
@@ -138,6 +142,7 @@ describe("PlanningLineSelector", () => {
     const option = within(dialog).getByTestId("request-planning-line-trigger-option");
 
     expect(option).toHaveTextContent("Unidad: UO-01 · Unidad de Operaciones");
+    expect(option).toHaveTextContent("Moneda: PEN");
     expect(option).toHaveTextContent("Componente: Fortalecimiento comunitario");
     expect(option).toHaveTextContent("Acción: Ejecutar acompañamiento");
     expect(option).toHaveTextContent("Categoría/Recurso: CAT-10 · Servicios técnicos");
@@ -149,6 +154,58 @@ describe("PlanningLineSelector", () => {
       expect(option).not.toHaveTextContent("Costo total");
       expect(option).not.toHaveTextContent("Saldo por ejecutar");
     });
+  });
+  it("shows the actual currency and disables USD and unresolved lines for PEN", async () => {
+    mocks.lines = [makeLine(), makeLine({ id: "usd", currency: "USD" }), makeLine({ id: "legacy", currency: null })];
+    render(<PlanningLineSelectorHarness selectedLine={null} />);
+    await userEvent.setup().click(screen.getByTestId("request-planning-line-trigger"));
+    const options = await screen.findAllByTestId("request-planning-line-trigger-option");
+    expect(options[0]).not.toBeDisabled();
+    expect(options[1]).toBeDisabled();
+    expect(options[1]).toHaveTextContent("Una solicitud en soles solo puede usar líneas POA en soles.");
+    expect(options[2]).toBeDisabled();
+    expect(options[2]).toHaveTextContent("Pendiente de resolución");
+  });
+
+  it("allows USD with homogeneous PEN or USD lines, but never mixed lines", async () => {
+    mocks.lines = [makeLine(), makeLine({ id: "usd", currency: "USD" }), makeLine({ id: "legacy", currency: null })];
+    const { rerender } = render(<PlanningLineSelectorHarness selectedLine={null} currency="USD" />);
+    await userEvent.setup().click(screen.getByTestId("request-planning-line-trigger"));
+    let options = await screen.findAllByTestId("request-planning-line-trigger-option");
+    expect(options[0]).not.toBeDisabled();
+    expect(options[1]).not.toBeDisabled();
+    expect(options[2]).toBeDisabled();
+
+    rerender(<PlanningLineSelectorHarness selectedLine={null} currency="USD" otherSelectedCurrencies={["PEN"]} />);
+    options = await screen.findAllByTestId("request-planning-line-trigger-option");
+    expect(options[0]).not.toBeDisabled();
+    expect(options[1]).toBeDisabled();
+    expect(options[1]).toHaveTextContent("No se pueden mezclar");
+  });
+
+  it("retains the hydrated PEN selection across PEN to USD to PEN", async () => {
+    const user = userEvent.setup();
+    const line = makeLine();
+    mocks.lines = [line];
+    render(<PlanningLineSelectorHarness selectedLine={line} />);
+    expect(screen.getByTestId("selected-line-id")).toHaveTextContent(line.id);
+    await user.selectOptions(screen.getByLabelText("Moneda de prueba"), "USD");
+    expect(screen.getByTestId("selected-line-id")).toHaveTextContent(line.id);
+    expect(screen.getByText("Moneda").parentElement).toHaveTextContent("PEN");
+    await user.selectOptions(screen.getByLabelText("Moneda de prueba"), "PEN");
+    expect(screen.getByTestId("selected-line-id")).toHaveTextContent(line.id);
+  });
+
+  it("retains an incompatible hydrated selection and shows how to correct it after currency changes", async () => {
+    const user = userEvent.setup();
+    const line = makeLine({ id: "usd", currency: "USD" });
+    mocks.lines = [line];
+    render(<PlanningLineSelectorHarness selectedLine={line} currency="USD" />);
+    await user.selectOptions(screen.getByLabelText("Moneda de prueba"), "PEN");
+    expect(screen.getByTestId("selected-line-id")).toHaveTextContent(line.id);
+    expect(screen.getByRole("alert")).toHaveTextContent("Una solicitud en soles solo puede usar líneas POA en soles.");
+    await user.selectOptions(screen.getByLabelText("Moneda de prueba"), "USD");
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
   it("propaga la apertura del modal para iniciar la carga directa", async () => {

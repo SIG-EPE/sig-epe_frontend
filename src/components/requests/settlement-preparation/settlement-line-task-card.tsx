@@ -12,7 +12,7 @@ import {
 
 interface SettlementLineTaskCardProps {
   task: SettlementLineTask;
-  currency: string;
+  currency: string | null;
   disabled?: boolean;
   onGoToTask: (task: SettlementLineTask) => void;
 }

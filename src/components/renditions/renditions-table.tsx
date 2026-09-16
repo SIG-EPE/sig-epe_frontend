@@ -5,7 +5,14 @@ import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { QueueTableRowsSkeleton } from "@/components/performance/route-skeletons";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import {
   formatRequestCurrency,
   formatRequestDate,
@@ -20,8 +27,12 @@ import {
 } from "@/lib/requests";
 import type { RenditionInboxRow } from "@/types/requests";
 import { GiofWorkStatus } from "@/components/giof-work/giof-work-controls";
+import { GiofOwnershipActions } from "@/components/giof-work/giof-ownership-actions";
 import { canOperateAssignedGiofWork } from "@/lib/role-capabilities";
-import { REQUEST_STATUS_SURFACE, formatRequestStatus } from "@/lib/request-status-vocabulary";
+import {
+  REQUEST_STATUS_SURFACE,
+  formatRequestStatus,
+} from "@/lib/request-status-vocabulary";
 
 interface RenditionsTableProps {
   renditions: RenditionInboxRow[];
@@ -31,108 +42,267 @@ interface RenditionsTableProps {
   selectedAssignmentIds?: string[];
   onToggleAssignment?: (requestId: string, checked: boolean) => void;
   onToggleAllAssignments?: (checked: boolean) => void;
+  roleCode?: string | null;
+  refetchPoolQueue?: (options?: { force?: boolean }) => Promise<void>;
 }
 
-export function RenditionsTable({ renditions, isLoading, currentUserId, isGiofManager = false, selectedAssignmentIds = [], onToggleAssignment, onToggleAllAssignments }: RenditionsTableProps) {
+export function RenditionsTable({
+  renditions,
+  isLoading,
+  currentUserId,
+  isGiofManager = false,
+  selectedAssignmentIds = [],
+  onToggleAssignment,
+  onToggleAllAssignments,
+  roleCode,
+  refetchPoolQueue,
+}: RenditionsTableProps) {
   if (isLoading) {
     return <QueueTableRowsSkeleton rows={5} columns={8} />;
   }
 
   if (renditions.length === 0) {
-    return <p className="rounded-md border p-6 text-sm text-muted-foreground">No hay rendiciones para este filtro.</p>;
+    return (
+      <p className="rounded-md border p-6 text-sm text-muted-foreground">
+        No hay rendiciones para este filtro.
+      </p>
+    );
   }
 
-  const assignableRenditions = renditions.filter((row) => row.giof_work?.requestId && row.giof_work.canAssign === true);
+  const assignableRenditions = renditions.filter(
+    (row) => row.giof_work?.requestId && row.giof_work.canAssign === true,
+  );
 
   return (
-    <div className="overflow-x-auto"><Table>
-      <TableHeader>
-        <TableRow>
-          {isGiofManager && <TableHead className="w-10"><span className="sr-only">Seleccionar para asignar</span></TableHead>}
-          <TableHead>Código</TableHead>
-          <TableHead>A nombre de</TableHead>
-          <TableHead className="text-right">Monto</TableHead>
-          <TableHead>Fecha de pago</TableHead>
-          <TableHead>Plazo</TableHead>
-          <TableHead>Estado</TableHead>
-          <TableHead>Asignación</TableHead>
-          <TableHead className="text-right">REXAN / acción</TableHead>
-        </TableRow>
-      </TableHeader>
-      <TableBody>
-        {isGiofManager && onToggleAllAssignments && assignableRenditions.length > 0 && <TableRow><TableCell colSpan={9}><label className="flex items-center gap-2 text-sm text-muted-foreground"><input type="checkbox" className="size-4" checked={assignableRenditions.every((row) => selectedAssignmentIds.includes(row.giof_work?.requestId as string))} onChange={(event) => onToggleAllAssignments(event.target.checked)} />Seleccionar esta página</label></TableCell></TableRow>}
-        {renditions.map((row) => {
-          const action = getRenditionAction(row);
-          const primaryRequestCode = row.settlement_request_code ?? row.request_code ?? row.advance_id;
-          const originRequestCode = row.advance_request_code ?? row.request_code;
-          const registeredParty = getRegisteredPartyDisplay(row);
-          const registeredPartyDocument = getRegisteredPartyDocumentLabel(row);
-          const registeredBy = getRegisteredByDisplayName(row);
-          const canOperate = canOperateAssignedGiofWork(row.giof_work, currentUserId);
-          const deadlineDate = getRenditionDeadlineDate(row);
-          const deadlineLabel = getRenditionDueLabel(row);
-          const formattedDeadlineDate = deadlineDate ? formatRequestDate(deadlineDate) : null;
-          const derivedStatusLabel = getRenditionStatusLabel(row.rendition_status);
-          const renditionLifecycleLabel = row.settlement_status
-            ? formatRequestStatus(row.settlement_status, { surface: REQUEST_STATUS_SURFACE.RENDITION_LIFECYCLE })
-            : null;
-          return (
-            <TableRow key={row.advance_id} data-testid="rendition-row">
-              {isGiofManager && <TableCell>{row.giof_work?.requestId ? <input type="checkbox" className="size-4" checked={selectedAssignmentIds.includes(row.giof_work.requestId)} disabled={row.giof_work.canAssign !== true} title={row.giof_work.canAssign === true ? "Seleccionar para asignar" : "Rendición finalizada: no tiene seguimiento REXAN pendiente"} onChange={(event) => onToggleAssignment?.(row.giof_work?.requestId as string, event.target.checked)} aria-label={row.giof_work.canAssign === true ? `Seleccionar ${primaryRequestCode} para asignar` : `${primaryRequestCode}: rendición finalizada`} /> : null}</TableCell>}
-              <TableCell className="font-medium whitespace-nowrap">
-                <div className="flex flex-col">
-                  <span>{primaryRequestCode}</span>
-                  {originRequestCode && originRequestCode !== primaryRequestCode && (
-                    <span className="text-xs text-muted-foreground">Origen / anticipo: {originRequestCode}</span>
-                  )}
-                  <span className="text-xs text-muted-foreground">{row.concept}</span>
-                </div>
-              </TableCell>
-              <TableCell className="max-w-xs">
-                <div className="flex flex-col gap-1">
-                  <span className="truncate font-medium">{registeredParty}</span>
-                  <span className="truncate text-xs text-muted-foreground">{registeredPartyDocument}</span>
-                  <span className="truncate text-xs text-muted-foreground">Registrado por: {registeredBy}</span>
-                </div>
-              </TableCell>
-              <TableCell className="text-right font-medium">{formatRequestCurrency(row.amount_paid ?? row.requested_amount)}</TableCell>
-              <TableCell className="whitespace-nowrap">{formatRequestDate(row.paid_at)}</TableCell>
-              <TableCell
-                className="whitespace-nowrap"
-                aria-label={formattedDeadlineDate
-                  ? `Plazo: ${formattedDeadlineDate}. ${deadlineLabel}.`
-                  : `Plazo: ${deadlineLabel}.`}
-              >
-                <div className="flex flex-col gap-1">
-                  {formattedDeadlineDate && <span>{formattedDeadlineDate}</span>}
-                  <span className={formattedDeadlineDate ? "text-xs text-muted-foreground" : undefined}>{deadlineLabel}</span>
-                </div>
-              </TableCell>
-              <TableCell>
-                <div className="flex flex-col gap-1">
-                  <Badge variant={getRenditionStatusTone(row.rendition_status)} aria-label={`Estado derivado de rendición: ${derivedStatusLabel}`}>{derivedStatusLabel}</Badge>
-                  {renditionLifecycleLabel ? (
-                    <Badge variant="outline" aria-label={`Lifecycle de rendición: ${renditionLifecycleLabel}`}>
-                      {renditionLifecycleLabel}
-                    </Badge>
-                  ) : null}
-                  {row.settlement_request_id && (
+    <div className="overflow-x-auto">
+      <Table>
+        <TableHeader>
+          <TableRow>
+            {isGiofManager && (
+              <TableHead className="w-10">
+                <span className="sr-only">Seleccionar para asignar</span>
+              </TableHead>
+            )}
+            <TableHead>Código</TableHead>
+            <TableHead>A nombre de</TableHead>
+            <TableHead className="text-right">Monto</TableHead>
+            <TableHead>Fecha de pago</TableHead>
+            <TableHead>Plazo</TableHead>
+            <TableHead>Estado</TableHead>
+            <TableHead>Asignación</TableHead>
+            <TableHead className="text-right">REXAN / acción</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {isGiofManager &&
+            onToggleAllAssignments &&
+            assignableRenditions.length > 0 && (
+              <TableRow>
+                <TableCell colSpan={9}>
+                  <label className="flex items-center gap-2 text-sm text-muted-foreground">
+                    <input
+                      type="checkbox"
+                      className="size-4"
+                      checked={assignableRenditions.every((row) =>
+                        selectedAssignmentIds.includes(
+                          row.giof_work?.requestId as string,
+                        ),
+                      )}
+                      onChange={(event) =>
+                        onToggleAllAssignments(event.target.checked)
+                      }
+                    />
+                    Seleccionar esta página
+                  </label>
+                </TableCell>
+              </TableRow>
+            )}
+          {renditions.map((row) => {
+            const action = getRenditionAction(row);
+            const primaryRequestCode =
+              row.settlement_request_code ?? row.request_code ?? row.advance_id;
+            const originRequestCode =
+              row.advance_request_code ?? row.request_code;
+            const registeredParty = getRegisteredPartyDisplay(row);
+            const registeredPartyDocument =
+              getRegisteredPartyDocumentLabel(row);
+            const registeredBy = getRegisteredByDisplayName(row);
+            const canOperate = canOperateAssignedGiofWork(
+              row.giof_work,
+              currentUserId,
+            );
+            const deadlineDate = getRenditionDeadlineDate(row);
+            const deadlineLabel = getRenditionDueLabel(row);
+            const formattedDeadlineDate = deadlineDate
+              ? formatRequestDate(deadlineDate)
+              : null;
+            const derivedStatusLabel = getRenditionStatusLabel(
+              row.rendition_status,
+            );
+            const renditionLifecycleLabel = row.settlement_status
+              ? formatRequestStatus(row.settlement_status, {
+                  surface: REQUEST_STATUS_SURFACE.RENDITION_LIFECYCLE,
+                })
+              : null;
+            return (
+              <TableRow key={row.advance_id} data-testid="rendition-row">
+                {isGiofManager && (
+                  <TableCell>
+                    {row.giof_work?.requestId ? (
+                      <input
+                        type="checkbox"
+                        className="size-4"
+                        checked={selectedAssignmentIds.includes(
+                          row.giof_work.requestId,
+                        )}
+                        disabled={row.giof_work.canAssign !== true}
+                        title={
+                          row.giof_work.canAssign === true
+                            ? "Seleccionar para asignar"
+                            : "Rendición finalizada: no tiene seguimiento REXAN pendiente"
+                        }
+                        onChange={(event) =>
+                          onToggleAssignment?.(
+                            row.giof_work?.requestId as string,
+                            event.target.checked,
+                          )
+                        }
+                        aria-label={
+                          row.giof_work.canAssign === true
+                            ? `Seleccionar ${primaryRequestCode} para asignar`
+                            : `${primaryRequestCode}: rendición finalizada`
+                        }
+                      />
+                    ) : null}
+                  </TableCell>
+                )}
+                <TableCell className="font-medium whitespace-nowrap">
+                  <div className="flex flex-col">
+                    <span>{primaryRequestCode}</span>
+                    {originRequestCode &&
+                      originRequestCode !== primaryRequestCode && (
+                        <span className="text-xs text-muted-foreground">
+                          Origen / anticipo: {originRequestCode}
+                        </span>
+                      )}
                     <span className="text-xs text-muted-foreground">
-                      {row.settlement_documents_complete ? "Sustentos completos" : "Faltan documentos"}
+                      {row.concept}
                     </span>
+                  </div>
+                </TableCell>
+                <TableCell className="max-w-xs">
+                  <div className="flex flex-col gap-1">
+                    <span className="truncate font-medium">
+                      {registeredParty}
+                    </span>
+                    <span className="truncate text-xs text-muted-foreground">
+                      {registeredPartyDocument}
+                    </span>
+                    <span className="truncate text-xs text-muted-foreground">
+                      Registrado por: {registeredBy}
+                    </span>
+                  </div>
+                </TableCell>
+                <TableCell className="text-right font-medium">
+                  {formatRequestCurrency(
+                    row.amount_paid ?? row.requested_amount,
                   )}
-                </div>
-              </TableCell>
-              <TableCell>{row.giof_work?.requestId && <GiofWorkStatus requestId={row.giof_work.requestId} work={row.giof_work} currentUserId={currentUserId} isManager={isGiofManager} />}</TableCell>
-              <TableCell className="text-right">
-                <Button asChild size="sm" variant={row.settlement_request_id ? "default" : "outline"}>
-                  <Link href={row.settlement_request_id && canOperate ? `${action.href}?mode=process` : action.href}>{row.settlement_request_id && row.giof_work && !canOperate ? "Ver" : action.label}</Link>
-                </Button>
-              </TableCell>
-            </TableRow>
-          );
-        })}
-      </TableBody>
-    </Table></div>
+                </TableCell>
+                <TableCell className="whitespace-nowrap">
+                  {formatRequestDate(row.paid_at)}
+                </TableCell>
+                <TableCell
+                  className="whitespace-nowrap"
+                  aria-label={
+                    formattedDeadlineDate
+                      ? `Plazo: ${formattedDeadlineDate}. ${deadlineLabel}.`
+                      : `Plazo: ${deadlineLabel}.`
+                  }
+                >
+                  <div className="flex flex-col gap-1">
+                    {formattedDeadlineDate && (
+                      <span>{formattedDeadlineDate}</span>
+                    )}
+                    <span
+                      className={
+                        formattedDeadlineDate
+                          ? "text-xs text-muted-foreground"
+                          : undefined
+                      }
+                    >
+                      {deadlineLabel}
+                    </span>
+                  </div>
+                </TableCell>
+                <TableCell>
+                  <div className="flex flex-col gap-1">
+                    <Badge
+                      variant={getRenditionStatusTone(row.rendition_status)}
+                      aria-label={`Estado derivado de rendición: ${derivedStatusLabel}`}
+                    >
+                      {derivedStatusLabel}
+                    </Badge>
+                    {renditionLifecycleLabel ? (
+                      <Badge
+                        variant="outline"
+                        aria-label={`Lifecycle de rendición: ${renditionLifecycleLabel}`}
+                      >
+                        {renditionLifecycleLabel}
+                      </Badge>
+                    ) : null}
+                    {row.settlement_request_id && (
+                      <span className="text-xs text-muted-foreground">
+                        {row.settlement_documents_complete
+                          ? "Sustentos completos"
+                          : "Faltan documentos"}
+                      </span>
+                    )}
+                  </div>
+                </TableCell>
+                <TableCell>
+                  {row.giof_work?.requestId && (
+                    <GiofWorkStatus
+                      requestId={row.giof_work.requestId}
+                      work={row.giof_work}
+                      currentUserId={currentUserId}
+                      isManager={isGiofManager}
+                    />
+                  )}
+                </TableCell>
+                <TableCell className="text-right">
+                  {row.giof_work?.requestId && refetchPoolQueue && (
+                    <GiofOwnershipActions
+                      requestId={row.giof_work.requestId}
+                      label={primaryRequestCode}
+                      work={row.giof_work}
+                      roleCode={roleCode}
+                      currentUserId={currentUserId}
+                      refetchPoolQueue={refetchPoolQueue}
+                    />
+                  )}
+                  <Button
+                    asChild
+                    size="sm"
+                    variant={row.settlement_request_id ? "default" : "outline"}
+                  >
+                    <Link
+                      href={
+                        row.settlement_request_id && canOperate
+                          ? `${action.href}?mode=process`
+                          : action.href
+                      }
+                    >
+                      {row.settlement_request_id && row.giof_work && !canOperate
+                        ? "Ver"
+                        : action.label}
+                    </Link>
+                  </Button>
+                </TableCell>
+              </TableRow>
+            );
+          })}
+        </TableBody>
+      </Table>
+    </div>
   );
 }

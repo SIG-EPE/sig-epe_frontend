@@ -43,6 +43,7 @@ export interface RequestDocumentUploadQueueItem {
   persistedDocumentId?: string;
   hasPersistentWarning: boolean;
   warningMessage?: string;
+  idempotencyKey?: string;
 }
 
 export interface RequestDocumentUploadQueueState {
@@ -159,8 +160,10 @@ export function enqueueRequestDocumentFiles(
       : null;
     const errorMessage = validationError ?? allocationError;
 
+    const id = idFactory(index);
     return {
-      id: idFactory(index),
+      id,
+      idempotencyKey: id,
       file,
       documentCategory: options.category,
       scopeType: requiresAllocation ? REQUEST_DOCUMENT_SCOPE_TYPE.ALLOCATION : undefined,

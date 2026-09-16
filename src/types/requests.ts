@@ -13,6 +13,11 @@ export const REQUEST_TYPE = {
 
 export type RequestType = (typeof REQUEST_TYPE)[keyof typeof REQUEST_TYPE];
 
+export interface RequestAnnualUitLookup {
+  year: number;
+  annual_uit: string | null;
+}
+
 export const REQUEST_STATUS = {
   DRAFT: "DRAFT",
   SUBMITTED: "SUBMITTED",
@@ -128,6 +133,13 @@ export const REQUEST_DOCUMENT_CATEGORY = {
   PXQ: "PXQ",
   REQUEST_SUPPORT: "REQUEST_SUPPORT",
   RECEIPT: "RECEIPT",
+  INVOICE: "INVOICE",
+  PROFESSIONAL_FEE_RECEIPT: "PROFESSIONAL_FEE_RECEIPT",
+  SALES_RECEIPT: "SALES_RECEIPT",
+  CASH_RECEIPT: "CASH_RECEIPT",
+  QUOTATION: "QUOTATION",
+  EVIDENCE: "EVIDENCE",
+  FOURTH_CATEGORY_SUSPENSION: "FOURTH_CATEGORY_SUSPENSION",
   CONTRACT: "CONTRACT",
   SETTLEMENT_REPORT: "SETTLEMENT_REPORT",
   RETURN_PROOF: "RETURN_PROOF",
@@ -364,6 +376,7 @@ export interface RequestPlanningLineMonthlySummary {
 }
 
 export interface RequestPlanningLineLookupItem {
+  currency?: RequestCurrency | null;
   id: string;
   line_code?: string | null;
   resource_description: string;
@@ -413,6 +426,7 @@ export interface RequestPlanningLineLookupOption {
 }
 
 export interface RequestPlanningLineSearchItem {
+  currency?: RequestCurrency | null;
   id: string;
   line_code: string;
   resource_description: string;
@@ -497,6 +511,7 @@ export interface RequestAllocationsBudgetPreview {
 }
 
 export interface PaymentRequestPlanningLine {
+  currency?: RequestCurrency | null;
   id: string;
   line_code?: string | null;
   resource_description?: string | null;
@@ -547,10 +562,16 @@ export interface RequestStatusHistoryItem {
   to_status: RequestStatus;
   actor_id: string | null;
   actor_role: string | null;
+  actor?: RequestStatusHistoryActor | null;
   reason: string | null;
   comment: string | null;
   metadata?: Readonly<Record<string, unknown>> | null;
   created_at: string;
+}
+
+export interface RequestStatusHistoryActor {
+  first_name?: string | null;
+  last_name?: string | null;
 }
 
 export interface RequestPaymentUserSummary {
@@ -562,6 +583,7 @@ export interface RequestPaymentUserSummary {
 
 export const DRIVE_PAYMENT_ROUTE_MODEL = {
   DAILY_V1: "DAILY_V1",
+  STABLE_V1: "STABLE_V1",
 } as const;
 
 export type KnownDrivePaymentRouteModel =
@@ -572,6 +594,8 @@ export type DrivePaymentRouteModel = KnownDrivePaymentRouteModel;
 export const PAYMENT_MISSING_FIELD = {
   OPERATION_REFERENCE: "operation_reference",
   PROOF: "proof",
+  FINAL_FX_RATE: "final_fx_rate",
+  FINAL_FX_CONFIRMED: "final_fx_confirmed",
 } as const;
 
 export type PaymentMissingField =
@@ -588,6 +612,9 @@ export type PaymentCompletenessState =
   (typeof PAYMENT_COMPLETENESS_STATE)[keyof typeof PAYMENT_COMPLETENESS_STATE];
 
 export interface RequestPayment {
+  original?: OriginalPaymentMoney | null;
+  valuation?: FxValuation | null;
+  fx_pending?: boolean;
   id: string;
   payment_request_id: string;
   paid_at: string;
@@ -616,7 +643,9 @@ export interface RequestPayment {
   drive_projection_reconciliation_required?: boolean;
   drive_projection_frozen?: boolean;
   readonly drive_projection_destination_id?: string | null;
-  readonly drive_projection_topology_evidence?: Readonly<Record<string, unknown>> | null;
+  readonly drive_projection_topology_evidence?: Readonly<
+    Record<string, unknown>
+  > | null;
   proof_document_id: string | null;
   proofDocument?: RequestDocument | null;
   proof_pending?: boolean;
@@ -803,6 +832,8 @@ export interface RelatedRequestSummary {
 }
 
 export interface PaymentRequest {
+  original?: OriginalPaymentMoney | null;
+  valuation?: FxValuation | null;
   id: string;
   request_code: string | null;
   sequential_number: string | null;
@@ -810,7 +841,7 @@ export interface PaymentRequest {
   status: RequestStatus;
   fiscal_year: number;
   requested_amount: number;
-  currency: RequestCurrency;
+  currency: RequestCurrency | null;
   concept: string;
   requester_id: string;
   requester_name?: string | null;
@@ -827,6 +858,12 @@ export interface PaymentRequest {
   scheduled_rendition_at: string | null;
   related_request_id: string | null;
   supplier_ruc: string | null;
+  supplier_document_type?: BeneficiaryDocumentType | null;
+  supplier_document_number?: string | null;
+  declares_rus?: boolean | null;
+  declares_casa_de_retiro?: boolean | null;
+  uit_year_applied?: number | null;
+  uit_amount_applied?: string | null;
   supplier_name: string | null;
   document_type: string | null;
   has_associated_contract: boolean;
@@ -877,6 +914,28 @@ export interface PaymentRequest {
   giof_work?: GiofWorkMetadata;
 }
 
+export interface PaymentRejectionActor {
+  id: string;
+  first_name: string | null;
+  last_name: string | null;
+}
+
+export interface PaymentRejectionProjection {
+  reason: string | null;
+  rejected_at: string;
+  actor: PaymentRejectionActor | null;
+}
+
+export type PaymentQueueRequest =
+  | (PaymentRequest & {
+      status: typeof REQUEST_STATUS.APPROVED | typeof REQUEST_STATUS.PAID;
+      payment_rejection?: never;
+    })
+  | (PaymentRequest & {
+      status: typeof REQUEST_STATUS.REJECTED;
+      payment_rejection: PaymentRejectionProjection;
+    });
+
 export type StartAdvanceSettlementResponse = PaymentRequest;
 
 export const ADVANCE_SETTLEMENT_CTA_STATE = {
@@ -922,6 +981,8 @@ export interface RequestDocument {
   request_allocation_id?: string | null;
   document_section?: string | null;
   document_category: RequestDocumentCategory | string;
+  document_category_normalized?: RequestDocumentCategory | string | null;
+  deleted_at?: string | null;
   safe_filename: string;
   original_filename: string;
   mime_type: string;
@@ -950,7 +1011,7 @@ export interface RequestReceipt {
   number: string | null;
   issue_date: string | null;
   amount: number | null;
-  currency: RequestCurrency | string;
+  currency: RequestCurrency | string | null;
   duplicate_status: RequestReceiptDuplicateStatus | string;
   ocr_status: RequestReceiptOcrStatus | string;
   corrected_fields: Record<string, unknown> | null;
@@ -1190,6 +1251,7 @@ export interface UploadRequestDocumentInput {
   request_allocation_id?: string;
   document_section?: string;
   metadata_json?: Record<string, unknown>;
+  idempotency_key?: string;
 }
 
 export const REQUEST_DOCUMENT_UPLOAD_QUEUE_STATUS = {
@@ -1282,7 +1344,10 @@ export interface RequestsListFilters {
 export interface PaymentQueueFilters {
   page?: number;
   limit?: number;
-  status?: typeof REQUEST_STATUS.APPROVED | typeof REQUEST_STATUS.PAID;
+  status?:
+    | typeof REQUEST_STATUS.APPROVED
+    | typeof REQUEST_STATUS.PAID
+    | typeof REQUEST_STATUS.REJECTED;
   pending_proof?: boolean;
   pending_details?: boolean;
   pending_data?: boolean;
@@ -1293,6 +1358,8 @@ export interface PaymentQueueFilters {
   approved_to?: string;
   paid_from?: string;
   paid_to?: string;
+  rejected_from?: string;
+  rejected_to?: string;
   source_account_key?: DriveSourceAccount;
   completeness?: PaymentCompleteness;
   drive_status?: DrivePaymentProjectionStatus;
@@ -1328,12 +1395,21 @@ export type PaymentQueueRexanStatus =
   (typeof PAYMENT_REXAN_STATUS)[keyof typeof PAYMENT_REXAN_STATUS];
 
 export interface PaymentQueueSummary {
+  original_amount_by_currency?: Partial<Record<RequestCurrency, string>>;
+  accounting_amount_pen?: string;
+  accounting_currency?: "PEN";
+  unresolved_count?: number;
+  totals_complete?: boolean;
   count: number;
   payable_amount_by_currency: Partial<Record<RequestCurrency, string>>;
   status_counts: Partial<Record<RequestStatus, number>>;
 }
 
-export interface PaymentQueueResponse extends RequestsListResponse {
+export interface PaymentQueueResponse extends Omit<
+  RequestsListResponse,
+  "requests"
+> {
+  requests: PaymentQueueRequest[];
   summary: PaymentQueueSummary;
 }
 
@@ -1391,14 +1467,15 @@ export type PaymentRexanStatus =
   (typeof PAYMENT_REXAN_STATUS)[keyof typeof PAYMENT_REXAN_STATUS] | string;
 
 export interface BulkMarkPaidInput {
-  client_batch_id: string;
-  paid_at: string;
-  source_account_key: DriveSourceAccount;
   items: BulkRegisterPaymentItemInput[];
 }
 
 export interface BulkRegisterPaymentItemInput {
   request_id: string;
+  command_id: string;
+  expected_original_amount: string;
+  expected_original_currency: RequestCurrency;
+  paid_at: string;
   assignment_version: number;
   lease_token: string;
   operation_reference?: string;
@@ -1448,17 +1525,64 @@ export interface BulkPaymentItemResult {
 }
 
 export interface BulkMarkPaidResponse {
-  batch_id: string;
-  status?: "PROCESSING" | "COMPLETED" | "COMPLETED_WITH_ERRORS";
-  item_count: number;
-  success_count: number;
-  failed_count: number;
-  total_amount: number | string;
-  results: BulkPaymentItemResult[];
-  rexan_metrics: Record<string, number>;
+  items: MarkPaidItemResult[];
+  amounts_by_currency: Partial<Record<RequestCurrency, string>>;
+  unresolved_count: number;
+  totals_complete: boolean;
+}
+
+export interface OriginalPaymentMoney {
+  amount: string;
+  currency: RequestCurrency | null;
+}
+export const FX_VALUATION_STATE = {
+  IDENTITY: "IDENTITY",
+  PROVISIONAL: "PROVISIONAL",
+  FINAL: "FINAL",
+  UNVALUED: "UNVALUED",
+} as const;
+export const FX_REFERENCE_SOURCE = {
+  SBS_BCRPDATA: "SBS_BCRPDATA",
+  MANUAL: "MANUAL",
+} as const;
+export interface FxReference {
+  rate: string;
+  source: (typeof FX_REFERENCE_SOURCE)[keyof typeof FX_REFERENCE_SOURCE];
+  side: string;
+  series: string | null;
+  effective_date: string;
+  retrieved_at: string;
+  manual_source: string | null;
+  reason: string | null;
+}
+export interface FxValuation {
+  amount_pen: string | null;
+  accounting_currency: "PEN";
+  state: (typeof FX_VALUATION_STATE)[keyof typeof FX_VALUATION_STATE];
+  reference: FxReference | null;
+  final_rate: string | null;
+  final_confirmed_at: string | null;
+  final_confirmed_by: string | null;
+  origin_execution_id: string | null;
+}
+export interface MarkPaidItemResult {
+  request_id: string;
+  command_id: string;
+  outcome: BulkPaymentResultStatus;
+  payment_id: string | null;
+  code: string;
+  message: string;
+  original: OriginalPaymentMoney | null;
+  actual_disbursement: OriginalPaymentMoney | null;
+  valuation: FxValuation | null;
+  missing_fields: string[];
+  rexan_activation: RexanActivation | null;
 }
 
 export interface CompletePaymentDetailsInput {
+  command_id?: string;
+  final_fx_rate?: string;
+  final_fx_confirmed?: boolean;
   proof?: File;
   operation_reference?: string;
   bank_commission?: number;
@@ -1571,13 +1695,17 @@ export interface RegisterPaymentInput {
 export interface CreateRequestDto {
   request_type: RequestType;
   budget_planning_line_id?: string;
-  requested_amount?: number;
+  requested_amount?: string;
   allocations?: RequestAllocationInputDto[];
-  currency?: RequestCurrency;
+  currency: RequestCurrency;
   concept: string;
   scheduled_rendition_at?: string;
   related_request_id?: string;
   supplier_ruc?: string;
+  supplier_document_type?: BeneficiaryDocumentType;
+  supplier_document_number?: string;
+  declares_rus?: boolean;
+  declares_casa_de_retiro?: boolean;
   supplier_name?: string;
   document_type?: string;
   has_associated_contract?: boolean;
@@ -1597,7 +1725,7 @@ export type UpdateRequestDto = Partial<CreateRequestDto>;
 export interface RequestAllocationInputDto {
   client_key?: string;
   budget_planning_line_id: string;
-  amount: number;
+  amount: string;
 }
 
 export interface ObserveRequestDto {
@@ -1615,10 +1743,40 @@ export interface RejectRequestDto {
   reason: string;
 }
 
+export interface RejectApprovedPaymentDto {
+  reason: string;
+}
+
+export interface RejectApprovedPaymentLease {
+  assignmentVersion: string | number;
+  token: string;
+}
+
+export type RejectApprovedPaymentResponse = PaymentRequest & {
+  status: typeof REQUEST_STATUS.REJECTED;
+  rejected_at: string;
+};
+
 export interface BudgetPreviewInput {
+  currency?: RequestCurrency | null;
+  planningLineCurrencies?: readonly (RequestCurrency | null | undefined)[];
   planningLineId?: string;
   month?: number;
   amount?: number;
   requestId?: string;
   allocations?: RequestAllocationInputDto[];
+}
+
+export const FX_REFERENCE_FALLBACK = {
+  NONE: "NONE",
+  CACHE: "CACHE",
+  SNAPSHOT: "SNAPSHOT",
+  UNAVAILABLE: "UNAVAILABLE",
+} as const;
+
+export interface RequestFxReferenceResult {
+  reference: Readonly<FxReference> | null;
+  direction: "PEN/USD";
+  fallback: (typeof FX_REFERENCE_FALLBACK)[keyof typeof FX_REFERENCE_FALLBACK];
+  last_refresh_failure: string | null;
 }

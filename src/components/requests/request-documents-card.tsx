@@ -4,6 +4,8 @@ import { useEffect, useRef, useState, type ChangeEvent, type ReactNode } from "r
 import { flushSync } from "react-dom";
 import { CheckCircle2, ExternalLink, FileText, Info, Trash2, Upload, XCircle } from "lucide-react";
 import { toast } from "sonner";
+import { useRequestAnnualUit } from "@/hooks/use-request-currency";
+import { RequestContractAdvisory } from "./request-contract-advisory";
 
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -141,6 +143,14 @@ function getRequestDocumentWebUrl(document: RequestDocument): string | null {
   return getSafeDocumentUrl(document.drive_web_url);
 }
 
+const RECEIPT_DOCUMENT_CATEGORIES = new Set<string>([
+  REQUEST_DOCUMENT_CATEGORY.RECEIPT,
+  REQUEST_DOCUMENT_CATEGORY.INVOICE,
+  REQUEST_DOCUMENT_CATEGORY.PROFESSIONAL_FEE_RECEIPT,
+  REQUEST_DOCUMENT_CATEGORY.SALES_RECEIPT,
+  REQUEST_DOCUMENT_CATEGORY.CASH_RECEIPT,
+]);
+
 function getPendingRequiredDocumentCategories(checklist: RequiredDocumentChecklistItem[]): Set<RequestDocumentCategory> {
   return new Set(checklist.filter((item) => item.required && !item.satisfied).map((item) => item.category));
 }
@@ -167,10 +177,6 @@ function isAllocationScopedDocument(document: RequestDocument): boolean {
 
 function getRequestLevelDocuments(documents: RequestDocument[]): RequestDocument[] {
   return documents.filter((document) => !isAllocationScopedDocument(document));
-}
-
-function getGeneralChecklist(request: PaymentRequest, requestLevelDocuments: RequestDocument[]): ReturnType<typeof getRequiredDocumentChecklist> {
-  return getRequiredDocumentChecklist(request.request_type, requestLevelDocuments);
 }
 
 function getAllocationDocuments(allocation: RequestAllocation, documents: RequestDocument[]): RequestDocument[] {
@@ -208,7 +214,7 @@ function getAllocationSummary(allocation: RequestAllocation): string {
   const parts = [
     orgUnit?.name ? `Unidad: ${orgUnit.name}` : null,
     fiscalYear ? `Año fiscal: ${fiscalYear}` : null,
-    `Monto: ${formatRequestCurrency(Number(allocation.amount ?? 0), allocation.currency || REQUEST_CURRENCY.PEN)}`,
+    `Monto: ${formatRequestCurrency(Number(allocation.amount ?? 0), allocation.currency ?? null)}`,
   ].filter((part): part is string => Boolean(part));
 
   return parts.join(" · ");
@@ -220,9 +226,9 @@ function getAllocationChecklist(): ReturnType<typeof getRequiredDocumentChecklis
 
 function getReceiptStatusLabel(receiptReview?: RequestReceiptReview): string {
   if (!receiptReview) return "Procesando comprobante";
-  if (receiptReview.receipt.duplicate_status === REQUEST_RECEIPT_DUPLICATE_STATUS.POSSIBLE_DUPLICATE) return "Factura duplicada por revisar";
-  if (receiptReview.duplicate_candidates.length > 0) return "Factura duplicada por revisar";
-  if (receiptReview.receipt.confirmed_at) return "Factura registrada";
+  if (receiptReview.receipt.duplicate_status === REQUEST_RECEIPT_DUPLICATE_STATUS.POSSIBLE_DUPLICATE) return "Comprobante duplicado por revisar";
+  if (receiptReview.duplicate_candidates.length > 0) return "Comprobante duplicado por revisar";
+  if (receiptReview.receipt.confirmed_at) return "Comprobante registrado";
 
   const status = receiptReview.receipt.ocr_status;
   if (status === REQUEST_RECEIPT_OCR_STATUS.PENDING || status === REQUEST_RECEIPT_OCR_STATUS.PROCESSING) return "Procesando comprobante";
@@ -247,7 +253,8 @@ function canConfirmReceiptReview(receiptReview: RequestReceiptReview): boolean {
     receipt.series &&
     receipt.number &&
     receipt.issue_date &&
-    receipt.amount !== null,
+    receipt.amount !== null &&
+    (receipt.currency === REQUEST_CURRENCY.PEN || receipt.currency === REQUEST_CURRENCY.USD),
   );
 }
 
@@ -263,7 +270,7 @@ function getReceiptReviewFormState(receiptReview: RequestReceiptReview): Receipt
     number: receiptReview.receipt.number ?? "",
     issue_date: toDateInputValue(receiptReview.receipt.issue_date),
     amount: receiptReview.receipt.amount === null ? "" : String(receiptReview.receipt.amount),
-    currency: receiptReview.receipt.currency || REQUEST_CURRENCY.PEN,
+    currency: receiptReview.receipt.currency === REQUEST_CURRENCY.PEN || receiptReview.receipt.currency === REQUEST_CURRENCY.USD ? receiptReview.receipt.currency : "",
   };
 }
 
@@ -276,7 +283,7 @@ function getReceiptReviewPayload(formState: ReceiptReviewFormState): UpdateReque
     number: formState.number.trim(),
     issue_date: formState.issue_date,
     amount: Number.isFinite(amount) ? amount : undefined,
-    currency: formState.currency === REQUEST_CURRENCY.USD ? REQUEST_CURRENCY.USD : REQUEST_CURRENCY.PEN,
+    currency: formState.currency === REQUEST_CURRENCY.USD ? REQUEST_CURRENCY.USD : formState.currency === REQUEST_CURRENCY.PEN ? REQUEST_CURRENCY.PEN : undefined,
   };
 }
 
@@ -284,7 +291,7 @@ function getReceiptValueSummary(receiptReview: RequestReceiptReview): string {
   const receipt = receiptReview.receipt;
   const serieNumber = [receipt.series, receipt.number].filter(Boolean).join("-") || "sin serie/número";
   const provider = receipt.issuer_name?.trim() || "proveedor no detectado";
-  const amount = receipt.amount === null ? "monto no detectado" : `${receipt.currency} ${receipt.amount}`;
+  const amount = receipt.amount === null ? "monto no detectado" : receipt.currency === "PEN" || receipt.currency === "USD" ? `${receipt.currency} ${receipt.amount}` : `${receipt.amount} · Moneda pendiente de resolución`;
   return `${provider} · ${serieNumber} · ${amount}`;
 }
 
@@ -351,6 +358,7 @@ export function RequestDocumentsCard({
   const allocationGroups = request.allocations ?? [];
   const displayAllocationGroups = allocationGroups.length > 0 ? allocationGroups : guidanceAllocations;
   const isAdvanceSettlement = request.request_type === REQUEST_TYPE.ADVANCE_SETTLEMENT;
+  const isAdvance = request.request_type === REQUEST_TYPE.ADVANCE;
   const hasAllocationGroups = allocationGroups.length > 0;
   const hasDisplayAllocationGroups = displayAllocationGroups.length > 0;
   const isUsingGuidanceAllocations = isAdvanceSettlement && !hasAllocationGroups && guidanceAllocations.length > 0;
@@ -366,7 +374,9 @@ export function RequestDocumentsCard({
     genericExcludedCategories.add(REQUEST_DOCUMENT_CATEGORY.RETURN_PROOF);
     genericExcludedCategories.add(REQUEST_DOCUMENT_CATEGORY.SETTLEMENT_REPORT);
   }
-  const baseChecklist = getGeneralChecklist(request, documents);
+  const annualUitLookupEnabled = request.request_type === REQUEST_TYPE.SUPPLIER_PAYMENT && request.currency === "PEN" && request.uit_year_applied == null && request.uit_amount_applied == null;
+  const annualUit = useRequestAnnualUit(request.fiscal_year, annualUitLookupEnabled);
+  const baseChecklist = getRequiredDocumentChecklist(request.request_type, documents, request, receipts.map((item) => item.receipt), annualUit.annualUit);
   const checklist = restrictGenericReturnProof
     ? {
       ...baseChecklist,
@@ -620,7 +630,7 @@ export function RequestDocumentsCard({
         {rows.map((document) => {
           const documentWebUrl = getRequestDocumentWebUrl(document);
           const receiptReview = receipts.find((item) => item.receipt?.document_id === document.id);
-          const shouldShowReceiptReview = document.document_category === REQUEST_DOCUMENT_CATEGORY.RECEIPT && (receiptsLoading || receiptReview);
+          const shouldShowReceiptReview = RECEIPT_DOCUMENT_CATEGORIES.has(document.document_category) && (receiptsLoading || receiptReview);
 
           return (
             <div key={document.id} className="flex flex-col gap-3 rounded-md border p-3 sm:flex-row sm:items-center sm:justify-between">
@@ -709,7 +719,11 @@ export function RequestDocumentsCard({
       <section className="space-y-3" data-testid="allocation-documents-groups">
         <div className="space-y-1">
           <h3 className="text-sm font-semibold">Documentos asociados por línea POA</h3>
-          <p className="text-xs text-muted-foreground">Los documentos por línea son opcionales en esta etapa. Un único PXQ activo asociado a la solicitud, en cualquier línea o a nivel general, satisface el requisito.</p>
+          <p className="text-xs text-muted-foreground">
+            {isAdvance
+              ? "Los documentos por línea son opcionales en esta etapa. Un único PXQ activo asociado a la solicitud, en cualquier línea o a nivel general, satisface el requisito."
+              : "Los documentos asociados a cada línea POA son opcionales en esta etapa."}
+          </p>
         </div>
         {allocationGroups.map((allocation, index) => {
           const allocationDocuments = getAllocationDocuments(allocation, documents);
@@ -877,7 +891,7 @@ export function RequestDocumentsCard({
             </AlertDescription>
           </Alert>
         ) : null}
-        {hasAllocationDocumentGroups && (
+        {isAdvance && hasAllocationDocumentGroups && (
           <Alert>
             <Info className="h-4 w-4" />
             <AlertDescription>
@@ -896,7 +910,7 @@ export function RequestDocumentsCard({
                 ? "Estado de los documentos requeridos para esta solicitud. Esta vista no permite adjuntar ni eliminar archivos."
                 : isAdvanceSettlement && hasAllocationGroups
                   ? "No hay un comprobante general obligatorio. Los comprobantes se gestionan por línea POA y luego se agregan al Informe de rendición."
-                : "Completa el único documento requerido para continuar. Los demás sustentos son opcionales en esta etapa."}
+                 : "Completa los documentos requeridos según el tipo y la moneda de la solicitud."}
             </p>
           </div>
           <div className="mt-3 space-y-3">
@@ -937,6 +951,26 @@ export function RequestDocumentsCard({
                 ))}
               </ul>
             </div>
+          )}
+          {request.request_type === REQUEST_TYPE.SUPPLIER_PAYMENT && <div className="mt-3 space-y-2 text-sm">
+            <p>RUS: {request.declares_rus == null ? "Sin declarar" : request.declares_rus ? "Sí" : "No"} · Casa de Retiro: {request.declares_casa_de_retiro == null ? "Sin declarar" : request.declares_casa_de_retiro ? "Sí" : "No"}</p>
+            {checklist.missingMessages.map((message) => <p key={message} role="status">{message}</p>)}
+            {request.currency === "USD" && <RequestContractAdvisory request={request} />}
+          </div>}
+          {annualUitLookupEnabled && annualUit.isLoading && (
+            <p className="mt-3 text-sm text-muted-foreground" role="status">
+              Consultando el Valor UIT del año de la solicitud…
+            </p>
+          )}
+          {annualUitLookupEnabled && annualUit.error && (
+            <Alert variant="destructive" className="mt-3">
+              <AlertDescription>
+                No se pudo consultar el Valor UIT del año de la solicitud. Verifica tu sesión y vuelve a intentarlo. La solicitud no se modificó.{" "}
+                <Button type="button" variant="outline" size="sm" onClick={() => void annualUit.refetch()}>
+                  Volver a consultar UIT
+                </Button>
+              </AlertDescription>
+            </Alert>
           )}
           {backendMissingMessages.length > 0 && (
             <Alert variant="destructive" className="mt-3">
@@ -1175,7 +1209,7 @@ export function RequestDocumentsCard({
             ) : null}
             <DialogFooter>
               <Button type="button" variant="outline" onClick={closeReceiptReview} disabled={updatingReceipt}>Cancelar</Button>
-              <Button type="button" onClick={() => void handleSaveReceiptReview()} disabled={updatingReceipt || !receiptForm}>
+              <Button type="button" onClick={() => void handleSaveReceiptReview()} disabled={updatingReceipt || !receiptForm || !["PEN", "USD"].includes(receiptForm.currency)}>
                 {updatingReceipt ? "Guardando..." : "Guardar corrección"}
               </Button>
             </DialogFooter>
@@ -1200,7 +1234,7 @@ export function RequestDocumentsCard({
                   <div><dt className="text-xs text-muted-foreground">RUC</dt><dd className="font-medium">{receiptToConfirm.receipt.issuer_document_number || "RUC no detectado"}</dd></div>
                   <div><dt className="text-xs text-muted-foreground">Comprobante</dt><dd className="font-medium">{[receiptToConfirm.receipt.series, receiptToConfirm.receipt.number].filter(Boolean).join("-") || "Serie y número no detectados"}</dd></div>
                   <div><dt className="text-xs text-muted-foreground">Fecha</dt><dd className="font-medium">{receiptToConfirm.receipt.issue_date || "Fecha no detectada"}</dd></div>
-                  <div><dt className="text-xs text-muted-foreground">Monto</dt><dd className="font-medium">{receiptToConfirm.receipt.amount === null ? "Monto no detectado" : formatRequestCurrency(receiptToConfirm.receipt.amount, receiptToConfirm.receipt.currency || REQUEST_CURRENCY.PEN)}</dd></div>
+                  <div><dt className="text-xs text-muted-foreground">Monto</dt><dd className="font-medium">{receiptToConfirm.receipt.amount === null ? "Monto no detectado" : formatRequestCurrency(receiptToConfirm.receipt.amount, receiptToConfirm.receipt.currency ?? null)}</dd></div>
                 </dl>
                 <p className="text-xs text-muted-foreground">Después de confirmar, podrás seleccionar la línea POA y agregar este comprobante al Informe de rendición.</p>
               </div>
