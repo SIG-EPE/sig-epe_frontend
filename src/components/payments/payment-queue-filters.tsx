@@ -54,6 +54,7 @@ const SORT_LABEL = {
 interface PaymentQueueFiltersProps {
   filters: PaymentQueueUrlFilters;
   isManager: boolean;
+  isOperational: boolean;
   summary: PaymentQueueSummary | null;
   total: number;
   isLoading: boolean;
@@ -70,11 +71,11 @@ interface FilterChipDefinition {
 
 function getChips(
   filters: PaymentQueueUrlFilters,
-  isManager: boolean,
+  isOperational: boolean,
 ): FilterChipDefinition[] {
   const chips: FilterChipDefinition[] = [];
   if (
-    isManager &&
+    isOperational &&
     filters.work_scope &&
     filters.work_scope !== GIOF_WORK_SCOPE.ALL
   ) {
@@ -172,6 +173,7 @@ function getChips(
 export function PaymentQueueFilters({
   filters,
   isManager,
+  isOperational,
   summary,
   total,
   isLoading,
@@ -242,7 +244,7 @@ export function PaymentQueueFilters({
     });
   }
 
-  const chips = getChips(filters, isManager);
+  const chips = getChips(filters, isOperational);
   const count = summary?.count ?? total;
   const liveMessage = isLoading
     ? "Cargando pagos"
@@ -255,11 +257,11 @@ export function PaymentQueueFilters({
       className="space-y-4 rounded-xl border bg-muted/20 p-4"
       aria-label="Filtros de la cola de pagos"
     >
-      {isManager && (
+      {isOperational && (
         <GiofWorkScopeFilter
           value={filters.work_scope ?? GIOF_WORK_SCOPE.ALL}
           assigneeId={filters.assignee_id}
-          isManager
+          isManager={isManager}
           onChange={(work_scope, assignee_id) =>
             onChange({
               work_scope,

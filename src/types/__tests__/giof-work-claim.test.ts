@@ -3,10 +3,16 @@ import { describe, expect, expectTypeOf, it } from "vitest";
 import {
   GIOF_CLAIMABLE_ASSIGNMENT_STATE,
   GIOF_CLAIMABLE_LEASE_STATE,
+  GIOF_OWNERSHIP_ERROR_CODE,
+  GIOF_WORK_ASSIGNMENT_STATE,
+  GIOF_WORK_LEASE_STATE,
   GIOF_WORK_POOL,
   type GiofClaimableWorkPage,
   type GiofSelfClaimCommand,
   type GiofSelfClaimResult,
+  type GiofForceReassignWorkCommand,
+  type GiofReleaseWorkCommand,
+  type GiofWorkMetadata,
   type GiofWorkPool,
 } from "@/types/giof-work";
 
@@ -18,7 +24,6 @@ describe("contratos frontend de autoasignación GIOF", () => {
       "REXAN",
     ]);
     expect(Object.values(GIOF_CLAIMABLE_ASSIGNMENT_STATE)).toEqual([
-      "OWN",
       "UNASSIGNED",
       "TAKEOVER",
     ]);
@@ -31,6 +36,35 @@ describe("contratos frontend de autoasignación GIOF", () => {
     expectTypeOf<GiofWorkPool>().toEqualTypeOf<
       "REQUEST" | "PAYMENT" | "REXAN"
     >();
+  });
+
+  it("representa el read model público y los comandos mínimos sin credenciales de lease", () => {
+    expect(Object.values(GIOF_WORK_ASSIGNMENT_STATE)).toEqual([
+      "UNASSIGNED",
+      "SELF",
+      "OTHER",
+    ]);
+    expect(Object.values(GIOF_WORK_LEASE_STATE)).toEqual([
+      "NONE",
+      "ACTIVE_SELF",
+      "ACTIVE_OTHER",
+      "EXPIRED",
+      "STALE",
+    ]);
+    expect(Object.values(GIOF_OWNERSHIP_ERROR_CODE)).toContain(
+      "ACTIVE_CROSS_POOL_LEASE",
+    );
+    expectTypeOf<GiofReleaseWorkCommand>().toEqualTypeOf<{
+      requestId: string;
+      pool: GiofWorkPool;
+      expectedAssignmentVersion: number;
+    }>();
+    expectTypeOf<GiofForceReassignWorkCommand>().not.toHaveProperty("token");
+    expectTypeOf<GiofForceReassignWorkCommand>().not.toHaveProperty(
+      "leaseFingerprint",
+    );
+    expectTypeOf<GiofWorkMetadata>().toHaveProperty("assignmentState");
+    expectTypeOf<GiofWorkMetadata>().toHaveProperty("leaseState");
   });
 
   it("separa comando, respuesta y página mínima de los contratos admin/bulk", () => {

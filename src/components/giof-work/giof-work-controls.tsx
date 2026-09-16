@@ -33,6 +33,7 @@ import {
   bulkAssignGiofWork,
   fetchGiofHistory,
   getGiofConflictMessage,
+  registerGiofClaimableRefetch,
   useGiofAssignees,
   useGiofClaimableWork,
   useGiofSelfClaim,
@@ -40,9 +41,12 @@ import {
 import { ApiRequestError } from "@/lib/api-client";
 import { ROLE_CODE, ROUTES } from "@/lib/constants";
 import type { GiofHelpContext } from "@/lib/giof-assignment-help";
+import { isGiofWorkLifecycleEligible } from "@/lib/role-capabilities";
 import { useAuthStore } from "@/stores/auth-store";
 import {
   GIOF_CLAIMABLE_ASSIGNMENT_STATE,
+  GIOF_WORK_ASSIGNMENT_STATE,
+  GIOF_WORK_LEASE_STATE,
   GIOF_WORK_POOL,
   GIOF_WORK_SCOPE,
   type GiofAssigneeCandidate,
@@ -148,12 +152,16 @@ export function GiofWorkScopeFilter({
           )
         }
       >
-        <SelectTrigger className="sm:w-44" data-testid="giof-work-scope-filter">
+        <SelectTrigger
+          className="sm:w-44"
+          aria-label="Alcance de trabajo GIOF"
+          data-testid="giof-work-scope-filter"
+        >
           <SelectValue placeholder="Trabajo" />
         </SelectTrigger>
         <SelectContent>
+          <SelectItem value={GIOF_WORK_SCOPE.ALL}>Todos</SelectItem>
           <SelectItem value={GIOF_WORK_SCOPE.MINE}>Mi trabajo</SelectItem>
-          <SelectItem value={GIOF_WORK_SCOPE.ALL}>Todo</SelectItem>
           {isManager && (
             <SelectItem value={GIOF_WORK_SCOPE.UNASSIGNED}>
               Sin asignar
@@ -225,18 +233,22 @@ export function GiofWorkStatus({
   const [historyOpen, setHistoryOpen] = useState(false);
   const [history, setHistory] = useState<GiofAssignmentHistoryItem[]>([]);
   const [historyError, setHistoryError] = useState<string | null>(null);
-  if (!work) return null;
+  if (!isGiofWorkLifecycleEligible(work)) return null;
 
   const assigneeLabel =
+    work.assignmentState === GIOF_WORK_ASSIGNMENT_STATE.UNASSIGNED ||
     work.assigneeId === null
       ? "Sin asignar"
-      : work.assigneeId === currentUserId
+      : work.assignmentState === GIOF_WORK_ASSIGNMENT_STATE.SELF ||
+          work.assigneeId === currentUserId
         ? "Asignada a ti"
         : work.assigneeName
           ? `Asignada a ${work.assigneeName}`
           : "Asignada a otra persona";
   const activeLease = Boolean(
-    work.lease?.expiresAt && new Date(work.lease.expiresAt) > new Date(),
+    work.leaseState === GIOF_WORK_LEASE_STATE.ACTIVE_SELF ||
+    work.leaseState === GIOF_WORK_LEASE_STATE.ACTIVE_OTHER ||
+    (work.lease?.expiresAt && new Date(work.lease.expiresAt) > new Date()),
   );
   const pool = work.pool;
 
@@ -256,7 +268,12 @@ export function GiofWorkStatus({
       data-testid="giof-work-status"
     >
       <Badge
-        variant={work.assigneeId ? "secondary" : "outline"}
+        variant={
+          work.assignmentState === GIOF_WORK_ASSIGNMENT_STATE.UNASSIGNED ||
+          work.assigneeId === null
+            ? "outline"
+            : "secondary"
+        }
         aria-label={`Asignación GIOF: ${assigneeLabel}`}
       >
         {assigneeLabel}
@@ -335,7 +352,7 @@ interface GiofClaimableWorkPanelProps {
 }
 
 function getClaimAssignmentLabel(item: GiofClaimableWorkItem): string {
-  if (item.assignmentState === GIOF_CLAIMABLE_ASSIGNMENT_STATE.OWN)
+  if ((item.assignmentState as string) === "OWN")
     return "Ya está asignado a ti";
   if (item.assignmentState === GIOF_CLAIMABLE_ASSIGNMENT_STATE.UNASSIGNED)
     return "Sin asignar";
@@ -374,6 +391,10 @@ export function GiofClaimableWorkPanel({
     refetchClaimable: claimable.refetch,
     refetchPoolQueue,
   });
+  useEffect(
+    () => registerGiofClaimableRefetch(pool, claimable.refetch),
+    [claimable.refetch, pool],
+  );
   const totalPages = Math.max(1, Math.ceil(claimable.total / claimable.limit));
 
   if (!isOperator) return null;
@@ -442,19 +463,21 @@ export function GiofClaimableWorkPanel({
                     {getClaimAssignmentLabel(item)}
                   </p>
                 </div>
-                <Button
-                  type="button"
-                  size="sm"
-                  disabled={selfClaim.isSubmitting}
-                  aria-label={`Tomar trabajo ${label}`}
-                  onClick={() => {
-                    setStatus(null);
-                    selfClaim.clearError();
-                    setSelected(item);
-                  }}
-                >
-                  {isPending ? "Tomando..." : "Tomar trabajo"}
-                </Button>
+                {(item.assignmentState as string) !== "OWN" && (
+                  <Button
+                    type="button"
+                    size="sm"
+                    disabled={selfClaim.isSubmitting}
+                    aria-label={`Tomar trabajo ${label}`}
+                    onClick={() => {
+                      setStatus(null);
+                      selfClaim.clearError();
+                      setSelected(item);
+                    }}
+                  >
+                    {isPending ? "Tomando..." : "Tomar trabajo"}
+                  </Button>
+                )}
               </li>
             );
           })}
@@ -607,7 +630,7 @@ export function GiofBulkAssignmentBar({
         pool,
         items: items.map((item) => ({
           requestId: item.requestId,
-          expectedAssigneeId: item.work.assigneeId,
+          expectedAssigneeId: item.work.assigneeId ?? null,
           expectedVersion: Number(item.work.assignmentVersion),
         })),
         targetAssigneeId: targetId,

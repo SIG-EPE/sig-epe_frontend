@@ -1,6 +1,6 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   getGiofAssignmentBlockerMessage,
@@ -36,6 +36,7 @@ const claimUi = vi.hoisted(() => ({
 }));
 
 vi.mock("@/hooks/use-giof-work", () => ({
+  registerGiofClaimableRefetch: vi.fn(() => vi.fn()),
   bulkAssignGiofWork: vi.fn(),
   fetchGiofAssignees: vi.fn().mockResolvedValue([]),
   fetchGiofHistory: vi.fn().mockResolvedValue([]),
@@ -86,6 +87,15 @@ const work: GiofWorkMetadata = {
   canEdit: false,
   readOnly: true,
 };
+
+beforeAll(() => {
+  if (!HTMLElement.prototype.hasPointerCapture)
+    HTMLElement.prototype.hasPointerCapture = vi.fn(() => false);
+  if (!HTMLElement.prototype.releasePointerCapture)
+    HTMLElement.prototype.releasePointerCapture = vi.fn();
+  if (!HTMLElement.prototype.scrollIntoView)
+    HTMLElement.prototype.scrollIntoView = vi.fn();
+});
 
 describe("controles GIOF", () => {
   beforeEach(() => {
@@ -255,6 +265,53 @@ describe("controles GIOF", () => {
     },
   );
 
+  it("limita el alcance de Gestor a Todos y Mi trabajo", async () => {
+    const user = userEvent.setup();
+    render(
+      <GiofWorkScopeFilter
+        value={GIOF_WORK_SCOPE.ALL}
+        isManager={false}
+        onChange={vi.fn()}
+        helpContext={GIOF_HELP_CONTEXT.REQUEST}
+      />,
+    );
+
+    const scope = screen.getByRole("combobox", {
+      name: "Alcance de trabajo GIOF",
+    });
+    expect(scope).toHaveTextContent("Todos");
+    expect(
+      screen.getByRole("link", { name: /abrir ayuda sobre asignación giof/i }),
+    ).toBeInTheDocument();
+    await user.click(scope);
+
+    expect(
+      screen.getAllByRole("option").map((option) => option.textContent),
+    ).toEqual(["Todos", "Mi trabajo"]);
+  });
+
+  it("ofrece los cuatro alcances a Manager", async () => {
+    const user = userEvent.setup();
+    render(
+      <GiofWorkScopeFilter
+        value={GIOF_WORK_SCOPE.ALL}
+        isManager
+        onChange={vi.fn()}
+        helpContext={GIOF_HELP_CONTEXT.REQUEST}
+      />,
+    );
+
+    const scope = screen.getByRole("combobox", {
+      name: "Alcance de trabajo GIOF",
+    });
+    expect(scope).toHaveTextContent("Todos");
+    await user.click(scope);
+
+    expect(
+      screen.getAllByRole("option").map((option) => option.textContent),
+    ).toEqual(["Todos", "Mi trabajo", "Sin asignar", "Por responsable"]);
+  });
+
   it("confirma Tomar trabajo con lenguaje sin identidad ajena y estado accesible", async () => {
     const user = userEvent.setup();
     render(
@@ -310,6 +367,9 @@ describe("controles GIOF", () => {
 
     expect(screen.getByText("Sin asignar")).toBeInTheDocument();
     expect(screen.getByText("Ya está asignado a ti")).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /tomar trabajo sol-paid/i }),
+    ).not.toBeInTheDocument();
     expect(
       screen.getByText("Pago pendiente de transferencia"),
     ).toBeInTheDocument();

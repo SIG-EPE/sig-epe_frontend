@@ -6,7 +6,7 @@ import {
   within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createBulkMarkPaidRun } from "@/hooks/use-bulk-mark-paid-orchestrator";
 import {
@@ -109,6 +109,15 @@ vi.mock("next/navigation", () => ({
 }));
 
 vi.mock("@/hooks/use-giof-work", () => ({
+  registerGiofClaimableRefetch: vi.fn(() => vi.fn()),
+  useGiofOwnershipCommands: vi.fn(() => ({
+    release: vi.fn(),
+    take: vi.fn(),
+    forceReassign: vi.fn(),
+    isSubmitting: false,
+    error: null,
+    clearError: vi.fn(),
+  })),
   useGiofWorkLeaseSet: () => ({
     leases: [],
     acquire: mocks.acquireLease,
@@ -220,6 +229,15 @@ function failedRexanRequest(canAcquire: boolean): PaymentRequest {
   };
 }
 
+beforeAll(() => {
+  if (!HTMLElement.prototype.hasPointerCapture)
+    HTMLElement.prototype.hasPointerCapture = vi.fn(() => false);
+  if (!HTMLElement.prototype.releasePointerCapture)
+    HTMLElement.prototype.releasePointerCapture = vi.fn();
+  if (!HTMLElement.prototype.scrollIntoView)
+    HTMLElement.prototype.scrollIntoView = vi.fn();
+});
+
 describe("payment pending queue action", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -297,6 +315,39 @@ describe("payment pending queue action", () => {
     },
   );
 
+  it.each([
+    ["GIOF_GESTOR", "Todos", ["Todos", "Mi trabajo"]],
+    [
+      "GIOF_MANAGER",
+      "Todos",
+      ["Todos", "Mi trabajo", "Sin asignar", "Por responsable"],
+    ],
+  ])(
+    "muestra los alcances permitidos de Payment para %s",
+    async (role, selected, expectedOptions) => {
+      const user = userEvent.setup();
+      roleCode = role;
+
+      render(<PaymentQueuePage />);
+
+      const scope = screen.getByRole("combobox", {
+        name: "Alcance de trabajo GIOF",
+      });
+      expect(scope).toHaveTextContent(selected);
+      await user.click(scope);
+      expect(
+        screen.getAllByRole("option").map((option) => option.textContent),
+      ).toEqual(expectedOptions);
+      expect(mocks.usePaymentQueue).toHaveBeenCalledWith(
+        expect.objectContaining({
+          work_scope: "all",
+        }),
+        expect.anything(),
+      );
+      expect(screen.getByTestId("giof-claimable-PAYMENT")).toBeInTheDocument();
+    },
+  );
+
   it("oculta PAYMENT claimable en historial y para roles no operativos", () => {
     currentQuery = "tab=paid";
     roleCode = "GIOF_GESTOR";
@@ -310,6 +361,9 @@ describe("payment pending queue action", () => {
     rerender(<PaymentQueuePage />);
     expect(
       screen.queryByTestId("giof-claimable-PAYMENT"),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("combobox", { name: "Alcance de trabajo GIOF" }),
     ).not.toBeInTheDocument();
   });
 
@@ -395,7 +449,9 @@ describe("payment pending queue action", () => {
     );
 
     await user.click(screen.getByTestId("payment-filter-pending-data"));
-    expect(replaceMock).toHaveBeenLastCalledWith("/payments?tab=pending-data");
+    expect(replaceMock).toHaveBeenLastCalledWith(
+      "/payments?tab=pending-data&work_scope=all",
+    );
     rerender(<PaymentQueuePage />);
     expect(mocks.usePaymentQueue).toHaveBeenLastCalledWith(
       expect.objectContaining({
@@ -406,7 +462,9 @@ describe("payment pending queue action", () => {
     );
 
     await user.click(screen.getByTestId("payment-filter-rejected"));
-    expect(replaceMock).toHaveBeenLastCalledWith("/payments?tab=rejected");
+    expect(replaceMock).toHaveBeenLastCalledWith(
+      "/payments?tab=rejected&work_scope=all",
+    );
     rerender(<PaymentQueuePage />);
     expect(mocks.usePaymentQueue).toHaveBeenLastCalledWith(
       expect.objectContaining({ status: REQUEST_STATUS.REJECTED }),
@@ -572,11 +630,11 @@ describe("payment pending queue action", () => {
         status: REQUEST_STATUS.PAID,
         page: 2,
         search: "REXAN",
-      approved_from: "2026-08-01",
-      source_account_key: "BCP_PEN",
-      completeness: "complete",
-      drive_status: "SUCCEEDED",
-      rexan_status: "CREATED",
+        approved_from: "2026-08-01",
+        source_account_key: "BCP_PEN",
+        completeness: "complete",
+        drive_status: "SUCCEEDED",
+        rexan_status: "CREATED",
         amount_min: "10.00",
         amount_max: "300.00",
         sort: "payable_amount_desc",
@@ -598,7 +656,9 @@ describe("payment pending queue action", () => {
     await user.click(
       screen.getByRole("button", { name: "Quitar filtro Búsqueda: REXAN" }),
     );
-    expect(replaceMock).toHaveBeenLastCalledWith("/payments?tab=paid");
+    expect(replaceMock).toHaveBeenLastCalledWith(
+      "/payments?tab=paid&work_scope=all",
+    );
 
     currentQuery = "tab=paid&status=VOIDED";
     rerender(<PaymentQueuePage />);
@@ -612,7 +672,7 @@ describe("payment pending queue action", () => {
     await user.click(
       screen.getByRole("button", { name: "Restablecer filtros" }),
     );
-    expect(replaceMock).toHaveBeenLastCalledWith("/payments");
+    expect(replaceMock).toHaveBeenLastCalledWith("/payments?work_scope=all");
   });
 
   it("muestra lifecycle Payment y completitud backend sin SOURCE_REQUIRED", () => {
@@ -669,9 +729,7 @@ describe("payment pending queue action", () => {
           onRegisterPayment={vi.fn()}
           onRejectPayment={onRejectPayment}
           currentUserId="user-1"
-          canManagePayments={
-            role === "GIOF_GESTOR" || role === "GIOF_MANAGER"
-          }
+          canManagePayments={role === "GIOF_GESTOR" || role === "GIOF_MANAGER"}
         />,
       );
       expect(
@@ -806,7 +864,7 @@ describe("payment pending queue action", () => {
     const scope = {
       userId: "user-1",
       sessionId: "user-1:GIOF_GESTOR",
-      pageIdentity: "work_scope=mine",
+      pageIdentity: "work_scope=all",
     };
     const persistedRun = createBulkMarkPaidRun({
       scope,
@@ -851,9 +909,7 @@ describe("payment pending queue action", () => {
       }),
     );
 
-    await waitFor(() =>
-      expect(refetch).toHaveBeenCalledWith({ force: true }),
-    );
+    await waitFor(() => expect(refetch).toHaveBeenCalledWith({ force: true }));
     expect(mocks.releaseLease).toHaveBeenCalledWith(request.id);
     expect(mocks.invalidateRequestDomain).toHaveBeenCalledWith(request.id);
     expect(
@@ -920,18 +976,18 @@ describe("payment pending queue action", () => {
       const incomplete = pendingSourceRequest();
       incomplete.payment = {
         ...incomplete.payment!,
-      operation_reference: null,
-      details_pending: true,
-      missing_fields: ["operation_reference"],
-      completeness: "REFERENCE_PENDING",
-    };
-    const { rerender } = render(
-      <PaymentQueueTable
-        requests={[incomplete]}
-        isLoading={false}
-        onRegisterPayment={vi.fn()}
-        onCompletePaymentDetails={vi.fn()}
-        currentUserId="user-1"
+        operation_reference: null,
+        details_pending: true,
+        missing_fields: ["operation_reference"],
+        completeness: "REFERENCE_PENDING",
+      };
+      const { rerender } = render(
+        <PaymentQueueTable
+          requests={[incomplete]}
+          isLoading={false}
+          onRegisterPayment={vi.fn()}
+          onCompletePaymentDetails={vi.fn()}
+          currentUserId="user-1"
           canManagePayments={role === "GIOF_GESTOR" || role === "GIOF_MANAGER"}
         />,
       );
@@ -941,11 +997,11 @@ describe("payment pending queue action", () => {
 
       rerender(
         <PaymentQueueTable
-        requests={[incomplete]}
-        isLoading={false}
-        onRegisterPayment={vi.fn()}
-        onCompletePaymentDetails={vi.fn()}
-        currentUserId="user-1"
+          requests={[incomplete]}
+          isLoading={false}
+          onRegisterPayment={vi.fn()}
+          onCompletePaymentDetails={vi.fn()}
+          currentUserId="user-1"
           canManagePayments={false}
         />,
       );
@@ -964,21 +1020,21 @@ describe("payment pending queue action", () => {
       roleCode = role;
       mocks.usePaymentQueue.mockReturnValue({
         requests: [
-        {
-          ...pendingSourceRequest(),
-          status: REQUEST_STATUS.APPROVED,
-          paid_at: null,
-          payment_id: undefined,
-          payment: undefined,
-        },
-      ],
-      total: 1,
-      limit: 20,
-      isLoading: false,
-      isRefreshing: false,
-      error: null,
-      refetch: vi.fn(),
-    });
+          {
+            ...pendingSourceRequest(),
+            status: REQUEST_STATUS.APPROVED,
+            paid_at: null,
+            payment_id: undefined,
+            payment: undefined,
+          },
+        ],
+        total: 1,
+        limit: 20,
+        isLoading: false,
+        isRefreshing: false,
+        error: null,
+        refetch: vi.fn(),
+      });
 
       render(<PaymentQueuePage />);
 
@@ -1072,7 +1128,7 @@ describe("payment pending queue action", () => {
     const scope = {
       userId: "user-1",
       sessionId: "user-1:GIOF_GESTOR",
-      pageIdentity: "work_scope=mine",
+      pageIdentity: "work_scope=all",
     };
     const recovered = createBulkMarkPaidRun({
       scope,

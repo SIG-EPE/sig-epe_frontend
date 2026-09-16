@@ -68,6 +68,7 @@ export function RenditionsInboxPage() {
       ? Boolean(
           urlFilters.assignee_id ||
           (urlFilters.work_scope &&
+            urlFilters.work_scope !== GIOF_WORK_SCOPE.ALL &&
             urlFilters.work_scope !== GIOF_WORK_SCOPE.MINE),
         )
       : Boolean(urlFilters.work_scope || urlFilters.assignee_id);
@@ -76,9 +77,7 @@ export function RenditionsInboxPage() {
     parsedUrl.unknownKeys.length > 0 ||
     roleFilterInvalid;
   const workScope: GiofWorkScope | undefined = isGiofOperational
-    ? isGiofManager
-      ? (urlFilters.work_scope ?? GIOF_WORK_SCOPE.ALL)
-      : GIOF_WORK_SCOPE.MINE
+    ? (urlFilters.work_scope ?? GIOF_WORK_SCOPE.ALL)
     : undefined;
   const workAssigneeId =
     isGiofManager && workScope === GIOF_WORK_SCOPE.ASSIGNEE
@@ -92,7 +91,7 @@ export function RenditionsInboxPage() {
   const inbox = useRenditionsInbox(effectiveFilters, {
     enabled: !hasInvalidUrl,
   });
-  const canonicalParams = serializeRenditionsQueueUrl(urlFilters);
+  const canonicalParams = serializeRenditionsQueueUrl(effectiveFilters);
   const canonicalQuery = canonicalParams.toString();
   const rawQuery = currentParams.toString();
   const viewIdentity = serializeRenditionsQueueUrl(effectiveFilters).toString();
@@ -112,11 +111,20 @@ export function RenditionsInboxPage() {
   }
 
   function changeFilters(patch: Partial<RenditionsQueueUrlFilters>): void {
-    replaceRenditionsUrl(updateRenditionsQueueUrl(currentParams, patch));
+    replaceRenditionsUrl(
+      updateRenditionsQueueUrl(
+        serializeRenditionsQueueUrl(effectiveFilters),
+        patch,
+      ),
+    );
   }
 
   function clearFilters(): void {
-    replaceRenditionsUrl(new URLSearchParams());
+    replaceRenditionsUrl(
+      serializeRenditionsQueueUrl({
+        work_scope: isGiofOperational ? GIOF_WORK_SCOPE.ALL : undefined,
+      }),
+    );
   }
 
   function setStatusFilter(status: RenditionsQueueUrlFilters["status"]): void {
@@ -293,6 +301,8 @@ export function RenditionsInboxPage() {
               renditions={inbox.renditions}
               isLoading={inbox.isLoading}
               currentUserId={user?.id}
+              roleCode={roleCode}
+              refetchPoolQueue={(options) => inbox.refetch(options)}
               isGiofManager={isGiofManager}
               selectedAssignmentIds={selectedAssignmentIds}
               onToggleAssignment={(requestId, checked) =>

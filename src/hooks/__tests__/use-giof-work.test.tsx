@@ -4,7 +4,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   claimGiofWork,
+  forceReassignGiofWork,
+  getGiofConflictMessage,
+  getGiofOwnershipErrorCode,
+  releaseGiofWork,
   useAutoAcquireGiofWorkLease,
+  useGiofOwnershipCommands,
   useGiofWorkLease,
 } from "@/hooks/use-giof-work";
 import { api, ApiRequestError } from "@/lib/api-client";
@@ -20,7 +25,16 @@ vi.mock("@/lib/api-client", async (importActual) => {
   return { ...actual, api: { post: vi.fn() } };
 });
 
-vi.mock("@/lib/query-tags", () => ({ invalidateRequestDomain: vi.fn() }));
+const queryTagMocks = vi.hoisted(() => ({
+  invalidateRequestDomain: vi.fn(),
+  invalidateQueryPrefixes: vi.fn(),
+}));
+
+vi.mock("@/lib/query-tags", () => ({
+  QUERY_TAGS: { GIOF_WORK: "giof-work" },
+  invalidateRequestDomain: queryTagMocks.invalidateRequestDomain,
+  invalidateQueryPrefixes: queryTagMocks.invalidateQueryPrefixes,
+}));
 
 const work: GiofWorkMetadata = {
   pool: GIOF_WORK_POOL.REQUEST,
@@ -139,6 +153,207 @@ describe("useGiofWorkLease", () => {
       pool: GIOF_WORK_POOL.PAYMENT,
       requestId: "request-1",
       expectedVersion: 3,
+    });
+  });
+
+  it("serializa release y force-reassign con los DTO mínimos actuales", async () => {
+    vi.mocked(api.post)
+      .mockResolvedValueOnce({
+        requestId: "request-1",
+        pool: GIOF_WORK_POOL.REQUEST,
+        assignmentVersion: "4",
+        changed: true,
+      })
+      .mockResolvedValueOnce({
+        requestId: "request-1",
+        pool: GIOF_WORK_POOL.PAYMENT,
+        assignmentVersion: "5",
+        changed: true,
+      });
+
+    await releaseGiofWork({
+      requestId: "request-1",
+      pool: GIOF_WORK_POOL.REQUEST,
+      expectedAssignmentVersion: 3,
+    });
+    await forceReassignGiofWork({
+      requestId: "request-1",
+      pool: GIOF_WORK_POOL.PAYMENT,
+      targetAssigneeId: "22222222-2222-4222-8222-222222222222",
+      expectedAssignmentVersion: 4,
+      reason: "Cobertura operativa",
+      confirmed: true,
+      acknowledgePaymentInterruption: true,
+    });
+
+    expect(api.post).toHaveBeenNthCalledWith(
+      1,
+      "/giof-work/assignments/release",
+      {
+        requestId: "request-1",
+        pool: "REQUEST",
+        expectedAssignmentVersion: 3,
+      },
+    );
+    expect(api.post).toHaveBeenNthCalledWith(
+      2,
+      "/giof-work/assignments/force-reassign",
+      {
+        requestId: "request-1",
+        pool: "PAYMENT",
+        targetAssigneeId: "22222222-2222-4222-8222-222222222222",
+        expectedAssignmentVersion: 4,
+        reason: "Cobertura operativa",
+        confirmed: true,
+        acknowledgePaymentInterruption: true,
+      },
+    );
+  });
+
+  it("conserva códigos públicos de conflicto y muestra mensajes accionables", () => {
+    const error = new ApiRequestError(409, {
+      statusCode: 409,
+      code: "ACTIVE_CROSS_POOL_LEASE",
+      message: "Work item has lease state for another pool",
+      error: "Conflict",
+      timestamp: "2026-09-16T00:00:00.000Z",
+      path: "/giof-work/assignments/release",
+    });
+
+    expect(getGiofOwnershipErrorCode(error)).toBe("ACTIVE_CROSS_POOL_LEASE");
+    expect(getGiofConflictMessage(error)).toMatch(/otra etapa/i);
+    expect(getGiofOwnershipErrorCode(new Error("local"))).toBeUndefined();
+  });
+
+  it("el hook anuncia el error sin ocultar el ApiRequestError al llamador", async () => {
+    const conflict = new ApiRequestError(409, {
+      statusCode: 409,
+      code: "VERSION_MISMATCH",
+      message: "Assignment version is stale",
+      error: "Conflict",
+      timestamp: "2026-09-16T00:00:00.000Z",
+      path: "/giof-work/assignments/release",
+    });
+    vi.mocked(api.post).mockRejectedValueOnce(conflict);
+    const { result } = renderHook(() => useGiofOwnershipCommands());
+
+    await act(async () => {
+      await expect(
+        result.current.release({
+          requestId: "request-1",
+          pool: GIOF_WORK_POOL.REQUEST,
+          expectedAssignmentVersion: 3,
+        }),
+      ).rejects.toBe(conflict);
+    });
+
+    expect(result.current.error?.message).toMatch(/versión.*cambió/i);
+    expect(result.current.isSubmitting).toBe(false);
+  });
+
+  it("refresca primero la cola inferior y luego claimable después de release", async () => {
+    const order: string[] = [];
+    vi.mocked(api.post).mockResolvedValueOnce({
+      requestId: "request-1",
+      pool: GIOF_WORK_POOL.REQUEST,
+      assignmentVersion: "4",
+      changed: true,
+    });
+    const { result } = renderHook(() =>
+      useGiofOwnershipCommands({
+        pool: GIOF_WORK_POOL.REQUEST,
+        refetchPoolQueue: async () => {
+          order.push("lower");
+        },
+        refetchClaimable: async () => {
+          order.push("claimable");
+        },
+      }),
+    );
+
+    await act(async () => {
+      await result.current.release({
+        requestId: "request-1",
+        pool: GIOF_WORK_POOL.REQUEST,
+        expectedAssignmentVersion: 3,
+      });
+    });
+
+    expect(order).toEqual(["lower", "claimable"]);
+    expect(queryTagMocks.invalidateRequestDomain).toHaveBeenCalledWith(
+      "request-1",
+    );
+  });
+
+  it("retiene el error y refresca en el mismo orden ante 409", async () => {
+    const order: string[] = [];
+    const conflict = new ApiRequestError(409, {
+      statusCode: 409,
+      code: "VERSION_MISMATCH",
+      message: "Assignment version is stale",
+      error: "Conflict",
+      timestamp: "2026-09-16T00:00:00.000Z",
+      path: "/giof-work/assignments/release",
+    });
+    vi.mocked(api.post).mockRejectedValueOnce(conflict);
+    const { result } = renderHook(() =>
+      useGiofOwnershipCommands({
+        pool: GIOF_WORK_POOL.REQUEST,
+        refetchPoolQueue: async () => {
+          order.push("lower");
+        },
+        refetchClaimable: async () => {
+          order.push("claimable");
+        },
+      }),
+    );
+
+    await act(async () => {
+      await expect(
+        result.current.release({
+          requestId: "request-1",
+          pool: GIOF_WORK_POOL.REQUEST,
+          expectedAssignmentVersion: 3,
+        }),
+      ).rejects.toBe(conflict);
+    });
+
+    expect(order).toEqual(["lower", "claimable"]);
+    expect(result.current.error?.message).toMatch(/versión.*cambió/i);
+  });
+
+  it("rechaza un segundo submit mientras la acción anterior sigue pendiente", async () => {
+    let finishRequest: ((value: unknown) => void) | undefined;
+    vi.mocked(api.post).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finishRequest = resolve;
+        }),
+    );
+    const { result } = renderHook(() => useGiofOwnershipCommands());
+    const command = {
+      requestId: "request-1",
+      pool: GIOF_WORK_POOL.REQUEST,
+      expectedAssignmentVersion: 3,
+    };
+
+    let firstRequest: Promise<unknown> | undefined;
+    await act(async () => {
+      firstRequest = result.current.release(command);
+      await expect(result.current.release(command)).rejects.toThrow(
+        /acción de asignación en curso/i,
+      );
+    });
+    expect(api.post).toHaveBeenCalledTimes(1);
+
+    finishRequest?.({
+      requestId: "request-1",
+      pool: GIOF_WORK_POOL.REQUEST,
+      assignmentVersion: "4",
+      changed: true,
+    });
+    await act(async () => {
+      await firstRequest;
     });
   });
 });

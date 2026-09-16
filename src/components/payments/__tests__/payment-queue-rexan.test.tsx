@@ -86,6 +86,15 @@ vi.mock("next/navigation", () => ({
 }));
 
 vi.mock("@/hooks/use-giof-work", () => ({
+  registerGiofClaimableRefetch: vi.fn(() => vi.fn()),
+  useGiofOwnershipCommands: vi.fn(() => ({
+    release: vi.fn(),
+    take: vi.fn(),
+    forceReassign: vi.fn(),
+    isSubmitting: false,
+    error: null,
+    clearError: vi.fn(),
+  })),
   useGiofWorkLeaseSet: () => ({
     leases: [],
     acquire: vi.fn().mockResolvedValue({ token: "lease-token" }),

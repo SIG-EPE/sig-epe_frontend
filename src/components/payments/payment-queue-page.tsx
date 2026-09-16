@@ -136,6 +136,7 @@ export function PaymentQueuePage() {
       ? Boolean(
           urlFilters.assignee_id ||
           (urlFilters.work_scope &&
+            urlFilters.work_scope !== GIOF_WORK_SCOPE.ALL &&
             urlFilters.work_scope !== GIOF_WORK_SCOPE.MINE),
         )
       : Boolean(urlFilters.work_scope || urlFilters.assignee_id);
@@ -144,9 +145,7 @@ export function PaymentQueuePage() {
     parsedUrl.unknownKeys.length > 0 ||
     roleFilterInvalid;
   const workScope: GiofWorkScope | undefined = canManagePayments
-    ? isGiofManager
-      ? (urlFilters.work_scope ?? GIOF_WORK_SCOPE.ALL)
-      : GIOF_WORK_SCOPE.MINE
+    ? (urlFilters.work_scope ?? GIOF_WORK_SCOPE.ALL)
     : undefined;
   const workAssigneeId =
     isGiofManager && workScope === GIOF_WORK_SCOPE.ASSIGNEE
@@ -184,6 +183,16 @@ export function PaymentQueuePage() {
     work_scope: workScope,
     assignee_id: workAssigneeId,
   }).toString();
+  const canonicalQuery = canManagePayments
+    ? viewIdentity
+    : serializePaymentQueueUrl(urlFilters).toString();
+  const rawQuery = searchParams.toString();
+
+  useEffect(() => {
+    if (!hasInvalidUrl && rawQuery !== canonicalQuery) {
+      replacePaymentUrl(new URLSearchParams(canonicalQuery));
+    }
+  }, [canonicalQuery, hasInvalidUrl, rawQuery]);
   const bulkRunScope: BulkMarkPaidRunScope | null =
     canManagePayments && user?.id
       ? {
@@ -500,15 +509,17 @@ export function PaymentQueuePage() {
 
   function changeFilters(patch: Partial<PaymentQueueUrlFilters>): void {
     replacePaymentUrl(
-      updatePaymentQueueUrl(
-        new URLSearchParams(searchParams.toString()),
-        patch,
-      ),
+      updatePaymentQueueUrl(new URLSearchParams(viewIdentity), patch),
     );
   }
 
   function clearFilters(): void {
-    replacePaymentUrl(serializePaymentQueueUrl({ tab }));
+    replacePaymentUrl(
+      serializePaymentQueueUrl({
+        tab,
+        work_scope: canManagePayments ? GIOF_WORK_SCOPE.ALL : undefined,
+      }),
+    );
   }
 
   return (
@@ -584,7 +595,13 @@ export function PaymentQueuePage() {
       {hasInvalidUrl ? (
         <QueueFilterReset
           message="No se pudieron aplicar los filtros de la URL. Restablécelos para continuar sin exponer parámetros inválidos."
-          onReset={() => replacePaymentUrl(new URLSearchParams())}
+          onReset={() =>
+            replacePaymentUrl(
+              serializePaymentQueueUrl({
+                work_scope: canManagePayments ? GIOF_WORK_SCOPE.ALL : undefined,
+              }),
+            )
+          }
         />
       ) : (
         <PaymentQueueFilters
@@ -594,6 +611,7 @@ export function PaymentQueuePage() {
             assignee_id: workAssigneeId,
           }}
           isManager={isGiofManager}
+          isOperational={canManagePayments}
           summary={activeQueue.summary}
           total={displayedTotal}
           isLoading={displayedIsLoading}
@@ -792,6 +810,8 @@ export function PaymentQueuePage() {
               onCompletePaymentDetails={openCompletePaymentDetails}
               onRetryRexanActivation={canRetryRexan ? retryRexan : undefined}
               currentUserId={user?.id}
+              roleCode={roleCode}
+              refetchPoolQueue={(options) => activeQueue.refetch(options)}
               isGiofManager={
                 isGiofManager && tab !== PAYMENT_QUEUE_TAB.REJECTED
               }

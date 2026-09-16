@@ -54,6 +54,7 @@ import {
 } from "@/lib/requests";
 import {
   parseRequestReviewUrl,
+  serializeRequestReviewUrl,
   updateRequestReviewUrl,
 } from "@/lib/queue-filters/review";
 import {
@@ -316,9 +317,7 @@ export function RequestsPage() {
     isGiofOperational &&
     Object.values(GIOF_WORK_SCOPE).includes(rawWorkScope as GiofWorkScope)
       ? (rawWorkScope as GiofWorkScope)
-      : isGiofManager
-        ? GIOF_WORK_SCOPE.ALL
-        : GIOF_WORK_SCOPE.MINE;
+      : GIOF_WORK_SCOPE.ALL;
   const workAssigneeId =
     workScope === GIOF_WORK_SCOPE.ASSIGNEE
       ? (searchParams.get("assignee_id") ?? undefined)
@@ -339,13 +338,35 @@ export function RequestsPage() {
     parsedReviewUrl.unknownKeys.length > 0 ||
     (roleCode === ROLE_CODE.GIOF_GESTOR &&
       parsedReviewUrl.filters.work_scope !== undefined &&
+      parsedReviewUrl.filters.work_scope !== GIOF_WORK_SCOPE.ALL &&
       parsedReviewUrl.filters.work_scope !== GIOF_WORK_SCOPE.MINE);
   const reviewFilters: ReviewFilters = {
     ...parsedReviewUrl.filters,
-    work_scope:
-      parsedReviewUrl.filters.work_scope ??
-      (isGiofManager ? GIOF_WORK_SCOPE.ALL : GIOF_WORK_SCOPE.MINE),
+    work_scope: parsedReviewUrl.filters.work_scope ?? GIOF_WORK_SCOPE.ALL,
   };
+  const canonicalReviewParams = new URLSearchParams({
+    scope: REQUEST_SCOPE.REVIEW,
+  });
+  serializeRequestReviewUrl(reviewFilters).forEach((value, key) =>
+    canonicalReviewParams.append(key, value),
+  );
+  const canonicalReviewQuery = canonicalReviewParams.toString();
+
+  useEffect(() => {
+    if (
+      isGiofReviewInbox &&
+      !hasUnsupportedReviewUrl &&
+      searchParamsSignature !== canonicalReviewQuery
+    ) {
+      router.replace(`${ROUTES.REQUESTS}?${canonicalReviewQuery}`);
+    }
+  }, [
+    canonicalReviewQuery,
+    hasUnsupportedReviewUrl,
+    isGiofReviewInbox,
+    router,
+    searchParamsSignature,
+  ]);
   const legacyResource = useRequests(
     {
       page,
@@ -460,7 +481,9 @@ export function RequestsPage() {
   }
 
   function resetInvalidReviewFilters() {
-    router.replace(`${ROUTES.REQUESTS}?scope=review`);
+    router.replace(
+      `${ROUTES.REQUESTS}?scope=review&work_scope=${GIOF_WORK_SCOPE.ALL}`,
+    );
   }
 
   function setReviewQueueFilter(queue: RequestReviewQueue) {
@@ -493,7 +516,9 @@ export function RequestsPage() {
 
   function clearReviewFilters() {
     setSelectedAssignmentIds([]);
-    router.replace(`${ROUTES.REQUESTS}?scope=review`);
+    router.replace(
+      `${ROUTES.REQUESTS}?scope=review&work_scope=${GIOF_WORK_SCOPE.ALL}`,
+    );
   }
 
   function toggleAssignment(requestId: string, checked: boolean) {
@@ -1329,6 +1354,7 @@ export function RequestsPage() {
                   ? REQUEST_STATUS_SURFACE.REVIEW
                   : REQUEST_STATUS_SURFACE.DETAIL
               }
+              refetchPoolQueue={(options) => refetch(options)}
             />
           )}
         </CardContent>

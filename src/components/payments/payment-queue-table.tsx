@@ -42,6 +42,7 @@ import {
   type PaymentRequest,
 } from "@/types/requests";
 import { GiofWorkStatus } from "@/components/giof-work/giof-work-controls";
+import { GiofOwnershipActions } from "@/components/giof-work/giof-ownership-actions";
 import { canOperateAssignedGiofWork } from "@/lib/role-capabilities";
 import { isGiofLeaseCurrent } from "@/lib/giof-work-lease-session";
 import { GIOF_WORK_POOL, type GiofWorkLease } from "@/types/giof-work";
@@ -68,6 +69,8 @@ interface PaymentQueueTableProps {
   onToggleAssignment?: (requestId: string, checked: boolean) => void;
   onToggleAllAssignments?: (checked: boolean) => void;
   maxSelectedRequests?: number;
+  roleCode?: string | null;
+  refetchPoolQueue?: (options?: { force?: boolean }) => Promise<void>;
 }
 
 export function isBulkPaymentSelectable(
@@ -116,6 +119,8 @@ export function PaymentQueueTable({
   onToggleAssignment,
   onToggleAllAssignments,
   maxSelectedRequests = 50,
+  roleCode,
+  refetchPoolQueue,
 }: PaymentQueueTableProps) {
   if (isLoading) {
     return <QueueTableRowsSkeleton rows={5} columns={7} />;
@@ -492,6 +497,16 @@ export function PaymentQueueTable({
                   </TableCell>
                   <TableCell className="text-right">
                     <div className="flex flex-col items-end gap-2">
+                      {request.giof_work && refetchPoolQueue && (
+                        <GiofOwnershipActions
+                          requestId={request.id}
+                          label={request.request_code ?? "Pago"}
+                          work={request.giof_work}
+                          roleCode={roleCode}
+                          currentUserId={currentUserId}
+                          refetchPoolQueue={refetchPoolQueue}
+                        />
+                      )}
                       {canManagePayments &&
                       request.status === REQUEST_STATUS.APPROVED &&
                       hasActivePaymentLease ? (

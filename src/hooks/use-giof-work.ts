@@ -21,12 +21,17 @@ import type {
   GiofBulkAssignInput,
   GiofBulkAssignResponse,
   GiofClaimableWorkPage,
+  GiofForceReassignWorkCommand,
+  GiofOwnershipCommandResult,
+  GiofOwnershipErrorCode,
+  GiofReleaseWorkCommand,
   GiofSelfClaimCommand,
   GiofSelfClaimResult,
   GiofWorkLease,
   GiofWorkMetadata,
   GiofWorkPool,
 } from "@/types/giof-work";
+import { GIOF_OWNERSHIP_ERROR_CODE } from "@/types/giof-work";
 
 const DEFAULT_HEARTBEAT_MS = 60_000;
 
@@ -60,6 +65,12 @@ export function getGiofConflictMessage(error: unknown): string {
     if (code === "ASSIGNEE_MISMATCH") {
       return "La solicitud está asignada a otra persona y no puede tomarse desde este lote.";
     }
+    if (code === "ACTIVE_CROSS_POOL_LEASE") {
+      return "La solicitud tiene una sesión de trabajo en otra etapa. Actualiza la cola antes de continuar.";
+    }
+    if (code === "NOT_FOUND") {
+      return "El trabajo ya no está disponible. Actualiza la cola.";
+    }
     if (code === "INELIGIBLE_LIFECYCLE") {
       return "El trabajo ya no es elegible para esta etapa. Actualiza la cola.";
     }
@@ -68,6 +79,18 @@ export function getGiofConflictMessage(error: unknown): string {
   return error instanceof Error
     ? error.message
     : "No se pudo completar la operación GIOF.";
+}
+
+export function getGiofOwnershipErrorCode(
+  error: unknown,
+): GiofOwnershipErrorCode | undefined {
+  if (!(error instanceof ApiRequestError)) return undefined;
+  const code = error.body.code;
+  return Object.values(GIOF_OWNERSHIP_ERROR_CODE).includes(
+    code as GiofOwnershipErrorCode,
+  )
+    ? (code as GiofOwnershipErrorCode)
+    : undefined;
 }
 
 export function useGiofWorkLease() {
@@ -463,6 +486,110 @@ export async function bulkAssignGiofWork(
   );
   invalidateRequestDomain();
   return result;
+}
+
+export async function releaseGiofWork(
+  command: GiofReleaseWorkCommand,
+): Promise<GiofOwnershipCommandResult> {
+  return api.post<GiofOwnershipCommandResult>(
+    "/giof-work/assignments/release",
+    command,
+  );
+}
+
+export async function forceReassignGiofWork(
+  command: GiofForceReassignWorkCommand,
+): Promise<GiofOwnershipCommandResult> {
+  return api.post<GiofOwnershipCommandResult>(
+    "/giof-work/assignments/force-reassign",
+    command,
+  );
+}
+
+type GiofQueueRefetch = (options?: { force?: boolean }) => Promise<void>;
+
+interface GiofOwnershipCommandOptions {
+  pool?: GiofWorkPool;
+  refetchPoolQueue?: GiofQueueRefetch;
+  refetchClaimable?: GiofQueueRefetch;
+}
+
+const claimableRefetchers = new Map<GiofWorkPool, Set<GiofQueueRefetch>>();
+
+export function registerGiofClaimableRefetch(
+  pool: GiofWorkPool,
+  refetch: GiofQueueRefetch,
+): () => void {
+  const refetchers =
+    claimableRefetchers.get(pool) ?? new Set<GiofQueueRefetch>();
+  refetchers.add(refetch);
+  claimableRefetchers.set(pool, refetchers);
+  return () => {
+    refetchers.delete(refetch);
+    if (refetchers.size === 0) claimableRefetchers.delete(pool);
+  };
+}
+
+async function refetchRegisteredClaimable(pool: GiofWorkPool): Promise<void> {
+  const refetchers = [...(claimableRefetchers.get(pool) ?? [])];
+  await Promise.all(refetchers.map((refetch) => refetch({ force: true })));
+}
+
+export function useGiofOwnershipCommands({
+  pool,
+  refetchPoolQueue,
+  refetchClaimable,
+}: GiofOwnershipCommandOptions = {}) {
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [error, setError] = useState<Error | null>(null);
+  const inFlightRef = useRef(false);
+
+  async function refreshQueues(requestId: string): Promise<void> {
+    if (!pool || !refetchPoolQueue) return;
+    invalidateQueryPrefixes([[QUERY_TAGS.GIOF_WORK, "claimable", pool]]);
+    invalidateRequestDomain(requestId);
+    await refetchPoolQueue({ force: true });
+    if (refetchClaimable) await refetchClaimable({ force: true });
+    else await refetchRegisteredClaimable(pool);
+  }
+
+  async function run(
+    requestId: string,
+    command: () => Promise<GiofOwnershipCommandResult>,
+  ): Promise<GiofOwnershipCommandResult> {
+    if (inFlightRef.current)
+      throw new Error("Ya hay una acción de asignación en curso.");
+    inFlightRef.current = true;
+    setIsSubmitting(true);
+    setError(null);
+    try {
+      const result = await command();
+      await refreshQueues(requestId);
+      return result;
+    } catch (reason) {
+      if (reason instanceof ApiRequestError && reason.status === 409) {
+        await refreshQueues(requestId).catch(() => undefined);
+      }
+      const nextError = new Error(getGiofConflictMessage(reason));
+      setError(nextError);
+      throw reason;
+    } finally {
+      inFlightRef.current = false;
+      setIsSubmitting(false);
+    }
+  }
+
+  return {
+    release: (command: GiofReleaseWorkCommand) =>
+      run(command.requestId, () => releaseGiofWork(command)),
+    take: (command: GiofSelfClaimCommand) =>
+      run(command.requestId, () => claimGiofWork(command)),
+    forceReassign: (command: GiofForceReassignWorkCommand) =>
+      run(command.requestId, () => forceReassignGiofWork(command)),
+    isSubmitting,
+    error,
+    clearError: () => setError(null),
+  };
 }
 
 export async function fetchGiofClaimableWork(

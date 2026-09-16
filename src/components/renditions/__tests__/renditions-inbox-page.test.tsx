@@ -40,6 +40,15 @@ vi.mock("@/stores/auth-store", () => ({
 }));
 
 vi.mock("@/hooks/use-giof-work", () => ({
+  registerGiofClaimableRefetch: vi.fn(() => vi.fn()),
+  useGiofOwnershipCommands: vi.fn(() => ({
+    release: vi.fn(),
+    take: vi.fn(),
+    forceReassign: vi.fn(),
+    isSubmitting: false,
+    error: null,
+    clearError: vi.fn(),
+  })),
   useGiofClaimableWork: giofMocks.useClaimableWork,
   useGiofSelfClaim: giofMocks.useSelfClaim,
   useGiofAssignees: vi.fn(() => ({ data: [], isLoading: false, error: null })),
@@ -192,11 +201,47 @@ describe("RenditionsInboxPage", () => {
     },
   );
 
+  it.each([
+    ["GIOF_GESTOR", "Todos", ["Todos", "Mi trabajo"]],
+    [
+      "GIOF_MANAGER",
+      "Todos",
+      ["Todos", "Mi trabajo", "Sin asignar", "Por responsable"],
+    ],
+  ])(
+    "muestra los alcances permitidos de Renditions para %s",
+    async (role, selected, expectedOptions) => {
+      const user = userEvent.setup();
+      roleCode = role;
+
+      render(<RenditionsInboxPage />);
+
+      const scope = screen.getByRole("combobox", {
+        name: "Alcance de trabajo GIOF",
+      });
+      expect(scope).toHaveTextContent(selected);
+      await user.click(scope);
+      expect(
+        screen.getAllByRole("option").map((option) => option.textContent),
+      ).toEqual(expectedOptions);
+      expect(useRenditionsInbox).toHaveBeenCalledWith(
+        expect.objectContaining({
+          work_scope: "all",
+        }),
+        expect.objectContaining({ enabled: true }),
+      );
+      expect(screen.getByTestId("giof-claimable-REXAN")).toBeInTheDocument();
+    },
+  );
+
   it("oculta REXAN claimable para roles no operativos", () => {
     roleCode = "ADMIN_SISTEMA";
     render(<RenditionsInboxPage />);
     expect(
       screen.queryByTestId("giof-claimable-REXAN"),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("combobox", { name: "Alcance de trabajo GIOF" }),
     ).not.toBeInTheDocument();
   });
 
@@ -220,7 +265,7 @@ describe("RenditionsInboxPage", () => {
     fireEvent.click(screen.getByTestId("renditions-summary-card-due-soon"));
 
     expect(replaceMock).toHaveBeenCalledWith(
-      "/renditions?status=PENDING&deadline_bucket=due_soon",
+      "/renditions?status=PENDING&work_scope=all&deadline_bucket=due_soon",
     );
   });
 
@@ -283,7 +328,9 @@ describe("RenditionsInboxPage", () => {
     ]);
 
     await user.click(screen.getByRole("option", { name: "En revisión" }));
-    expect(replaceMock).toHaveBeenCalledWith("/renditions?status=IN_REVIEW");
+    expect(replaceMock).toHaveBeenCalledWith(
+      "/renditions?status=IN_REVIEW&work_scope=all",
+    );
   });
 
   it("muestra summary exacto y comunica qué dimensión excluye cada facet", () => {
@@ -332,12 +379,12 @@ describe("RenditionsInboxPage", () => {
 
     const { rerender } = render(<RenditionsInboxPage />);
     expect(replaceMock).toHaveBeenCalledWith(
-      "/renditions?page=2&deadline_from=2026-06-01&deadline_bucket=due_soon",
+      "/renditions?page=2&work_scope=all&deadline_from=2026-06-01&deadline_bucket=due_soon",
     );
 
     replaceMock.mockClear();
     searchParams = new URLSearchParams(
-      "page=2&deadline_from=2026-06-01&deadline_bucket=due_soon",
+      "page=2&work_scope=all&deadline_from=2026-06-01&deadline_bucket=due_soon",
     );
     rerender(<RenditionsInboxPage />);
     expect(replaceMock).not.toHaveBeenCalled();
@@ -363,7 +410,7 @@ describe("RenditionsInboxPage", () => {
     await user.click(
       screen.getByRole("button", { name: "Limpiar todos los filtros" }),
     );
-    expect(replaceMock).toHaveBeenCalledWith("/renditions");
+    expect(replaceMock).toHaveBeenCalledWith("/renditions?work_scope=all");
 
     replaceMock.mockClear();
     searchParams = new URLSearchParams("document_complete=true");
@@ -371,6 +418,6 @@ describe("RenditionsInboxPage", () => {
     await user.click(
       screen.getByRole("button", { name: "Restablecer filtros" }),
     );
-    expect(replaceMock).toHaveBeenCalledWith("/renditions");
+    expect(replaceMock).toHaveBeenCalledWith("/renditions?work_scope=all");
   });
 });

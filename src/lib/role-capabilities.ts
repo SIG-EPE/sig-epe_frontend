@@ -1,5 +1,8 @@
 import { ROLE_CODE, type RoleCode } from "@/lib/constants";
-import type { GiofWorkMetadata } from "@/types/giof-work";
+import {
+  GIOF_WORK_ASSIGNMENT_STATE,
+  type GiofWorkMetadata,
+} from "@/types/giof-work";
 
 export const ROLE_CAPABILITY = {
   REQUEST_OWN: "request-own",
@@ -75,13 +78,21 @@ export function canRetryGiofWork(roleCode?: string | null): boolean {
   return hasRoleCapability(roleCode, ROLE_CAPABILITY.GIOF_RETRY);
 }
 
+export function isGiofWorkLifecycleEligible(
+  work: GiofWorkMetadata | null | undefined,
+): work is GiofWorkMetadata {
+  return Boolean(work && work.canAssign !== false);
+}
+
 export function canOperateAssignedGiofWork(
   work: GiofWorkMetadata | null | undefined,
   currentUserId: string | null | undefined,
 ): boolean {
   return Boolean(
     currentUserId
-      && work?.assigneeId === currentUserId
+      && isGiofWorkLifecycleEligible(work)
+      && (work?.assignmentState === GIOF_WORK_ASSIGNMENT_STATE.SELF
+        || work?.assigneeId === currentUserId)
       && work.canAcquire === true,
   );
 }

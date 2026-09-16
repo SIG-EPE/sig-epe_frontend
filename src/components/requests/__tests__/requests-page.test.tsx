@@ -6,7 +6,15 @@ import {
   waitFor,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 
 import { RequestsPage } from "@/components/requests/requests-page";
 import { ApiRequestError } from "@/lib/api-client";
@@ -70,6 +78,15 @@ vi.mock("@/hooks/use-requests", () => ({
 }));
 
 vi.mock("@/hooks/use-giof-work", () => ({
+  registerGiofClaimableRefetch: vi.fn(() => vi.fn()),
+  useGiofOwnershipCommands: vi.fn(() => ({
+    release: vi.fn(),
+    take: vi.fn(),
+    forceReassign: vi.fn(),
+    isSubmitting: false,
+    error: null,
+    clearError: vi.fn(),
+  })),
   useGiofClaimableWork: giofMocks.useClaimableWork,
   useGiofSelfClaim: giofMocks.useSelfClaim,
   useGiofAssignees: vi.fn(() => ({
@@ -163,6 +180,15 @@ function makeRequest(overrides: Partial<PaymentRequest> = {}): PaymentRequest {
     ...overrides,
   };
 }
+
+beforeAll(() => {
+  if (!HTMLElement.prototype.hasPointerCapture)
+    HTMLElement.prototype.hasPointerCapture = vi.fn(() => false);
+  if (!HTMLElement.prototype.releasePointerCapture)
+    HTMLElement.prototype.releasePointerCapture = vi.fn();
+  if (!HTMLElement.prototype.scrollIntoView)
+    HTMLElement.prototype.scrollIntoView = vi.fn();
+});
 
 describe("RequestsPage", () => {
   beforeEach(() => {
@@ -272,6 +298,43 @@ describe("RequestsPage", () => {
     expect(screen.getAllByTestId("giof-claimable-REQUEST")).toHaveLength(1);
   });
 
+  it("muestra Todos y Mi trabajo en Review para Gestor con default Todos", async () => {
+    const user = userEvent.setup();
+    currentQuery = "scope=review";
+
+    render(<RequestsPage />);
+
+    const scope = screen.getByRole("combobox", {
+      name: "Alcance de trabajo GIOF",
+    });
+    expect(scope).toHaveTextContent("Todos");
+    await user.click(scope);
+    expect(
+      screen.getAllByRole("option").map((option) => option.textContent),
+    ).toEqual(["Todos", "Mi trabajo"]);
+    expect(useRequestReviewMock).toHaveBeenCalledWith(
+      expect.objectContaining({ work_scope: "all" }),
+      expect.objectContaining({ enabled: true }),
+    );
+    expect(screen.getByTestId("giof-claimable-REQUEST")).toBeInTheDocument();
+  });
+
+  it("muestra los cuatro alcances de Review para Manager", async () => {
+    const user = userEvent.setup();
+    currentQuery = "scope=review";
+    authUser = makeUser("GIOF_MANAGER");
+
+    render(<RequestsPage />);
+
+    const scope = screen.getByRole("combobox", {
+      name: "Alcance de trabajo GIOF",
+    });
+    await user.click(scope);
+    expect(
+      screen.getAllByRole("option").map((option) => option.textContent),
+    ).toEqual(["Todos", "Mi trabajo", "Sin asignar", "Por responsable"]);
+  });
+
   it.each(["GIOF_GESTOR", "GIOF_MANAGER"] as const)(
     "integra REQUEST claimable para %s y conecta el refetch autoritativo sin navegar",
     async (role) => {
@@ -318,6 +381,9 @@ describe("RequestsPage", () => {
         expect.objectContaining({ scope: "mine" }),
         expect.anything(),
       );
+      expect(
+        screen.queryByRole("combobox", { name: "Alcance de trabajo GIOF" }),
+      ).not.toBeInTheDocument();
     },
   );
 
@@ -583,7 +649,7 @@ describe("RequestsPage", () => {
     );
     expect(useRequestReviewMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        work_scope: "mine",
+        work_scope: "all",
       }),
       expect.objectContaining({ keepPreviousData: false, enabled: true }),
     );
@@ -775,24 +841,21 @@ describe("RequestsPage", () => {
     await user.click(
       screen.getByRole("button", { name: "Restablecer filtros" }),
     );
-    expect(replaceMock).toHaveBeenLastCalledWith("/requests?scope=review");
+    expect(replaceMock).toHaveBeenLastCalledWith(
+      "/requests?scope=review&work_scope=all",
+    );
   });
 
-  it("impide que Gestor use o enumere alcances globales desde una URL manipulada", () => {
+  it("acepta el alcance all canónico de Gestor", () => {
     currentQuery = "scope=review&work_scope=all";
 
     render(<RequestsPage />);
 
     expect(useRequestReviewMock).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.objectContaining({ enabled: false }),
+      expect.objectContaining({ work_scope: "all" }),
+      expect.objectContaining({ enabled: true }),
     );
-    expect(screen.getByRole("alert")).toHaveTextContent(
-      "No se pudieron aplicar los filtros de la URL",
-    );
-    expect(
-      screen.queryByTestId("giof-work-scope-filter"),
-    ).not.toBeInTheDocument();
+    expect(screen.getByTestId("giof-work-scope-filter")).toBeInTheDocument();
     expect(
       screen.queryByTestId("giof-assignee-filter"),
     ).not.toBeInTheDocument();
@@ -807,7 +870,7 @@ describe("RequestsPage", () => {
     await user.click(screen.getByRole("button", { name: "Buscar" }));
 
     expect(replaceMock).toHaveBeenLastCalledWith(
-      "/requests?scope=review&status=OBSERVED&search=vi%C3%A1tico",
+      "/requests?scope=review&work_scope=all&status=OBSERVED&search=vi%C3%A1tico",
     );
   });
 
@@ -824,13 +887,15 @@ describe("RequestsPage", () => {
       screen.getByRole("button", { name: "Quitar filtro Búsqueda: viatico" }),
     );
     expect(replaceMock).toHaveBeenLastCalledWith(
-      "/requests?scope=review&status=SUBMITTED",
+      "/requests?scope=review&work_scope=all&status=SUBMITTED",
     );
 
     await user.click(
       screen.getByRole("button", { name: "Limpiar todos los filtros" }),
     );
-    expect(replaceMock).toHaveBeenLastCalledWith("/requests?scope=review");
+    expect(replaceMock).toHaveBeenLastCalledWith(
+      "/requests?scope=review&work_scope=all",
+    );
   });
 
   it("muestra errores de revisión accionables sin exponer detalles técnicos", () => {
