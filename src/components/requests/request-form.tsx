@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { useFieldArray, useForm } from "react-hook-form";
+import { useFieldArray, useForm, useWatch } from "react-hook-form";
 import { toast } from "sonner";
 import { z } from "zod";
 
@@ -93,6 +93,13 @@ import { validatePoaCurrencies } from "@/lib/request-currency-policy";
 import { requestMoneyError, requestMoneyInput, requestMoneyTotal } from "@/lib/request-form-money";
 
 const STRUCTURED_REPORT_PENDING_MESSAGE = "Informe pendiente de generación: genera el Excel validado antes de enviar a revisión.";
+const SUPPLIER_IDENTITY_ERROR_MESSAGE = "Completa el nombre y documento válido del proveedor (RUC, DNI o CE).";
+const SUPPLIER_IDENTITY_ERROR_MESSAGES = new Set([
+  SUPPLIER_IDENTITY_ERROR_MESSAGE,
+  "Completa el nombre y documento válido del proveedor, independientemente del beneficiario bancario.",
+  "Revisa el nombre, tipo y número de documento del proveedor: RUC de 11 dígitos, DNI de 8 o CE de 6 a 12 letras o números.",
+  "La identidad del proveedor y el RUC registrado no coinciden. Actualiza la solicitud y revisa los datos antes de guardar nuevamente.",
+]);
 
 function toSettlementPreparationStep(step: RequestEditStep): SettlementPreparationStep {
   if (step === REQUEST_EDIT_STEP.DOCUMENTS) return SETTLEMENT_PREPARATION_STEP.REGISTER_RECEIPTS;
@@ -175,7 +182,7 @@ export const requestFormSchema = z.object({
 }).superRefine((value, ctx) => {
   if (value.request_type !== REQUEST_TYPE.SUPPLIER_PAYMENT) return;
   if (!resolveSupplierIdentity(value)) {
-    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["supplier_document_number"], message: "Completa el nombre y documento válido del proveedor (RUC, DNI o CE)." });
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["supplier_document_number"], message: SUPPLIER_IDENTITY_ERROR_MESSAGE });
   }
 }).superRefine((value, ctx) => {
   // Supplier identity is validated above; the hidden historical payee is not an editor.
@@ -585,6 +592,19 @@ export function RequestForm({
   });
 
   const requestType = form.watch("request_type");
+  const [supplierDocumentType, supplierDocumentNumber, supplierName] = useWatch({
+    control: form.control,
+    name: ["supplier_document_type", "supplier_document_number", "supplier_name"],
+  });
+  const supplierIdentityKey = JSON.stringify([requestType, supplierDocumentType, supplierDocumentNumber, supplierName]);
+  const lastValidatedSupplierIdentityKey = useRef(supplierIdentityKey);
+  const liveSupplierIdentity = requestType === REQUEST_TYPE.SUPPLIER_PAYMENT
+    ? resolveSupplierIdentity({
+        supplier_document_type: supplierDocumentType,
+        supplier_document_number: supplierDocumentNumber,
+        supplier_name: supplierName,
+      })
+    : null;
   // RHF requires this subscription for keepDirtyValues on delayed refresh/reset.
   const { dirtyFields } = form.formState;
   const currency = form.watch("currency");
@@ -593,8 +613,12 @@ export function RequestForm({
   const isAdvanceSettlement = effectiveRequestType === REQUEST_TYPE.ADVANCE_SETTLEMENT;
   const supplierPayeeKey = currentRequest?.request_type === REQUEST_TYPE.SUPPLIER_PAYMENT
     ? supplierPayeeConsentKey(currentRequest) : null;
+  const hasRepairedHistoricalSupplierIdentity = currentRequest?.request_type === REQUEST_TYPE.SUPPLIER_PAYMENT
+    && !resolveSupplierIdentity(currentRequest)
+    && liveSupplierIdentity !== null;
   const needsSupplierPayeeConsent = supplierPayeeKey !== null
     && currentRequest !== null && !supplierMatchesPayee(currentRequest)
+    && !hasRepairedHistoricalSupplierIdentity
     && confirmedSupplierPayeeKey !== supplierPayeeKey;
   const allocations = form.watch("allocations");
   const totalRequestedAmount = sumRequestAmounts(allocations.map((allocation) => allocation.amount)) ?? "—";
@@ -647,7 +671,15 @@ export function RequestForm({
   const annualUit = useRequestAnnualUit(currentRequest?.fiscal_year ?? (hasMixedFiscalYears ? null : selectedFiscalYears[0]), annualUitLookupEnabled);
   const checklist = getRequiredDocumentChecklist(effectiveRequestType, reviewDocuments.documents, currentRequest ?? undefined, reviewReceipts.receipts.map((item) => item.receipt), annualUit.annualUit);
   const areDocumentsReady = !reviewDocuments.isLoading && !reviewReceipts.isLoading;
-  const currentRequestDataIssues = currentRequest ? validateRequestDataForSubmitIssues(currentRequest) : [];
+  const liveCurrentRequest = currentRequest?.request_type === REQUEST_TYPE.SUPPLIER_PAYMENT
+    ? {
+        ...currentRequest,
+        supplier_document_type: supplierDocumentType,
+        supplier_document_number: supplierDocumentNumber,
+        supplier_name: supplierName,
+      }
+    : currentRequest;
+  const currentRequestDataIssues = liveCurrentRequest ? validateRequestDataForSubmitIssues(liveCurrentRequest) : [];
   const currentRequestDataErrors = currentRequestDataIssues.length > 0 ? getDataValidationMessages(currentRequestDataIssues) : [];
   const hasCompleteRequestData = currentRequestDataErrors.length === 0;
   const dataStepBlockingMessages = submitErrors.length > 0 ? submitErrors : currentRequestDataErrors;
@@ -729,6 +761,33 @@ export function RequestForm({
       form.setValue("bank_cci", "", { shouldDirty: false, shouldValidate: false });
     }
   }, [form]);
+
+  useEffect(() => {
+    if (lastValidatedSupplierIdentityKey.current === supplierIdentityKey) return;
+    lastValidatedSupplierIdentityKey.current = supplierIdentityKey;
+    let cancelled = false;
+
+    void form.trigger(["supplier_name", "supplier_document_type", "supplier_document_number"]).then(() => {
+      if (cancelled) return;
+      const values = form.getValues();
+      const identityIsValid = values.request_type !== REQUEST_TYPE.SUPPLIER_PAYMENT
+        || resolveSupplierIdentity(values) !== null;
+      if (!identityIsValid) return;
+
+      const supplierDocumentError = form.getFieldState("supplier_document_number").error;
+      if (supplierDocumentError?.message && SUPPLIER_IDENTITY_ERROR_MESSAGES.has(supplierDocumentError.message)) {
+        form.clearErrors("supplier_document_number");
+      }
+      setSubmitErrors((messages) => {
+        const remainingMessages = messages.filter((message) => !SUPPLIER_IDENTITY_ERROR_MESSAGES.has(message));
+        return remainingMessages.length === messages.length ? messages : remainingMessages;
+      });
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [form, supplierIdentityKey]);
 
   useEffect(() => {
     if (activeStep === REQUEST_EDIT_STEP.REVIEW && draftId) {

@@ -341,6 +341,7 @@ function makeRequestStateConflict(): ApiRequestError {
 }
 
 describe("supplier is the bank beneficiary", () => {
+  const supplierIdentityError = "Completa el nombre y documento válido del proveedor (RUC, DNI o CE).";
   const supplierDraft = (overrides: Partial<PaymentRequest> = {}) => makePaymentRequest({
     request_type: REQUEST_TYPE.SUPPLIER_PAYMENT, currency: "USD",
     supplier_document_type: "DNI", supplier_document_number: "87654321", supplier_name: "Provider",
@@ -432,9 +433,70 @@ describe("supplier is the bank beneficiary", () => {
     await user.click(screen.getByRole("option", { name: "DNI" }));
     fireEvent.change(screen.getByTestId("request-supplier-document-number-input"), { target: { value: "87654321" } });
     fireEvent.change(screen.getByLabelText("Nombre del proveedor *"), { target: { value: "Provider" } });
-    fireEvent.click(screen.getByRole("button", { name: "Confirmar proveedor como beneficiario" }));
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Confirmar proveedor como beneficiario" })).not.toBeInTheDocument());
     fireEvent.click(screen.getByTestId("request-save-draft-button"));
     await waitFor(() => expect(mocks.updateRequest).toHaveBeenCalledWith(draft.id, expect.objectContaining({ supplier_document_type: "DNI", supplier_document_number: "87654321", supplier_name: "Provider", beneficiary_document_type: "DNI", beneficiary_document_number: "87654321", beneficiary_name: "Provider", bank_account: draft.bank_account })));
+  });
+
+  it("clears stale supplier identity errors when DNI is selected last and preserves unrelated errors", async () => {
+    const user = userEvent.setup();
+    const draft = supplierDraft({
+      supplier_document_type: null,
+      supplier_document_number: null,
+      supplier_name: null,
+      supplier_ruc: null,
+      concept: "",
+    });
+
+    render(<RequestForm mode="edit" initialRequest={draft} />);
+    fireEvent.click(screen.getByTestId("request-save-draft-button"));
+
+    expect(await screen.findAllByText(supplierIdentityError)).not.toHaveLength(0);
+    expect(screen.getByText("Describe el concepto o justificación.")).toBeInTheDocument();
+    expect(screen.getByText(/Completa la identidad del proveedor/)).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("Nombre del proveedor *"), { target: { value: "Provider" } });
+    fireEvent.change(screen.getByTestId("request-supplier-document-number-input"), { target: { value: "87654321" } });
+    await user.click(screen.getByTestId("request-supplier-document-type-select"));
+    await user.click(screen.getByRole("option", { name: "DNI" }));
+
+    await waitFor(() => expect(screen.queryAllByText(supplierIdentityError)).toHaveLength(0));
+    expect(screen.queryByText(/Completa la identidad del proveedor/)).not.toBeInTheDocument();
+    expect(screen.getByText("Describe el concepto o justificación.")).toBeInTheDocument();
+  });
+
+  it("keeps the supplier identity error while the live DNI remains invalid", async () => {
+    const user = userEvent.setup();
+    const draft = supplierDraft({
+      beneficiary_document_type: "DNI",
+      beneficiary_document_number: "87654321",
+      beneficiary_name: "Provider",
+    });
+
+    render(<RequestForm mode="edit" initialRequest={draft} />);
+    fireEvent.change(screen.getByTestId("request-supplier-document-number-input"), { target: { value: "1234567" } });
+    await user.click(screen.getByTestId("request-supplier-document-type-select"));
+    await user.click(screen.getByRole("option", { name: "DNI" }));
+
+    expect(await screen.findAllByText(supplierIdentityError)).not.toHaveLength(0);
+  });
+
+  it("removes supplier identity validation away from supplier payment and restores it on return", async () => {
+    const user = userEvent.setup();
+    render(<RequestForm mode="create" />);
+
+    await user.click(screen.getByTestId("request-type-select"));
+    await user.click(screen.getByRole("option", { name: "Pago a Proveedor" }));
+    fireEvent.change(screen.getByLabelText("Nombre del proveedor *"), { target: { value: "Provider" } });
+    expect(await screen.findAllByText(supplierIdentityError)).not.toHaveLength(0);
+
+    await user.click(screen.getByTestId("request-type-select"));
+    await user.click(screen.getByRole("option", { name: "Anticipo" }));
+    await waitFor(() => expect(screen.queryAllByText(supplierIdentityError)).toHaveLength(0));
+
+    await user.click(screen.getByTestId("request-type-select"));
+    await user.click(screen.getByRole("option", { name: "Pago a Proveedor" }));
+    expect(await screen.findAllByText(supplierIdentityError)).not.toHaveLength(0);
   });
 
   it("resets identity and consent for a different draft without leaking previous edits", () => {
