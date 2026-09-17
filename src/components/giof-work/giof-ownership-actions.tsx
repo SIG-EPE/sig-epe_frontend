@@ -140,6 +140,27 @@ export function GiofOwnershipActions({
     commands.clearError();
   }
 
+  async function takeOwnership(): Promise<void> {
+    await commands.take({
+      requestId,
+      pool: work.pool,
+      expectedVersion: parsedVersion,
+    });
+    setSuccessMessage("Trabajo asignado a ti. Las colas fueron actualizadas.");
+    toast.success("Trabajo asignado a ti.");
+  }
+
+  async function assignUnassigned(): Promise<void> {
+    if (commands.isSubmitting) return;
+    setSuccessMessage(null);
+    commands.clearError();
+    try {
+      await takeOwnership();
+    } catch {
+      // El hook conserva el error autoritativo; no se reintenta automáticamente.
+    }
+  }
+
   async function submit(): Promise<void> {
     if (!action || commands.isSubmitting) return;
     try {
@@ -152,15 +173,7 @@ export function GiofOwnershipActions({
         setSuccessMessage("Trabajo liberado. Las colas fueron actualizadas.");
         toast.success("Trabajo liberado.");
       } else if (action === OWNERSHIP_ACTION.TAKE) {
-        await commands.take({
-          requestId,
-          pool: work.pool,
-          expectedVersion: parsedVersion,
-        });
-        setSuccessMessage(
-          "Trabajo asignado a ti. Las colas fueron actualizadas.",
-        );
-        toast.success("Trabajo asignado a ti.");
+        await takeOwnership();
       } else {
         if (!forceIsValid) return;
         await commands.forceReassign({
@@ -208,17 +221,23 @@ export function GiofOwnershipActions({
           type="button"
           size="sm"
           variant="outline"
-          onClick={() => open(OWNERSHIP_ACTION.TAKE)}
+          onClick={() => {
+            if (assignmentState === GIOF_WORK_ASSIGNMENT_STATE.UNASSIGNED)
+              void assignUnassigned();
+            else open(OWNERSHIP_ACTION.TAKE);
+          }}
         >
-          Tomar para mí
+          {assignmentState === GIOF_WORK_ASSIGNMENT_STATE.UNASSIGNED
+            ? "Asignarme"
+            : "Reasignarme"}
         </Button>
       )}
       {isGestor &&
         assignmentState !== GIOF_WORK_ASSIGNMENT_STATE.SELF &&
         activeForeignLease && (
-          <Button type="button" size="sm" variant="outline" disabled>
-            En proceso por otro gestor
-          </Button>
+          <span className="text-sm text-muted-foreground">
+            En proceso por otra persona
+          </span>
         )}
       {canForce && (
         <Button
@@ -235,6 +254,15 @@ export function GiofOwnershipActions({
           {successMessage}
         </span>
       )}
+      {action === null && commands.error && (
+        <p
+          role="alert"
+          aria-live="assertive"
+          className="text-sm text-destructive"
+        >
+          {commands.error.message}
+        </p>
+      )}
       <Dialog
         open={action !== null}
         onOpenChange={(nextOpen) => {
@@ -247,14 +275,14 @@ export function GiofOwnershipActions({
               {action === OWNERSHIP_ACTION.RELEASE
                 ? "Liberar trabajo"
                 : action === OWNERSHIP_ACTION.TAKE
-                  ? "Tomar para mí"
+                  ? "Reasignarme"
                   : "Forzar reasignación"}
             </DialogTitle>
             <DialogDescription>
               {action === OWNERSHIP_ACTION.RELEASE
                 ? `Confirma que deseas dejar ${label} sin asignar.`
                 : action === OWNERSHIP_ACTION.TAKE
-                  ? `Confirma que deseas asignar ${label} a tu usuario.`
+                  ? "Este trabajo ya tiene responsable. Al continuar, pasará a estar asignado a ti. No hay una sesión de procesamiento activa."
                   : `Selecciona el nuevo responsable de ${label} y registra el motivo.`}
             </DialogDescription>
           </DialogHeader>
@@ -363,7 +391,7 @@ export function GiofOwnershipActions({
                 : action === OWNERSHIP_ACTION.RELEASE
                   ? "Confirmar liberación"
                   : action === OWNERSHIP_ACTION.TAKE
-                    ? "Confirmar toma"
+                    ? "Confirmar reasignación"
                     : "Confirmar reasignación"}
             </Button>
           </DialogFooter>

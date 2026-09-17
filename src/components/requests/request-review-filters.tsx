@@ -351,16 +351,20 @@ export function RequestReviewFilters({
             }
           >
             <SelectTrigger id="request-review-status">
-              <SelectValue placeholder="Estado de solicitud">
-                {filters.status
-                  ? getReviewStatusLabel(filters.status)
-                  : undefined}
-              </SelectValue>
+              <SelectValue placeholder="Estado de solicitud" />
             </SelectTrigger>
             <SelectContent>
               <SelectItem value={QUEUE_FILTER_ALL_VALUE}>
                 Todos los estados
               </SelectItem>
+              {filters.status &&
+                !REQUEST_STATUS_OPTIONS.some(
+                  ({ value }) => value === filters.status,
+                ) && (
+                  <SelectItem value={filters.status} disabled hidden>
+                    {getReviewStatusLabel(filters.status)}
+                  </SelectItem>
+                )}
               {REQUEST_STATUS_OPTIONS.map(({ value, label }) => (
                 <SelectItem key={value} value={value}>
                   {label}

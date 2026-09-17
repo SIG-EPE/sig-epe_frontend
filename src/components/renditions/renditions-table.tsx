@@ -33,12 +33,18 @@ import {
   REQUEST_STATUS_SURFACE,
   formatRequestStatus,
 } from "@/lib/request-status-vocabulary";
+import {
+  GIOF_BULK_ASSIGNMENT_MODE,
+  type GiofBulkAssignmentMode,
+} from "@/types/giof-work";
+import { isGiofBulkSelectable } from "@/lib/giof-bulk-selection";
 
 interface RenditionsTableProps {
   renditions: RenditionInboxRow[];
   isLoading: boolean;
   currentUserId?: string | null;
   isGiofManager?: boolean;
+  bulkAssignmentMode?: GiofBulkAssignmentMode | null;
   selectedAssignmentIds?: string[];
   onToggleAssignment?: (requestId: string, checked: boolean) => void;
   onToggleAllAssignments?: (checked: boolean) => void;
@@ -51,6 +57,7 @@ export function RenditionsTable({
   isLoading,
   currentUserId,
   isGiofManager = false,
+  bulkAssignmentMode,
   selectedAssignmentIds = [],
   onToggleAssignment,
   onToggleAllAssignments,
@@ -69,16 +76,25 @@ export function RenditionsTable({
     );
   }
 
-  const assignableRenditions = renditions.filter(
-    (row) => row.giof_work?.requestId && row.giof_work.canAssign === true,
-  );
+  const effectiveBulkAssignmentMode =
+    bulkAssignmentMode === undefined && isGiofManager
+      ? GIOF_BULK_ASSIGNMENT_MODE.MANAGER_TARGET
+      : (bulkAssignmentMode ?? undefined);
+  const assignableRenditions = effectiveBulkAssignmentMode
+    ? renditions.filter(
+        (row) =>
+          row.giof_work?.requestId &&
+          isGiofBulkSelectable(row.giof_work, effectiveBulkAssignmentMode),
+      )
+    : [];
+  const showsAssignmentSelection = effectiveBulkAssignmentMode !== undefined;
 
   return (
     <div className="overflow-x-auto">
       <Table>
         <TableHeader>
           <TableRow>
-            {isGiofManager && (
+            {showsAssignmentSelection && (
               <TableHead className="w-10">
                 <span className="sr-only">Seleccionar para asignar</span>
               </TableHead>
@@ -94,7 +110,7 @@ export function RenditionsTable({
           </TableRow>
         </TableHeader>
         <TableBody>
-          {isGiofManager &&
+          {showsAssignmentSelection &&
             onToggleAllAssignments &&
             assignableRenditions.length > 0 && (
               <TableRow>
@@ -146,18 +162,32 @@ export function RenditionsTable({
               : null;
             return (
               <TableRow key={row.advance_id} data-testid="rendition-row">
-                {isGiofManager && (
+                {showsAssignmentSelection && (
                   <TableCell>
-                    {row.giof_work?.requestId ? (
+                    {row.giof_work?.requestId &&
+                    (effectiveBulkAssignmentMode ===
+                      GIOF_BULK_ASSIGNMENT_MODE.MANAGER_TARGET ||
+                      isGiofBulkSelectable(
+                        row.giof_work,
+                        GIOF_BULK_ASSIGNMENT_MODE.GESTOR_SELF,
+                      )) ? (
                       <input
                         type="checkbox"
                         className="size-4"
                         checked={selectedAssignmentIds.includes(
                           row.giof_work.requestId,
                         )}
-                        disabled={row.giof_work.canAssign !== true}
+                        disabled={
+                          !isGiofBulkSelectable(
+                            row.giof_work,
+                            effectiveBulkAssignmentMode!,
+                          )
+                        }
                         title={
-                          row.giof_work.canAssign === true
+                          isGiofBulkSelectable(
+                            row.giof_work,
+                            effectiveBulkAssignmentMode!,
+                          )
                             ? "Seleccionar para asignar"
                             : "Rendición finalizada: no tiene seguimiento REXAN pendiente"
                         }
@@ -168,7 +198,10 @@ export function RenditionsTable({
                           )
                         }
                         aria-label={
-                          row.giof_work.canAssign === true
+                          isGiofBulkSelectable(
+                            row.giof_work,
+                            effectiveBulkAssignmentMode!,
+                          )
                             ? `Seleccionar ${primaryRequestCode} para asignar`
                             : `${primaryRequestCode}: rendición finalizada`
                         }

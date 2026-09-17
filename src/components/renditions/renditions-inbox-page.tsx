@@ -36,10 +36,16 @@ import {
 import { cn } from "@/lib/utils";
 import { useAuthStore } from "@/stores/auth-store";
 import {
+  GIOF_BULK_ASSIGNMENT_MODE,
   GIOF_WORK_POOL,
   GIOF_WORK_SCOPE,
   type GiofWorkScope,
 } from "@/types/giof-work";
+import {
+  getGiofCurrentPageSelection,
+  isGiofBulkSelectable,
+  type GiofBulkSelectableWorkItem,
+} from "@/lib/giof-bulk-selection";
 import { RENDITION_DEADLINE_BUCKET } from "@/types/requests";
 import { RenditionsFilters } from "./renditions-filters";
 import { RenditionsTable } from "./renditions-table";
@@ -95,6 +101,31 @@ export function RenditionsInboxPage() {
   const canonicalQuery = canonicalParams.toString();
   const rawQuery = currentParams.toString();
   const viewIdentity = serializeRenditionsQueueUrl(effectiveFilters).toString();
+  const bulkAssignmentMode = isGiofOperational
+    ? isGiofManager
+      ? GIOF_BULK_ASSIGNMENT_MODE.MANAGER_TARGET
+      : GIOF_BULK_ASSIGNMENT_MODE.GESTOR_SELF
+    : undefined;
+  const assignmentItems: GiofBulkSelectableWorkItem[] = inbox.renditions
+    .filter(
+      (row): row is typeof row & { giof_work: NonNullable<typeof row.giof_work> } =>
+        Boolean(row.giof_work?.requestId),
+    )
+    .map((row) => ({
+      requestId: row.giof_work.requestId!,
+      label: row.request_code ?? "Rendición",
+      work: row.giof_work,
+    }));
+  const selectedAssignmentItems = bulkAssignmentMode
+    ? getGiofCurrentPageSelection(
+        assignmentItems,
+        selectedAssignmentIds,
+        bulkAssignmentMode,
+      )
+    : [];
+  const assignmentResultIdentity = assignmentItems
+    .map((item) => `${item.requestId}:${item.work.assignmentVersion}`)
+    .join("|");
 
   useEffect(() => {
     if (!hasInvalidUrl && rawQuery !== canonicalQuery) {
@@ -104,7 +135,7 @@ export function RenditionsInboxPage() {
 
   useEffect(() => {
     setSelectedAssignmentIds([]);
-  }, [viewIdentity]);
+  }, [assignmentResultIdentity, bulkAssignmentMode, viewIdentity]);
 
   function replaceRenditionsUrl(params: URLSearchParams): void {
     router.replace(buildRenditionsRoute(params));
@@ -135,6 +166,23 @@ export function RenditionsInboxPage() {
     deadlineBucket: RenditionsQueueUrlFilters["deadline_bucket"],
   ): void {
     changeFilters({ deadline_bucket: deadlineBucket });
+  }
+
+  function toggleAssignment(requestId: string, checked: boolean): void {
+    const item = assignmentItems.find(
+      (candidate) => candidate.requestId === requestId,
+    );
+    if (
+      !bulkAssignmentMode ||
+      !item ||
+      !isGiofBulkSelectable(item.work, bulkAssignmentMode)
+    )
+      return;
+    setSelectedAssignmentIds((current) =>
+      checked
+        ? [...new Set([...current, requestId])].slice(0, 50)
+        : current.filter((id) => id !== requestId),
+    );
   }
 
   const currentPage = inbox.page;
@@ -256,25 +304,25 @@ export function RenditionsInboxPage() {
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
-          {isGiofManager && (
+          {bulkAssignmentMode === GIOF_BULK_ASSIGNMENT_MODE.GESTOR_SELF &&
+          selectedAssignmentItems.length > 0 ? (
+            <GiofBulkAssignmentBar
+              mode={GIOF_BULK_ASSIGNMENT_MODE.GESTOR_SELF}
+              pool={GIOF_WORK_POOL.REXAN}
+              items={selectedAssignmentItems}
+              onClear={() => setSelectedAssignmentIds([])}
+              refetchPoolQueue={(options) => inbox.refetch(options)}
+            />
+          ) : bulkAssignmentMode ===
+            GIOF_BULK_ASSIGNMENT_MODE.MANAGER_TARGET &&
+            selectedAssignmentItems.length > 0 ? (
             <GiofBulkAssignmentBar
               pool={GIOF_WORK_POOL.REXAN}
-              items={inbox.renditions
-                .filter(
-                  (row) =>
-                    row.giof_work?.requestId &&
-                    selectedAssignmentIds.includes(row.giof_work.requestId) &&
-                    row.giof_work.canAssign === true,
-                )
-                .map((row) => ({
-                  requestId: row.giof_work!.requestId!,
-                  label: row.request_code ?? "Rendición",
-                  work: row.giof_work!,
-                }))}
+              items={selectedAssignmentItems}
               onClear={() => setSelectedAssignmentIds([])}
               onSuccess={() => inbox.refetch()}
             />
-          )}
+          ) : null}
           {inbox.isRefreshing && !inbox.error && (
             <p
               className="rounded-md border bg-muted/40 px-3 py-2 text-sm text-muted-foreground"
@@ -304,19 +352,22 @@ export function RenditionsInboxPage() {
               roleCode={roleCode}
               refetchPoolQueue={(options) => inbox.refetch(options)}
               isGiofManager={isGiofManager}
+              bulkAssignmentMode={bulkAssignmentMode}
               selectedAssignmentIds={selectedAssignmentIds}
-              onToggleAssignment={(requestId, checked) =>
-                setSelectedAssignmentIds((current) =>
-                  checked
-                    ? [...new Set([...current, requestId])].slice(0, 50)
-                    : current.filter((id) => id !== requestId),
-                )
-              }
+              onToggleAssignment={toggleAssignment}
               onToggleAllAssignments={(checked) =>
                 setSelectedAssignmentIds(
                   checked
                     ? inbox.renditions
-                        .filter((row) => row.giof_work?.canAssign === true)
+                        .filter(
+                          (row) =>
+                            row.giof_work &&
+                            bulkAssignmentMode &&
+                            isGiofBulkSelectable(
+                              row.giof_work,
+                              bulkAssignmentMode,
+                            ),
+                        )
                         .map((row) => row.giof_work?.requestId)
                         .filter((id): id is string => Boolean(id))
                         .slice(0, 50)

@@ -49,10 +49,16 @@ import {
   isGiofOperationalRole,
 } from "@/lib/role-capabilities";
 import {
+  GIOF_BULK_ASSIGNMENT_MODE,
   GIOF_WORK_POOL,
   GIOF_WORK_SCOPE,
   type GiofWorkScope,
 } from "@/types/giof-work";
+import {
+  getGiofCurrentPageSelection,
+  isGiofBulkSelectable,
+  type GiofBulkSelectableWorkItem,
+} from "@/lib/giof-bulk-selection";
 import type { GiofWorkLease } from "@/types/giof-work";
 import { isGiofLeaseCurrent } from "@/lib/giof-work-lease-session";
 import {
@@ -130,6 +136,15 @@ export function PaymentQueuePage() {
   );
   const urlFilters = parsedUrl.filters;
   const tab = urlFilters.tab ?? PAYMENT_QUEUE_TAB.APPROVED;
+  const isPaymentAssignmentSurface =
+    tab === PAYMENT_QUEUE_TAB.APPROVED ||
+    tab === PAYMENT_QUEUE_TAB.PENDING_DATA;
+  const bulkAssignmentMode =
+    canManagePayments && isPaymentAssignmentSurface
+      ? isGiofManager
+        ? GIOF_BULK_ASSIGNMENT_MODE.MANAGER_TARGET
+        : GIOF_BULK_ASSIGNMENT_MODE.GESTOR_SELF
+      : undefined;
   const roleFilterInvalid = isGiofManager
     ? false
     : canManagePayments
@@ -202,8 +217,31 @@ export function PaymentQueuePage() {
         }
       : null;
   const resultIdentity = displayedRequests
-    .map((request) => request.id)
+    .map(
+      (request) =>
+        `${request.id}:${request.giof_work?.assignmentVersion ?? "missing"}`,
+    )
     .join("|");
+  const assignmentItems: GiofBulkSelectableWorkItem[] =
+    displayedRequests.flatMap((request) => {
+      const work = request.giof_work;
+      return work
+        ? [
+            {
+              requestId: request.id,
+              label: request.request_code ?? "Pago",
+              work,
+            },
+          ]
+        : [];
+    });
+  const selectedAssignmentItems = bulkAssignmentMode
+    ? getGiofCurrentPageSelection(
+        assignmentItems,
+        selectedAssignmentIds,
+        bulkAssignmentMode,
+      )
+    : [];
   const hasVisiblePendingDriveProjection = displayedRequests.some(
     (request) =>
       request.payment?.drive_projection_status === "PENDING" ||
@@ -218,7 +256,7 @@ export function PaymentQueuePage() {
   useEffect(() => {
     setSelectedAssignmentIds([]);
     setSelectedPaymentIds([]);
-  }, [resultIdentity, viewIdentity]);
+  }, [bulkAssignmentMode, resultIdentity, viewIdentity]);
 
   useEffect(() => {
     if (!bulkRunScope) return;
@@ -522,6 +560,23 @@ export function PaymentQueuePage() {
     );
   }
 
+  function toggleAssignment(requestId: string, checked: boolean): void {
+    const item = assignmentItems.find(
+      (candidate) => candidate.requestId === requestId,
+    );
+    if (
+      !bulkAssignmentMode ||
+      !item ||
+      !isGiofBulkSelectable(item.work, bulkAssignmentMode)
+    )
+      return;
+    setSelectedAssignmentIds((current) =>
+      checked
+        ? [...new Set([...current, requestId])].slice(0, 50)
+        : current.filter((id) => id !== requestId),
+    );
+  }
+
   return (
     <div className="space-y-6">
       <div>
@@ -623,7 +678,7 @@ export function PaymentQueuePage() {
 
       {canManagePayments &&
       !hasInvalidUrl &&
-      tab === PAYMENT_QUEUE_TAB.APPROVED ? (
+      isPaymentAssignmentSurface ? (
         <GiofClaimableWorkPanel
           pool={GIOF_WORK_POOL.PAYMENT}
           refetchPoolQueue={(options) => activeQueue.refetch(options)}
@@ -732,24 +787,25 @@ export function PaymentQueuePage() {
               </Button>
             </div>
           ) : null}
-          {isGiofManager && tab === PAYMENT_QUEUE_TAB.APPROVED && (
+          {bulkAssignmentMode === GIOF_BULK_ASSIGNMENT_MODE.GESTOR_SELF &&
+          selectedAssignmentItems.length > 0 ? (
+            <GiofBulkAssignmentBar
+              mode={GIOF_BULK_ASSIGNMENT_MODE.GESTOR_SELF}
+              pool={GIOF_WORK_POOL.PAYMENT}
+              items={selectedAssignmentItems}
+              onClear={() => setSelectedAssignmentIds([])}
+              refetchPoolQueue={(options) => activeQueue.refetch(options)}
+            />
+          ) : bulkAssignmentMode ===
+            GIOF_BULK_ASSIGNMENT_MODE.MANAGER_TARGET &&
+            selectedAssignmentItems.length > 0 ? (
             <GiofBulkAssignmentBar
               pool={GIOF_WORK_POOL.PAYMENT}
-              items={displayedRequests
-                .filter(
-                  (request) =>
-                    selectedAssignmentIds.includes(request.id) &&
-                    request.giof_work?.canAssign === true,
-                )
-                .map((request) => ({
-                  requestId: request.id,
-                  label: request.request_code ?? "Pago",
-                  work: request.giof_work!,
-                }))}
+              items={selectedAssignmentItems}
               onClear={() => setSelectedAssignmentIds([])}
               onSuccess={() => activeQueue.refetch()}
             />
-          )}
+          ) : null}
           {displayedIsRefreshing && !displayedError && (
             <p
               className="mb-3 rounded-md border bg-muted/40 px-3 py-2 text-sm text-muted-foreground"
@@ -815,27 +871,27 @@ export function PaymentQueuePage() {
               isGiofManager={
                 isGiofManager && tab !== PAYMENT_QUEUE_TAB.REJECTED
               }
+              bulkAssignmentMode={bulkAssignmentMode ?? null}
               canManagePayments={
                 canManagePayments && tab !== PAYMENT_QUEUE_TAB.REJECTED
               }
               paymentLeases={leaseSet.leases}
               selectedAssignmentIds={selectedAssignmentIds}
               onToggleAssignment={
-                tab !== PAYMENT_QUEUE_TAB.REJECTED
-                  ? (requestId, checked) =>
-                      setSelectedAssignmentIds((current) =>
-                        checked
-                          ? [...new Set([...current, requestId])].slice(0, 50)
-                          : current.filter((id) => id !== requestId),
-                      )
-                  : undefined
+                bulkAssignmentMode ? toggleAssignment : undefined
               }
               onToggleAllAssignments={(checked) =>
                 setSelectedAssignmentIds(
                   checked
                     ? displayedRequests
                         .filter(
-                          (request) => request.giof_work?.canAssign === true,
+                          (request) =>
+                            request.giof_work &&
+                            bulkAssignmentMode &&
+                            isGiofBulkSelectable(
+                              request.giof_work,
+                              bulkAssignmentMode,
+                            ),
                         )
                         .map((request) => request.id)
                         .slice(0, 50)

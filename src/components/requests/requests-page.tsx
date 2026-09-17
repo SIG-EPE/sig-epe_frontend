@@ -88,10 +88,16 @@ import {
 } from "@/lib/role-capabilities";
 import { REQUEST_STATUS_SURFACE } from "@/lib/request-status-vocabulary";
 import {
+  GIOF_BULK_ASSIGNMENT_MODE,
   GIOF_WORK_POOL,
   GIOF_WORK_SCOPE,
   type GiofWorkScope,
 } from "@/types/giof-work";
+import {
+  getGiofCurrentPageSelection,
+  isGiofBulkSelectable,
+  type GiofBulkSelectableWorkItem,
+} from "@/lib/giof-bulk-selection";
 
 const ALL_STATUSES_FILTER = "ALL";
 const REQUEST_SEARCH_DEBOUNCE_MS = 500;
@@ -444,6 +450,38 @@ export function RequestsPage() {
     ? requests
     : sortRequestsForList(requests, sort);
   const displayedTotal = total;
+  const bulkAssignmentMode = isGiofReviewInbox
+    ? isGiofManager
+      ? GIOF_BULK_ASSIGNMENT_MODE.MANAGER_TARGET
+      : GIOF_BULK_ASSIGNMENT_MODE.GESTOR_SELF
+    : undefined;
+  const assignmentItems: GiofBulkSelectableWorkItem[] =
+    displayedRequests.flatMap((request) => {
+      const work = request.giof_work;
+      return work
+        ? [
+            {
+              requestId: request.id,
+              label: request.request_code ?? "Solicitud",
+              work,
+            },
+          ]
+        : [];
+    });
+  const selectedAssignmentItems = bulkAssignmentMode
+    ? getGiofCurrentPageSelection(
+        assignmentItems,
+        selectedAssignmentIds,
+        bulkAssignmentMode,
+      )
+    : [];
+  const assignmentResultIdentity = assignmentItems
+    .map((item) => `${item.requestId}:${item.work.assignmentVersion}`)
+    .join("|");
+
+  useEffect(() => {
+    setSelectedAssignmentIds([]);
+  }, [assignmentResultIdentity, bulkAssignmentMode, canonicalReviewQuery]);
 
   function replaceQuery(
     nextValues: Record<string, string | number | undefined>,
@@ -522,6 +560,15 @@ export function RequestsPage() {
   }
 
   function toggleAssignment(requestId: string, checked: boolean) {
+    const item = assignmentItems.find(
+      (candidate) => candidate.requestId === requestId,
+    );
+    if (
+      !bulkAssignmentMode ||
+      !item ||
+      !isGiofBulkSelectable(item.work, bulkAssignmentMode)
+    )
+      return;
     setSelectedAssignmentIds((current) =>
       checked
         ? [...new Set([...current, requestId])].slice(0, 50)
@@ -1284,24 +1331,26 @@ export function RequestsPage() {
           )}
         </CardHeader>
         <CardContent>
-          {isGiofManager && isReviewInbox && !hasUnsupportedReviewUrl && (
-            <GiofBulkAssignmentBar
-              pool={GIOF_WORK_POOL.REQUEST}
-              items={displayedRequests
-                .filter(
-                  (request) =>
-                    selectedAssignmentIds.includes(request.id) &&
-                    request.giof_work?.canAssign === true,
-                )
-                .map((request) => ({
-                  requestId: request.id,
-                  label: request.request_code ?? "Solicitud",
-                  work: request.giof_work!,
-                }))}
-              onClear={() => setSelectedAssignmentIds([])}
-              onSuccess={() => refetch()}
-            />
-          )}
+          {bulkAssignmentMode &&
+          selectedAssignmentItems.length > 0 &&
+          !hasUnsupportedReviewUrl ? (
+            bulkAssignmentMode === GIOF_BULK_ASSIGNMENT_MODE.GESTOR_SELF ? (
+              <GiofBulkAssignmentBar
+                mode={GIOF_BULK_ASSIGNMENT_MODE.GESTOR_SELF}
+                pool={GIOF_WORK_POOL.REQUEST}
+                items={selectedAssignmentItems}
+                onClear={() => setSelectedAssignmentIds([])}
+                refetchPoolQueue={(options) => refetch(options)}
+              />
+            ) : (
+              <GiofBulkAssignmentBar
+                pool={GIOF_WORK_POOL.REQUEST}
+                items={selectedAssignmentItems}
+                onClear={() => setSelectedAssignmentIds([])}
+                onSuccess={() => refetch()}
+              />
+            )
+          ) : null}
           {isRefreshing && !error && (
             <p
               className="mb-3 rounded-md border bg-muted/40 px-3 py-2 text-sm text-muted-foreground"
@@ -1335,6 +1384,7 @@ export function RequestsPage() {
               showResponsible={isReviewInbox || isHistory}
               showAssignment={isReviewInbox}
               isGiofManager={isGiofManager && isReviewInbox}
+              bulkAssignmentMode={bulkAssignmentMode}
               selectedAssignmentIds={selectedAssignmentIds}
               onToggleAssignment={toggleAssignment}
               onToggleAllAssignments={(checked) =>
@@ -1342,7 +1392,13 @@ export function RequestsPage() {
                   checked
                     ? displayedRequests
                         .filter(
-                          (request) => request.giof_work?.canAssign === true,
+                          (request) =>
+                            request.giof_work &&
+                            bulkAssignmentMode &&
+                            isGiofBulkSelectable(
+                              request.giof_work,
+                              bulkAssignmentMode,
+                            ),
                         )
                         .map((request) => request.id)
                         .slice(0, 50)

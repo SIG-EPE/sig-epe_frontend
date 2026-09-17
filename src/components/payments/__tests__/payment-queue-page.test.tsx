@@ -1,4 +1,9 @@
 import {
+  GIOF_BULK_ASSIGNMENT_MODE,
+  GIOF_WORK_ASSIGNMENT_STATE,
+  GIOF_WORK_LEASE_STATE,
+} from "@/types/giof-work";
+import {
   fireEvent,
   render,
   screen,
@@ -28,6 +33,7 @@ import {
 } from "@/types/requests";
 
 const mocks = vi.hoisted(() => ({
+  bulkSelfAssign: vi.fn(),
   bulkMarkPaid: vi.fn(),
   completePaymentDetails: vi.fn(),
   uploadDocument: vi.fn(),
@@ -139,6 +145,14 @@ vi.mock("@/hooks/use-giof-work", () => ({
     error instanceof Error ? error.message : "Error",
   useGiofClaimableWork: mocks.useGiofClaimableWork,
   useGiofSelfClaim: mocks.useGiofSelfClaim,
+  useGiofBulkSelfAssignment: vi.fn(() => ({
+    assign: mocks.bulkSelfAssign,
+    isSubmitting: false,
+    error: null,
+    result: null,
+    clearError: vi.fn(),
+    clearResult: vi.fn(),
+  })),
 }));
 
 vi.mock("@/hooks/use-drive-projection-polling", () => ({
@@ -245,6 +259,13 @@ describe("payment pending queue action", () => {
     roleCode = "GIOF_GESTOR";
     sessionStorage.clear();
     mocks.apiGet.mockReset();
+    mocks.bulkSelfAssign.mockReset();
+    mocks.bulkSelfAssign.mockResolvedValue({
+      pool: "PAYMENT",
+      total: 1,
+      counts: { assigned: 1, unchangedSelf: 0, blocked: 0 },
+      results: [{ requestId: "request-1", outcome: "ASSIGNED" }],
+    });
     mocks.usePaymentQueue.mockReturnValue({
       requests: [],
       total: 0,
@@ -302,6 +323,9 @@ describe("payment pending queue action", () => {
       render(<PaymentQueuePage />);
 
       expect(screen.getByTestId("giof-claimable-PAYMENT")).toBeInTheDocument();
+      expect(
+        screen.getByRole("heading", { name: "Trabajos que puedes tomar" }),
+      ).toBeInTheDocument();
       expect(
         screen.getByRole("button", { name: /Marcar pagos seleccionados/i }),
       ).toBeDisabled();
@@ -599,8 +623,8 @@ describe("payment pending queue action", () => {
     await user.click(screen.getByTestId("payment-filter-paid"));
     rerender(<PaymentQueuePage />);
     expect(
-      screen.getByRole("checkbox", { name: "Seleccionar SOL-1 para asignar" }),
-    ).not.toBeChecked();
+      screen.queryByRole("checkbox", { name: "Seleccionar SOL-1 para asignar" }),
+    ).not.toBeInTheDocument();
     expect(screen.queryByText(/todos los filtrados/i)).not.toBeInTheDocument();
   });
 
@@ -1265,6 +1289,101 @@ describe("payment pending queue action", () => {
     expect(
       screen.getByRole("button", { name: /Marcar pagos seleccionados/ }),
     ).toBeDisabled();
+  });
+
+  it("integra autoasignación Gestor en Datos pendientes sin habilitar marcado de pagos", async () => {
+    currentQuery = "tab=pending-data";
+    const row = pendingSourceRequest();
+    row.giof_work = {
+      ...row.giof_work!,
+      assignmentState: GIOF_WORK_ASSIGNMENT_STATE.UNASSIGNED,
+      assignmentVersion: "11",
+      leaseState: GIOF_WORK_LEASE_STATE.NONE,
+      canAssign: true,
+    };
+    mocks.usePaymentQueue.mockReturnValue({
+      requests: [row],
+      total: 1,
+      page: 1,
+      limit: 20,
+      isLoading: false,
+      isRefreshing: false,
+      error: null,
+      refetch: vi.fn().mockResolvedValue(undefined),
+      summary: { count: 1, payable_amount_by_currency: {}, status_counts: {} },
+    });
+    const user = userEvent.setup();
+    render(<PaymentQueuePage />);
+
+    expect(
+      screen.queryByRole("button", { name: /Marcar pagos seleccionados/i }),
+    ).not.toBeInTheDocument();
+    await user.click(
+      screen.getByRole("checkbox", {
+        name: "Seleccionar SOL-1 para asignar",
+      }),
+    );
+    await user.click(
+      screen.getByRole("button", { name: "Asignarme seleccionados" }),
+    );
+    await user.click(
+      screen.getByRole("button", { name: "Confirmar asignación" }),
+    );
+
+    expect(mocks.bulkSelfAssign).toHaveBeenCalledWith([
+      { requestId: "request-1", expectedAssignmentVersion: 11 },
+    ]);
+    expect(mocks.acquireLease).not.toHaveBeenCalled();
+  });
+
+  it("separa selección PAYMENT de autoasignación Gestor y excluye own, lease activo e ineligible", () => {
+    const base = {
+      ...pendingSourceRequest(),
+      status: REQUEST_STATUS.APPROVED,
+      payment: undefined,
+      payment_id: undefined,
+      giof_work: {
+        ...pendingSourceRequest().giof_work!,
+        pool: "PAYMENT" as const,
+        assignmentState: GIOF_WORK_ASSIGNMENT_STATE.UNASSIGNED,
+        assignmentVersion: "9",
+        leaseState: GIOF_WORK_LEASE_STATE.NONE,
+        canAssign: true,
+      },
+    };
+    const onToggleAssignment = vi.fn();
+    render(
+      <PaymentQueueTable
+        requests={[
+          { ...base, id: "eligible", request_code: "PAY-ELIGIBLE" },
+          { ...base, id: "own", request_code: "PAY-OWN", giof_work: { ...base.giof_work, assignmentState: GIOF_WORK_ASSIGNMENT_STATE.SELF } },
+          { ...base, id: "leased", request_code: "PAY-LEASED", giof_work: { ...base.giof_work, assignmentState: GIOF_WORK_ASSIGNMENT_STATE.OTHER, leaseState: GIOF_WORK_LEASE_STATE.ACTIVE_OTHER } },
+          { ...base, id: "ineligible", request_code: "PAY-INELIGIBLE", giof_work: { ...base.giof_work, canAssign: false } },
+        ]}
+        isLoading={false}
+        onRegisterPayment={vi.fn()}
+        currentUserId="user-1"
+        bulkAssignmentMode={GIOF_BULK_ASSIGNMENT_MODE.GESTOR_SELF}
+        selectedRequestIds={[]}
+        onToggleRequest={vi.fn()}
+        onToggleAll={vi.fn()}
+        onToggleAssignment={onToggleAssignment}
+        onToggleAllAssignments={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(
+      screen.getByRole("checkbox", {
+        name: "Seleccionar PAY-ELIGIBLE para asignar",
+      }),
+    );
+    expect(onToggleAssignment).toHaveBeenCalledWith("eligible", true);
+    expect(screen.queryByRole("checkbox", { name: /PAY-OWN.*asignar/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("checkbox", { name: /PAY-LEASED.*asignar/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("checkbox", { name: /PAY-INELIGIBLE.*asignar/i })).not.toBeInTheDocument();
+    expect(
+      screen.getAllByRole("checkbox", { name: /pago masivo/i }).length,
+    ).toBeGreaterThan(1);
   });
 
   it("seleccionar todos admite como máximo cincuenta pagos", () => {

@@ -146,6 +146,63 @@ export interface GiofBulkAssignResponse {
   unchanged: number;
 }
 
+export const GIOF_BULK_ASSIGNMENT_MODE = {
+  MANAGER_TARGET: "MANAGER_TARGET",
+  GESTOR_SELF: "GESTOR_SELF",
+} as const;
+
+export type GiofBulkAssignmentMode =
+  (typeof GIOF_BULK_ASSIGNMENT_MODE)[keyof typeof GIOF_BULK_ASSIGNMENT_MODE];
+
+export const SELF_BULK_ASSIGNMENT_OUTCOME = {
+  ASSIGNED: "ASSIGNED",
+  UNCHANGED_SELF: "UNCHANGED_SELF",
+  BLOCKED: "BLOCKED",
+} as const;
+
+export type GiofSelfBulkAssignmentOutcome =
+  (typeof SELF_BULK_ASSIGNMENT_OUTCOME)[keyof typeof SELF_BULK_ASSIGNMENT_OUTCOME];
+
+export const SELF_BULK_ASSIGNMENT_BLOCK_CODE = {
+  NOT_FOUND_OR_POOL_MISMATCH: "NOT_FOUND_OR_POOL_MISMATCH",
+  INELIGIBLE_LIFECYCLE: "INELIGIBLE_LIFECYCLE",
+  VERSION_CONFLICT: "VERSION_CONFLICT",
+  ACTIVE_FOREIGN_LEASE: "ACTIVE_FOREIGN_LEASE",
+} as const;
+
+export type GiofSelfBulkAssignmentBlockCode =
+  (typeof SELF_BULK_ASSIGNMENT_BLOCK_CODE)[keyof typeof SELF_BULK_ASSIGNMENT_BLOCK_CODE];
+
+export interface GiofSelfBulkAssignmentItem {
+  requestId: string;
+  expectedAssignmentVersion: number;
+}
+
+export interface GiofSelfBulkAssignInput {
+  pool: GiofWorkPool;
+  items: GiofSelfBulkAssignmentItem[];
+}
+
+export interface GiofSelfBulkAssignmentResult {
+  requestId: string;
+  outcome: GiofSelfBulkAssignmentOutcome;
+  code?: GiofSelfBulkAssignmentBlockCode;
+  assignmentVersion?: string;
+}
+
+export interface GiofSelfBulkAssignmentCounts {
+  assigned: number;
+  unchangedSelf: number;
+  blocked: number;
+}
+
+export interface GiofSelfBulkAssignResponse {
+  pool: GiofWorkPool;
+  total: number;
+  counts: GiofSelfBulkAssignmentCounts;
+  results: GiofSelfBulkAssignmentResult[];
+}
+
 export interface GiofReleaseWorkCommand {
   requestId: string;
   pool: GiofWorkPool;

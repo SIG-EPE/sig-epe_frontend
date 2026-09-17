@@ -5,6 +5,11 @@ import { FileText, FolderOpen, MoreHorizontal } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import {
+  GIOF_BULK_ASSIGNMENT_MODE,
+  type GiofBulkAssignmentMode,
+} from "@/types/giof-work";
+import { isGiofBulkSelectable } from "@/lib/giof-bulk-selection";
+import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
@@ -64,6 +69,7 @@ interface RequestListTableProps {
   showResponsible?: boolean;
   showAssignment?: boolean;
   isGiofManager?: boolean;
+  bulkAssignmentMode?: GiofBulkAssignmentMode | null;
   selectedAssignmentIds?: string[];
   onToggleAssignment?: (requestId: string, checked: boolean) => void;
   onToggleAllAssignments?: (checked: boolean) => void;
@@ -195,6 +201,7 @@ export function RequestListTable({
   currentUserId,
   showAssignment = false,
   isGiofManager = false,
+  bulkAssignmentMode,
   selectedAssignmentIds = [],
   onToggleAssignment,
   onToggleAllAssignments,
@@ -217,9 +224,18 @@ export function RequestListTable({
     );
   }
 
-  const assignableRequests = requests.filter(
-    (request) => request.giof_work?.canAssign === true,
-  );
+  const effectiveBulkAssignmentMode =
+    bulkAssignmentMode === undefined && isGiofManager
+      ? GIOF_BULK_ASSIGNMENT_MODE.MANAGER_TARGET
+      : (bulkAssignmentMode ?? undefined);
+  const assignableRequests = effectiveBulkAssignmentMode
+    ? requests.filter(
+        (request) =>
+          request.giof_work &&
+          isGiofBulkSelectable(request.giof_work, effectiveBulkAssignmentMode),
+      )
+    : [];
+  const showsAssignmentSelection = effectiveBulkAssignmentMode !== undefined;
 
   return (
     <TooltipProvider delayDuration={0}>
@@ -227,7 +243,7 @@ export function RequestListTable({
         <Table>
           <TableHeader>
             <TableRow>
-              {isGiofManager && (
+              {showsAssignmentSelection && (
                 <TableHead className="w-10">
                   <span className="sr-only">Seleccionar para asignar</span>
                 </TableHead>
@@ -246,7 +262,7 @@ export function RequestListTable({
             </TableRow>
           </TableHeader>
           <TableBody>
-            {isGiofManager &&
+            {showsAssignmentSelection &&
               onToggleAllAssignments &&
               assignableRequests.length > 0 && (
                 <TableRow>
@@ -329,27 +345,49 @@ export function RequestListTable({
 
               return (
                 <TableRow key={request.id} data-testid="request-list-row">
-                  {isGiofManager && (
+                  {showsAssignmentSelection && (
                     <TableCell>
-                      <input
-                        type="checkbox"
-                        className="size-4"
-                        checked={selectedAssignmentIds.includes(request.id)}
-                        disabled={request.giof_work?.canAssign !== true}
-                        title={
-                          request.giof_work?.canAssign === true
-                            ? "Seleccionar para asignar"
-                            : "No asignable en su estado actual"
-                        }
-                        onChange={(event) =>
-                          onToggleAssignment?.(request.id, event.target.checked)
-                        }
-                        aria-label={
-                          request.giof_work?.canAssign === true
-                            ? `Seleccionar ${request.request_code ?? "solicitud"} para asignar`
-                            : `${request.request_code ?? "Solicitud"}: no asignable en su estado actual`
-                        }
-                      />
+                      {request.giof_work &&
+                      (effectiveBulkAssignmentMode ===
+                        GIOF_BULK_ASSIGNMENT_MODE.MANAGER_TARGET ||
+                        isGiofBulkSelectable(
+                          request.giof_work,
+                          GIOF_BULK_ASSIGNMENT_MODE.GESTOR_SELF,
+                        )) ? (
+                        <input
+                          type="checkbox"
+                          className="size-4"
+                          checked={selectedAssignmentIds.includes(request.id)}
+                          disabled={
+                            !isGiofBulkSelectable(
+                              request.giof_work,
+                              effectiveBulkAssignmentMode!,
+                            )
+                          }
+                          title={
+                            isGiofBulkSelectable(
+                              request.giof_work,
+                              effectiveBulkAssignmentMode!,
+                            )
+                              ? "Seleccionar para asignar"
+                              : "No asignable en su estado actual"
+                          }
+                          onChange={(event) =>
+                            onToggleAssignment?.(
+                              request.id,
+                              event.target.checked,
+                            )
+                          }
+                          aria-label={
+                            isGiofBulkSelectable(
+                              request.giof_work,
+                              effectiveBulkAssignmentMode!,
+                            )
+                              ? `Seleccionar ${request.request_code ?? "solicitud"} para asignar`
+                              : `${request.request_code ?? "Solicitud"}: no asignable en su estado actual`
+                          }
+                        />
+                      ) : null}
                     </TableCell>
                   )}
                   <TableCell className="font-medium whitespace-nowrap">

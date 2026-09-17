@@ -3,6 +3,8 @@ import userEvent from "@testing-library/user-event";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
+  getGiofSelfAssignmentSelectionSummary,
+  getGiofCurrentPageSelection,
   getGiofAssignmentBlockerMessage,
   GiofBulkAssignmentBar,
   GiofClaimableWorkPanel,
@@ -11,8 +13,12 @@ import {
 } from "@/components/giof-work/giof-work-controls";
 import { GIOF_HELP_CONTEXT } from "@/lib/giof-assignment-help";
 import {
+  GIOF_BULK_ASSIGNMENT_MODE,
+  GIOF_WORK_ASSIGNMENT_STATE,
+  GIOF_WORK_LEASE_STATE,
   GIOF_WORK_POOL,
   GIOF_WORK_SCOPE,
+  SELF_BULK_ASSIGNMENT_OUTCOME,
   type GiofWorkMetadata,
 } from "@/types/giof-work";
 
@@ -33,6 +39,22 @@ const claimUi = vi.hoisted(() => ({
       leaseState: "EXPIRED",
     },
   ],
+}));
+
+const bulkSelfUi = vi.hoisted(() => ({
+  assign: vi.fn(),
+  isSubmitting: false,
+  error: null as Error | null,
+  result: null as null | {
+    pool: "PAYMENT";
+    total: number;
+    counts: { assigned: number; unchangedSelf: number; blocked: number };
+    results: Array<{
+      requestId: string;
+      outcome: "ASSIGNED" | "UNCHANGED_SELF" | "BLOCKED";
+      code?: "VERSION_CONFLICT";
+    }>;
+  },
 }));
 
 vi.mock("@/hooks/use-giof-work", () => ({
@@ -68,6 +90,14 @@ vi.mock("@/hooks/use-giof-work", () => ({
     error: claimUi.error,
     clearError: vi.fn(),
   })),
+  useGiofBulkSelfAssignment: vi.fn(() => ({
+    assign: bulkSelfUi.assign,
+    isSubmitting: bulkSelfUi.isSubmitting,
+    error: bulkSelfUi.error,
+    result: bulkSelfUi.result,
+    clearError: vi.fn(),
+    clearResult: vi.fn(),
+  })),
 }));
 
 vi.mock("@/stores/auth-store", () => ({
@@ -81,6 +111,8 @@ const work: GiofWorkMetadata = {
   assigneeId: "user-1",
   assigneeName: "Ana Operadora",
   assignmentVersion: "2",
+  assignmentState: GIOF_WORK_ASSIGNMENT_STATE.OTHER,
+  leaseState: GIOF_WORK_LEASE_STATE.NONE,
   lease: null,
   canAssign: true,
   canAcquire: true,
@@ -120,6 +152,10 @@ describe("controles GIOF", () => {
       assignmentVersion: "6",
       changed: true,
     });
+    bulkSelfUi.assign.mockReset();
+    bulkSelfUi.isSubmitting = false;
+    bulkSelfUi.error = null;
+    bulkSelfUi.result = null;
   });
 
   it("muestra estado compacto sin exponer historial a un operador ordinario", () => {
@@ -138,8 +174,8 @@ describe("controles GIOF", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("muestra el nombre completo de otra persona sin exponer su identificador", () => {
-    render(
+  it("oculta la identidad ajena al Gestor y conserva el nombre para Manager", () => {
+    const { rerender } = render(
       <GiofWorkStatus
         requestId="request-1"
         work={{
@@ -150,8 +186,27 @@ describe("controles GIOF", () => {
         currentUserId="user-1"
       />,
     );
-    expect(screen.getByText("Asignada a María Pérez")).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Asignado a otra persona · No está siendo procesado",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/María Pérez/)).not.toBeInTheDocument();
     expect(screen.queryByText(/8e0050b3/)).not.toBeInTheDocument();
+
+    rerender(
+      <GiofWorkStatus
+        requestId="request-1"
+        work={{
+          ...work,
+          assigneeId: "8e0050b3-0000-4000-8000-000000000000",
+          assigneeName: "María Pérez",
+        }}
+        currentUserId="user-1"
+        isManager
+      />,
+    );
+    expect(screen.getByText("Asignada a María Pérez")).toBeInTheDocument();
   });
 
   it("mantiene assignment y lease como badges GIOF independientes y accesibles", () => {
@@ -219,6 +274,177 @@ describe("controles GIOF", () => {
     expect(
       screen.getByRole("button", { name: "Asignar / reasignar" }),
     ).toBeInTheDocument();
+  });
+
+  it("conserva el modo Manager con responsable y operación todo-o-nada", async () => {
+    const user = userEvent.setup();
+    render(
+      <GiofBulkAssignmentBar
+        pool={GIOF_WORK_POOL.PAYMENT}
+        items={[{ requestId: "request-1", label: "SOL-1", work }]}
+        onClear={vi.fn()}
+        onSuccess={vi.fn()}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Asignar / reasignar" }));
+    expect(screen.getByText(/operación es todo-o-nada/i)).toBeInTheDocument();
+    expect(screen.getByText("Responsable")).toBeInTheDocument();
+    expect(screen.getByText("Nota opcional")).toBeInTheDocument();
+  });
+
+  it("muestra modo Gestor sin controles de autoridad y explica resultados mixtos", async () => {
+    const user = userEvent.setup();
+    render(
+      <GiofBulkAssignmentBar
+        mode={GIOF_BULK_ASSIGNMENT_MODE.GESTOR_SELF}
+        pool={GIOF_WORK_POOL.PAYMENT}
+        items={[{ requestId: "request-1", label: "SOL-1", work }]}
+        onClear={vi.fn()}
+        refetchPoolQueue={vi.fn().mockResolvedValue(undefined)}
+        refetchClaimable={vi.fn().mockResolvedValue(undefined)}
+      />,
+    );
+
+    expect(
+      screen.getByRole("button", { name: "Asignarme seleccionados" }),
+    ).toBeInTheDocument();
+    await user.click(
+      screen.getByRole("button", { name: "Asignarme seleccionados" }),
+    );
+    expect(
+      screen.getAllByText(/1 trabajo: 0 sin asignar y 1 asignado/i),
+    ).toHaveLength(2);
+    expect(screen.getByText(/resultados mixtos/i)).toBeInTheDocument();
+    expect(screen.queryByText("Responsable")).not.toBeInTheDocument();
+    expect(screen.queryByText("Nota opcional")).not.toBeInTheDocument();
+    expect(screen.queryByText(/forzar/i)).not.toBeInTheDocument();
+  });
+
+  it.each([
+    [
+      [{ ...work, assignmentState: GIOF_WORK_ASSIGNMENT_STATE.UNASSIGNED }],
+      "1 trabajo: 1 sin asignar y 0 asignados a otras personas.",
+    ],
+    [
+      [{ ...work, assignmentState: GIOF_WORK_ASSIGNMENT_STATE.OTHER }],
+      "1 trabajo: 0 sin asignar y 1 asignado a otra persona. Este último cambiará de responsable.",
+    ],
+    [
+      [
+        { ...work, assignmentState: GIOF_WORK_ASSIGNMENT_STATE.UNASSIGNED },
+        { ...work, assignmentState: GIOF_WORK_ASSIGNMENT_STATE.UNASSIGNED },
+        { ...work, assignmentState: GIOF_WORK_ASSIGNMENT_STATE.UNASSIGNED },
+        { ...work, assignmentState: GIOF_WORK_ASSIGNMENT_STATE.OTHER },
+        { ...work, assignmentState: GIOF_WORK_ASSIGNMENT_STATE.OTHER },
+      ],
+      "5 trabajos: 3 sin asignar y 2 asignados a otras personas. Estos últimos cambiarán de responsable.",
+    ],
+  ])("resume selección Gestor con pluralización precisa", (works, expected) => {
+    expect(
+      getGiofSelfAssignmentSelectionSummary(
+        works.map((candidate, index) => ({
+          requestId: `request-${index}`,
+          label: `SOL-${index}`,
+          work: candidate,
+        })),
+      ),
+    ).toBe(expected);
+  });
+
+  it("anuncia el resumen y cada bloqueo del resultado Gestor", async () => {
+    const user = userEvent.setup();
+    bulkSelfUi.result = {
+      pool: "PAYMENT",
+      total: 2,
+      counts: { assigned: 1, unchangedSelf: 0, blocked: 1 },
+      results: [
+        { requestId: "request-1", outcome: SELF_BULK_ASSIGNMENT_OUTCOME.ASSIGNED },
+        {
+          requestId: "request-2",
+          outcome: SELF_BULK_ASSIGNMENT_OUTCOME.BLOCKED,
+          code: "VERSION_CONFLICT",
+        },
+      ],
+    };
+    render(
+      <GiofBulkAssignmentBar
+        mode={GIOF_BULK_ASSIGNMENT_MODE.GESTOR_SELF}
+        pool={GIOF_WORK_POOL.PAYMENT}
+        items={[
+          { requestId: "request-1", label: "SOL-1", work },
+          { requestId: "request-2", label: "SOL-2", work },
+        ]}
+        onClear={vi.fn()}
+        refetchPoolQueue={vi.fn().mockResolvedValue(undefined)}
+        refetchClaimable={vi.fn().mockResolvedValue(undefined)}
+      />,
+    );
+
+    await user.click(
+      screen.getByRole("button", { name: "Asignarme seleccionados" }),
+    );
+    expect(screen.getByRole("status")).toHaveTextContent(
+      /1 asignado.*1 bloqueado/i,
+    );
+    expect(screen.getByText(/SOL-2.*versión.*cambió/i)).toBeInTheDocument();
+  });
+
+  it("filtra selección Gestor por metadata estricta y limita la página a 50", () => {
+    const eligibleWork: GiofWorkMetadata = {
+      ...work,
+      assignmentState: GIOF_WORK_ASSIGNMENT_STATE.OTHER,
+      leaseState: GIOF_WORK_LEASE_STATE.STALE,
+      assignmentVersion: "7",
+    };
+    const page = Array.from({ length: 51 }, (_, index) => ({
+      requestId: `request-${index + 1}`,
+      label: `SOL-${index + 1}`,
+      work: eligibleWork,
+    }));
+    const selectedIds = page.map((item) => item.requestId);
+
+    expect(
+      getGiofCurrentPageSelection(
+        page.slice(0, 1),
+        selectedIds,
+        GIOF_BULK_ASSIGNMENT_MODE.GESTOR_SELF,
+      ),
+    ).toHaveLength(1);
+    expect(
+      getGiofCurrentPageSelection(
+        page.slice(0, 50),
+        selectedIds,
+        GIOF_BULK_ASSIGNMENT_MODE.GESTOR_SELF,
+      ),
+    ).toHaveLength(50);
+    expect(
+      getGiofCurrentPageSelection(
+        page,
+        selectedIds,
+        GIOF_BULK_ASSIGNMENT_MODE.GESTOR_SELF,
+      ),
+    ).toHaveLength(50);
+
+    const excluded = [
+      { ...eligibleWork, assignmentState: GIOF_WORK_ASSIGNMENT_STATE.SELF },
+      { ...eligibleWork, leaseState: GIOF_WORK_LEASE_STATE.ACTIVE_OTHER },
+      { ...eligibleWork, canAssign: false },
+      { ...eligibleWork, assignmentVersion: "" },
+      { ...eligibleWork, assignmentState: undefined },
+      { ...eligibleWork, leaseState: undefined },
+    ];
+    expect(
+      getGiofCurrentPageSelection(
+        excluded.map((candidate, index) => ({
+          requestId: `excluded-${index}`,
+          label: `Excluded ${index}`,
+          work: candidate,
+        })),
+        excluded.map((_, index) => `excluded-${index}`),
+        GIOF_BULK_ASSIGNMENT_MODE.GESTOR_SELF,
+      ),
+    ).toEqual([]);
   });
 
   it("traduce causas de bloqueo conservando el código preciso y sin versiones técnicas", () => {
@@ -312,7 +538,7 @@ describe("controles GIOF", () => {
     ).toEqual(["Todos", "Mi trabajo", "Sin asignar", "Por responsable"]);
   });
 
-  it("confirma Tomar trabajo con lenguaje sin identidad ajena y estado accesible", async () => {
+  it("confirma la reasignación sin identidad ajena y conserva el payload", async () => {
     const user = userEvent.setup();
     render(
       <GiofClaimableWorkPanel
@@ -322,22 +548,64 @@ describe("controles GIOF", () => {
     );
 
     expect(
-      screen.getByText("Asignado a otra persona, sin lease activo"),
+      screen.getByText(
+        "Asignado a otra persona · No está siendo procesado",
+      ),
     ).toBeInTheDocument();
-    expect(screen.getByText(/lista es referencial/i)).toBeInTheDocument();
+    expect(screen.getByText(/asignados que no estén siendo procesados/i)).toBeInTheDocument();
     await user.click(
-      screen.getByRole("button", { name: /tomar trabajo sol-claim/i }),
+      screen.getByRole("button", { name: /reasignarme sol-claim/i }),
     );
     expect(
-      screen.getByRole("dialog", { name: "Tomar trabajo" }),
+      screen.getByRole("dialog", { name: "Reasignarme" }),
     ).toBeInTheDocument();
     expect(
-      screen.getByText(/se actualizará la asignación/i),
+      screen.getByText(
+        "Este trabajo ya tiene responsable. Al continuar, pasará a estar asignado a ti. No hay una sesión de procesamiento activa.",
+      ),
     ).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Confirmar y tomar" }));
+    await user.click(screen.getByRole("button", { name: "Cancelar" }));
+    expect(claimUi.claim).not.toHaveBeenCalled();
+
+    await user.click(
+      screen.getByRole("button", { name: /reasignarme sol-claim/i }),
+    );
+    await user.click(
+      screen.getByRole("button", { name: "Confirmar reasignación" }),
+    );
     await waitFor(() =>
       expect(screen.getByRole("status")).toHaveTextContent(/asignado a ti/i),
     );
+    expect(claimUi.claim).toHaveBeenCalledWith({
+      requestId: "request-claim",
+      expectedVersion: 5,
+    });
+  });
+
+  it("asigna directamente el trabajo sin responsable", async () => {
+    const user = userEvent.setup();
+    claimUi.items = [
+      {
+        ...claimUi.items[0],
+        assignmentState: "UNASSIGNED",
+        leaseState: "NONE",
+      },
+    ];
+    render(
+      <GiofClaimableWorkPanel
+        pool={GIOF_WORK_POOL.PAYMENT}
+        refetchPoolQueue={vi.fn().mockResolvedValue(undefined)}
+      />,
+    );
+
+    await user.click(
+      screen.getByRole("button", { name: /asignarme sol-claim/i }),
+    );
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(claimUi.claim).toHaveBeenCalledWith({
+      requestId: "request-claim",
+      expectedVersion: 5,
+    });
   });
 
   it("etiqueta estados mínimos sin inferir detalles sensibles de seguimiento PAYMENT", () => {
@@ -368,7 +636,7 @@ describe("controles GIOF", () => {
     expect(screen.getByText("Sin asignar")).toBeInTheDocument();
     expect(screen.getByText("Ya está asignado a ti")).toBeInTheDocument();
     expect(
-      screen.queryByRole("button", { name: /tomar trabajo sol-paid/i }),
+      screen.queryByRole("button", { name: /asignarme sol-paid|reasignarme sol-paid/i }),
     ).not.toBeInTheDocument();
     expect(
       screen.getByText("Pago pendiente de transferencia"),
@@ -404,7 +672,7 @@ describe("controles GIOF", () => {
     );
     expect(screen.getByTestId("giof-claimable-REQUEST")).toBeInTheDocument();
     expect(
-      screen.getByRole("button", { name: /tomar trabajo sol-claim/i }),
+      screen.getByRole("button", { name: /reasignarme sol-claim/i }),
     ).toBeInTheDocument();
   });
 

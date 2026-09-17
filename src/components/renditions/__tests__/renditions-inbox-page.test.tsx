@@ -5,6 +5,11 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { RenditionsInboxPage } from "@/components/renditions/renditions-inbox-page";
 import { useRenditionsInbox } from "@/hooks/use-requests";
 import {
+  GIOF_WORK_ASSIGNMENT_STATE,
+  GIOF_WORK_LEASE_STATE,
+  GIOF_WORK_POOL,
+} from "@/types/giof-work";
+import {
   RENDITION_DEADLINE_BUCKET,
   RENDITION_DEADLINE_STATE,
   RENDITION_STATUS,
@@ -17,6 +22,7 @@ const replaceMock = vi.fn();
 let searchParams = new URLSearchParams();
 let roleCode = "GIOF_GESTOR";
 const giofMocks = vi.hoisted(() => ({
+  bulkSelfAssign: vi.fn(),
   useClaimableWork: vi.fn(),
   useSelfClaim: vi.fn(),
 }));
@@ -51,6 +57,14 @@ vi.mock("@/hooks/use-giof-work", () => ({
   })),
   useGiofClaimableWork: giofMocks.useClaimableWork,
   useGiofSelfClaim: giofMocks.useSelfClaim,
+  useGiofBulkSelfAssignment: vi.fn(() => ({
+    assign: giofMocks.bulkSelfAssign,
+    isSubmitting: false,
+    error: null,
+    result: null,
+    clearError: vi.fn(),
+    clearResult: vi.fn(),
+  })),
   useGiofAssignees: vi.fn(() => ({ data: [], isLoading: false, error: null })),
   fetchGiofHistory: vi.fn().mockResolvedValue([]),
   bulkAssignGiofWork: vi.fn(),
@@ -167,6 +181,13 @@ describe("RenditionsInboxPage", () => {
       error: null,
       clearError: vi.fn(),
     });
+    giofMocks.bulkSelfAssign.mockReset();
+    giofMocks.bulkSelfAssign.mockResolvedValue({
+      pool: GIOF_WORK_POOL.REXAN,
+      total: 1,
+      counts: { assigned: 1, unchangedSelf: 0, blocked: 0 },
+      results: [{ requestId: "settlement-1", outcome: "ASSIGNED" }],
+    });
   });
 
   it.each(["GIOF_GESTOR", "GIOF_MANAGER"])(
@@ -192,6 +213,9 @@ describe("RenditionsInboxPage", () => {
       render(<RenditionsInboxPage />);
 
       expect(screen.getByTestId("giof-claimable-REXAN")).toBeInTheDocument();
+      expect(
+        screen.getByRole("heading", { name: "Trabajos que puedes tomar" }),
+      ).toBeInTheDocument();
       const options = giofMocks.useSelfClaim.mock.calls.at(-1)?.[0];
       await options.refetchPoolQueue({ force: true });
       expect(refetch).toHaveBeenCalledWith({ force: true });
@@ -200,6 +224,59 @@ describe("RenditionsInboxPage", () => {
       );
     },
   );
+
+  it("integra selección Gestor REXAN con el requestId y versión del trabajo", async () => {
+    vi.mocked(useRenditionsInbox).mockReturnValue({
+      renditions: [
+        makeRendition({
+          settlement_request_id: "settlement-1",
+          giof_work: {
+            requestId: "settlement-1",
+            pool: GIOF_WORK_POOL.REXAN,
+            assignmentState: GIOF_WORK_ASSIGNMENT_STATE.UNASSIGNED,
+            assignmentVersion: "6",
+            leaseState: GIOF_WORK_LEASE_STATE.NONE,
+            canAssign: true,
+            canAcquire: false,
+            canEdit: false,
+            readOnly: true,
+          },
+        }),
+      ],
+      total: 1,
+      page: 1,
+      limit: 20,
+      counts: makeCounts(),
+      summary: { count: 1 },
+      facets: makeFacets(),
+      isLoading: false,
+      isInitialLoading: false,
+      isRefreshing: false,
+      error: null,
+      refetch: vi.fn().mockResolvedValue(undefined),
+    });
+    const user = userEvent.setup();
+    render(<RenditionsInboxPage />);
+
+    await user.click(
+      screen.getByRole("checkbox", {
+        name: "Seleccionar SOL-1 para asignar",
+      }),
+    );
+    await user.click(
+      screen.getByRole("button", { name: "Asignarme seleccionados" }),
+    );
+    await user.click(
+      screen.getByRole("button", { name: "Confirmar asignación" }),
+    );
+
+    expect(giofMocks.bulkSelfAssign).toHaveBeenCalledWith([
+      { requestId: "settlement-1", expectedAssignmentVersion: 6 },
+    ]);
+    expect(replaceMock).not.toHaveBeenCalledWith(
+      expect.stringContaining("mode=process"),
+    );
+  });
 
   it.each([
     ["GIOF_GESTOR", "Todos", ["Todos", "Mi trabajo"]],

@@ -41,8 +41,8 @@ export const GIOF_ROLE_GUIDES: Readonly<Record<RoleCode, GiofRoleGuide>> = {
     description:
       "Trabaja sobre sus asignaciones y puede tomar trabajo disponible para sí.",
     points: [
-      "Mi trabajo muestra tus asignaciones. Trabajo disponible permite tomar para ti un elemento elegible de cualquier etapa GIOF.",
-      "Tomar trabajo también puede recuperar un elemento asignado a otra persona cuando ya no tiene un lease activo. Nunca muestra la identidad de esa persona.",
+      "Mi trabajo muestra tus asignaciones. Trabajos que puedes tomar reúne elementos elegibles de cualquier etapa GIOF.",
+      "Asignarme toma un trabajo sin responsable. Reasignarme recupera uno asignado a otra persona cuando no tiene una sesión de procesamiento activa, sin revelar su identidad.",
       "La lista disponible es referencial: al confirmar se valida otra vez el estado, la versión y el lease. Si algo cambió, actualiza la cola.",
       "Después de tomarlo, la cola se actualiza antes de abrir o editar; el lease se obtiene por separado.",
       "Puedes editar un elemento asignado a ti cuando está disponible. Un elemento ajeno se abre en modo Solo lectura.",
@@ -56,7 +56,7 @@ export const GIOF_ROLE_GUIDES: Readonly<Record<RoleCode, GiofRoleGuide>> = {
     description: "Distribuye y redistribuye el trabajo operativo.",
     points: [
       "Usa Mi trabajo, Todo, Sin asignar o Por responsable para ubicar la carga de cada persona.",
-      "También puede usar Tomar trabajo para asignarse un elemento disponible; esta acción no reemplaza los controles administrativos.",
+      "También puede usar Asignarme o Reasignarme para tomar un elemento disponible; estas acciones no reemplazan los controles administrativos.",
       "Puede asignar o reasignar un elemento, o hasta 50 de la misma etapa. La operación masiva es todo-o-nada.",
       "La nota de asignación es opcional y la interfaz muestra los nombres de los responsables.",
       "Si otra persona está trabajando, En uso bloquea la asignación. Actualiza la cola y espera a que el trabajo quede disponible.",
@@ -147,7 +147,7 @@ export interface GiofTroubleshootingItem {
 
 export const GIOF_TROUBLESHOOTING: readonly GiofTroubleshootingItem[] = [
   {
-    question: "¿Qué hace Tomar trabajo?",
+    question: "¿Qué hacen Asignarme y Reasignarme?",
     answer:
       "Asigna el elemento a tu usuario si continúa elegible y no tiene un lease activo de otra persona. Luego actualiza la cola; abrir o editar requiere un lease separado con los datos ya actualizados.",
   },

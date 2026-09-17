@@ -6,6 +6,7 @@ import { RequestListTable } from "@/components/requests/request-list-table";
 import { ROLE_CODE } from "@/lib/constants";
 import { REQUEST_STATUS_SURFACE } from "@/lib/request-status-vocabulary";
 import {
+  GIOF_BULK_ASSIGNMENT_MODE,
   GIOF_WORK_ASSIGNMENT_STATE,
   GIOF_WORK_LEASE_STATE,
   GIOF_WORK_POOL,
@@ -106,6 +107,45 @@ function makeAllocation(overrides: Partial<RequestAllocation> = {}): RequestAllo
 }
 
 describe("RequestListTable", () => {
+  it("permite al Gestor seleccionar solo REQUEST elegibles sin lease activo", async () => {
+    const user = userEvent.setup();
+    const onToggleAssignment = vi.fn();
+    const eligibleWork = {
+      pool: GIOF_WORK_POOL.REQUEST,
+      assignmentState: GIOF_WORK_ASSIGNMENT_STATE.UNASSIGNED,
+      assignmentVersion: "4",
+      leaseState: GIOF_WORK_LEASE_STATE.NONE,
+      canAssign: true,
+      canAcquire: false,
+      canEdit: false,
+      readOnly: true,
+    } as const;
+    render(
+      <RequestListTable
+        requests={[
+          makeRequest({ id: "eligible", request_code: "SOL-ELIGIBLE", status: REQUEST_STATUS.SUBMITTED, giof_work: eligibleWork }),
+          makeRequest({ id: "own", request_code: "SOL-OWN", status: REQUEST_STATUS.SUBMITTED, giof_work: { ...eligibleWork, assignmentState: GIOF_WORK_ASSIGNMENT_STATE.SELF } }),
+          makeRequest({ id: "leased", request_code: "SOL-LEASED", status: REQUEST_STATUS.SUBMITTED, giof_work: { ...eligibleWork, assignmentState: GIOF_WORK_ASSIGNMENT_STATE.OTHER, leaseState: GIOF_WORK_LEASE_STATE.ACTIVE_OTHER } }),
+          makeRequest({ id: "draft", request_code: "SOL-DRAFT", status: REQUEST_STATUS.DRAFT, giof_work: { ...eligibleWork, canAssign: false } }),
+        ]}
+        isLoading={false}
+        roleCode={ROLE_CODE.GIOF_GESTOR}
+        bulkAssignmentMode={GIOF_BULK_ASSIGNMENT_MODE.GESTOR_SELF}
+        onToggleAssignment={onToggleAssignment}
+        onToggleAllAssignments={vi.fn()}
+      />,
+    );
+
+    const eligible = screen.getByRole("checkbox", {
+      name: "Seleccionar SOL-ELIGIBLE para asignar",
+    });
+    await user.click(eligible);
+    expect(onToggleAssignment).toHaveBeenCalledWith("eligible", true);
+    expect(screen.queryByRole("checkbox", { name: /SOL-OWN.*asignar/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("checkbox", { name: /SOL-LEASED.*asignar/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("checkbox", { name: /SOL-DRAFT.*asignar/i })).not.toBeInTheDocument();
+  });
+
   it("shows persisted projection phase and reconciliation state in the request row", () => {
     render(
       <RequestListTable

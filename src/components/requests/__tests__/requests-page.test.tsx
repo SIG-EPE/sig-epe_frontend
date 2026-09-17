@@ -32,6 +32,11 @@ import {
   type RequestsListFilters,
 } from "@/types/requests";
 import type { AuthUser } from "@/types/auth";
+import {
+  GIOF_WORK_ASSIGNMENT_STATE,
+  GIOF_WORK_LEASE_STATE,
+  GIOF_WORK_POOL,
+} from "@/types/giof-work";
 import { toast } from "sonner";
 
 const replaceMock = vi.fn((href: string) => {
@@ -42,6 +47,7 @@ let currentQuery = "";
 const useRequestsMock = vi.fn();
 const useRequestReviewMock = vi.fn();
 const giofMocks = vi.hoisted(() => ({
+  bulkSelfAssign: vi.fn(),
   useClaimableWork: vi.fn(),
   useSelfClaim: vi.fn(),
 }));
@@ -89,6 +95,14 @@ vi.mock("@/hooks/use-giof-work", () => ({
   })),
   useGiofClaimableWork: giofMocks.useClaimableWork,
   useGiofSelfClaim: giofMocks.useSelfClaim,
+  useGiofBulkSelfAssignment: vi.fn(() => ({
+    assign: giofMocks.bulkSelfAssign,
+    isSubmitting: false,
+    error: null,
+    result: null,
+    clearError: vi.fn(),
+    clearResult: vi.fn(),
+  })),
   useGiofAssignees: vi.fn(() => ({
     data: [],
     isLoading: false,
@@ -246,6 +260,13 @@ describe("RequestsPage", () => {
       error: null,
       clearError: vi.fn(),
     });
+    giofMocks.bulkSelfAssign.mockReset();
+    giofMocks.bulkSelfAssign.mockResolvedValue({
+      pool: GIOF_WORK_POOL.REQUEST,
+      total: 1,
+      counts: { assigned: 1, unchangedSelf: 0, blocked: 0 },
+      results: [{ requestId: "req-1", outcome: "ASSIGNED" }],
+    });
     downloadReviewExportMock.mockReset();
     saveReviewExportMock.mockReset();
     toastSuccessMock.mockClear();
@@ -319,6 +340,60 @@ describe("RequestsPage", () => {
     expect(screen.getByTestId("giof-claimable-REQUEST")).toBeInTheDocument();
   });
 
+  it("integra selección Gestor REQUEST con versión y sin target ni lease", async () => {
+    currentQuery = "scope=review";
+    useRequestReviewMock.mockReturnValue({
+      requests: [
+        makeRequest({
+          giof_work: {
+            pool: GIOF_WORK_POOL.REQUEST,
+            assignmentState: GIOF_WORK_ASSIGNMENT_STATE.UNASSIGNED,
+            assignmentVersion: "7",
+            leaseState: GIOF_WORK_LEASE_STATE.NONE,
+            canAssign: true,
+            canAcquire: false,
+            canEdit: false,
+            readOnly: true,
+          },
+        }),
+      ],
+      total: 1,
+      page: 1,
+      limit: 20,
+      summary: null,
+      isLoading: false,
+      isRefreshing: false,
+      error: null,
+      refetch: vi.fn().mockResolvedValue(undefined),
+    });
+    const user = userEvent.setup();
+    render(<RequestsPage />);
+
+    await user.click(
+      screen.getByRole("checkbox", {
+        name: "Seleccionar SOL-1 para asignar",
+      }),
+    );
+    expect(
+      screen.getByText(
+        "1 trabajo: 1 sin asignar y 0 asignados a otras personas.",
+      ),
+    ).toBeInTheDocument();
+    await user.click(
+      screen.getByRole("button", { name: "Asignarme seleccionados" }),
+    );
+    await user.click(
+      screen.getByRole("button", { name: "Confirmar asignación" }),
+    );
+
+    expect(giofMocks.bulkSelfAssign).toHaveBeenCalledWith([
+      { requestId: "req-1", expectedAssignmentVersion: 7 },
+    ]);
+    expect(giofMocks.bulkSelfAssign.mock.calls[0]?.[0]?.[0]).not.toHaveProperty(
+      "targetAssigneeId",
+    );
+  });
+
   it("muestra los cuatro alcances de Review para Manager", async () => {
     const user = userEvent.setup();
     currentQuery = "scope=review";
@@ -356,6 +431,9 @@ describe("RequestsPage", () => {
       render(<RequestsPage />);
 
       expect(screen.getByTestId("giof-claimable-REQUEST")).toBeInTheDocument();
+      expect(
+        screen.getByRole("heading", { name: "Trabajos que puedes tomar" }),
+      ).toBeInTheDocument();
       expect(giofMocks.useClaimableWork).toHaveBeenCalledWith(
         expect.objectContaining({ pool: "REQUEST", enabled: true }),
       );

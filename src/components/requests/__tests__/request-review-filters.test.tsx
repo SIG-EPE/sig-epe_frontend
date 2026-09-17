@@ -1,6 +1,7 @@
+import { useState } from "react";
 import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { RequestReviewFilters } from "@/components/requests/request-review-filters";
 import { GIOF_WORK_SCOPE } from "@/types/giof-work";
@@ -76,6 +77,10 @@ beforeAll(() => {
     HTMLElement.prototype.scrollIntoView = vi.fn();
 });
 
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
 function renderFilters(filters: ReviewFilters = {}, isManager = true) {
   const onChange = vi.fn();
   const onClear = vi.fn();
@@ -98,7 +103,51 @@ function renderFilters(filters: ReviewFilters = {}, isManager = true) {
   return { onChange, onClear };
 }
 
+function ControlledFilters() {
+  const [filters, setFilters] = useState<ReviewFilters>({});
+
+  return (
+    <RequestReviewFilters
+      filters={filters}
+      isManager
+      total={7}
+      summary={null}
+      isLoading={false}
+      isRefreshing={false}
+      onChange={(patch) =>
+        setFilters((current) => ({ ...current, ...patch }))
+      }
+      onClear={() => setFilters({})}
+    />
+  );
+}
+
 describe("RequestReviewFilters", () => {
+  it("muestra etiquetas legibles al seleccionar tipo y estado sin errores de React y permite limpiar", async () => {
+    const user = userEvent.setup();
+    const consoleError = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => undefined);
+    render(<ControlledFilters />);
+
+    const typeFilter = screen.getByLabelText("Tipo de solicitud");
+    await user.click(typeFilter);
+    await user.click(screen.getByRole("option", { name: "Reembolso" }));
+    expect(typeFilter).toHaveTextContent("Reembolso");
+
+    const statusFilter = screen.getByLabelText("Estado de solicitud");
+    await user.click(statusFilter);
+    await user.click(screen.getByRole("option", { name: "Por revisar" }));
+    expect(statusFilter).toHaveTextContent("Por revisar");
+
+    await user.click(
+      screen.getByRole("button", { name: "Limpiar todos los filtros" }),
+    );
+    expect(typeFilter).toHaveTextContent("Todos los tipos");
+    expect(statusFilter).toHaveTextContent("Todos los estados");
+    expect(consoleError).not.toHaveBeenCalled();
+  });
+
   it("expone controles básicos etiquetados, usa el lookup autorizado solo para manager y no ofrece ordenamiento", async () => {
     const user = userEvent.setup();
     const { onChange } = renderFilters({ work_scope: GIOF_WORK_SCOPE.ALL });

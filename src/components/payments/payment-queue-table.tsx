@@ -45,7 +45,13 @@ import { GiofWorkStatus } from "@/components/giof-work/giof-work-controls";
 import { GiofOwnershipActions } from "@/components/giof-work/giof-ownership-actions";
 import { canOperateAssignedGiofWork } from "@/lib/role-capabilities";
 import { isGiofLeaseCurrent } from "@/lib/giof-work-lease-session";
-import { GIOF_WORK_POOL, type GiofWorkLease } from "@/types/giof-work";
+import {
+  GIOF_BULK_ASSIGNMENT_MODE,
+  GIOF_WORK_POOL,
+  type GiofBulkAssignmentMode,
+  type GiofWorkLease,
+} from "@/types/giof-work";
+import { isGiofBulkSelectable } from "@/lib/giof-bulk-selection";
 import { REQUEST_STATUS_SURFACE } from "@/lib/request-status-vocabulary";
 import { PaymentValuation } from "./payment-valuation";
 import { formatExactMoney, getExactPayablePrincipal } from "@/lib/payment-fx";
@@ -63,6 +69,7 @@ interface PaymentQueueTableProps {
   onRetryRexanActivation?: (request: PaymentRequest) => void;
   currentUserId?: string | null;
   isGiofManager?: boolean;
+  bulkAssignmentMode?: GiofBulkAssignmentMode | null;
   canManagePayments?: boolean;
   paymentLeases?: GiofWorkLease[];
   selectedAssignmentIds?: string[];
@@ -113,6 +120,7 @@ export function PaymentQueueTable({
   onRetryRexanActivation,
   currentUserId,
   isGiofManager = false,
+  bulkAssignmentMode,
   canManagePayments = true,
   paymentLeases = [],
   selectedAssignmentIds = [],
@@ -137,9 +145,17 @@ export function PaymentQueueTable({
   const selectableRequests = requests.filter((request) =>
     isBulkPaymentSelectable(request, currentUserId),
   );
-  const assignableRequests = requests.filter(
-    (request) => request.giof_work?.canAssign === true,
-  );
+  const effectiveBulkAssignmentMode =
+    bulkAssignmentMode === undefined && isGiofManager
+      ? GIOF_BULK_ASSIGNMENT_MODE.MANAGER_TARGET
+      : (bulkAssignmentMode ?? undefined);
+  const assignableRequests = effectiveBulkAssignmentMode
+    ? requests.filter(
+        (request) =>
+          request.giof_work &&
+          isGiofBulkSelectable(request.giof_work, effectiveBulkAssignmentMode),
+      )
+    : [];
   const allSelectableSelected =
     selectableRequests.length > 0 &&
     selectableRequests.every((request) =>
@@ -202,7 +218,7 @@ export function PaymentQueueTable({
             <TableHead className="min-w-40">
               <div className="flex flex-col items-start gap-1.5 py-1">
                 <span className="leading-none">Asignación</span>
-                {isGiofManager && onToggleAllAssignments ? (
+                {effectiveBulkAssignmentMode && onToggleAllAssignments ? (
                   <div className="inline-flex items-center gap-1.5 whitespace-nowrap text-xs font-normal text-muted-foreground">
                     <Checkbox
                       checked={assignmentSelectAllState}
@@ -467,13 +483,28 @@ export function PaymentQueueTable({
                   </TableCell>
                   <TableCell>
                     <div className="flex min-w-36 items-start gap-2">
-                      {isGiofManager ? (
+                      {effectiveBulkAssignmentMode &&
+                      request.giof_work &&
+                      (effectiveBulkAssignmentMode ===
+                        GIOF_BULK_ASSIGNMENT_MODE.MANAGER_TARGET ||
+                        isGiofBulkSelectable(
+                          request.giof_work,
+                          GIOF_BULK_ASSIGNMENT_MODE.GESTOR_SELF,
+                        )) ? (
                         <Checkbox
                           className="mt-0.5"
                           checked={selectedAssignmentIds.includes(request.id)}
-                          disabled={request.giof_work?.canAssign !== true}
+                          disabled={
+                            !isGiofBulkSelectable(
+                              request.giof_work,
+                              effectiveBulkAssignmentMode,
+                            )
+                          }
                           title={
-                            request.giof_work?.canAssign === true
+                            isGiofBulkSelectable(
+                              request.giof_work,
+                              effectiveBulkAssignmentMode,
+                            )
                               ? "Seleccionar para asignar"
                               : assignmentDisabledReason
                           }
@@ -481,7 +512,10 @@ export function PaymentQueueTable({
                             onToggleAssignment?.(request.id, checked === true)
                           }
                           aria-label={
-                            request.giof_work?.canAssign === true
+                            isGiofBulkSelectable(
+                              request.giof_work,
+                              effectiveBulkAssignmentMode,
+                            )
                               ? `Seleccionar ${request.request_code ?? "pago"} para asignar`
                               : `${request.request_code ?? "Pago"}: ${request.status === REQUEST_STATUS.PAID ? "trabajo de pago completo" : "no asignable en su estado actual"}`
                           }

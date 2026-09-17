@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { CircleHelp, History } from "lucide-react";
 import { toast } from "sonner";
@@ -35,16 +35,22 @@ import {
   getGiofConflictMessage,
   registerGiofClaimableRefetch,
   useGiofAssignees,
+  useGiofBulkSelfAssignment,
   useGiofClaimableWork,
   useGiofSelfClaim,
 } from "@/hooks/use-giof-work";
 import { ApiRequestError } from "@/lib/api-client";
 import { ROLE_CODE, ROUTES } from "@/lib/constants";
 import type { GiofHelpContext } from "@/lib/giof-assignment-help";
+import {
+  getGiofCurrentPageSelection,
+  type GiofBulkSelectableWorkItem,
+} from "@/lib/giof-bulk-selection";
 import { isGiofWorkLifecycleEligible } from "@/lib/role-capabilities";
 import { useAuthStore } from "@/stores/auth-store";
 import {
   GIOF_CLAIMABLE_ASSIGNMENT_STATE,
+  GIOF_BULK_ASSIGNMENT_MODE,
   GIOF_WORK_ASSIGNMENT_STATE,
   GIOF_WORK_LEASE_STATE,
   GIOF_WORK_POOL,
@@ -53,17 +59,15 @@ import {
   type GiofAssignmentBlocker,
   type GiofAssignmentHistoryItem,
   type GiofClaimableWorkItem,
+  type GiofSelfBulkAssignmentBlockCode,
   type GiofWorkMetadata,
   type GiofWorkPool,
   type GiofWorkScope,
 } from "@/types/giof-work";
 import { REQUEST_STATUS } from "@/types/requests";
 
-export interface GiofSelectableWorkItem {
-  requestId: string;
-  label: string;
-  work: GiofWorkMetadata;
-}
+export type GiofSelectableWorkItem = GiofBulkSelectableWorkItem;
+export { getGiofCurrentPageSelection } from "@/lib/giof-bulk-selection";
 
 interface GiofWorkScopeFilterProps {
   value: GiofWorkScope;
@@ -235,6 +239,13 @@ export function GiofWorkStatus({
   const [historyError, setHistoryError] = useState<string | null>(null);
   if (!isGiofWorkLifecycleEligible(work)) return null;
 
+  const hasActiveForeignLease = Boolean(
+    work.leaseState === GIOF_WORK_LEASE_STATE.ACTIVE_OTHER ||
+    (work.lease?.ownerId &&
+      work.lease.ownerId !== currentUserId &&
+      work.lease.expiresAt &&
+      new Date(work.lease.expiresAt) > new Date()),
+  );
   const assigneeLabel =
     work.assignmentState === GIOF_WORK_ASSIGNMENT_STATE.UNASSIGNED ||
     work.assigneeId === null
@@ -242,9 +253,13 @@ export function GiofWorkStatus({
       : work.assignmentState === GIOF_WORK_ASSIGNMENT_STATE.SELF ||
           work.assigneeId === currentUserId
         ? "Asignada a ti"
-        : work.assigneeName
-          ? `Asignada a ${work.assigneeName}`
-          : "Asignada a otra persona";
+        : !isManager && hasActiveForeignLease
+          ? "En proceso por otra persona"
+          : !isManager
+            ? "Asignado a otra persona · No está siendo procesado"
+            : work.assigneeName
+              ? `Asignada a ${work.assigneeName}`
+              : "Asignada a otra persona";
   const activeLease = Boolean(
     work.leaseState === GIOF_WORK_LEASE_STATE.ACTIVE_SELF ||
     work.leaseState === GIOF_WORK_LEASE_STATE.ACTIVE_OTHER ||
@@ -356,7 +371,7 @@ function getClaimAssignmentLabel(item: GiofClaimableWorkItem): string {
     return "Ya está asignado a ti";
   if (item.assignmentState === GIOF_CLAIMABLE_ASSIGNMENT_STATE.UNASSIGNED)
     return "Sin asignar";
-  return "Asignado a otra persona, sin lease activo";
+  return "Asignado a otra persona · No está siendo procesado";
 }
 
 function getClaimableStageLabel(item: GiofClaimableWorkItem): string {
@@ -399,14 +414,14 @@ export function GiofClaimableWorkPanel({
 
   if (!isOperator) return null;
 
-  async function confirmClaim(): Promise<void> {
-    if (!selected || selfClaim.isSubmitting) return;
+  async function claim(item: GiofClaimableWorkItem): Promise<void> {
+    if (selfClaim.isSubmitting) return;
     setStatus(null);
     selfClaim.clearError();
     try {
       const result = await selfClaim.claim({
-        requestId: selected.requestId,
-        expectedVersion: Number(selected.assignmentVersion),
+        requestId: item.requestId,
+        expectedVersion: Number(item.assignmentVersion),
       });
       setStatus(
         result.changed
@@ -419,6 +434,11 @@ export function GiofClaimableWorkPanel({
     }
   }
 
+  async function confirmClaim(): Promise<void> {
+    if (!selected) return;
+    await claim(selected);
+  }
+
   return (
     <section
       className="space-y-3 rounded-md border p-4"
@@ -427,10 +447,11 @@ export function GiofClaimableWorkPanel({
     >
       <div>
         <h2 id={`giof-claimable-${pool}`} className="font-semibold">
-          Trabajo disponible
+          Trabajos que puedes tomar
         </h2>
         <p className="text-sm text-muted-foreground">
-          Esta lista es referencial. La disponibilidad se valida nuevamente al
+          Esta lista puede incluir trabajos sin asignar y trabajos asignados que
+          no estén siendo procesados. La disponibilidad se valida nuevamente al
           confirmar.
         </p>
       </div>
@@ -451,6 +472,12 @@ export function GiofClaimableWorkPanel({
           {claimable.items.map((item) => {
             const label = item.requestCode ?? "Trabajo sin código";
             const isPending = selfClaim.pendingRequestId === item.requestId;
+            const isUnassigned =
+              item.assignmentState ===
+              GIOF_CLAIMABLE_ASSIGNMENT_STATE.UNASSIGNED;
+            const isTakeover =
+              item.assignmentState === GIOF_CLAIMABLE_ASSIGNMENT_STATE.TAKEOVER;
+            const actionLabel = isUnassigned ? "Asignarme" : "Reasignarme";
             return (
               <li
                 key={item.requestId}
@@ -463,19 +490,20 @@ export function GiofClaimableWorkPanel({
                     {getClaimAssignmentLabel(item)}
                   </p>
                 </div>
-                {(item.assignmentState as string) !== "OWN" && (
+                {(isUnassigned || isTakeover) && (
                   <Button
                     type="button"
                     size="sm"
                     disabled={selfClaim.isSubmitting}
-                    aria-label={`Tomar trabajo ${label}`}
+                    aria-label={`${actionLabel} ${label}`}
                     onClick={() => {
                       setStatus(null);
                       selfClaim.clearError();
-                      setSelected(item);
+                      if (isUnassigned) void claim(item);
+                      else setSelected(item);
                     }}
                   >
-                    {isPending ? "Tomando..." : "Tomar trabajo"}
+                    {isPending ? "Asignando..." : actionLabel}
                   </Button>
                 )}
               </li>
@@ -547,10 +575,10 @@ export function GiofClaimableWorkPanel({
       >
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Tomar trabajo</DialogTitle>
+            <DialogTitle>Reasignarme</DialogTitle>
             <DialogDescription>
-              Se actualizará la asignación a tu usuario. Después se refrescarán
-              los datos; el lease de edición se adquiere por separado.
+              Este trabajo ya tiene responsable. Al continuar, pasará a estar
+              asignado a ti. No hay una sesión de procesamiento activa.
             </DialogDescription>
           </DialogHeader>
           {selected && (
@@ -573,7 +601,9 @@ export function GiofClaimableWorkPanel({
               disabled={selfClaim.isSubmitting}
               onClick={() => void confirmClaim()}
             >
-              {selfClaim.isSubmitting ? "Tomando..." : "Confirmar y tomar"}
+              {selfClaim.isSubmitting
+                ? "Reasignando..."
+                : "Confirmar reasignación"}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -582,19 +612,248 @@ export function GiofClaimableWorkPanel({
   );
 }
 
-interface GiofBulkAssignmentBarProps {
+interface GiofBulkAssignmentBarCommonProps {
   pool: GiofWorkPool;
   items: GiofSelectableWorkItem[];
   onClear: () => void;
+}
+
+interface GiofManagerBulkAssignmentBarProps
+  extends GiofBulkAssignmentBarCommonProps {
+  mode?: typeof GIOF_BULK_ASSIGNMENT_MODE.MANAGER_TARGET;
   onSuccess: () => Promise<void> | void;
 }
 
-export function GiofBulkAssignmentBar({
+interface GiofSelfBulkAssignmentBarProps
+  extends GiofBulkAssignmentBarCommonProps {
+  mode: typeof GIOF_BULK_ASSIGNMENT_MODE.GESTOR_SELF;
+  refetchPoolQueue: (options?: { force?: boolean }) => Promise<void>;
+  refetchClaimable?: (options?: { force?: boolean }) => Promise<void>;
+}
+
+type GiofBulkAssignmentBarProps =
+  | GiofManagerBulkAssignmentBarProps
+  | GiofSelfBulkAssignmentBarProps;
+
+const SELF_BULK_BLOCK_LABELS: Readonly<
+  Record<GiofSelfBulkAssignmentBlockCode, string>
+> = {
+  NOT_FOUND_OR_POOL_MISMATCH:
+    "El trabajo ya no está disponible en esta bandeja.",
+  INELIGIBLE_LIFECYCLE: "El estado actual ya no permite asignarlo.",
+  VERSION_CONFLICT: "La versión de asignación cambió. Actualiza la bandeja.",
+  ACTIVE_FOREIGN_LEASE: "Otra persona tiene una sesión de trabajo activa.",
+};
+
+export function getGiofSelfAssignmentSelectionSummary(
+  items: readonly GiofSelectableWorkItem[],
+): string {
+  const unassigned = items.filter(
+    (item) =>
+      item.work.assignmentState === GIOF_WORK_ASSIGNMENT_STATE.UNASSIGNED,
+  ).length;
+  const other = items.filter(
+    (item) => item.work.assignmentState === GIOF_WORK_ASSIGNMENT_STATE.OTHER,
+  ).length;
+  const totalLabel = `${items.length} trabajo${items.length === 1 ? "" : "s"}`;
+  const otherLabel =
+    other === 1
+      ? "1 asignado a otra persona"
+      : `${other} asignados a otras personas`;
+  const takeoverWarning =
+    other === 0
+      ? ""
+      : other === 1
+        ? " Este último cambiará de responsable."
+        : " Estos últimos cambiarán de responsable.";
+
+  return `${totalLabel}: ${unassigned} sin asignar y ${otherLabel}.${takeoverWarning}`;
+}
+
+export function GiofBulkAssignmentBar(props: GiofBulkAssignmentBarProps) {
+  if (props.mode === GIOF_BULK_ASSIGNMENT_MODE.GESTOR_SELF)
+    return <GiofSelfBulkAssignmentBar {...props} />;
+  return <GiofManagerBulkAssignmentBar {...props} />;
+}
+
+function GiofSelfBulkAssignmentBar({
+  pool,
+  items,
+  onClear,
+  refetchPoolQueue,
+  refetchClaimable,
+}: GiofSelfBulkAssignmentBarProps) {
+  const [open, setOpen] = useState(false);
+  const summaryRef = useRef<HTMLParagraphElement>(null);
+  const eligibleItems = getGiofCurrentPageSelection(
+    items,
+    items.map((item) => item.requestId),
+    GIOF_BULK_ASSIGNMENT_MODE.GESTOR_SELF,
+  );
+  const labelsRef = useRef(new Map<string, string>());
+  const assignment = useGiofBulkSelfAssignment({
+    pool,
+    onClearSelection: onClear,
+    refetchPoolQueue,
+    refetchClaimable,
+  });
+
+  useEffect(() => {
+    if (assignment.result) summaryRef.current?.focus();
+  }, [assignment.result]);
+
+  useEffect(() => {
+    for (const item of eligibleItems)
+      labelsRef.current.set(item.requestId, item.label);
+  }, [eligibleItems]);
+
+  if (
+    eligibleItems.length === 0 &&
+    !assignment.result &&
+    !assignment.error &&
+    !open
+  )
+    return null;
+
+  async function submit(): Promise<void> {
+    if (assignment.isSubmitting || eligibleItems.length === 0) return;
+    assignment.clearError();
+    assignment.clearResult();
+    await assignment
+      .assign(
+        eligibleItems.map((item) => ({
+          requestId: item.requestId,
+          expectedAssignmentVersion: Number(item.work.assignmentVersion),
+        })),
+      )
+      .catch(() => undefined);
+  }
+
+  const counts = assignment.result?.counts;
+  const selectionSummary = getGiofSelfAssignmentSelectionSummary(eligibleItems);
+  return (
+    <div
+      className="mb-4 flex flex-col gap-3 rounded-md border bg-muted/40 p-3 sm:flex-row sm:items-center sm:justify-between"
+      data-testid="giof-bulk-assignment-bar"
+    >
+      <p className="text-sm">{selectionSummary}</p>
+      <div className="flex gap-2">
+        <Button type="button" variant="outline" onClick={onClear}>
+          Limpiar
+        </Button>
+        <Button
+          type="button"
+          onClick={() => setOpen(true)}
+          disabled={assignment.isSubmitting || eligibleItems.length === 0}
+        >
+          Asignarme seleccionados
+        </Button>
+      </div>
+      <Dialog
+        open={open}
+        onOpenChange={(nextOpen) => {
+          if (!assignment.isSubmitting) setOpen(nextOpen);
+        }}
+      >
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Asignarme trabajo seleccionado</DialogTitle>
+            <DialogDescription>
+              Cada elemento se valida y asigna por separado. Puede haber
+              resultados mixtos: algunos trabajos pueden asignarse y otros
+              quedar bloqueados. El lease de edición se adquiere por separado.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <p className="text-sm">{selectionSummary}</p>
+            <div className="max-h-40 overflow-y-auto rounded-md border p-2 text-sm">
+              {eligibleItems.map((item) => (
+                <p key={item.requestId}>{item.label}</p>
+              ))}
+            </div>
+            {counts && (
+              <div className="space-y-2">
+                <p
+                  ref={summaryRef}
+                  role="status"
+                  aria-live="polite"
+                  tabIndex={-1}
+                  className="font-medium"
+                >
+                  Resultado: {counts.assigned} asignado
+                  {counts.assigned === 1 ? "" : "s"}, {counts.unchangedSelf} ya
+                  asignado{counts.unchangedSelf === 1 ? "" : "s"} a ti y{" "}
+                  {counts.blocked} bloqueado
+                  {counts.blocked === 1 ? "" : "s"}.
+                </p>
+                <ol className="space-y-2" aria-label="Resultados por trabajo">
+                  {assignment.result?.results.map((item) => {
+                    const label =
+                      labelsRef.current.get(item.requestId) ??
+                      "Trabajo seleccionado";
+                    const detail =
+                      item.outcome === "ASSIGNED"
+                        ? "Asignado a ti."
+                        : item.outcome === "UNCHANGED_SELF"
+                          ? "Ya estaba asignado a ti."
+                          : item.code
+                            ? SELF_BULK_BLOCK_LABELS[item.code]
+                            : "No se pudo asignar.";
+                    return (
+                      <li
+                        key={item.requestId}
+                        className="rounded-md border p-2 text-sm"
+                      >
+                        {label}: {detail}
+                      </li>
+                    );
+                  })}
+                </ol>
+              </div>
+            )}
+            {assignment.error && (
+              <p
+                className="rounded-md border border-destructive/40 p-3 text-sm text-destructive"
+                role="alert"
+                aria-live="assertive"
+              >
+                {assignment.error.message}
+              </p>
+            )}
+          </div>
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setOpen(false)}
+              disabled={assignment.isSubmitting}
+            >
+              {assignment.result ? "Cerrar" : "Cancelar"}
+            </Button>
+            {!assignment.result && (
+              <Button
+                type="button"
+                onClick={() => void submit()}
+                disabled={assignment.isSubmitting || eligibleItems.length === 0}
+              >
+                {assignment.isSubmitting
+                  ? "Asignando..."
+                  : "Confirmar asignación"}
+              </Button>
+            )}
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}
+
+function GiofManagerBulkAssignmentBar({
   pool,
   items,
   onClear,
   onSuccess,
-}: GiofBulkAssignmentBarProps) {
+}: GiofManagerBulkAssignmentBarProps) {
   const [open, setOpen] = useState(false);
   const [targetId, setTargetId] = useState("");
   const [note, setNote] = useState("");

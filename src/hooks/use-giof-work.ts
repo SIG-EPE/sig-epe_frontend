@@ -15,6 +15,12 @@ import {
   invalidateRequestDomain,
   QUERY_TAGS,
 } from "@/lib/query-tags";
+import {
+  GIOF_BULK_SELECTION_MAX,
+  getGiofCurrentPageSelection,
+  isGiofBulkSelectable,
+  type GiofBulkSelectableWorkItem,
+} from "@/lib/giof-bulk-selection";
 import type {
   GiofAssigneeCandidate,
   GiofAssignmentHistoryItem,
@@ -25,11 +31,15 @@ import type {
   GiofOwnershipCommandResult,
   GiofOwnershipErrorCode,
   GiofReleaseWorkCommand,
+  GiofSelfBulkAssignInput,
+  GiofSelfBulkAssignResponse,
+  GiofSelfBulkAssignmentItem,
   GiofSelfClaimCommand,
   GiofSelfClaimResult,
   GiofWorkLease,
   GiofWorkMetadata,
   GiofWorkPool,
+  GiofBulkAssignmentMode,
 } from "@/types/giof-work";
 import { GIOF_OWNERSHIP_ERROR_CODE } from "@/types/giof-work";
 
@@ -488,6 +498,22 @@ export async function bulkAssignGiofWork(
   return result;
 }
 
+export async function bulkSelfAssignGiofWork(
+  input: GiofSelfBulkAssignInput,
+): Promise<GiofSelfBulkAssignResponse> {
+  const payload: GiofSelfBulkAssignInput = {
+    pool: input.pool,
+    items: input.items.map(({ requestId, expectedAssignmentVersion }) => ({
+      requestId,
+      expectedAssignmentVersion,
+    })),
+  };
+  return api.post<GiofSelfBulkAssignResponse>(
+    "/giof-work/assignments/self/bulk",
+    payload,
+  );
+}
+
 export async function releaseGiofWork(
   command: GiofReleaseWorkCommand,
 ): Promise<GiofOwnershipCommandResult> {
@@ -507,6 +533,150 @@ export async function forceReassignGiofWork(
 }
 
 type GiofQueueRefetch = (options?: { force?: boolean }) => Promise<void>;
+
+interface GiofBulkSelectionOptions {
+  items: readonly GiofBulkSelectableWorkItem[];
+  identity: string;
+  mode: GiofBulkAssignmentMode;
+}
+
+export function useGiofBulkSelection({
+  items,
+  identity,
+  mode,
+}: GiofBulkSelectionOptions) {
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+
+  useEffect(() => setSelectedIds([]), [identity]);
+
+  const selectedItems = getGiofCurrentPageSelection(items, selectedIds, mode);
+
+  function toggle(requestId: string, checked: boolean): void {
+    const item = items.find((candidate) => candidate.requestId === requestId);
+    if (!item || !isGiofBulkSelectable(item.work, mode)) return;
+    setSelectedIds((current) => {
+      if (!checked) return current.filter((id) => id !== requestId);
+      if (
+        current.includes(requestId) ||
+        current.length >= GIOF_BULK_SELECTION_MAX
+      )
+        return current;
+      return [...current, requestId];
+    });
+  }
+
+  function selectAll(): void {
+    setSelectedIds(
+      items
+        .filter((item) => isGiofBulkSelectable(item.work, mode))
+        .slice(0, GIOF_BULK_SELECTION_MAX)
+        .map((item) => item.requestId),
+    );
+  }
+
+  return {
+    selectedIds: selectedItems.map((item) => item.requestId),
+    selectedItems,
+    toggle,
+    selectAll,
+    clear: () => setSelectedIds([]),
+  };
+}
+
+interface GiofBulkSelfAssignmentOptions {
+  pool: GiofWorkPool;
+  onClearSelection: () => void;
+  refetchPoolQueue: GiofQueueRefetch;
+  refetchClaimable?: GiofQueueRefetch;
+}
+
+const UNKNOWN_BULK_COMPLETION_MESSAGE =
+  "No se pudo confirmar cómo terminó la asignación. Actualiza las bandejas antes de reintentar; no se reintentará automáticamente.";
+
+export function useGiofBulkSelfAssignment({
+  pool,
+  onClearSelection,
+  refetchPoolQueue,
+  refetchClaimable,
+}: GiofBulkSelfAssignmentOptions) {
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [error, setError] = useState<Error | null>(null);
+  const [result, setResult] = useState<GiofSelfBulkAssignResponse | null>(null);
+  const inFlightRef = useRef(false);
+
+  async function refreshQueues(): Promise<void> {
+    onClearSelection();
+    invalidateQueryPrefixes([[QUERY_TAGS.GIOF_WORK, "claimable", pool]]);
+    invalidateRequestDomain();
+    await refetchPoolQueue({ force: true });
+    if (refetchClaimable) await refetchClaimable({ force: true });
+    else await refetchRegisteredClaimable(pool);
+  }
+
+  async function assign(
+    items: readonly GiofSelfBulkAssignmentItem[],
+  ): Promise<GiofSelfBulkAssignResponse> {
+    if (inFlightRef.current)
+      throw new Error("Ya hay una asignación masiva en curso.");
+    if (items.length < 1 || items.length > GIOF_BULK_SELECTION_MAX)
+      throw new Error("Selecciona entre 1 y 50 trabajos de la página actual.");
+    if (new Set(items.map((item) => item.requestId)).size !== items.length)
+      throw new Error("La selección contiene trabajos duplicados.");
+    for (const item of items)
+      toExpectedVersion(String(item.expectedAssignmentVersion));
+
+    inFlightRef.current = true;
+    setIsSubmitting(true);
+    setError(null);
+    setResult(null);
+    try {
+      let response: GiofSelfBulkAssignResponse;
+      try {
+        response = await bulkSelfAssignGiofWork({
+          pool,
+          items: [...items],
+        });
+      } catch (reason) {
+        const isKnownConflict =
+          reason instanceof ApiRequestError && reason.status === 409;
+        const isUnknownCompletion =
+          !(reason instanceof ApiRequestError) || reason.status >= 500;
+        if (isKnownConflict || isUnknownCompletion)
+          await refreshQueues().catch(() => undefined);
+        const nextError = new Error(
+          isUnknownCompletion
+            ? UNKNOWN_BULK_COMPLETION_MESSAGE
+            : getGiofConflictMessage(reason),
+        );
+        setError(nextError);
+        throw nextError;
+      }
+      setResult(response);
+      try {
+        await refreshQueues();
+      } catch {
+        setError(
+          new Error(
+            "La asignación terminó, pero no se pudieron actualizar las bandejas. Actualízalas manualmente.",
+          ),
+        );
+      }
+      return response;
+    } finally {
+      inFlightRef.current = false;
+      setIsSubmitting(false);
+    }
+  }
+
+  return {
+    assign,
+    isSubmitting,
+    error,
+    result,
+    clearError: () => setError(null),
+    clearResult: () => setResult(null),
+  };
+}
 
 interface GiofOwnershipCommandOptions {
   pool?: GiofWorkPool;

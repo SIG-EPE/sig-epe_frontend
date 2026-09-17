@@ -3,6 +3,11 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
 import { RenditionsTable } from "@/components/renditions/renditions-table";
+import {
+  GIOF_BULK_ASSIGNMENT_MODE,
+  GIOF_WORK_ASSIGNMENT_STATE,
+  GIOF_WORK_LEASE_STATE,
+} from "@/types/giof-work";
 import { RENDITION_DEADLINE_STATE, RENDITION_STATUS, REQUEST_STATUS, type RenditionInboxRow } from "@/types/requests";
 
 function makeRendition(overrides: Partial<RenditionInboxRow> = {}): RenditionInboxRow {
@@ -40,6 +45,44 @@ function makeRendition(overrides: Partial<RenditionInboxRow> = {}): RenditionInb
 }
 
 describe("RenditionsTable", () => {
+  it("permite al Gestor seleccionar solo REXAN elegibles", async () => {
+    const user = userEvent.setup();
+    const onToggleAssignment = vi.fn();
+    const work = {
+      requestId: "settlement-eligible",
+      pool: "REXAN" as const,
+      assignmentState: GIOF_WORK_ASSIGNMENT_STATE.UNASSIGNED,
+      assignmentVersion: "2",
+      leaseState: GIOF_WORK_LEASE_STATE.NONE,
+      canAssign: true,
+      canAcquire: false,
+      canEdit: false,
+      readOnly: true,
+    };
+    render(
+      <RenditionsTable
+        renditions={[
+          makeRendition({ advance_id: "eligible", request_code: "REXAN-ELIGIBLE", giof_work: work }),
+          makeRendition({ advance_id: "own", request_code: "REXAN-OWN", giof_work: { ...work, requestId: "settlement-own", assignmentState: GIOF_WORK_ASSIGNMENT_STATE.SELF } }),
+          makeRendition({ advance_id: "leased", request_code: "REXAN-LEASED", giof_work: { ...work, requestId: "settlement-leased", assignmentState: GIOF_WORK_ASSIGNMENT_STATE.OTHER, leaseState: GIOF_WORK_LEASE_STATE.ACTIVE_OTHER } }),
+        ]}
+        isLoading={false}
+        bulkAssignmentMode={GIOF_BULK_ASSIGNMENT_MODE.GESTOR_SELF}
+        onToggleAssignment={onToggleAssignment}
+        onToggleAllAssignments={vi.fn()}
+      />,
+    );
+
+    await user.click(
+      screen.getByRole("checkbox", {
+        name: "Seleccionar REXAN-ELIGIBLE para asignar",
+      }),
+    );
+    expect(onToggleAssignment).toHaveBeenCalledWith("settlement-eligible", true);
+    expect(screen.queryByRole("checkbox", { name: /REXAN-OWN.*asignar/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("checkbox", { name: /REXAN-LEASED.*asignar/i })).not.toBeInTheDocument();
+  });
+
   it("asigna usando el settlement vinculado en estados activos y deshabilita una rendida", async () => {
     const user = userEvent.setup();
     const onToggleAssignment = vi.fn();
