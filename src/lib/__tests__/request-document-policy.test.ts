@@ -5,11 +5,13 @@ const request = { id: "r", request_type: "SUPPLIER_PAYMENT", currency: "PEN", re
 const invoice = { id: "d", payment_request_id: "r", document_category: "INVOICE", upload_status: "PERMANENT", mime_type: "application/pdf" };
 const pdf = { ...invoice, id: "c", document_category: "CONTRACT" };
 describe("backend-aligned evidence without OCR prerequisite", () => {
-  it("separates primary eligibility and the exact PEN contract gate", () => {
+  it("keeps contract advisory separate from primary eligibility and completeness", () => {
     expect(evaluateRequestEvidence(request, [pdf], []).primarySatisfied).toBe(false);
-    expect(evaluateRequestEvidence(request, [invoice], []).contractSatisfied).toBe(false);
+    expect(evaluateRequestEvidence(request, [invoice], []).contractRecommended).toBe(true);
+    expect(evaluateRequestEvidence(request, [invoice], []).contractRequired).toBe(false);
+    expect(evaluateRequestEvidence(request, [invoice], []).contractSatisfied).toBe(true);
     expect(evaluateRequestEvidence(request, [invoice, pdf], []).contractSatisfied).toBe(true);
-    expect(evaluateRequestEvidence({ ...request, requested_amount: "2500.00" }, [invoice], []).contractRequired).toBe(false);
+    expect(evaluateRequestEvidence({ ...request, requested_amount: "2499.99" }, [invoice], []).contractRecommended).toBe(false);
   });
   it.each(["SALES_RECEIPT", "CASH_RECEIPT"])("requires the matching declaration for %s", (category) => {
     const document = { ...invoice, document_category: category };
@@ -32,28 +34,28 @@ describe("backend-aligned evidence without OCR prerequisite", () => {
       expect(evaluateRequestEvidence(reimbursement, [document], [receipt]).primarySatisfied).toBe(false);
     }
   });
-  it("prefers historical UIT and never gates USD on missing UIT", () => {
-    expect(evaluateRequestEvidence(request, [invoice], [], "6000.00").contractRequired).toBe(true);
-    expect(evaluateRequestEvidence({ ...request, uit_amount_applied: null }, [invoice, pdf], []).error).toBe("UIT_NOT_CONFIGURED");
-    expect(evaluateRequestEvidence({ ...request, currency: "USD", uit_amount_applied: null }, [invoice], []).error).toBeNull();
-    expect(evaluateRequestEvidence({ ...request, currency: null }, [invoice], []).error).toBe("LEGACY_CURRENCY_RESOLUTION_REQUIRED");
+  it("prefers historical UIT and omits advisory when currency or UIT cannot determine it", () => {
+    expect(evaluateRequestEvidence(request, [invoice], [], "6000.00").contractRecommended).toBe(true);
+    expect(evaluateRequestEvidence({ ...request, uit_amount_applied: null }, [invoice, pdf], []).contractRecommended).toBeNull();
+    expect(evaluateRequestEvidence({ ...request, currency: "USD", uit_amount_applied: null }, [invoice], []).contractRecommended).toBeNull();
+    expect(evaluateRequestEvidence({ ...request, currency: null }, [invoice], []).contractRecommended).toBeNull();
   });
   it("uses annual UIT only when the immutable snapshot is wholly absent", () => {
     const draft = { ...request, uit_year_applied: null, uit_amount_applied: null };
-    expect(evaluateRequestEvidence(draft, [invoice], [], "5500.00").error).toBeNull();
-    expect(evaluateRequestEvidence(draft, [invoice], [], "5500.00").contractRequired).toBe(false);
-    expect(evaluateRequestEvidence({ ...draft, requested_amount: "2750.01" }, [invoice], [], "5500.00").contractRequired).toBe(true);
-    expect(evaluateRequestEvidence({ ...draft, uit_year_applied: 2026 }, [invoice], [], "9000.00").error).toBe("UIT_NOT_CONFIGURED");
+    expect(evaluateRequestEvidence(draft, [invoice], [], "5500.00").contractRecommended).toBe(false);
+    expect(evaluateRequestEvidence({ ...draft, requested_amount: "2750.00" }, [invoice], [], "5500.00").contractRecommended).toBe(true);
+    expect(evaluateRequestEvidence({ ...draft, uit_year_applied: 2026 }, [invoice], [], "9000.00").contractRecommended).toBeNull();
   });
-  it("emits UIT_NOT_CONFIGURED only for a successful null lookup, not unresolved loading or API failure", () => {
+  it("keeps unresolved and missing UIT nonblocking without an advisory", () => {
     const draft = { ...request, uit_year_applied: null, uit_amount_applied: null };
-    expect(evaluateRequestEvidence(draft, [invoice], [], undefined).error).toBeNull();
-    expect(evaluateRequestEvidence(draft, [invoice], [], null).error).toBe("UIT_NOT_CONFIGURED");
+    expect(evaluateRequestEvidence(draft, [invoice], [], undefined).contractRecommended).toBeNull();
+    expect(evaluateRequestEvidence(draft, [invoice], [], null).contractRecommended).toBeNull();
+    expect(evaluateRequestEvidence(draft, [invoice], [], null).contractSatisfied).toBe(true);
   });
   it("keeps registered primary evidence satisfied while annual UIT is resolved", () => {
     const draft = { ...request, requested_amount: "1000.00", uit_year_applied: null, uit_amount_applied: null };
     const evidence = evaluateRequestEvidence(draft, [invoice], [], "5500.00");
     expect(evidence.primarySatisfied).toBe(true);
-    expect(evidence.error).toBeNull();
+    expect(evidence.contractSatisfied).toBe(true);
   });
 });

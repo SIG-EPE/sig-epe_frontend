@@ -79,13 +79,12 @@ export function sumRequestAmounts(values: readonly (string | number)[]): string 
   return `${total / BigInt(100)}.${String(total % BigInt(100)).padStart(2, "0")}`;
 }
 
-// El llamador debe preferir el snapshot histórico; nunca se consulta el año actual por defecto.
-export function supplierContractRequirement(currency: unknown, total: string, annualUit: string | null | undefined) {
-  if (currency === "USD") return { required: false, error: null };
-  if (currency !== "PEN") return { required: false, error: "LEGACY_CURRENCY_RESOLUTION_REQUIRED" };
+// El llamador debe preferir el snapshot histórico; null significa que no hay base para aconsejar.
+export function supplierContractRecommendation(currency: unknown, total: string, annualUit: string | null | undefined): boolean | null {
+  if (currency !== "PEN") return null;
   const uit = exactMinor(annualUit);
-  if (uit === null || uit <= BigInt(0)) return { required: false, error: "UIT_NOT_CONFIGURED" };
+  if (uit === null || uit <= BigInt(0)) return null;
   const amount = exactMinor(total);
-  if (amount === null || amount < BigInt(0)) return { required: false, error: "REQUEST_AMOUNT_INVALID" };
-  return { required: amount * BigInt(2) > uit, error: null };
+  if (amount === null || amount < BigInt(0)) return null;
+  return amount * BigInt(2) >= uit;
 }

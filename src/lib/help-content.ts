@@ -76,7 +76,7 @@ export const FAQ_ITEMS = [
     id: "documentos-por-tipo",
     category: FAQ_CATEGORIES.DOCUMENTS,
     question: "¿Qué documentos necesito según mi solicitud?",
-    answer: "Depende del tipo: anticipo requiere PXQ; reembolso requiere un comprobante real activo vinculado a la solicitud. Pago a proveedor requiere factura o RHE, boleta solo con declaración RUS, o recibo de caja solo con Casa de Retiro. El contrato PDF es obligatorio para pagos a proveedor en soles que superan estrictamente ½ UIT del año de la solicitud; en dólares es opcional. Las rendiciones conservan comprobantes por línea, informe actualizado y confirmación manual.",
+    answer: "Depende del tipo: anticipo requiere PXQ; reembolso requiere un comprobante real activo vinculado a la solicitud. Pago a proveedor requiere factura o RHE, boleta solo con declaración RUS, o recibo de caja solo con Casa de Retiro. El contrato PDF siempre es opcional; para pagos en soles que alcanzan o superan ½ UIT del año de la solicitud se recomienda adjuntarlo. En dólares, la recomendación de ½ UIT no aplica. Las rendiciones conservan comprobantes por línea, informe actualizado y confirmación manual.",
     keywords: ["factura", "recibo por honorarios", "informe de rendición", "sustento"],
   },
   {

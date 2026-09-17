@@ -544,8 +544,8 @@ describe("requests helpers", () => {
     ["SUPPLIER_IDENTITY_CONFLICT", "data", "proveedor"],
     ["SUPPLIER_PRIMARY_DOCUMENT_REQUIRED", "documents", "primario"],
     ["SUPPLIER_DOCUMENT_INELIGIBLE", "documents", "RUS"],
-    ["UIT_NOT_CONFIGURED", "documents", "configuración"],
-    ["CONTRACT_REQUIRED_BY_UIT", "documents", "PDF"],
+    ["UIT_NOT_CONFIGURED", "review", "validación anterior"],
+    ["CONTRACT_REQUIRED_BY_UIT", "review", "validación anterior"],
     ["POA_CURRENCY_MISMATCH", "data", "moneda"],
     ["LEGACY_CURRENCY_RESOLUTION_REQUIRED", "data", "autorizada"],
     ["SETTLEMENT_BALANCE_MISMATCH", "documents", "rendición"],
@@ -1980,6 +1980,21 @@ describe("requests helpers", () => {
       "Falta un documento primario elegible del proveedor.",
     ]);
     expect(supplier.conditionalNotes).toEqual([]);
+
+    const supplierAtHalfUit = getRequiredDocumentChecklist(
+      REQUEST_TYPE.SUPPLIER_PAYMENT,
+      [makeDocument({ document_category: REQUEST_DOCUMENT_CATEGORY.INVOICE })],
+      makeRequest({
+        request_type: REQUEST_TYPE.SUPPLIER_PAYMENT,
+        currency: REQUEST_CURRENCY.PEN,
+        requested_amount: 2500,
+        uit_year_applied: 2026,
+        uit_amount_applied: "5000.00",
+      }),
+    );
+    expect(supplierAtHalfUit.items.find((item) => item.category === REQUEST_DOCUMENT_CATEGORY.CONTRACT)).toEqual(expect.objectContaining({ required: false, satisfied: false }));
+    expect(supplierAtHalfUit.missingMessages).toEqual([]);
+    expect(supplierAtHalfUit.isComplete).toBe(true);
 
     const rexanMissing = getRequiredDocumentChecklist(
       REQUEST_TYPE.ADVANCE_SETTLEMENT,

@@ -5,7 +5,6 @@ import { flushSync } from "react-dom";
 import { CheckCircle2, ExternalLink, FileText, Info, Trash2, Upload, XCircle } from "lucide-react";
 import { toast } from "sonner";
 import { useRequestAnnualUit } from "@/hooks/use-request-currency";
-import { RequestContractAdvisory } from "./request-contract-advisory";
 
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -19,6 +18,7 @@ import { useConfirmRequestReceiptReview, useDeleteRequestDocument, useRequestDoc
 import { useUploadNavigationGuard } from "@/hooks/use-upload-navigation-guard";
 import { REQUEST_DOCUMENT_UPLOAD_BATCH_STATE, REQUEST_DOCUMENT_UPLOAD_FILE_STATE } from "@/lib/request-document-upload-queue";
 import { getSafeDocumentUrl } from "@/lib/safe-url";
+import { supplierContractRecommendation } from "@/lib/request-supplier-policy";
 import {
   canManageRequestDocuments,
   formatRequestDateTime,
@@ -377,6 +377,13 @@ export function RequestDocumentsCard({
   const annualUitLookupEnabled = request.request_type === REQUEST_TYPE.SUPPLIER_PAYMENT && request.currency === "PEN" && request.uit_year_applied == null && request.uit_amount_applied == null;
   const annualUit = useRequestAnnualUit(request.fiscal_year, annualUitLookupEnabled);
   const baseChecklist = getRequiredDocumentChecklist(request.request_type, documents, request, receipts.map((item) => item.receipt), annualUit.annualUit);
+  const contractItem = baseChecklist.items.find((item) => item.key === "supplier-contract");
+  const hasUitSnapshot = request.uit_year_applied != null || request.uit_amount_applied != null;
+  const advisoryUit = hasUitSnapshot
+    ? request.uit_year_applied != null ? request.uit_amount_applied : null
+    : annualUit.annualUit;
+  const showContractRecommendation = contractItem?.satisfied === false
+    && supplierContractRecommendation(request.currency, String(request.requested_amount), advisoryUit) === true;
   const checklist = restrictGenericReturnProof
     ? {
       ...baseChecklist,
@@ -955,23 +962,15 @@ export function RequestDocumentsCard({
           {request.request_type === REQUEST_TYPE.SUPPLIER_PAYMENT && <div className="mt-3 space-y-2 text-sm">
             <p>RUS: {request.declares_rus == null ? "Sin declarar" : request.declares_rus ? "Sí" : "No"} · Casa de Retiro: {request.declares_casa_de_retiro == null ? "Sin declarar" : request.declares_casa_de_retiro ? "Sí" : "No"}</p>
             {checklist.missingMessages.map((message) => <p key={message} role="status">{message}</p>)}
-            {request.currency === "USD" && <RequestContractAdvisory request={request} />}
+            {showContractRecommendation && (
+              <Alert aria-label="Recomendación de contrato" role="status" className="border-amber-500/50 bg-amber-50 text-amber-950 dark:bg-amber-950/20 dark:text-amber-100">
+                <Info className="h-4 w-4" />
+                <AlertDescription>
+                  El total en soles alcanza o supera ½ UIT del año de la solicitud. Es recomendable adjuntar un contrato o convenio PDF, pero no es obligatorio para continuar.
+                </AlertDescription>
+              </Alert>
+            )}
           </div>}
-          {annualUitLookupEnabled && annualUit.isLoading && (
-            <p className="mt-3 text-sm text-muted-foreground" role="status">
-              Consultando el Valor UIT del año de la solicitud…
-            </p>
-          )}
-          {annualUitLookupEnabled && annualUit.error && (
-            <Alert variant="destructive" className="mt-3">
-              <AlertDescription>
-                No se pudo consultar el Valor UIT del año de la solicitud. Verifica tu sesión y vuelve a intentarlo. La solicitud no se modificó.{" "}
-                <Button type="button" variant="outline" size="sm" onClick={() => void annualUit.refetch()}>
-                  Volver a consultar UIT
-                </Button>
-              </AlertDescription>
-            </Alert>
-          )}
           {backendMissingMessages.length > 0 && (
             <Alert variant="destructive" className="mt-3">
               <AlertDescription>

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { resolveSupplierIdentity, supplierIdentityPayload, supplierContractRequirement, supplierMatchesPayee } from "@/lib/request-supplier-policy";
+import { resolveSupplierIdentity, supplierIdentityPayload, supplierContractRecommendation, supplierMatchesPayee } from "@/lib/request-supplier-policy";
 
 describe("supplier identity and immutable threshold", () => {
   it("matches full normalized identities, not names alone or malformed evidence", () => {
@@ -29,11 +29,11 @@ describe("supplier identity and immutable threshold", () => {
     expect(() => supplierIdentityPayload({ supplier_name: "A" })).toThrow("SUPPLIER_IDENTITY_INVALID");
     expect(() => supplierIdentityPayload({ supplier_document_type: "DNI", supplier_document_number: "12345678", supplier_name: "A", supplier_ruc: "20123456789" })).toThrow("SUPPLIER_IDENTITY_CONFLICT");
   });
-  it.each([["2500.00", "5000.00", false], ["2499.99", "5000.00", false], ["2500.01", "5000.00", true], ["2500.00", "5000.01", false], ["2500.01", "5000.01", true]])("compares exact doubled minor %s to UIT %s", (total, uit, required) => {
-    expect(supplierContractRequirement("PEN", total, uit)).toEqual({ required, error: null });
+  it.each([["2500.00", "5000.00", true], ["2499.99", "5000.00", false], ["2500.01", "5000.00", true], ["2500.00", "5000.01", false], ["2500.01", "5000.01", true]])("recommends at exact half UIT using doubled minor units for %s and UIT %s", (total, uit, recommended) => {
+    expect(supplierContractRecommendation("PEN", total, uit)).toBe(recommended);
   });
-  it("fails closed for missing PEN UIT but never gates USD", () => {
-    expect(supplierContractRequirement("PEN", "1", null).error).toBe("UIT_NOT_CONFIGURED");
-    expect(supplierContractRequirement("USD", "999999", null)).toEqual({ required: false, error: null });
+  it("omits the recommendation when UIT is unavailable and never derives one for USD", () => {
+    expect(supplierContractRecommendation("PEN", "1", null)).toBeNull();
+    expect(supplierContractRecommendation("USD", "999999", "5000.00")).toBeNull();
   });
 });

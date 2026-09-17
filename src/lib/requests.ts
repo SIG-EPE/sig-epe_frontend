@@ -2614,22 +2614,15 @@ export function getRequiredDocumentChecklist(
         description:
           context.currency === "USD"
             ? USD_CONTRACT_NOTICE
-            : "PDF obligatorio solo cuando el total en soles supera estrictamente ½ UIT del año de la solicitud.",
-        required: evidence.contractRequired,
+            : "Documento PDF opcional. Cuando el total en soles alcanza o supera ½ UIT del año de la solicitud, se recomienda adjuntarlo.",
+        required: false,
         satisfied: evidence.contractPresent,
         acceptedFormatsLabel: "PDF",
-        missingMessage:
-          "El total en soles supera media UIT y requiere contrato/convenio PDF.",
+        missingMessage: "",
       });
     const missingMessages = items
       .filter((item) => item.required && !item.satisfied)
       .map((item) => item.missingMessage);
-    if (evidence.error)
-      missingMessages.push(
-        evidence.error === "UIT_NOT_CONFIGURED"
-          ? "UIT no configurada para el año de la solicitud. Solicita su configuración antes de enviar."
-          : "Resuelve la moneda o el monto de la solicitud antes de continuar.",
-      );
     return {
       items,
       conditionalNotes: [],
@@ -2947,13 +2940,13 @@ const REQUEST_ERROR_POLICIES: Readonly<Record<string, RequestErrorPolicy>> = {
   },
   UIT_NOT_CONFIGURED: {
     message:
-      "La UIT del año de la solicitud no está configurada o no es válida. Solicita su configuración autorizada; adjuntar un contrato no resuelve este bloqueo.",
-    step: REQUEST_EDIT_STEP.DOCUMENTS,
+      "El servidor no pudo resolver la UIT para una validación anterior. La recomendación de contrato no bloquea el formulario; vuelve a intentar cuando el servicio esté actualizado.",
+    step: REQUEST_EDIT_STEP.REVIEW,
   },
   CONTRACT_REQUIRED_BY_UIT: {
     message:
-      "El total en soles supera estrictamente ½ UIT del año de la solicitud. Adjunta un contrato o convenio PDF activo.",
-    step: REQUEST_EDIT_STEP.DOCUMENTS,
+      "El servidor aplicó una validación anterior de contrato. El contrato es opcional en el formulario; vuelve a intentar cuando el servicio esté actualizado.",
+    step: REQUEST_EDIT_STEP.REVIEW,
   },
   POA_CURRENCY_MISMATCH: {
     message:

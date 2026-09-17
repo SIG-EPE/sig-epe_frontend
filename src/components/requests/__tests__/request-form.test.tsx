@@ -1171,7 +1171,8 @@ describe("RequestForm payload helpers", () => {
       error: new Error("403"),
       message: /No se pudo consultar el Valor UIT/,
     },
-  ])("blocks supplier submit while the annual UIT lookup is $state without claiming it is unconfigured", ({ annualUit, loading, error, message }) => {
+  ])("allows supplier submit while the advisory UIT lookup is $state", async ({ annualUit, loading, error }) => {
+    const user = userEvent.setup();
     mocks.annualUit = annualUit;
     mocks.annualUitLoading = loading;
     mocks.annualUitError = error;
@@ -1189,12 +1190,42 @@ describe("RequestForm payload helpers", () => {
       uit_year_applied: null,
       uit_amount_applied: null,
     });
+    mocks.updateRequest.mockResolvedValue(supplier);
+    mocks.submitRequest.mockResolvedValue({ ...supplier, status: REQUEST_STATUS.SUBMITTED });
 
     render(<RequestForm activeStep={REQUEST_EDIT_STEP.REVIEW} initialRequest={supplier} mode="edit" />);
 
-    expect(screen.getByText(message)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Enviar a revisión" })).toBeDisabled();
+    const submit = screen.getByRole("button", { name: "Enviar a revisión" });
+    expect(submit).toBeEnabled();
     expect(screen.queryByText(/UIT no configurada para el año de la solicitud/)).not.toBeInTheDocument();
+    await user.click(submit);
+    await waitFor(() => expect(mocks.submitRequest).toHaveBeenCalledWith("request-1"));
+  });
+
+  it("allows Documents to Review at exact half UIT without a contract", async () => {
+    const user = userEvent.setup();
+    mocks.annualUit = "5000.01";
+    mocks.requestDocuments = [makeDocument({ document_category: REQUEST_DOCUMENT_CATEGORY.INVOICE })];
+    const supplier = makePaymentRequest({
+      request_type: REQUEST_TYPE.SUPPLIER_PAYMENT,
+      requested_amount: 2500.01,
+      supplier_document_type: "DNI",
+      supplier_document_number: "87654321",
+      supplier_name: "Provider",
+      beneficiary_document_type: BENEFICIARY_DOCUMENT_TYPE.DNI,
+      beneficiary_document_number: "87654321",
+      beneficiary_name: "Provider",
+      declares_rus: false,
+      declares_casa_de_retiro: false,
+      uit_year_applied: null,
+      uit_amount_applied: null,
+    });
+
+    render(<RequestForm activeStep={REQUEST_EDIT_STEP.DOCUMENTS} initialRequest={supplier} mode="edit" />);
+
+    await user.click(screen.getByRole("button", { name: "Continuar a revisión" }));
+    expect(mocks.push).toHaveBeenCalledWith("/requests/request-1/edit?step=review");
+    expect(mocks.toastError).not.toHaveBeenCalledWith("Adjunta los documentos requeridos antes de pasar a revisión.");
   });
 
   it("usa CTA de corrección para solicitudes observadas", () => {
@@ -1328,11 +1359,11 @@ describe("RequestForm payload helpers", () => {
   });
 
   it.each([
-    ["SUPPLIER_IDENTITY_REQUIRED", REQUEST_EDIT_STEP.DATA],
-    ["POA_CURRENCY_MISMATCH", REQUEST_EDIT_STEP.DATA],
-    ["UIT_NOT_CONFIGURED", REQUEST_EDIT_STEP.DOCUMENTS],
-    ["CONTRACT_REQUIRED_BY_UIT", REQUEST_EDIT_STEP.DOCUMENTS],
-  ])("dirige el rechazo API %s al paso correctivo sin reenviar", async (code, step) => {
+    ["SUPPLIER_IDENTITY_REQUIRED", REQUEST_EDIT_STEP.DATA, true],
+    ["POA_CURRENCY_MISMATCH", REQUEST_EDIT_STEP.DATA, true],
+    ["UIT_NOT_CONFIGURED", REQUEST_EDIT_STEP.REVIEW, false],
+    ["CONTRACT_REQUIRED_BY_UIT", REQUEST_EDIT_STEP.REVIEW, false],
+  ])("maneja el rechazo API %s sin reenviar", async (code, step, shouldNavigate) => {
     const user = userEvent.setup();
     mocks.requestDocuments = [makeDocument({ document_category: REQUEST_DOCUMENT_CATEGORY.PXQ })];
     const draft = makePaymentRequest({ request_type: REQUEST_TYPE.ADVANCE });
@@ -1343,9 +1374,13 @@ describe("RequestForm payload helpers", () => {
     }));
     render(<RequestForm activeStep={REQUEST_EDIT_STEP.REVIEW} initialRequest={draft} mode="edit" />);
     await user.click(screen.getByRole("button", { name: "Enviar a revisión" }));
-    await waitFor(() => expect(mocks.push).toHaveBeenCalledWith(`/requests/request-1/edit?step=${step}`));
+    await waitFor(() => expect(mocks.submitRequest).toHaveBeenCalledTimes(1));
+    if (shouldNavigate) expect(mocks.push).toHaveBeenCalledWith(`/requests/request-1/edit?step=${step}`);
+    else {
+      expect(mocks.push).not.toHaveBeenCalled();
+      expect(screen.getByText(/validación anterior/)).toBeInTheDocument();
+    }
     expect(mocks.updateRequest).toHaveBeenCalledTimes(1);
-    expect(mocks.submitRequest).toHaveBeenCalledTimes(1);
   });
 
   it("muestra stepper y contexto original diferenciados para REXAN", () => {

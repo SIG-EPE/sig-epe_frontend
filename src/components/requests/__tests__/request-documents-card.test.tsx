@@ -249,23 +249,33 @@ describe("RequestDocumentsCard", () => {
     expect(screen.queryByTestId("allocation-documents-groups")).not.toBeInTheDocument();
   });
 
-  it.each(["PEN", "USD"] as const)("shows supplier contract rules in %s with independent primary evidence", async (currency) => {
-    vi.mocked(api.get).mockImplementation(async (path) => path === "/requests/lookups/fx-reference" ? { reference: null, direction: "PEN/USD", fallback: "UNAVAILABLE", last_refresh_failure: "PROVIDER_DISABLED" } : []);
+  it.each(["PEN", "USD"] as const)("shows nonblocking supplier contract guidance in %s with independent primary evidence", async (currency) => {
+    vi.mocked(api.get).mockResolvedValue([]);
     render(<RequestDocumentsCard request={makeRequest({ request_type: REQUEST_TYPE.SUPPLIER_PAYMENT, currency, requested_amount: 2500.01, uit_year_applied: 2026, uit_amount_applied: "5000.00", declares_rus: false, declares_casa_de_retiro: null })} documents={[makeDocument({ document_category: "INVOICE" })]} />);
     expect(screen.queryByText("Falta un documento primario elegible del proveedor.")).not.toBeInTheDocument();
     expect(screen.getByText(/RUS: No.*Casa de Retiro: Sin declarar/)).toBeInTheDocument();
     if (currency === "USD") {
       expect(screen.getByText("Opcional para solicitudes en dólares. El umbral de ½ UIT solo se aplica a solicitudes en soles.")).toBeInTheDocument();
-      expect(screen.queryByText("El total en soles supera media UIT y requiere contrato/convenio PDF.")).not.toBeInTheDocument();
-      expect(await screen.findByText(/Referencia cambiaria no disponible: PROVIDER_DISABLED/)).toBeInTheDocument();
+      expect(screen.queryByText(/recomendable adjuntar un contrato/i)).not.toBeInTheDocument();
+      expect(api.get).not.toHaveBeenCalledWith(expect.stringMatching(/fx-reference|annual-uit/));
     } else {
-      expect(screen.getByText("El total en soles supera media UIT y requiere contrato/convenio PDF.")).toBeInTheDocument();
+      const warning = screen.getByRole("status", { name: "Recomendación de contrato" });
+      expect(warning).toHaveTextContent(/alcanza o supera ½ UIT.*recomendable adjuntar un contrato/i);
+      expect(warning).toHaveClass("border-amber-500/50");
     }
+    expect(screen.getByText("Contrato / convenio").closest("div.rounded-md")).toHaveTextContent("Opcional");
   });
-  it("keeps missing PEN UIT blocking even with contract and primary PDFs", async () => {
+  it("omits the warning for missing PEN UIT", async () => {
     vi.mocked(api.get).mockImplementation(async (path) => path === "/requests/lookups/annual-uit/2026" ? { year: 2026, annual_uit: null } : []);
-    render(<RequestDocumentsCard request={makeRequest({ request_type: REQUEST_TYPE.SUPPLIER_PAYMENT })} documents={[makeDocument({ document_category: "INVOICE" }), makeDocument({ id: "c", document_category: "CONTRACT" })]} />);
-    expect(await screen.findByText(/UIT no configurada para el año de la solicitud/)).toBeInTheDocument();
+    render(<RequestDocumentsCard request={makeRequest({ request_type: REQUEST_TYPE.SUPPLIER_PAYMENT })} documents={[makeDocument({ document_category: "INVOICE" })]} />);
+    await waitFor(() => expect(api.get).toHaveBeenCalledWith("/requests/lookups/annual-uit/2026", expect.any(Object)));
+    expect(screen.queryByRole("status", { name: "Recomendación de contrato" })).not.toBeInTheDocument();
+  });
+  it("suppresses the threshold warning and shows attached state when a contract PDF exists", () => {
+    vi.mocked(api.get).mockResolvedValue([]);
+    render(<RequestDocumentsCard request={makeRequest({ request_type: REQUEST_TYPE.SUPPLIER_PAYMENT, requested_amount: 2500, uit_year_applied: 2026, uit_amount_applied: "5000.00" })} documents={[makeDocument({ document_category: "INVOICE" }), makeDocument({ id: "c", document_category: "CONTRACT" })]} />);
+    expect(screen.queryByRole("status", { name: "Recomendación de contrato" })).not.toBeInTheDocument();
+    expect(screen.getByText("Contrato / convenio").closest("div.rounded-md")).toHaveTextContent("Adjunto");
   });
   it("shows an actionable lookup error without reporting UIT as not configured", async () => {
     vi.mocked(api.get).mockImplementation(async (path) => {
@@ -273,8 +283,9 @@ describe("RequestDocumentsCard", () => {
       return [];
     });
     render(<RequestDocumentsCard request={makeRequest({ request_type: REQUEST_TYPE.SUPPLIER_PAYMENT })} documents={[makeDocument({ document_category: "INVOICE" })]} />);
-    expect(await screen.findByText(/No se pudo consultar el Valor UIT/)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Volver a consultar UIT" })).toBeInTheDocument();
+    await waitFor(() => expect(api.get).toHaveBeenCalledWith("/requests/lookups/annual-uit/2026", expect.any(Object)));
+    expect(screen.queryByRole("status", { name: "Recomendación de contrato" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Volver a consultar UIT" })).not.toBeInTheDocument();
     expect(screen.queryByText(/UIT no configurada para el año de la solicitud/)).not.toBeInTheDocument();
   });
   it("shows lookup loading without reporting UIT as not configured", async () => {
@@ -285,7 +296,7 @@ describe("RequestDocumentsCard", () => {
       return [];
     });
     render(<RequestDocumentsCard request={makeRequest({ request_type: REQUEST_TYPE.SUPPLIER_PAYMENT })} documents={[makeDocument({ document_category: "INVOICE" })]} />);
-    expect(await screen.findByText(/Consultando el Valor UIT/)).toBeInTheDocument();
+    expect(screen.queryByRole("status", { name: "Recomendación de contrato" })).not.toBeInTheDocument();
     expect(screen.queryByText(/UIT no configurada para el año de la solicitud/)).not.toBeInTheDocument();
   });
   it("allows a linked reimbursement receipt without OCR success or confirmation and without PXQ", async () => {

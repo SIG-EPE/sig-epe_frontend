@@ -1,4 +1,4 @@
-import { supplierContractRequirement } from "./request-supplier-policy";
+import { supplierContractRecommendation } from "./request-supplier-policy";
 
 export interface RequestEvidenceContext {
   id: string;
@@ -46,11 +46,9 @@ export function evaluateRequestEvidence(request: RequestEvidenceContext, documen
   // Un snapshot parcial tampoco se reemplaza con el catálogo actual.
   const hasSnapshot = request.uit_year_applied != null || request.uit_amount_applied != null;
   const uit = hasSnapshot ? request.uit_year_applied != null ? request.uit_amount_applied : null : annualUit;
-  const contract = supplier && !hasSnapshot && annualUit === undefined
-    ? { required: false, error: null }
-    : supplier
-      ? supplierContractRequirement(request.currency, String(request.requested_amount), uit)
-      : { required: false, error: null };
+  const contractRecommended = supplier
+    ? supplierContractRecommendation(request.currency, String(request.requested_amount), uit)
+    : null;
   const contractPresent = active.some((document) => category(document) === "CONTRACT" && document.mime_type.toLowerCase() === "application/pdf");
-  return { primarySatisfied, contractRequired: contract.required, contractPresent, contractSatisfied: !contract.required || contractPresent, error: contract.error };
+  return { primarySatisfied, contractRecommended, contractRequired: false, contractPresent, contractSatisfied: true, error: null };
 }

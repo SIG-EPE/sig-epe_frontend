@@ -698,8 +698,7 @@ export function RequestForm({
   });
   const reviewNavigationIssues = currentRequest ? getRequestReviewNavigationIssues(currentRequest, checklist) : null;
   const isBudgetCeilingBlocked = !isAdvanceSettlement && isBudgetPreviewBlocking(preview.data);
-  const isAnnualUitReady = !annualUitLookupEnabled || annualUit.isResolved;
-  const canSubmitReview = hasCompleteRequestData && areDocumentsReady && isAnnualUitReady && checklist.isComplete && !isBudgetCeilingBlocked && (!isAdvanceSettlement || structuredReportReady);
+  const canSubmitReview = hasCompleteRequestData && areDocumentsReady && checklist.isComplete && !isBudgetCeilingBlocked && (!isAdvanceSettlement || structuredReportReady);
   const settlementGuidanceAllocations = isAdvanceSettlement && (currentRequest?.allocations?.length ?? 0) === 0
     ? settlementContext?.original_advance.allocations ?? []
     : [];
@@ -1051,16 +1050,6 @@ export function RequestForm({
       return;
     }
 
-    if (!isAnnualUitReady) {
-      const message = annualUit.error
-        ? "No se pudo consultar el Valor UIT del año de la solicitud. Verifica tu sesión y vuelve a intentarlo."
-        : "Espera mientras consultamos el Valor UIT del año de la solicitud.";
-      setSubmitErrors([message]);
-      setDocumentStepErrors([message]);
-      toast.error(message);
-      setPendingAction(null);
-      return;
-    }
     const requestTypeForBlocking = effectiveRequestType;
     setPendingAction("submit");
     setSubmitErrors([]);
@@ -1723,21 +1712,6 @@ export function RequestForm({
               />
             )}
           </>
-        )}
-        {annualUitLookupEnabled && annualUit.isLoading && (
-          <p role="status" className="text-sm text-muted-foreground">
-            Consultando el Valor UIT del año de la solicitud…
-          </p>
-        )}
-        {annualUitLookupEnabled && annualUit.error && (
-          <Alert variant="destructive">
-            <AlertDescription>
-              No se pudo consultar el Valor UIT del año de la solicitud. Verifica tu sesión y vuelve a intentarlo.{" "}
-              <Button type="button" variant="outline" size="sm" onClick={() => void annualUit.refetch()}>
-                Volver a consultar UIT
-              </Button>
-            </AlertDescription>
-          </Alert>
         )}
         <div className="flex flex-col-reverse gap-3 border-t pt-4 sm:flex-row sm:justify-between">
           <Button type="button" variant="outline" onClick={() => navigateToStep(REQUEST_EDIT_STEP.DOCUMENTS)} disabled={isBusy}>Volver a documentos</Button>
