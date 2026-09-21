@@ -39,14 +39,14 @@ export const GIOF_ROLE_GUIDES: Readonly<Record<RoleCode, GiofRoleGuide>> = {
     id: "role-gestor",
     title: "GIOF Gestor",
     description:
-      "Trabaja sobre sus asignaciones y puede tomar trabajo disponible para sí.",
+      "Distribuye y redistribuye trabajo operativo con los mismos controles de asignación que GIOF Manager.",
     points: [
-      "Mi trabajo muestra tus asignaciones. Trabajos que puedes tomar reúne elementos elegibles de cualquier etapa GIOF.",
-      "Asignarme toma un trabajo sin responsable. Reasignarme recupera uno asignado a otra persona cuando no tiene una sesión de procesamiento activa, sin revelar su identidad.",
-      "La lista disponible es referencial: al confirmar se valida otra vez el estado, la versión y el lease. Si algo cambió, actualiza la cola.",
-      "Después de tomarlo, la cola se actualiza antes de abrir o editar; el lease se obtiene por separado.",
+      "Usa Mi trabajo, Todos, Sin asignar o Por responsable para ubicar la carga operativa.",
+      "Selecciona de 1 a 50 trabajos de una misma etapa y elige como destino tu propio usuario, otro Gestor o un Manager. La operación es todo-o-nada.",
+      "La asignación valida nuevamente estado, versión, responsable y lease. Asignar no adquiere el lease de edición.",
+      "Si existe un lease activo ajeno, usa la reasignación forzada solo con motivo y confirmación; en Pagos también debes reconocer la posible interrupción.",
       "Puedes editar un elemento asignado a ti cuando está disponible. Un elemento ajeno se abre en modo Solo lectura.",
-      "En uso indica que otra persona está trabajando. Debes esperar a que termine o a que el bloqueo venza.",
+      "Puedes liberar únicamente trabajo asignado a ti.",
       "Si observas un caso, conserva el mismo responsable. El solicitante corrige y, al reenviar, vuelve al mismo responsable.",
     ],
   },
@@ -56,10 +56,9 @@ export const GIOF_ROLE_GUIDES: Readonly<Record<RoleCode, GiofRoleGuide>> = {
     description: "Distribuye y redistribuye el trabajo operativo.",
     points: [
       "Usa Mi trabajo, Todo, Sin asignar o Por responsable para ubicar la carga de cada persona.",
-      "También puede usar Asignarme o Reasignarme para tomar un elemento disponible; estas acciones no reemplazan los controles administrativos.",
-      "Puede asignar o reasignar un elemento, o hasta 50 de la misma etapa. La operación masiva es todo-o-nada.",
+      "Puede asignar o reasignar un elemento, o hasta 50 de la misma etapa, eligiéndose también a sí mismo. La operación masiva es todo-o-nada.",
       "La nota de asignación es opcional y la interfaz muestra los nombres de los responsables.",
-      "Si otra persona está trabajando, En uso bloquea la asignación. Actualiza la cola y espera a que el trabajo quede disponible.",
+      "Si otra persona está trabajando, la reasignación normal se bloquea; la acción forzada exige motivo, confirmación y, para Pagos, reconocimiento de interrupción.",
       "Puede reasignar el seguimiento de un caso Observado cuando no está En uso.",
     ],
   },
@@ -129,7 +128,7 @@ export const GIOF_STAGE_GUIDES: readonly GiofStageGuide[] = [
     notAssignable:
       "Rendida no tiene seguimiento asignable. Un anticipo sin Rendición de anticipo vinculada tampoco se asigna en esta etapa.",
     observation:
-      "El GIOF Manager puede reasignar el seguimiento de una Observada cuando no está En uso.",
+      "GIOF Gestor y GIOF Manager pueden reasignar el seguimiento de una Observada con los controles de lease correspondientes.",
   },
 ];
 
@@ -147,19 +146,19 @@ export interface GiofTroubleshootingItem {
 
 export const GIOF_TROUBLESHOOTING: readonly GiofTroubleshootingItem[] = [
   {
-    question: "¿Qué hacen Asignarme y Reasignarme?",
+    question: "¿Cómo me asigno trabajo?",
     answer:
-      "Asigna el elemento a tu usuario si continúa elegible y no tiene un lease activo de otra persona. Luego actualiza la cola; abrir o editar requiere un lease separado con los datos ya actualizados.",
+      "Selecciona uno o más elementos, abre Asignar / reasignar y elige tu propio usuario como responsable. Abrir o editar requiere un lease separado.",
   },
   {
     question: "¿Por qué aparece trabajo asignado a otra persona?",
     answer:
-      "Puede tomarse cuando no tiene un lease activo. La lista no revela quién lo tenía asignado y la disponibilidad se confirma nuevamente al tomarlo.",
+      "Ambos roles GIOF pueden ver al responsable para distribuir la carga. La asignación normal vuelve a validar que no exista un lease activo ajeno.",
   },
   {
     question: "¿Por qué no aparece la casilla de selección?",
     answer:
-      "Solo el GIOF Manager ve la selección para asignar o reasignar. No aparece cuando la etapa o el estado no admite asignación.",
+      "GIOF Gestor y GIOF Manager ven la selección. No aparece cuando la etapa o el estado no admite asignación.",
   },
   {
     question: "¿Por qué solo aparece Ver?",
@@ -179,17 +178,17 @@ export const GIOF_TROUBLESHOOTING: readonly GiofTroubleshootingItem[] = [
   {
     question: "¿Por qué cambió el nombre del responsable?",
     answer:
-      "Un GIOF Manager reasignó el trabajo. La cola muestra el nombre vigente y el historial conserva el cambio.",
+      "Un GIOF Gestor o GIOF Manager reasignó el trabajo. La cola muestra el nombre vigente y el historial conserva el cambio.",
   },
   {
     question: "¿Quién puede reasignar?",
     answer:
-      "Solo el GIOF Manager. El GIOF Gestor, el Administrador del Sistema, solicitantes y auditoría pueden leer la guía, pero no reasignan.",
+      "GIOF Gestor y GIOF Manager. Administradores del Sistema, solicitantes y auditoría no administran asignaciones GIOF.",
   },
   {
     question: "¿Qué pasa después de una observación?",
     answer:
-      "El responsable se conserva mientras el solicitante corrige. Al reenviar, el caso vuelve a esa misma persona; un GIOF Manager puede reasignar el seguimiento cuando no está En uso.",
+      "El responsable se conserva mientras el solicitante corrige. Al reenviar, el caso vuelve a esa misma persona; GIOF Gestor o GIOF Manager pueden reasignar el seguimiento con los controles de lease.",
   },
 ];
 

@@ -17,8 +17,11 @@ import {
   useGiofAssignees,
   useGiofOwnershipCommands,
 } from "@/hooks/use-giof-work";
-import { ROLE_CODE } from "@/lib/constants";
-import { isGiofWorkLifecycleEligible } from "@/lib/role-capabilities";
+import {
+  hasRoleCapability,
+  isGiofWorkLifecycleEligible,
+  ROLE_CAPABILITY,
+} from "@/lib/role-capabilities";
 import {
   GIOF_WORK_ASSIGNMENT_STATE,
   GIOF_WORK_LEASE_STATE,
@@ -29,7 +32,6 @@ import {
 
 const OWNERSHIP_ACTION = {
   RELEASE: "release",
-  TAKE: "take",
   FORCE: "force",
 } as const;
 
@@ -56,10 +58,26 @@ function getAssignmentState(
   return null;
 }
 
-function hasActiveForeignLease(
+function hasActiveLease(work: GiofWorkMetadata): boolean {
+  return Boolean(
+    (work.leaseState === GIOF_WORK_LEASE_STATE.ACTIVE_SELF ||
+      work.leaseState === GIOF_WORK_LEASE_STATE.ACTIVE_OTHER) ||
+      (work.lease?.expiresAt &&
+        new Date(work.lease.expiresAt).getTime() > Date.now()),
+  );
+}
+
+function hasCrossPoolLease(work: GiofWorkMetadata): boolean {
+  return Boolean(
+    hasActiveLease(work) && work.lease?.pool && work.lease.pool !== work.pool,
+  );
+}
+
+function hasActiveSamePoolForeignLease(
   work: GiofWorkMetadata,
   currentUserId?: string | null,
 ): boolean {
+  if (hasCrossPoolLease(work)) return false;
   if (work.leaseState === GIOF_WORK_LEASE_STATE.ACTIVE_OTHER) return true;
   return Boolean(
     work.lease?.ownerId &&
@@ -86,11 +104,13 @@ export function GiofOwnershipActions({
   currentUserId,
   refetchPoolQueue,
 }: GiofOwnershipActionsProps) {
-  const isManager = roleCode === ROLE_CODE.GIOF_MANAGER;
-  const isGestor = roleCode === ROLE_CODE.GIOF_GESTOR;
-  const isOperational = isManager || isGestor;
+  const canManageAssignments = hasRoleCapability(
+    roleCode,
+    ROLE_CAPABILITY.GIOF_ASSIGNMENT,
+  );
   const assignmentState = getAssignmentState(work, currentUserId);
-  const activeForeignLease = hasActiveForeignLease(work, currentUserId);
+  const crossPoolLease = hasCrossPoolLease(work);
+  const activeForeignLease = hasActiveSamePoolForeignLease(work, currentUserId);
   const parsedVersion = Number(work.assignmentVersion);
   const hasSafeVersion =
     Number.isSafeInteger(parsedVersion) && parsedVersion >= 0;
@@ -114,7 +134,7 @@ export function GiofOwnershipActions({
     (work.pool !== GIOF_WORK_POOL.PAYMENT || acknowledged);
 
   if (
-    !isOperational ||
+    !canManageAssignments ||
     !isGiofWorkLifecycleEligible(work) ||
     !assignmentState ||
     !hasSafeVersion
@@ -140,27 +160,6 @@ export function GiofOwnershipActions({
     commands.clearError();
   }
 
-  async function takeOwnership(): Promise<void> {
-    await commands.take({
-      requestId,
-      pool: work.pool,
-      expectedVersion: parsedVersion,
-    });
-    setSuccessMessage("Trabajo asignado a ti. Las colas fueron actualizadas.");
-    toast.success("Trabajo asignado a ti.");
-  }
-
-  async function assignUnassigned(): Promise<void> {
-    if (commands.isSubmitting) return;
-    setSuccessMessage(null);
-    commands.clearError();
-    try {
-      await takeOwnership();
-    } catch {
-      // El hook conserva el error autoritativo; no se reintenta automáticamente.
-    }
-  }
-
   async function submit(): Promise<void> {
     if (!action || commands.isSubmitting) return;
     try {
@@ -172,8 +171,6 @@ export function GiofOwnershipActions({
         });
         setSuccessMessage("Trabajo liberado. Las colas fueron actualizadas.");
         toast.success("Trabajo liberado.");
-      } else if (action === OWNERSHIP_ACTION.TAKE) {
-        await takeOwnership();
       } else {
         if (!forceIsValid) return;
         await commands.forceReassign({
@@ -196,10 +193,8 @@ export function GiofOwnershipActions({
     }
   }
 
-  const canTake =
-    assignmentState !== GIOF_WORK_ASSIGNMENT_STATE.SELF && !activeForeignLease;
   const canForce =
-    isManager && assignmentState !== GIOF_WORK_ASSIGNMENT_STATE.UNASSIGNED;
+    assignmentState === GIOF_WORK_ASSIGNMENT_STATE.OTHER && activeForeignLease;
 
   return (
     <div
@@ -216,29 +211,17 @@ export function GiofOwnershipActions({
           Liberar trabajo
         </Button>
       )}
-      {canTake && (
-        <Button
-          type="button"
-          size="sm"
-          variant="outline"
-          onClick={() => {
-            if (assignmentState === GIOF_WORK_ASSIGNMENT_STATE.UNASSIGNED)
-              void assignUnassigned();
-            else open(OWNERSHIP_ACTION.TAKE);
-          }}
-        >
-          {assignmentState === GIOF_WORK_ASSIGNMENT_STATE.UNASSIGNED
-            ? "Asignarme"
-            : "Reasignarme"}
-        </Button>
-      )}
-      {isGestor &&
-        assignmentState !== GIOF_WORK_ASSIGNMENT_STATE.SELF &&
+      {assignmentState !== GIOF_WORK_ASSIGNMENT_STATE.SELF &&
         activeForeignLease && (
           <span className="text-sm text-muted-foreground">
             En proceso por otra persona
           </span>
         )}
+      {crossPoolLease && (
+        <span className="text-sm text-muted-foreground">
+          En uso por trabajo de otro pool
+        </span>
+      )}
       {canForce && (
         <Button
           type="button"
@@ -274,16 +257,12 @@ export function GiofOwnershipActions({
             <DialogTitle>
               {action === OWNERSHIP_ACTION.RELEASE
                 ? "Liberar trabajo"
-                : action === OWNERSHIP_ACTION.TAKE
-                  ? "Reasignarme"
-                  : "Forzar reasignación"}
+                : "Forzar reasignación"}
             </DialogTitle>
             <DialogDescription>
               {action === OWNERSHIP_ACTION.RELEASE
                 ? `Confirma que deseas dejar ${label} sin asignar.`
-                : action === OWNERSHIP_ACTION.TAKE
-                  ? "Este trabajo ya tiene responsable. Al continuar, pasará a estar asignado a ti. No hay una sesión de procesamiento activa."
-                  : `Selecciona el nuevo responsable de ${label} y registra el motivo.`}
+                : `Selecciona el nuevo responsable de ${label} y registra el motivo.`}
             </DialogDescription>
           </DialogHeader>
 
@@ -390,9 +369,7 @@ export function GiofOwnershipActions({
                 ? "Procesando..."
                 : action === OWNERSHIP_ACTION.RELEASE
                   ? "Confirmar liberación"
-                  : action === OWNERSHIP_ACTION.TAKE
-                    ? "Confirmar reasignación"
-                    : "Confirmar reasignación"}
+                  : "Confirmar reasignación"}
             </Button>
           </DialogFooter>
         </DialogContent>

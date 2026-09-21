@@ -300,8 +300,8 @@ describe("payment pending queue action", () => {
   });
 
   it.each(["GIOF_GESTOR", "GIOF_MANAGER"])(
-    "integra PAYMENT claimable para %s sin confundirlo con marcar pagos",
-    async (role) => {
+    "elimina PAYMENT claimable para %s sin confundirlo con marcar pagos",
+    (role) => {
       roleCode = role;
       const refetch = vi.fn().mockResolvedValue(undefined);
       mocks.usePaymentQueue.mockReturnValue({
@@ -322,25 +322,26 @@ describe("payment pending queue action", () => {
 
       render(<PaymentQueuePage />);
 
-      expect(screen.getByTestId("giof-claimable-PAYMENT")).toBeInTheDocument();
       expect(
-        screen.getByRole("heading", { name: "Trabajos que puedes tomar" }),
-      ).toBeInTheDocument();
+        screen.queryByText("Trabajos que puedes tomar"),
+      ).not.toBeInTheDocument();
       expect(
         screen.getByRole("button", { name: /Marcar pagos seleccionados/i }),
       ).toBeDisabled();
       expect(
         screen.queryByRole("button", { name: /^Tomar trabajo$/i }),
       ).not.toBeInTheDocument();
-      const options = mocks.useGiofSelfClaim.mock.calls.at(-1)?.[0];
-      await options.refetchPoolQueue({ force: true });
-      expect(refetch).toHaveBeenCalledWith({ force: true });
+      expect(mocks.useGiofSelfClaim).not.toHaveBeenCalled();
       expect(mocks.acquireLease).not.toHaveBeenCalled();
     },
   );
 
   it.each([
-    ["GIOF_GESTOR", "Todos", ["Todos", "Mi trabajo"]],
+    [
+      "GIOF_GESTOR",
+      "Todos",
+      ["Todos", "Mi trabajo", "Sin asignar", "Por responsable"],
+    ],
     [
       "GIOF_MANAGER",
       "Todos",
@@ -368,7 +369,9 @@ describe("payment pending queue action", () => {
         }),
         expect.anything(),
       );
-      expect(screen.getByTestId("giof-claimable-PAYMENT")).toBeInTheDocument();
+      expect(
+        screen.queryByText("Trabajos que puedes tomar"),
+      ).not.toBeInTheDocument();
     },
   );
 
@@ -426,7 +429,9 @@ describe("payment pending queue action", () => {
 
     render(<PaymentQueuePage />);
 
-    expect(screen.getByTestId("giof-claimable-PAYMENT")).toBeInTheDocument();
+    expect(
+      screen.queryByText("Trabajos que puedes tomar"),
+    ).not.toBeInTheDocument();
     expect(mocks.acquireLease).not.toHaveBeenCalled();
     await user.click(screen.getByRole("button", { name: "Procesar" }));
     expect(mocks.acquireLease).toHaveBeenCalledWith(row.id, row.giof_work, [
@@ -623,8 +628,8 @@ describe("payment pending queue action", () => {
     await user.click(screen.getByTestId("payment-filter-paid"));
     rerender(<PaymentQueuePage />);
     expect(
-      screen.queryByRole("checkbox", { name: "Seleccionar SOL-1 para asignar" }),
-    ).not.toBeInTheDocument();
+      screen.getByRole("checkbox", { name: "Seleccionar SOL-1 para asignar" }),
+    ).toBeInTheDocument();
     expect(screen.queryByText(/todos los filtrados/i)).not.toBeInTheDocument();
   });
 
@@ -1291,7 +1296,7 @@ describe("payment pending queue action", () => {
     ).toBeDisabled();
   });
 
-  it("integra autoasignación Gestor en Datos pendientes sin habilitar marcado de pagos", async () => {
+  it("integra asignación dirigida Gestor en Datos pendientes sin habilitar marcado de pagos", async () => {
     currentQuery = "tab=pending-data";
     const row = pendingSourceRequest();
     row.giof_work = {
@@ -1324,19 +1329,75 @@ describe("payment pending queue action", () => {
       }),
     );
     await user.click(
-      screen.getByRole("button", { name: "Asignarme seleccionados" }),
+      screen.getByRole("button", { name: "Asignar / reasignar" }),
     );
-    await user.click(
-      screen.getByRole("button", { name: "Confirmar asignación" }),
-    );
-
-    expect(mocks.bulkSelfAssign).toHaveBeenCalledWith([
-      { requestId: "request-1", expectedAssignmentVersion: 11 },
-    ]);
+    expect(screen.getByText("Responsable")).toBeInTheDocument();
+    expect(mocks.bulkSelfAssign).not.toHaveBeenCalled();
     expect(mocks.acquireLease).not.toHaveBeenCalled();
   });
 
-  it("separa selección PAYMENT de autoasignación Gestor y excluye own, lease activo e ineligible", () => {
+  it("habilita Historial pagado solo por canAssign y mantiene Pagos rechazados sin superficie", () => {
+    currentQuery = "tab=paid";
+    const eligible = pendingSourceRequest();
+    eligible.id = "paid-pending";
+    eligible.request_code = "PAY-PAID-PENDING";
+    eligible.giof_work = { ...eligible.giof_work!, canAssign: true };
+    const complete = pendingSourceRequest();
+    complete.id = "paid-complete";
+    complete.request_code = "PAY-PAID-COMPLETE";
+    complete.giof_work = { ...complete.giof_work!, canAssign: false };
+    mocks.usePaymentQueue.mockReturnValue({
+      requests: [eligible, complete],
+      total: 2,
+      page: 1,
+      limit: 20,
+      summary: {
+        count: 2,
+        payable_amount_by_currency: {},
+        status_counts: { PAID: 2 },
+      },
+      isLoading: false,
+      isRefreshing: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+    const view = render(<PaymentQueuePage />);
+
+    expect(
+      screen.getByRole("checkbox", {
+        name: "Seleccionar PAY-PAID-PENDING para asignar",
+      }),
+    ).toBeEnabled();
+    expect(
+      screen.getByRole("checkbox", {
+        name: /PAY-PAID-COMPLETE.*trabajo de pago completo/i,
+      }),
+    ).toBeDisabled();
+
+    currentQuery = "tab=rejected";
+    const rejected = { ...eligible, status: REQUEST_STATUS.REJECTED };
+    mocks.usePaymentQueue.mockReturnValue({
+      requests: [rejected],
+      total: 1,
+      page: 1,
+      limit: 20,
+      summary: {
+        count: 1,
+        payable_amount_by_currency: {},
+        status_counts: { REJECTED: 1 },
+      },
+      isLoading: false,
+      isRefreshing: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+    view.rerender(<PaymentQueuePage />);
+    expect(
+      screen.queryByRole("checkbox", { name: /para asignar/i }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("usa selección PAYMENT dirigida y excluye solo trabajo ineligible", () => {
     const base = {
       ...pendingSourceRequest(),
       status: REQUEST_STATUS.APPROVED,
@@ -1356,14 +1417,36 @@ describe("payment pending queue action", () => {
       <PaymentQueueTable
         requests={[
           { ...base, id: "eligible", request_code: "PAY-ELIGIBLE" },
-          { ...base, id: "own", request_code: "PAY-OWN", giof_work: { ...base.giof_work, assignmentState: GIOF_WORK_ASSIGNMENT_STATE.SELF } },
-          { ...base, id: "leased", request_code: "PAY-LEASED", giof_work: { ...base.giof_work, assignmentState: GIOF_WORK_ASSIGNMENT_STATE.OTHER, leaseState: GIOF_WORK_LEASE_STATE.ACTIVE_OTHER } },
-          { ...base, id: "ineligible", request_code: "PAY-INELIGIBLE", giof_work: { ...base.giof_work, canAssign: false } },
+          {
+            ...base,
+            id: "own",
+            request_code: "PAY-OWN",
+            giof_work: {
+              ...base.giof_work,
+              assignmentState: GIOF_WORK_ASSIGNMENT_STATE.SELF,
+            },
+          },
+          {
+            ...base,
+            id: "leased",
+            request_code: "PAY-LEASED",
+            giof_work: {
+              ...base.giof_work,
+              assignmentState: GIOF_WORK_ASSIGNMENT_STATE.OTHER,
+              leaseState: GIOF_WORK_LEASE_STATE.ACTIVE_OTHER,
+            },
+          },
+          {
+            ...base,
+            id: "ineligible",
+            request_code: "PAY-INELIGIBLE",
+            giof_work: { ...base.giof_work, canAssign: false },
+          },
         ]}
         isLoading={false}
         onRegisterPayment={vi.fn()}
         currentUserId="user-1"
-        bulkAssignmentMode={GIOF_BULK_ASSIGNMENT_MODE.GESTOR_SELF}
+        bulkAssignmentMode={GIOF_BULK_ASSIGNMENT_MODE.MANAGER_TARGET}
         selectedRequestIds={[]}
         onToggleRequest={vi.fn()}
         onToggleAll={vi.fn()}
@@ -1378,9 +1461,15 @@ describe("payment pending queue action", () => {
       }),
     );
     expect(onToggleAssignment).toHaveBeenCalledWith("eligible", true);
-    expect(screen.queryByRole("checkbox", { name: /PAY-OWN.*asignar/i })).not.toBeInTheDocument();
-    expect(screen.queryByRole("checkbox", { name: /PAY-LEASED.*asignar/i })).not.toBeInTheDocument();
-    expect(screen.queryByRole("checkbox", { name: /PAY-INELIGIBLE.*asignar/i })).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("checkbox", { name: /PAY-OWN.*asignar/i }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("checkbox", { name: /PAY-LEASED.*asignar/i }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("checkbox", { name: /PAY-INELIGIBLE.*no asignable/i }),
+    ).toBeDisabled();
     expect(
       screen.getAllByRole("checkbox", { name: /pago masivo/i }).length,
     ).toBeGreaterThan(1);

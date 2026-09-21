@@ -37,6 +37,7 @@ const ROLE_CAPABILITIES: Record<RoleCode, readonly RoleCapability[]> = {
     ROLE_CAPABILITY.GIOF_DASHBOARD,
     ROLE_CAPABILITY.GIOF_OPERATIONAL_EXECUTE,
     ROLE_CAPABILITY.GIOF_RETRY,
+    ROLE_CAPABILITY.GIOF_ASSIGNMENT,
     ROLE_CAPABILITY.HELP,
   ],
   [ROLE_CODE.GIOF_MANAGER]: [
@@ -71,6 +72,10 @@ export function isGiofOperationalRole(roleCode?: string | null): roleCode is Rol
 }
 
 export function isGiofManagerRole(roleCode?: string | null): boolean {
+  return hasRoleCapability(roleCode, ROLE_CAPABILITY.GIOF_MEMBERSHIP_MANAGE);
+}
+
+export function canManageGiofAssignments(roleCode?: string | null): boolean {
   return hasRoleCapability(roleCode, ROLE_CAPABILITY.GIOF_ASSIGNMENT);
 }
 

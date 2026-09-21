@@ -122,8 +122,7 @@ describe("GiofOwnershipActions", () => {
     },
   );
 
-  it("confirma una reasignación ajena y bloquea la sesión activa sin botón", async () => {
-    const user = userEvent.setup();
+  it("usa asignación dirigida sin fuerza cuando OTHER no tiene lease y fuerza solo con lease ajeno activo", () => {
     const { rerender } = render(
       <GiofOwnershipActions
         requestId="request-1"
@@ -137,30 +136,10 @@ describe("GiofOwnershipActions", () => {
         refetchPoolQueue={vi.fn()}
       />,
     );
-    expect(screen.getByRole("button", { name: "Reasignarme" })).toBeEnabled();
     expect(
-      screen.queryByRole("button", { name: /forzar/i }),
+      screen.queryByRole("button", { name: "Reasignarme" }),
     ).not.toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Reasignarme" }));
-    expect(
-      screen.getByText(
-        "Este trabajo ya tiene responsable. Al continuar, pasará a estar asignado a ti. No hay una sesión de procesamiento activa.",
-      ),
-    ).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Cancelar" }));
-    expect(mocks.take).not.toHaveBeenCalled();
-
-    await user.click(screen.getByRole("button", { name: "Reasignarme" }));
-    await user.click(
-      screen.getByRole("button", { name: "Confirmar reasignación" }),
-    );
-    await waitFor(() =>
-      expect(mocks.take).toHaveBeenCalledWith({
-        requestId: "request-1",
-        pool: GIOF_WORK_POOL.REQUEST,
-        expectedVersion: 7,
-      }),
-    );
+    expect(screen.queryByRole("button", { name: "Forzar reasignación" })).not.toBeInTheDocument();
 
     rerender(
       <GiofOwnershipActions
@@ -180,10 +159,63 @@ describe("GiofOwnershipActions", () => {
       screen.getByText("En proceso por otra persona"),
     ).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /reasignarme/i })).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Forzar reasignación" }),
+    ).toBeInTheDocument();
+    expect(mocks.take).not.toHaveBeenCalled();
   });
 
-  it("asigna directamente una fila sin responsable", async () => {
-    const user = userEvent.setup();
+  it.each([
+    GIOF_WORK_POOL.REQUEST,
+    GIOF_WORK_POOL.PAYMENT,
+    GIOF_WORK_POOL.REXAN,
+  ])("nunca muestra fuerza para SELF en %s", (pool) => {
+    render(
+      <GiofOwnershipActions
+        requestId={`self-${pool}`}
+        label={`SELF ${pool}`}
+        work={makeWork(pool, GIOF_WORK_ASSIGNMENT_STATE.SELF, GIOF_WORK_LEASE_STATE.ACTIVE_OTHER)}
+        roleCode={ROLE_CODE.GIOF_MANAGER}
+        currentUserId="user-current"
+        refetchPoolQueue={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "Liberar trabajo" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Forzar reasignación" })).not.toBeInTheDocument();
+  });
+
+  it("oculta fuerza para UNASSIGNED y para conflicto cross-pool", () => {
+    const { rerender } = render(
+      <GiofOwnershipActions
+        requestId="unassigned"
+        label="Sin responsable"
+        work={makeWork(GIOF_WORK_POOL.PAYMENT, GIOF_WORK_ASSIGNMENT_STATE.UNASSIGNED)}
+        roleCode={ROLE_CODE.GIOF_MANAGER}
+        currentUserId="user-current"
+        refetchPoolQueue={vi.fn()}
+      />,
+    );
+    expect(screen.queryByRole("button", { name: "Forzar reasignación" })).not.toBeInTheDocument();
+
+    rerender(
+      <GiofOwnershipActions
+        requestId="cross-pool"
+        label="Conflicto cross-pool"
+        work={{
+          ...makeWork(GIOF_WORK_POOL.PAYMENT, GIOF_WORK_ASSIGNMENT_STATE.OTHER, GIOF_WORK_LEASE_STATE.ACTIVE_OTHER),
+          lease: { pool: GIOF_WORK_POOL.REXAN, ownerId: "user-other", heartbeatAt: null, expiresAt: "2099-01-01T00:00:00.000Z" },
+        }}
+        roleCode={ROLE_CODE.GIOF_MANAGER}
+        currentUserId="user-current"
+        refetchPoolQueue={vi.fn()}
+      />,
+    );
+    expect(screen.queryByRole("button", { name: "Forzar reasignación" })).not.toBeInTheDocument();
+    expect(screen.getByText(/otro pool/i)).toBeInTheDocument();
+  });
+
+  it("elimina Asignarme de fila para trabajo sin responsable", () => {
     render(
       <GiofOwnershipActions
         requestId="request-1"
@@ -198,23 +230,16 @@ describe("GiofOwnershipActions", () => {
       />,
     );
 
-    await user.click(screen.getByRole("button", { name: "Asignarme" }));
-    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
-    await waitFor(() =>
-      expect(mocks.take).toHaveBeenCalledWith({
-        requestId: "request-1",
-        pool: GIOF_WORK_POOL.REQUEST,
-        expectedVersion: 7,
-      }),
-    );
+    expect(
+      screen.queryByRole("button", { name: "Asignarme" }),
+    ).not.toBeInTheDocument();
+    expect(mocks.take).not.toHaveBeenCalled();
   });
 
-  it("muestra el error autoritativo de una asignación directa sin reintentar", async () => {
-    const user = userEvent.setup();
+  it("no reintroduce autoasignación de fila aunque exista un error legado", () => {
     mocks.error = new Error(
       "La versión de asignación cambió. Actualiza la cola antes de reintentar.",
     );
-    mocks.take.mockRejectedValueOnce(new Error("conflict"));
     render(
       <GiofOwnershipActions
         requestId="request-1"
@@ -229,11 +254,11 @@ describe("GiofOwnershipActions", () => {
       />,
     );
 
-    await user.click(screen.getByRole("button", { name: "Asignarme" }));
     expect(screen.getByRole("alert")).toHaveTextContent(
       /versión de asignación cambió/i,
     );
-    expect(mocks.take).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("button", { name: "Asignarme" })).not.toBeInTheDocument();
+    expect(mocks.take).not.toHaveBeenCalled();
   });
 
   it("exige responsable, motivo y confirmación de interrupción para forzar PAYMENT", async () => {
@@ -247,7 +272,7 @@ describe("GiofOwnershipActions", () => {
           GIOF_WORK_ASSIGNMENT_STATE.OTHER,
           GIOF_WORK_LEASE_STATE.ACTIVE_OTHER,
         )}
-        roleCode={ROLE_CODE.GIOF_MANAGER}
+        roleCode={ROLE_CODE.GIOF_GESTOR}
         currentUserId="manager-1"
         refetchPoolQueue={vi.fn()}
       />,

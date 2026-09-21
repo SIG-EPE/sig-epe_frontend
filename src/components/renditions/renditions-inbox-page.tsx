@@ -4,10 +4,7 @@ import { useEffect, useState } from "react";
 import type { Route } from "next";
 import { useRouter, useSearchParams } from "next/navigation";
 
-import {
-  GiofBulkAssignmentBar,
-  GiofClaimableWorkPanel,
-} from "@/components/giof-work/giof-work-controls";
+import { GiofBulkAssignmentBar } from "@/components/giof-work/giof-work-controls";
 import { QueueFilterReset } from "@/components/queue-filters/queue-filter-reset";
 import { Button } from "@/components/ui/button";
 import {
@@ -30,6 +27,7 @@ import {
   getRenditionSummaryCount,
 } from "@/lib/requests";
 import {
+  canManageGiofAssignments,
   isGiofManagerRole,
   isGiofOperationalRole,
 } from "@/lib/role-capabilities";
@@ -61,6 +59,7 @@ export function RenditionsInboxPage() {
   const user = useAuthStore((state) => state.user);
   const roleCode = user?.role?.code;
   const isGiofManager = isGiofManagerRole(roleCode);
+  const canManageAssignments = canManageGiofAssignments(roleCode);
   const isGiofOperational = isGiofOperationalRole(roleCode);
   const [selectedAssignmentIds, setSelectedAssignmentIds] = useState<string[]>(
     [],
@@ -68,7 +67,7 @@ export function RenditionsInboxPage() {
   const currentParams = new URLSearchParams(searchParams.toString());
   const parsedUrl = parseRenditionsQueueUrl(currentParams);
   const urlFilters = parsedUrl.filters;
-  const roleFilterInvalid = isGiofManager
+  const roleFilterInvalid = canManageAssignments
     ? false
     : isGiofOperational
       ? Boolean(
@@ -86,7 +85,7 @@ export function RenditionsInboxPage() {
     ? (urlFilters.work_scope ?? GIOF_WORK_SCOPE.ALL)
     : undefined;
   const workAssigneeId =
-    isGiofManager && workScope === GIOF_WORK_SCOPE.ASSIGNEE
+    canManageAssignments && workScope === GIOF_WORK_SCOPE.ASSIGNEE
       ? urlFilters.assignee_id
       : undefined;
   const effectiveFilters: RenditionsQueueUrlFilters = {
@@ -102,9 +101,7 @@ export function RenditionsInboxPage() {
   const rawQuery = currentParams.toString();
   const viewIdentity = serializeRenditionsQueueUrl(effectiveFilters).toString();
   const bulkAssignmentMode = isGiofOperational
-    ? isGiofManager
-      ? GIOF_BULK_ASSIGNMENT_MODE.MANAGER_TARGET
-      : GIOF_BULK_ASSIGNMENT_MODE.GESTOR_SELF
+    ? GIOF_BULK_ASSIGNMENT_MODE.MANAGER_TARGET
     : undefined;
   const assignmentItems: GiofBulkSelectableWorkItem[] = inbox.renditions
     .filter(
@@ -279,20 +276,13 @@ export function RenditionsInboxPage() {
       ) : (
         <RenditionsFilters
           filters={effectiveFilters}
-          isManager={isGiofManager}
+          isManager={canManageAssignments}
           isOperational={isGiofOperational}
           count={exactCount}
           isLoading={inbox.isLoading}
           isRefreshing={inbox.isRefreshing}
           onChange={changeFilters}
           onClear={clearFilters}
-        />
-      )}
-
-      {isGiofOperational && !hasInvalidUrl && (
-        <GiofClaimableWorkPanel
-          pool={GIOF_WORK_POOL.REXAN}
-          refetchPoolQueue={(options) => inbox.refetch(options)}
         />
       )}
 
@@ -304,18 +294,8 @@ export function RenditionsInboxPage() {
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
-          {bulkAssignmentMode === GIOF_BULK_ASSIGNMENT_MODE.GESTOR_SELF &&
+          {bulkAssignmentMode === GIOF_BULK_ASSIGNMENT_MODE.MANAGER_TARGET &&
           selectedAssignmentItems.length > 0 ? (
-            <GiofBulkAssignmentBar
-              mode={GIOF_BULK_ASSIGNMENT_MODE.GESTOR_SELF}
-              pool={GIOF_WORK_POOL.REXAN}
-              items={selectedAssignmentItems}
-              onClear={() => setSelectedAssignmentIds([])}
-              refetchPoolQueue={(options) => inbox.refetch(options)}
-            />
-          ) : bulkAssignmentMode ===
-            GIOF_BULK_ASSIGNMENT_MODE.MANAGER_TARGET &&
-            selectedAssignmentItems.length > 0 ? (
             <GiofBulkAssignmentBar
               pool={GIOF_WORK_POOL.REXAN}
               items={selectedAssignmentItems}

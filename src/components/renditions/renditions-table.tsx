@@ -28,7 +28,10 @@ import {
 import type { RenditionInboxRow } from "@/types/requests";
 import { GiofWorkStatus } from "@/components/giof-work/giof-work-controls";
 import { GiofOwnershipActions } from "@/components/giof-work/giof-ownership-actions";
-import { canOperateAssignedGiofWork } from "@/lib/role-capabilities";
+import {
+  canManageGiofAssignments,
+  canOperateAssignedGiofWork,
+} from "@/lib/role-capabilities";
 import {
   REQUEST_STATUS_SURFACE,
   formatRequestStatus,
@@ -164,13 +167,7 @@ export function RenditionsTable({
               <TableRow key={row.advance_id} data-testid="rendition-row">
                 {showsAssignmentSelection && (
                   <TableCell>
-                    {row.giof_work?.requestId &&
-                    (effectiveBulkAssignmentMode ===
-                      GIOF_BULK_ASSIGNMENT_MODE.MANAGER_TARGET ||
-                      isGiofBulkSelectable(
-                        row.giof_work,
-                        GIOF_BULK_ASSIGNMENT_MODE.GESTOR_SELF,
-                      )) ? (
+                    {row.giof_work?.requestId ? (
                       <input
                         type="checkbox"
                         className="size-4"
@@ -298,7 +295,7 @@ export function RenditionsTable({
                       requestId={row.giof_work.requestId}
                       work={row.giof_work}
                       currentUserId={currentUserId}
-                      isManager={isGiofManager}
+                      isManager={canManageGiofAssignments(roleCode)}
                     />
                   )}
                 </TableCell>

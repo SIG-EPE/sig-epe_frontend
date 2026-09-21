@@ -12,6 +12,7 @@ import {
   GiofWorkStatus,
 } from "@/components/giof-work/giof-work-controls";
 import { GIOF_HELP_CONTEXT } from "@/lib/giof-assignment-help";
+import { bulkAssignGiofWork } from "@/hooks/use-giof-work";
 import {
   GIOF_BULK_ASSIGNMENT_MODE,
   GIOF_WORK_ASSIGNMENT_STATE,
@@ -65,7 +66,14 @@ vi.mock("@/hooks/use-giof-work", () => ({
   getGiofConflictMessage: (error: unknown) =>
     error instanceof Error ? error.message : "Error",
   useGiofAssignees: vi.fn(() => ({
-    data: [],
+    data: [
+      {
+        id: "target-gestor",
+        firstName: "Rosa",
+        lastName: "Gestora",
+        role: "GIOF_GESTOR",
+      },
+    ],
     isLoading: false,
     isInitialLoading: false,
     isRefreshing: false,
@@ -291,6 +299,43 @@ describe("controles GIOF", () => {
     expect(screen.getByText(/operación es todo-o-nada/i)).toBeInTheDocument();
     expect(screen.getByText("Responsable")).toBeInTheDocument();
     expect(screen.getByText("Nota opcional")).toBeInTheDocument();
+  });
+
+  it("envía el flujo dirigido sin exponer forceTakeover masivo", async () => {
+    const user = userEvent.setup();
+    vi.mocked(bulkAssignGiofWork).mockResolvedValueOnce({
+      batchId: "batch-1",
+      changed: 1,
+      unchanged: 0,
+    });
+    render(
+      <GiofBulkAssignmentBar
+        pool={GIOF_WORK_POOL.PAYMENT}
+        items={[{ requestId: "request-1", label: "SOL-1", work }]}
+        onClear={vi.fn()}
+        onSuccess={vi.fn()}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Asignar / reasignar" }));
+    await user.click(screen.getByRole("combobox", { name: "Responsable" }));
+    await user.click(screen.getByRole("option", { name: "Rosa Gestora" }));
+    await user.click(screen.getByRole("button", { name: "Confirmar asignación" }));
+
+    await waitFor(() => expect(bulkAssignGiofWork).toHaveBeenCalledTimes(1));
+    const payload = vi.mocked(bulkAssignGiofWork).mock.calls[0]?.[0];
+    expect(payload).toMatchObject({
+      pool: GIOF_WORK_POOL.PAYMENT,
+      targetAssigneeId: "target-gestor",
+      items: [
+        {
+          requestId: "request-1",
+          expectedAssigneeId: "user-1",
+          expectedVersion: 2,
+        },
+      ],
+    });
+    expect(payload).not.toHaveProperty("forceTakeover");
   });
 
   it("muestra modo Gestor sin controles de autoridad y explica resultados mixtos", async () => {

@@ -107,7 +107,7 @@ function makeAllocation(overrides: Partial<RequestAllocation> = {}): RequestAllo
 }
 
 describe("RequestListTable", () => {
-  it("permite al Gestor seleccionar solo REQUEST elegibles sin lease activo", async () => {
+  it("permite al Gestor seleccionar REQUEST dirigidos y deja conflictos al backend", async () => {
     const user = userEvent.setup();
     const onToggleAssignment = vi.fn();
     const eligibleWork = {
@@ -130,7 +130,7 @@ describe("RequestListTable", () => {
         ]}
         isLoading={false}
         roleCode={ROLE_CODE.GIOF_GESTOR}
-        bulkAssignmentMode={GIOF_BULK_ASSIGNMENT_MODE.GESTOR_SELF}
+        bulkAssignmentMode={GIOF_BULK_ASSIGNMENT_MODE.MANAGER_TARGET}
         onToggleAssignment={onToggleAssignment}
         onToggleAllAssignments={vi.fn()}
       />,
@@ -141,9 +141,9 @@ describe("RequestListTable", () => {
     });
     await user.click(eligible);
     expect(onToggleAssignment).toHaveBeenCalledWith("eligible", true);
-    expect(screen.queryByRole("checkbox", { name: /SOL-OWN.*asignar/i })).not.toBeInTheDocument();
-    expect(screen.queryByRole("checkbox", { name: /SOL-LEASED.*asignar/i })).not.toBeInTheDocument();
-    expect(screen.queryByRole("checkbox", { name: /SOL-DRAFT.*asignar/i })).not.toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: /SOL-OWN.*asignar/i })).toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: /SOL-LEASED.*asignar/i })).toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: /SOL-DRAFT.*no asignable/i })).toBeDisabled();
   });
 
   it("shows persisted projection phase and reconciliation state in the request row", () => {

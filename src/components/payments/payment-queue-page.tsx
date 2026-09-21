@@ -36,13 +36,11 @@ import { BulkMarkPaidModal } from "./bulk-mark-paid-modal";
 import { RegisterPaymentModal } from "./register-payment-modal";
 import { CompletePaymentDetailsModal } from "./complete-payment-details-modal";
 import { RejectApprovedPaymentModal } from "./reject-approved-payment-modal";
-import {
-  GiofBulkAssignmentBar,
-  GiofClaimableWorkPanel,
-} from "@/components/giof-work/giof-work-controls";
+import { GiofBulkAssignmentBar } from "@/components/giof-work/giof-work-controls";
 import { useGiofWorkLeaseSet } from "@/hooks/use-giof-work";
 import { useDriveProjectionPolling } from "@/hooks/use-drive-projection-polling";
 import {
+  canManageGiofAssignments,
   canOperateAssignedGiofWork,
   canRetryGiofWork,
   isGiofManagerRole,
@@ -105,6 +103,7 @@ export function PaymentQueuePage() {
   const sessionExpiresAt = useAuthStore((state) => state.sessionExpiresAt);
   const roleCode = user?.role?.code;
   const isGiofManager = isGiofManagerRole(roleCode);
+  const canManageAssignments = canManageGiofAssignments(roleCode);
   const canManagePayments = isGiofOperationalRole(roleCode);
   const canRetryRexan = canRetryGiofWork(roleCode);
   const leaseSet = useGiofWorkLeaseSet();
@@ -138,14 +137,13 @@ export function PaymentQueuePage() {
   const tab = urlFilters.tab ?? PAYMENT_QUEUE_TAB.APPROVED;
   const isPaymentAssignmentSurface =
     tab === PAYMENT_QUEUE_TAB.APPROVED ||
-    tab === PAYMENT_QUEUE_TAB.PENDING_DATA;
+    tab === PAYMENT_QUEUE_TAB.PENDING_DATA ||
+    tab === PAYMENT_QUEUE_TAB.PAID;
   const bulkAssignmentMode =
     canManagePayments && isPaymentAssignmentSurface
-      ? isGiofManager
-        ? GIOF_BULK_ASSIGNMENT_MODE.MANAGER_TARGET
-        : GIOF_BULK_ASSIGNMENT_MODE.GESTOR_SELF
+      ? GIOF_BULK_ASSIGNMENT_MODE.MANAGER_TARGET
       : undefined;
-  const roleFilterInvalid = isGiofManager
+  const roleFilterInvalid = canManageAssignments
     ? false
     : canManagePayments
       ? Boolean(
@@ -163,7 +161,7 @@ export function PaymentQueuePage() {
     ? (urlFilters.work_scope ?? GIOF_WORK_SCOPE.ALL)
     : undefined;
   const workAssigneeId =
-    isGiofManager && workScope === GIOF_WORK_SCOPE.ASSIGNEE
+    canManageAssignments && workScope === GIOF_WORK_SCOPE.ASSIGNEE
       ? urlFilters.assignee_id
       : undefined;
   const { tab: _tab, ...paymentUrlFilters } = urlFilters;
@@ -665,7 +663,7 @@ export function PaymentQueuePage() {
             work_scope: workScope,
             assignee_id: workAssigneeId,
           }}
-          isManager={isGiofManager}
+          isManager={canManageAssignments}
           isOperational={canManagePayments}
           summary={activeQueue.summary}
           total={displayedTotal}
@@ -675,15 +673,6 @@ export function PaymentQueuePage() {
           onClear={clearFilters}
         />
       )}
-
-      {canManagePayments &&
-      !hasInvalidUrl &&
-      isPaymentAssignmentSurface ? (
-        <GiofClaimableWorkPanel
-          pool={GIOF_WORK_POOL.PAYMENT}
-          refetchPoolQueue={(options) => activeQueue.refetch(options)}
-        />
-      ) : null}
 
       <Card>
         <CardHeader className="gap-4 md:flex-row md:items-center md:justify-between">
@@ -787,18 +776,8 @@ export function PaymentQueuePage() {
               </Button>
             </div>
           ) : null}
-          {bulkAssignmentMode === GIOF_BULK_ASSIGNMENT_MODE.GESTOR_SELF &&
+          {bulkAssignmentMode === GIOF_BULK_ASSIGNMENT_MODE.MANAGER_TARGET &&
           selectedAssignmentItems.length > 0 ? (
-            <GiofBulkAssignmentBar
-              mode={GIOF_BULK_ASSIGNMENT_MODE.GESTOR_SELF}
-              pool={GIOF_WORK_POOL.PAYMENT}
-              items={selectedAssignmentItems}
-              onClear={() => setSelectedAssignmentIds([])}
-              refetchPoolQueue={(options) => activeQueue.refetch(options)}
-            />
-          ) : bulkAssignmentMode ===
-            GIOF_BULK_ASSIGNMENT_MODE.MANAGER_TARGET &&
-            selectedAssignmentItems.length > 0 ? (
             <GiofBulkAssignmentBar
               pool={GIOF_WORK_POOL.PAYMENT}
               items={selectedAssignmentItems}

@@ -43,7 +43,10 @@ import {
 } from "@/types/requests";
 import { GiofWorkStatus } from "@/components/giof-work/giof-work-controls";
 import { GiofOwnershipActions } from "@/components/giof-work/giof-ownership-actions";
-import { canOperateAssignedGiofWork } from "@/lib/role-capabilities";
+import {
+  canManageGiofAssignments,
+  canOperateAssignedGiofWork,
+} from "@/lib/role-capabilities";
 import { isGiofLeaseCurrent } from "@/lib/giof-work-lease-session";
 import {
   GIOF_BULK_ASSIGNMENT_MODE,
@@ -484,13 +487,7 @@ export function PaymentQueueTable({
                   <TableCell>
                     <div className="flex min-w-36 items-start gap-2">
                       {effectiveBulkAssignmentMode &&
-                      request.giof_work &&
-                      (effectiveBulkAssignmentMode ===
-                        GIOF_BULK_ASSIGNMENT_MODE.MANAGER_TARGET ||
-                        isGiofBulkSelectable(
-                          request.giof_work,
-                          GIOF_BULK_ASSIGNMENT_MODE.GESTOR_SELF,
-                        )) ? (
+                      request.giof_work ? (
                         <Checkbox
                           className="mt-0.5"
                           checked={selectedAssignmentIds.includes(request.id)}
@@ -525,7 +522,7 @@ export function PaymentQueueTable({
                         requestId={request.id}
                         work={request.giof_work}
                         currentUserId={currentUserId}
-                        isManager={isGiofManager}
+                        isManager={canManageGiofAssignments(roleCode)}
                       />
                     </div>
                   </TableCell>

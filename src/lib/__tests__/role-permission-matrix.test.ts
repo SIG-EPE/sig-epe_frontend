@@ -8,8 +8,10 @@ import {
 } from "@/lib/requests";
 import {
   ROLE_CAPABILITY,
+  canManageGiofAssignments,
   canRetryGiofWork,
   hasRoleCapability,
+  isGiofManagerRole,
 } from "@/lib/role-capabilities";
 import { REQUEST_STATUS, REQUEST_TYPE, type PaymentRequest } from "@/types/requests";
 
@@ -81,7 +83,7 @@ describe("role permission matrix", () => {
 
   it.each([
     { role: ROLE_CODE.SOLICITANTE_EPE, operational: false, retry: false, assignment: false, membership: false, budgetAdmin: false },
-    { role: ROLE_CODE.GIOF_GESTOR, operational: true, retry: true, assignment: false, membership: false, budgetAdmin: false },
+    { role: ROLE_CODE.GIOF_GESTOR, operational: true, retry: true, assignment: true, membership: false, budgetAdmin: false },
     { role: ROLE_CODE.GIOF_MANAGER, operational: true, retry: true, assignment: true, membership: true, budgetAdmin: true },
     { role: ROLE_CODE.AUDITOR_DIRECCION, operational: false, retry: false, assignment: false, membership: false, budgetAdmin: false },
     { role: ROLE_CODE.ADMIN_SISTEMA, operational: false, retry: false, assignment: false, membership: false, budgetAdmin: true },
@@ -90,7 +92,9 @@ describe("role permission matrix", () => {
     expect(canReviewRequest(role, REQUEST_STATUS.SUBMITTED)).toBe(operational);
     expect(canRetryGiofWork(role)).toBe(retry);
     expect(hasRoleCapability(role, ROLE_CAPABILITY.GIOF_ASSIGNMENT)).toBe(assignment);
+    expect(canManageGiofAssignments(role)).toBe(assignment);
     expect(hasRoleCapability(role, ROLE_CAPABILITY.GIOF_MEMBERSHIP_MANAGE)).toBe(membership);
+    expect(isGiofManagerRole(role)).toBe(membership);
     expect(hasRoleCapability(role, ROLE_CAPABILITY.BUDGET_ADMIN)).toBe(budgetAdmin);
   });
 

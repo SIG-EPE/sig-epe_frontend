@@ -191,8 +191,8 @@ describe("RenditionsInboxPage", () => {
   });
 
   it.each(["GIOF_GESTOR", "GIOF_MANAGER"])(
-    "integra REXAN claimable para %s con refetch autoritativo y sin navegación automática",
-    async (role) => {
+    "elimina REXAN claimable para %s sin navegación automática",
+    (role) => {
       roleCode = role;
       const refetch = vi.fn().mockResolvedValue(undefined);
       vi.mocked(useRenditionsInbox).mockReturnValue({
@@ -212,20 +212,15 @@ describe("RenditionsInboxPage", () => {
 
       render(<RenditionsInboxPage />);
 
-      expect(screen.getByTestId("giof-claimable-REXAN")).toBeInTheDocument();
-      expect(
-        screen.getByRole("heading", { name: "Trabajos que puedes tomar" }),
-      ).toBeInTheDocument();
-      const options = giofMocks.useSelfClaim.mock.calls.at(-1)?.[0];
-      await options.refetchPoolQueue({ force: true });
-      expect(refetch).toHaveBeenCalledWith({ force: true });
+      expect(screen.queryByText("Trabajos que puedes tomar")).not.toBeInTheDocument();
+      expect(giofMocks.useSelfClaim).not.toHaveBeenCalled();
       expect(replaceMock).not.toHaveBeenCalledWith(
         expect.stringContaining("mode=process"),
       );
     },
   );
 
-  it("integra selección Gestor REXAN con el requestId y versión del trabajo", async () => {
+  it("integra selección dirigida Gestor REXAN", async () => {
     vi.mocked(useRenditionsInbox).mockReturnValue({
       renditions: [
         makeRendition({
@@ -264,22 +259,17 @@ describe("RenditionsInboxPage", () => {
       }),
     );
     await user.click(
-      screen.getByRole("button", { name: "Asignarme seleccionados" }),
+      screen.getByRole("button", { name: "Asignar / reasignar" }),
     );
-    await user.click(
-      screen.getByRole("button", { name: "Confirmar asignación" }),
-    );
-
-    expect(giofMocks.bulkSelfAssign).toHaveBeenCalledWith([
-      { requestId: "settlement-1", expectedAssignmentVersion: 6 },
-    ]);
+    expect(screen.getByText("Responsable")).toBeInTheDocument();
+    expect(giofMocks.bulkSelfAssign).not.toHaveBeenCalled();
     expect(replaceMock).not.toHaveBeenCalledWith(
       expect.stringContaining("mode=process"),
     );
   });
 
   it.each([
-    ["GIOF_GESTOR", "Todos", ["Todos", "Mi trabajo"]],
+    ["GIOF_GESTOR", "Todos", ["Todos", "Mi trabajo", "Sin asignar", "Por responsable"]],
     [
       "GIOF_MANAGER",
       "Todos",
@@ -307,7 +297,7 @@ describe("RenditionsInboxPage", () => {
         }),
         expect.objectContaining({ enabled: true }),
       );
-      expect(screen.getByTestId("giof-claimable-REXAN")).toBeInTheDocument();
+      expect(screen.queryByText("Trabajos que puedes tomar")).not.toBeInTheDocument();
     },
   );
 

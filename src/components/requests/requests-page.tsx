@@ -75,12 +75,10 @@ import {
   type RequestType,
 } from "@/types/requests";
 import { RequestListTable } from "./request-list-table";
-import {
-  GiofBulkAssignmentBar,
-  GiofClaimableWorkPanel,
-} from "@/components/giof-work/giof-work-controls";
+import { GiofBulkAssignmentBar } from "@/components/giof-work/giof-work-controls";
 import { RequestReviewFilters } from "./request-review-filters";
 import {
+  canManageGiofAssignments,
   ROLE_CAPABILITY,
   hasRoleCapability,
   isGiofManagerRole,
@@ -302,6 +300,7 @@ export function RequestsPage() {
   const roleCode = user?.role?.code;
   const isGiofOperational = isGiofOperationalRole(roleCode);
   const isGiofManager = isGiofManagerRole(roleCode);
+  const canManageAssignments = canManageGiofAssignments(roleCode);
   const isRolePending = roleCode === undefined;
   const canUseHistory = hasRoleCapability(
     roleCode,
@@ -341,11 +340,7 @@ export function RequestsPage() {
   const parsedReviewUrl = parseRequestReviewUrl(reviewUrlParams);
   const hasUnsupportedReviewUrl =
     parsedReviewUrl.invalidKeys.length > 0 ||
-    parsedReviewUrl.unknownKeys.length > 0 ||
-    (roleCode === ROLE_CODE.GIOF_GESTOR &&
-      parsedReviewUrl.filters.work_scope !== undefined &&
-      parsedReviewUrl.filters.work_scope !== GIOF_WORK_SCOPE.ALL &&
-      parsedReviewUrl.filters.work_scope !== GIOF_WORK_SCOPE.MINE);
+    parsedReviewUrl.unknownKeys.length > 0;
   const reviewFilters: ReviewFilters = {
     ...parsedReviewUrl.filters,
     work_scope: parsedReviewUrl.filters.work_scope ?? GIOF_WORK_SCOPE.ALL,
@@ -382,7 +377,8 @@ export function RequestsPage() {
       statuses: isUnsupportedQueue ? undefined : defaultReviewStatuses,
       scope: requestScope,
       work_scope: isReviewInbox && isGiofOperational ? workScope : undefined,
-      assignee_id: isReviewInbox && isGiofManager ? workAssigneeId : undefined,
+      assignee_id:
+        isReviewInbox && canManageAssignments ? workAssigneeId : undefined,
       date_from: isHistory ? dateFrom || undefined : undefined,
       date_to: isHistory ? dateTo || undefined : undefined,
       date_field: isHistory ? dateField : undefined,
@@ -411,7 +407,8 @@ export function RequestsPage() {
       search: serverSearch,
       scope: requestScope,
       work_scope: isReviewInbox && isGiofOperational ? workScope : undefined,
-      assignee_id: isReviewInbox && isGiofManager ? workAssigneeId : undefined,
+      assignee_id:
+        isReviewInbox && canManageAssignments ? workAssigneeId : undefined,
     },
     {
       keepPreviousData: false,
@@ -451,9 +448,7 @@ export function RequestsPage() {
     : sortRequestsForList(requests, sort);
   const displayedTotal = total;
   const bulkAssignmentMode = isGiofReviewInbox
-    ? isGiofManager
-      ? GIOF_BULK_ASSIGNMENT_MODE.MANAGER_TARGET
-      : GIOF_BULK_ASSIGNMENT_MODE.GESTOR_SELF
+    ? GIOF_BULK_ASSIGNMENT_MODE.MANAGER_TARGET
     : undefined;
   const assignmentItems: GiofBulkSelectableWorkItem[] =
     displayedRequests.flatMap((request) => {
@@ -834,13 +829,6 @@ export function RequestsPage() {
         </p>
       )}
 
-      {isGiofReviewInbox && !hasUnsupportedReviewUrl && (
-        <GiofClaimableWorkPanel
-          pool={GIOF_WORK_POOL.REQUEST}
-          refetchPoolQueue={(options) => reviewResource.refetch(options)}
-        />
-      )}
-
       <Card>
         <CardHeader className="gap-4">
           <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
@@ -1000,7 +988,7 @@ export function RequestsPage() {
           {isReviewInbox && isGiofOperational && !hasUnsupportedReviewUrl && (
             <RequestReviewFilters
               filters={reviewFilters}
-              isManager={isGiofManager}
+              isManager={canManageAssignments}
               total={reviewResource.total}
               summary={reviewResource.summary}
               isLoading={reviewResource.isLoading}
@@ -1334,22 +1322,12 @@ export function RequestsPage() {
           {bulkAssignmentMode &&
           selectedAssignmentItems.length > 0 &&
           !hasUnsupportedReviewUrl ? (
-            bulkAssignmentMode === GIOF_BULK_ASSIGNMENT_MODE.GESTOR_SELF ? (
-              <GiofBulkAssignmentBar
-                mode={GIOF_BULK_ASSIGNMENT_MODE.GESTOR_SELF}
-                pool={GIOF_WORK_POOL.REQUEST}
-                items={selectedAssignmentItems}
-                onClear={() => setSelectedAssignmentIds([])}
-                refetchPoolQueue={(options) => refetch(options)}
-              />
-            ) : (
-              <GiofBulkAssignmentBar
-                pool={GIOF_WORK_POOL.REQUEST}
-                items={selectedAssignmentItems}
-                onClear={() => setSelectedAssignmentIds([])}
-                onSuccess={() => refetch()}
-              />
-            )
+            <GiofBulkAssignmentBar
+              pool={GIOF_WORK_POOL.REQUEST}
+              items={selectedAssignmentItems}
+              onClear={() => setSelectedAssignmentIds([])}
+              onSuccess={() => refetch()}
+            />
           ) : null}
           {isRefreshing && !error && (
             <p

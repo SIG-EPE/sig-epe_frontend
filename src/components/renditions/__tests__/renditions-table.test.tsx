@@ -67,7 +67,7 @@ describe("RenditionsTable", () => {
           makeRendition({ advance_id: "leased", request_code: "REXAN-LEASED", giof_work: { ...work, requestId: "settlement-leased", assignmentState: GIOF_WORK_ASSIGNMENT_STATE.OTHER, leaseState: GIOF_WORK_LEASE_STATE.ACTIVE_OTHER } }),
         ]}
         isLoading={false}
-        bulkAssignmentMode={GIOF_BULK_ASSIGNMENT_MODE.GESTOR_SELF}
+        bulkAssignmentMode={GIOF_BULK_ASSIGNMENT_MODE.MANAGER_TARGET}
         onToggleAssignment={onToggleAssignment}
         onToggleAllAssignments={vi.fn()}
       />,
@@ -79,8 +79,8 @@ describe("RenditionsTable", () => {
       }),
     );
     expect(onToggleAssignment).toHaveBeenCalledWith("settlement-eligible", true);
-    expect(screen.queryByRole("checkbox", { name: /REXAN-OWN.*asignar/i })).not.toBeInTheDocument();
-    expect(screen.queryByRole("checkbox", { name: /REXAN-LEASED.*asignar/i })).not.toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: /REXAN-OWN.*asignar/i })).toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: /REXAN-LEASED.*asignar/i })).toBeInTheDocument();
   });
 
   it("asigna usando el settlement vinculado en estados activos y deshabilita una rendida", async () => {
@@ -104,6 +104,33 @@ describe("RenditionsTable", () => {
     await user.click(screen.getByRole("checkbox", { name: "Seleccionar REXAN-OBSERVED para asignar" }));
     expect(onToggleAssignment).toHaveBeenCalledWith("settlement-observed", true);
     expect(screen.getByRole("checkbox", { name: "REXAN-SETTLED: rendición finalizada" })).toBeDisabled();
+  });
+
+  it.each([
+    REQUEST_STATUS.DRAFT,
+    REQUEST_STATUS.SUBMITTED,
+    REQUEST_STATUS.IN_VALIDATION,
+    REQUEST_STATUS.OBSERVED,
+  ])("habilita REXAN vinculado en lifecycle activo %s", (status) => {
+    const work = { requestId: `settlement-${status}`, pool: "REXAN" as const, assignmentVersion: "1", canAssign: true, canAcquire: false, canEdit: false, readOnly: true };
+    render(<RenditionsTable renditions={[makeRendition({ request_code: `REXAN-${status}`, settlement_request_id: work.requestId, settlement_status: status, giof_work: work })]} isLoading={false} isGiofManager />);
+    expect(screen.getByRole("checkbox", { name: `Seleccionar REXAN-${status} para asignar` })).toBeEnabled();
+  });
+
+  it.each([
+    REQUEST_STATUS.REJECTED,
+    REQUEST_STATUS.APPROVED,
+    REQUEST_STATUS.PAID,
+    REQUEST_STATUS.CLOSED,
+  ])("deshabilita REXAN final o rechazado %s", (status) => {
+    const work = { requestId: `settlement-${status}`, pool: "REXAN" as const, assignmentVersion: "1", canAssign: false, canAcquire: false, canEdit: false, readOnly: true };
+    render(<RenditionsTable renditions={[makeRendition({ request_code: `REXAN-${status}`, settlement_request_id: work.requestId, settlement_status: status, giof_work: work })]} isLoading={false} isGiofManager />);
+    expect(screen.getByRole("checkbox", { name: `REXAN-${status}: rendición finalizada` })).toBeDisabled();
+  });
+
+  it("no habilita selección cuando no existe trabajo REXAN vinculado", () => {
+    render(<RenditionsTable renditions={[makeRendition({ request_code: "REXAN-NO-WORK", settlement_request_id: null, settlement_status: null, giof_work: undefined })]} isLoading={false} isGiofManager />);
+    expect(screen.queryByRole("checkbox", { name: /REXAN-NO-WORK.*asignar/i })).not.toBeInTheDocument();
   });
 
   it("muestra datos operativos y acción REXAN vinculada", () => {

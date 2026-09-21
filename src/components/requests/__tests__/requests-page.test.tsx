@@ -316,10 +316,10 @@ describe("RequestsPage", () => {
       expect.anything(),
     );
     expect(screen.queryByText("Procesar")).not.toBeInTheDocument();
-    expect(screen.getAllByTestId("giof-claimable-REQUEST")).toHaveLength(1);
+    expect(screen.queryByText("Trabajos que puedes tomar")).not.toBeInTheDocument();
   });
 
-  it("muestra Todos y Mi trabajo en Review para Gestor con default Todos", async () => {
+  it("muestra los cuatro alcances compartidos en Review para Gestor", async () => {
     const user = userEvent.setup();
     currentQuery = "scope=review";
 
@@ -332,15 +332,15 @@ describe("RequestsPage", () => {
     await user.click(scope);
     expect(
       screen.getAllByRole("option").map((option) => option.textContent),
-    ).toEqual(["Todos", "Mi trabajo"]);
+    ).toEqual(["Todos", "Mi trabajo", "Sin asignar", "Por responsable"]);
     expect(useRequestReviewMock).toHaveBeenCalledWith(
       expect.objectContaining({ work_scope: "all" }),
       expect.objectContaining({ enabled: true }),
     );
-    expect(screen.getByTestId("giof-claimable-REQUEST")).toBeInTheDocument();
+    expect(screen.queryByText("Trabajos que puedes tomar")).not.toBeInTheDocument();
   });
 
-  it("integra selección Gestor REQUEST con versión y sin target ni lease", async () => {
+  it("integra selección Gestor REQUEST con el selector dirigido unificado", async () => {
     currentQuery = "scope=review";
     useRequestReviewMock.mockReturnValue({
       requests: [
@@ -374,24 +374,12 @@ describe("RequestsPage", () => {
         name: "Seleccionar SOL-1 para asignar",
       }),
     );
-    expect(
-      screen.getByText(
-        "1 trabajo: 1 sin asignar y 0 asignados a otras personas.",
-      ),
-    ).toBeInTheDocument();
     await user.click(
-      screen.getByRole("button", { name: "Asignarme seleccionados" }),
+      screen.getByRole("button", { name: "Asignar / reasignar" }),
     );
-    await user.click(
-      screen.getByRole("button", { name: "Confirmar asignación" }),
-    );
-
-    expect(giofMocks.bulkSelfAssign).toHaveBeenCalledWith([
-      { requestId: "req-1", expectedAssignmentVersion: 7 },
-    ]);
-    expect(giofMocks.bulkSelfAssign.mock.calls[0]?.[0]?.[0]).not.toHaveProperty(
-      "targetAssigneeId",
-    );
+    expect(screen.getByText("Responsable")).toBeInTheDocument();
+    expect(screen.getByText(/todo-o-nada/i)).toBeInTheDocument();
+    expect(giofMocks.bulkSelfAssign).not.toHaveBeenCalled();
   });
 
   it("muestra los cuatro alcances de Review para Manager", async () => {
@@ -411,8 +399,8 @@ describe("RequestsPage", () => {
   });
 
   it.each(["GIOF_GESTOR", "GIOF_MANAGER"] as const)(
-    "integra REQUEST claimable para %s y conecta el refetch autoritativo sin navegar",
-    async (role) => {
+    "elimina REQUEST claimable para %s y conserva la cola dirigida",
+    (role) => {
       currentQuery = "scope=review";
       authUser = makeUser(role);
       const refetch = vi.fn().mockResolvedValue(undefined);
@@ -430,16 +418,9 @@ describe("RequestsPage", () => {
 
       render(<RequestsPage />);
 
-      expect(screen.getByTestId("giof-claimable-REQUEST")).toBeInTheDocument();
-      expect(
-        screen.getByRole("heading", { name: "Trabajos que puedes tomar" }),
-      ).toBeInTheDocument();
-      expect(giofMocks.useClaimableWork).toHaveBeenCalledWith(
-        expect.objectContaining({ pool: "REQUEST", enabled: true }),
-      );
-      const options = giofMocks.useSelfClaim.mock.calls.at(-1)?.[0];
-      await options.refetchPoolQueue({ force: true });
-      expect(refetch).toHaveBeenCalledWith({ force: true });
+      expect(screen.queryByText("Trabajos que puedes tomar")).not.toBeInTheDocument();
+      expect(giofMocks.useClaimableWork).not.toHaveBeenCalled();
+      expect(giofMocks.useSelfClaim).not.toHaveBeenCalled();
       expect(pushMock).not.toHaveBeenCalled();
     },
   );

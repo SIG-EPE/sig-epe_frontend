@@ -53,6 +53,7 @@ import { DriveProjectionState } from "./drive-projection-state";
 import { GiofWorkStatus } from "@/components/giof-work/giof-work-controls";
 import { GiofOwnershipActions } from "@/components/giof-work/giof-ownership-actions";
 import {
+  canManageGiofAssignments,
   canOperateAssignedGiofWork,
   isGiofOperationalRole,
 } from "@/lib/role-capabilities";
@@ -347,13 +348,7 @@ export function RequestListTable({
                 <TableRow key={request.id} data-testid="request-list-row">
                   {showsAssignmentSelection && (
                     <TableCell>
-                      {request.giof_work &&
-                      (effectiveBulkAssignmentMode ===
-                        GIOF_BULK_ASSIGNMENT_MODE.MANAGER_TARGET ||
-                        isGiofBulkSelectable(
-                          request.giof_work,
-                          GIOF_BULK_ASSIGNMENT_MODE.GESTOR_SELF,
-                        )) ? (
+                      {request.giof_work ? (
                         <input
                           type="checkbox"
                           className="size-4"
@@ -437,7 +432,7 @@ export function RequestListTable({
                         requestId={request.id}
                         work={request.giof_work}
                         currentUserId={currentUserId}
-                        isManager={isGiofManager}
+                        isManager={canManageGiofAssignments(roleCode)}
                       />
                     </TableCell>
                   )}
