@@ -1,6 +1,14 @@
 "use client";
 
-import { createContext, useContext, useEffect, useId, useRef, useState, type ReactNode } from "react";
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { createPortal } from "react-dom";
 import { X } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -33,7 +41,11 @@ interface DialogProps {
   onOpenChange?: (open: boolean) => void;
 }
 
-export function Dialog({ children, open: controlledOpen, onOpenChange }: DialogProps) {
+export function Dialog({
+  children,
+  open: controlledOpen,
+  onOpenChange,
+}: DialogProps) {
   const [uncontrolledOpen, setUncontrolledOpen] = useState(false);
   const isControlled = controlledOpen !== undefined;
   const open = isControlled ? controlledOpen : uncontrolledOpen;
@@ -63,7 +75,11 @@ interface DialogContentProps {
   closeDisabled?: boolean;
 }
 
-export function DialogContent({ children, className, closeDisabled = false }: DialogContentProps) {
+export function DialogContent({
+  children,
+  className,
+  closeDisabled = false,
+}: DialogContentProps) {
   const { open, onOpenChange } = useDialogContext();
   const [mounted, setMounted] = useState(false);
   const titleId = useId();
@@ -78,7 +94,10 @@ export function DialogContent({ children, className, closeDisabled = false }: Di
 
   useEffect(() => {
     if (!open || !mounted) return;
-    const previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const previouslyFocused =
+      document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null;
     const content = contentRef.current;
     const focusableSelector = [
       "button:not([disabled])",
@@ -88,8 +107,14 @@ export function DialogContent({ children, className, closeDisabled = false }: Di
       "textarea:not([disabled])",
       "[tabindex]:not([tabindex='-1'])",
     ].join(",");
-    const focusables = () => Array.from(content?.querySelectorAll<HTMLElement>(focusableSelector) ?? []);
-    const initialTarget = content?.querySelector<HTMLElement>("[data-autofocus]") ?? focusables()[0] ?? content;
+    const focusables = () =>
+      Array.from(
+        content?.querySelectorAll<HTMLElement>(focusableSelector) ?? [],
+      );
+    const initialTarget =
+      content?.querySelector<HTMLElement>("[data-autofocus]") ??
+      focusables()[0] ??
+      content;
     initialTarget?.focus();
 
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -149,7 +174,9 @@ export function DialogContent({ children, className, closeDisabled = false }: Di
         aria-describedby={descriptionId}
         tabIndex={-1}
       >
-        <DialogContext.Provider value={{ open, onOpenChange, titleId, descriptionId }}>
+        <DialogContext.Provider
+          value={{ open, onOpenChange, titleId, descriptionId }}
+        >
           {children}
           <button
             type="button"
@@ -157,7 +184,7 @@ export function DialogContent({ children, className, closeDisabled = false }: Di
             disabled={closeDisabled}
             className={cn(
               buttonVariants({ variant: "ghost" }),
-              "absolute right-4 top-4 h-8 w-8 shrink-0 p-0",
+              "absolute right-4 top-4 min-h-11 min-w-11 shrink-0 p-0",
             )}
             aria-label="Cerrar"
             aria-disabled={closeDisabled}
@@ -183,7 +210,12 @@ interface DialogHeaderProps {
 
 export function DialogHeader({ children, className }: DialogHeaderProps) {
   return (
-    <div className={cn("shrink-0 flex flex-col gap-1.5 text-center sm:text-left", className)}>
+    <div
+      className={cn(
+        "shrink-0 flex flex-col gap-1.5 text-center sm:text-left",
+        className,
+      )}
+    >
       {children}
     </div>
   );
@@ -217,10 +249,16 @@ interface DialogDescriptionProps {
   className?: string;
 }
 
-export function DialogDescription({ children, className }: DialogDescriptionProps) {
+export function DialogDescription({
+  children,
+  className,
+}: DialogDescriptionProps) {
   const { descriptionId } = useDialogContext();
   return (
-    <p id={descriptionId} className={cn("text-sm text-muted-foreground", className)}>
+    <p
+      id={descriptionId}
+      className={cn("text-sm text-muted-foreground", className)}
+    >
       {children}
     </p>
   );
@@ -271,7 +309,11 @@ interface DialogCloseProps {
   className?: string;
 }
 
-export function DialogClose({ children, onClick, className }: DialogCloseProps) {
+export function DialogClose({
+  children,
+  onClick,
+  className,
+}: DialogCloseProps) {
   const { onOpenChange } = useDialogContext();
 
   function handleClick() {
