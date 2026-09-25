@@ -235,6 +235,7 @@ export function LineDetailPage() {
           editable={isGiof && line.status === "DRAFT"}
           lineStatus={line.status}
           onConflictRefetch={refetch}
+          onExecutionCreated={refetch}
         />
       </div>
 

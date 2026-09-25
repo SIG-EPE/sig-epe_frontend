@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { renderHook, waitFor } from "@testing-library/react";
+import { act, renderHook, waitFor } from "@testing-library/react";
 import { api, ApiRequestError } from "@/lib/api-client";
 import { invalidateQueryTag } from "@/lib/query-cache";
 import {
@@ -7,7 +7,18 @@ import {
   isPlanningLineStateConflict,
   recoverFromPlanningLineStateConflict,
   useMonthlyDistribution,
+  usePlanningLines,
 } from "@/hooks/use-budget";
+import { clearQueryCache, setQueryCacheAuthNamespace } from "@/lib/query-cache";
+
+const authState = vi.hoisted(() => ({
+  value: { isLoading: false, accessToken: "token" as string | null },
+}));
+
+vi.mock("@/stores/auth-store", () => ({
+  useAuthStore: (selector: (state: typeof authState.value) => unknown) =>
+    selector(authState.value),
+}));
 
 vi.mock("@/lib/api-client", async (importActual) => {
   const actual = await importActual<typeof import("@/lib/api-client")>();
@@ -22,7 +33,11 @@ vi.mock("@/lib/query-cache", async (importActual) => {
   return { ...actual, invalidateQueryTag: vi.fn() };
 });
 
-function makeApiError(status: number, code?: string, message = "Mensaje del backend") {
+function makeApiError(
+  status: number,
+  code?: string,
+  message = "Mensaje del backend",
+) {
   return new ApiRequestError(status, {
     statusCode: status,
     code,
@@ -47,9 +62,9 @@ describe("POA planning line state conflict recovery", () => {
         makeApiError(400, PLANNING_LINE_STATE_CONFLICT_CODE),
       ),
     ).toBe(false);
-    expect(isPlanningLineStateConflict(makeApiError(409, "OTHER_CONFLICT"))).toBe(
-      false,
-    );
+    expect(
+      isPlanningLineStateConflict(makeApiError(409, "OTHER_CONFLICT")),
+    ).toBe(false);
     expect(isPlanningLineStateConflict(new Error("409"))).toBe(false);
   });
 
@@ -69,7 +84,9 @@ describe("POA planning line state conflict recovery", () => {
   });
 
   it("does not recover or invalidate unrelated errors", () => {
-    expect(recoverFromPlanningLineStateConflict(makeApiError(409, "OTHER"))).toBeNull();
+    expect(
+      recoverFromPlanningLineStateConflict(makeApiError(409, "OTHER")),
+    ).toBeNull();
     expect(invalidateQueryTag).not.toHaveBeenCalled();
   });
 });
@@ -95,5 +112,90 @@ describe("POA monthly distribution contract", () => {
     expect(api.get).toHaveBeenCalledWith(
       "/budget/planning-lines/line-1/monthly",
     );
+  });
+});
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((promiseResolve) => {
+    resolve = promiseResolve;
+  });
+  return { promise, resolve };
+}
+
+describe("POA planning line code query", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    clearQueryCache();
+    setQueryCacheAuthNamespace("planning-line-search-test");
+    authState.value = { isLoading: false, accessToken: "token" };
+  });
+
+  it("trims and sends code with existing filters and omits blank code", async () => {
+    vi.mocked(api.get).mockResolvedValue({
+      lines: [],
+      total: 0,
+      page: 1,
+      limit: 20,
+    });
+    const { rerender } = renderHook(
+      ({ code }: { code: string }) =>
+        usePlanningLines({
+          fiscal_year_id: "fy-1",
+          org_unit_id: "ou-1",
+          status: "APPROVED",
+          code,
+          page: 1,
+        }),
+      { initialProps: { code: "  PoA-17  " } },
+    );
+
+    await waitFor(() =>
+      expect(api.get).toHaveBeenCalledWith(
+        "/budget/planning-lines?fiscal_year_id=fy-1&org_unit_id=ou-1&status=APPROVED&code=PoA-17&page=1",
+      ),
+    );
+
+    rerender({ code: "   " });
+    await waitFor(() => expect(api.get).toHaveBeenCalledTimes(2));
+    expect(api.get).toHaveBeenLastCalledWith(
+      "/budget/planning-lines?fiscal_year_id=fy-1&org_unit_id=ou-1&status=APPROVED&page=1",
+    );
+  });
+
+  it("does not let an obsolete code response overwrite the current result", async () => {
+    const first = deferred<{
+      lines: never[];
+      total: number;
+      page: number;
+      limit: number;
+    }>();
+    const second = deferred<{
+      lines: never[];
+      total: number;
+      page: number;
+      limit: number;
+    }>();
+    vi.mocked(api.get)
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValueOnce(second.promise);
+
+    const { result, rerender } = renderHook(
+      ({ code }: { code: string }) => usePlanningLines({ code, page: 1 }),
+      { initialProps: { code: "OLD" } },
+    );
+    rerender({ code: "NEW" });
+
+    await act(async () => {
+      second.resolve({ lines: [], total: 2, page: 1, limit: 20 });
+      await second.promise;
+    });
+    await waitFor(() => expect(result.current.total).toBe(2));
+
+    await act(async () => {
+      first.resolve({ lines: [], total: 99, page: 1, limit: 20 });
+      await first.promise;
+    });
+    expect(result.current.total).toBe(2);
   });
 });

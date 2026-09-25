@@ -217,11 +217,35 @@ export interface MonthlyExecutionDetail {
   requestId?: string | null;
   requestCode?: string | null;
   concept: string | null;
-  amount: number;
+  amount: number | null;
   paidAt?: string | null;
   createdAt?: string | null;
   status?: string | null;
   type?: string | null;
+}
+
+export const MONTHLY_MOVEMENT_SOURCE = {
+  REQUEST: "REQUEST",
+  DIRECT_MANUAL: "DIRECT_MANUAL",
+  IMPORTED: "IMPORTED",
+  LEGACY_UNRESOLVED: "LEGACY_UNRESOLVED",
+} as const;
+
+export interface MonthlyMovement {
+  id: string;
+  source: (typeof MONTHLY_MOVEMENT_SOURCE)[keyof typeof MONTHLY_MOVEMENT_SOURCE];
+  origin?: string;
+  movementKind?: string;
+  effective?: true;
+  requestId?: string | null;
+  requestCode?: string | null;
+  concept: string | null;
+  amount: number | null;
+  amountDecimal?: string | null;
+  currency?: "PEN";
+  eventAt?: string | null;
+  valuation?: string;
+  warnings?: string[];
 }
 
 export interface MonthlyEntry {
@@ -229,11 +253,15 @@ export interface MonthlyEntry {
   planning_line_id: string;
   month: number;
   planned_amount: number;
-  executed_amount: string;
+  executed_amount: number;
   monthly_programmed_decimal?: string;
   executed_amount_decimal?: string;
   execution_provenance?: PoaExecutionProvenance;
   execution_details?: MonthlyExecutionDetail[];
+  movements?: MonthlyMovement[];
+  movements_complete?: boolean;
+  movements_truncated?: boolean;
+  movements_unresolved_count?: number;
 }
 
 export const POA_EXECUTION_SYSTEM_WINNER = {
@@ -315,4 +343,3 @@ export interface Partner {
   percentage: number;
   partner?: { id: string; code: string; name: string };
 }
-
