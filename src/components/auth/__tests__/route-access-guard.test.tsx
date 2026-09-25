@@ -44,6 +44,21 @@ describe("RouteAccessGuard", () => {
     vi.clearAllMocks();
     mockUsePathname.mockReturnValue("/payments");
     setAuthState(null);
+    window.history.replaceState(null, "", "/payments?status=pending");
+  });
+
+  it("preserves current intent only when authentication is missing", async () => {
+    render(
+      <RouteAccessGuard>
+        <div>payment content</div>
+      </RouteAccessGuard>,
+    );
+
+    await waitFor(() => {
+      expect(mockReplace).toHaveBeenCalledWith(
+        "/login?returnTo=%2Fpayments%3Fstatus%3Dpending",
+      );
+    });
   });
 
   it("blocks protected route children for unauthorized direct URLs", async () => {

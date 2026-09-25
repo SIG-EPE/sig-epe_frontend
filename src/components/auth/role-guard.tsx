@@ -6,7 +6,7 @@ import { useRouter } from "next/navigation";
 
 import { getRoleHomePath } from "@/lib/auth/role-redirect";
 import type { RoleCode } from "@/lib/constants";
-import { ROUTES } from "@/lib/constants";
+import { buildLoginPathForCurrentLocation } from "@/lib/auth/return-to";
 import { useAuthStore } from "@/stores/auth-store";
 
 interface RoleGuardProps {
@@ -25,7 +25,9 @@ export function RoleGuard({ allowedRoles, children }: RoleGuardProps) {
     if (isLoading) return;
 
     if (!user) {
-      router.replace(ROUTES.LOGIN);
+      router.replace(
+        buildLoginPathForCurrentLocation() as Parameters<typeof router.replace>[0],
+      );
       return;
     }
 

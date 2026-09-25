@@ -21,6 +21,7 @@ describe("InactivityWarningModal", () => {
         remainingSeconds={600}
         onContinue={onContinue}
         onLogout={vi.fn()}
+        onExpire={vi.fn()}
       />,
     );
 
@@ -36,6 +37,7 @@ describe("InactivityWarningModal", () => {
         remainingSeconds={600}
         onContinue={vi.fn()}
         onLogout={vi.fn()}
+        onExpire={vi.fn()}
       />,
     );
 
@@ -46,5 +48,28 @@ describe("InactivityWarningModal", () => {
     });
 
     expect(screen.getByText("9:59")).toBeInTheDocument();
+  });
+
+  it("separates automatic expiry from the explicit logout action", () => {
+    const onExpire = vi.fn();
+    const onLogout = vi.fn();
+    render(
+      <InactivityWarningModal
+        open
+        remainingSeconds={1}
+        onContinue={vi.fn()}
+        onLogout={onLogout}
+        onExpire={onExpire}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /cerrar sesion/i }));
+    expect(onLogout).toHaveBeenCalledTimes(1);
+    expect(onExpire).not.toHaveBeenCalled();
+
+    act(() => {
+      vi.advanceTimersByTime(1000);
+    });
+    expect(onExpire).toHaveBeenCalledTimes(1);
   });
 });

@@ -3,6 +3,7 @@ import { useAuthStore } from "@/stores/auth-store";
 import { clearClientAuthSession } from "@/lib/auth/session-sync";
 import { refreshSession } from "@/lib/auth/refresh-session";
 import { getGiofMutationHeaders } from "@/lib/giof-work-lease-session";
+import { buildLoginPathForCurrentLocation } from "@/lib/auth/return-to";
 
 // -------------------------------------------------------
 // API Client — SIG-EPE
@@ -114,7 +115,7 @@ async function apiFetch<T>(
     // Refresh failed — clear auth + redirect to login
     clearClientAuthSession();
     if (typeof window !== "undefined") {
-      window.location.href = "/login";
+      window.location.href = buildLoginPathForCurrentLocation();
     }
     throw new ApiRequestError(401, {
       statusCode: 401,
@@ -198,7 +199,7 @@ async function apiDownload(
     } else {
       clearClientAuthSession();
       if (typeof window !== "undefined") {
-        window.location.href = "/login";
+        window.location.href = buildLoginPathForCurrentLocation();
       }
       throw new ApiRequestError(401, {
         statusCode: 401,

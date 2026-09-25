@@ -6,7 +6,7 @@ import { usePathname, useRouter } from "next/navigation";
 
 import { getRoleHomePath } from "@/lib/auth/role-redirect";
 import { canAccessRoute } from "@/lib/auth/route-access";
-import { ROUTES } from "@/lib/constants";
+import { buildLoginPathForCurrentLocation } from "@/lib/auth/return-to";
 import { useAuthStore } from "@/stores/auth-store";
 
 export function RouteAccessGuard({ children }: { children: React.ReactNode }) {
@@ -21,7 +21,9 @@ export function RouteAccessGuard({ children }: { children: React.ReactNode }) {
     if (isLoading) return;
 
     if (!user) {
-      router.replace(ROUTES.LOGIN);
+      router.replace(
+        buildLoginPathForCurrentLocation() as Parameters<typeof router.replace>[0],
+      );
       return;
     }
 

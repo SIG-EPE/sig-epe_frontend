@@ -6,6 +6,7 @@ import { join } from "node:path";
 interface SignTestJwtInput {
   sub?: string;
   role?: string;
+  scope?: "full" | "onboarding";
 }
 
 function base64UrlJson(value: Record<string, unknown>): string {
@@ -37,7 +38,7 @@ function signTestJwt(input: SignTestJwtInput): string {
   const payload = base64UrlJson({
     sub: input.sub ?? "cypress-user",
     role: input.role ?? "SOLICITANTE_EPE",
-    scope: "full",
+    scope: input.scope ?? "full",
     iat: now,
     exp: now + 60 * 60,
   });

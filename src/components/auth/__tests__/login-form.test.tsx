@@ -4,6 +4,11 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
+const { mockBuildOnboardingPath, mockResolvePostAuthDestination } = vi.hoisted(() => ({
+  mockBuildOnboardingPath: vi.fn(),
+  mockResolvePostAuthDestination: vi.fn(),
+}));
+
 // -------------------------------------------------------
 // Mocks
 // -------------------------------------------------------
@@ -34,6 +39,19 @@ vi.mock("sonner", () => ({
   },
 }));
 
+vi.mock("@/lib/auth/return-to", async () => {
+  const actual = await vi.importActual<typeof import("@/lib/auth/return-to")>(
+    "@/lib/auth/return-to",
+  );
+  mockBuildOnboardingPath.mockImplementation(actual.buildOnboardingPath);
+  mockResolvePostAuthDestination.mockImplementation(actual.resolvePostAuthDestination);
+  return {
+    ...actual,
+    buildOnboardingPath: mockBuildOnboardingPath,
+    resolvePostAuthDestination: mockResolvePostAuthDestination,
+  };
+});
+
 // Mock next/navigation (no usado en LoginForm, pero evita errores de módulo)
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: vi.fn() }),
@@ -41,14 +59,10 @@ vi.mock("next/navigation", () => ({
 }));
 
 // Mock ROUTES constant
-vi.mock("@/lib/constants", () => ({
-  TOKEN_KEY: "access_token",
-  ROUTES: {
-    LOGIN: "/login",
-    ONBOARDING: "/onboarding",
-    DASHBOARD: "/dashboard",
-  },
-}));
+vi.mock("@/lib/constants", async () => {
+  const actual = await vi.importActual<typeof import("@/lib/constants")>("@/lib/constants");
+  return actual;
+});
 
 // -------------------------------------------------------
 // Helpers
@@ -358,6 +372,65 @@ describe("LoginForm", () => {
     expect(mockPost).toHaveBeenCalledWith("/auth/login", {
       identifier: "12345678",
       password: "Password123",
+    });
+  });
+
+  it("preserva returnTo al enviar un login manual a onboarding", async () => {
+    const { api } = await import("@/lib/api-client");
+    vi.mocked(api.post).mockResolvedValue({
+      accessToken: "access",
+      onboardingRequired: true,
+      user: {
+        id: "user-1",
+        firstName: "Ada",
+        lastName: "Lovelace",
+        email: null,
+        epeDni: "12345678",
+        onboardingCompleted: false,
+        authSource: "LOCAL",
+        roles: [{ code: "SOLICITANTE_EPE", name: "Solicitante" }],
+      },
+    } as never);
+    const user = userEvent.setup();
+    render(<LoginForm returnTo="/requests/abc?mode=process" />);
+
+    await user.type(screen.getByPlaceholderText(/12345678 o usuario@correo.com/i), "12345678");
+    await user.type(screen.getByPlaceholderText(/Tu contraseña/i), "Password123");
+    await user.click(screen.getByRole("button", { name: /ingresar/i }));
+
+    await waitFor(() => {
+      expect(mockBuildOnboardingPath).toHaveBeenCalledWith("/requests/abc?mode=process");
+    });
+  });
+
+  it("resuelve returnTo con el rol después del login manual", async () => {
+    const { api } = await import("@/lib/api-client");
+    vi.mocked(api.post).mockResolvedValue({
+      accessToken: "access",
+      onboardingRequired: false,
+      user: {
+        id: "user-1",
+        firstName: "Ada",
+        lastName: "Lovelace",
+        email: "ada@example.com",
+        epeDni: "12345678",
+        onboardingCompleted: true,
+        authSource: "LOCAL",
+        roles: [{ code: "SOLICITANTE_EPE", name: "Solicitante" }],
+      },
+    } as never);
+    const user = userEvent.setup();
+    render(<LoginForm returnTo="/requests/abc?mode=process" />);
+
+    await user.type(screen.getByPlaceholderText(/12345678 o usuario@correo.com/i), "12345678");
+    await user.type(screen.getByPlaceholderText(/Tu contraseña/i), "Password123");
+    await user.click(screen.getByRole("button", { name: /ingresar/i }));
+
+    await waitFor(() => {
+      expect(mockResolvePostAuthDestination).toHaveBeenCalledWith(
+        "/requests/abc?mode=process",
+        "SOLICITANTE_EPE",
+      );
     });
   });
 

@@ -15,6 +15,7 @@ interface InactivityWarningModalProps {
   remainingSeconds: number;
   onContinue: () => void | Promise<void>;
   onLogout: () => void;
+  onExpire: () => void;
 }
 
 export function InactivityWarningModal({
@@ -22,6 +23,7 @@ export function InactivityWarningModal({
   remainingSeconds,
   onContinue,
   onLogout,
+  onExpire,
 }: InactivityWarningModalProps) {
   const [countdown, setCountdown] = useState(remainingSeconds);
   const logoutCalledRef = useRef(false);
@@ -49,8 +51,8 @@ export function InactivityWarningModal({
     if (!open || countdown > 0 || logoutCalledRef.current) return;
 
     logoutCalledRef.current = true;
-    onLogout();
-  }, [open, countdown, onLogout]);
+    onExpire();
+  }, [open, countdown, onExpire]);
 
   const minutes = Math.floor(countdown / 60);
   const seconds = countdown % 60;

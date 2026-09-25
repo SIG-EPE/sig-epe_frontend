@@ -4,7 +4,7 @@ import { useEffect } from "react";
 import { Loader2 } from "lucide-react";
 import { useRouter } from "next/navigation";
 
-import { ROUTES } from "@/lib/constants";
+import { buildLoginPathForCurrentLocation } from "@/lib/auth/return-to";
 import { useAuthStore } from "@/stores/auth-store";
 
 export function AuthGate({ children }: { children: React.ReactNode }) {
@@ -14,7 +14,9 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     if (!isLoading && !user) {
-      router.replace(ROUTES.LOGIN);
+      router.replace(
+        buildLoginPathForCurrentLocation() as Parameters<typeof router.replace>[0],
+      );
     }
   }, [isLoading, router, user]);
 

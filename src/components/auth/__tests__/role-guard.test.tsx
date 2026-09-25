@@ -41,6 +41,21 @@ describe("RoleGuard", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     setAuthState(null);
+    window.history.replaceState(null, "", "/admin/users?tab=inactive");
+  });
+
+  it("preserves current intent only when authentication is missing", async () => {
+    render(
+      <RoleGuard allowedRoles={[ROLE_CODE.ADMIN_SISTEMA]}>
+        <div>admin content</div>
+      </RoleGuard>,
+    );
+
+    await waitFor(() => {
+      expect(mockReplace).toHaveBeenCalledWith(
+        "/login?returnTo=%2Fadmin%2Fusers%3Ftab%3Dinactive",
+      );
+    });
   });
 
   it("blocks unauthorized roles without showing children", async () => {

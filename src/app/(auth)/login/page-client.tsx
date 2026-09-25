@@ -8,6 +8,7 @@ import { AlertTriangle } from "lucide-react";
 interface LoginPageClientProps {
   reason: string | undefined;
   ssoToken?: string;
+  returnTo?: string | null;
 }
 
 function LoginBanner({ reason }: { reason: string }) {
@@ -29,13 +30,13 @@ function LoginBanner({ reason }: { reason: string }) {
   );
 }
 
-export default function LoginPageClient({ reason, ssoToken }: LoginPageClientProps) {
+export default function LoginPageClient({ reason, ssoToken, returnTo }: LoginPageClientProps) {
   return (
     <>
       {(reason === "inactividad" || reason === "inactivity") && (
         <LoginBanner reason={reason} />
       )}
-      <LoginForm ssoToken={ssoToken} />
+      <LoginForm ssoToken={ssoToken} returnTo={returnTo} reason={reason} />
     </>
   );
 }

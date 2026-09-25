@@ -38,6 +38,7 @@ function setAuthState(state: Partial<ReturnType<typeof useAuthStore.getState>>) 
 describe("AuthGate", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    window.history.replaceState(null, "", "/requests/abc?mode=process");
     setAuthState({});
   });
 
@@ -79,7 +80,9 @@ describe("AuthGate", () => {
     expect(screen.queryByText("protected content")).not.toBeInTheDocument();
 
     await waitFor(() => {
-      expect(mockReplace).toHaveBeenCalledWith("/login");
+      expect(mockReplace).toHaveBeenCalledWith(
+        "/login?returnTo=%2Frequests%2Fabc%3Fmode%3Dprocess",
+      );
     });
   });
 });

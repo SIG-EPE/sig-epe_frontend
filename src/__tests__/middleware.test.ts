@@ -94,15 +94,19 @@ describe("middleware session hint continuity", () => {
   });
 
   it("redirects protected routes when access and hint are both absent", async () => {
-    const response = await middleware(requestFor("/requests"));
+    const response = await middleware(requestFor("/requests/abc?mode=process&tab=history"));
 
-    expect(response.headers.get("location")).toBe("http://localhost:3000/login");
+    expect(response.headers.get("location")).toBe(
+      "http://localhost:3000/login?returnTo=%2Frequests%2Fabc%3Fmode%3Dprocess%26tab%3Dhistory",
+    );
   });
 
   it("protects /help when access and session hint are absent", async () => {
     const response = await middleware(requestFor("/help"));
 
-    expect(response.headers.get("location")).toBe("http://localhost:3000/login");
+    expect(response.headers.get("location")).toBe(
+      "http://localhost:3000/login?returnTo=%2Fhelp",
+    );
   });
 
   it.each([
@@ -129,6 +133,49 @@ describe("middleware session hint continuity", () => {
     expect(response.status).toBe(200);
     expect(response.headers.get("location")).toBeNull();
     expect(mockJwtVerify).not.toHaveBeenCalled();
+  });
+
+  it("keeps token handoff precedence when returnTo is present", async () => {
+    const response = await middleware(
+      requestFor(
+        "/login?token=handoff-token&returnTo=%2Frequests%2Fabc%3Fmode%3Dprocess",
+        { access_token: "existing-token" },
+      ),
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("location")).toBeNull();
+    expect(mockJwtVerify).not.toHaveBeenCalled();
+  });
+
+  it("resolves a safe login target for an authenticated full-scope user", async () => {
+    mockJwtVerify.mockResolvedValue({
+      payload: { sub: "user-1", role: "SOLICITANTE_EPE", scope: "full", iat: 1, exp: 2 },
+    });
+
+    const response = await middleware(
+      requestFor("/login?returnTo=%2Frequests%2Fabc%3Fmode%3Dprocess", { access_token: "token" }),
+    );
+
+    expect(response.headers.get("location")).toBe(
+      "http://localhost:3000/requests/abc?mode=process",
+    );
+  });
+
+  it("falls back to role home when an authenticated login target is invalid or disallowed", async () => {
+    mockJwtVerify.mockResolvedValue({
+      payload: { sub: "user-1", role: "SOLICITANTE_EPE", scope: "full", iat: 1, exp: 2 },
+    });
+
+    const invalid = await middleware(
+      requestFor("/login?returnTo=%2F%2Fevil.test", { access_token: "token" }),
+    );
+    const disallowed = await middleware(
+      requestFor("/login?returnTo=%2Fadmin%2Fusers", { access_token: "token" }),
+    );
+
+    expect(invalid.headers.get("location")).toBe("http://localhost:3000/requests");
+    expect(disallowed.headers.get("location")).toBe("http://localhost:3000/requests");
   });
 
   it("keeps valid access token as authoritative for role redirects", async () => {
@@ -182,6 +229,22 @@ describe("middleware session hint continuity", () => {
     expect(response.headers.get("location")).toBe("http://localhost:3000/requests");
   });
 
+  it("resolves a safe onboarding target for a full-scope user", async () => {
+    mockJwtVerify.mockResolvedValue({
+      payload: { sub: "user-1", role: "SOLICITANTE_EPE", scope: "full", iat: 1, exp: 2 },
+    });
+
+    const response = await middleware(
+      requestFor("/onboarding?returnTo=%2Frequests%2Fabc%3Fmode%3Dprocess", {
+        access_token: "token",
+      }),
+    );
+
+    expect(response.headers.get("location")).toBe(
+      "http://localhost:3000/requests/abc?mode=process",
+    );
+  });
+
   it("redirects onboarding-scope users from protected routes to onboarding", async () => {
     mockJwtVerify.mockResolvedValue({
       payload: { sub: "user-1", role: "SOLICITANTE_EPE", scope: "onboarding", iat: 1, exp: 2 },
@@ -189,6 +252,8 @@ describe("middleware session hint continuity", () => {
 
     const response = await middleware(requestFor("/requests", { access_token: "token" }));
 
-    expect(response.headers.get("location")).toBe("http://localhost:3000/onboarding");
+    expect(response.headers.get("location")).toBe(
+      "http://localhost:3000/onboarding?returnTo=%2Frequests",
+    );
   });
 });

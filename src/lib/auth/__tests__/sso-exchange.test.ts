@@ -24,6 +24,36 @@ describe("sso-exchange", () => {
     expect(JSON.stringify(window.history.state ?? {})).not.toContain("secret");
   });
 
+  it("retiene solo returnTo válido y reason permitido al sanear el handoff", () => {
+    window.history.replaceState(
+      null,
+      "",
+      "/login?token=secret&returnTo=%2Frequests%2Fabc%3Fmode%3Dprocess&reason=inactividad&extra=leak",
+    );
+    const replaceState = vi.spyOn(History.prototype, "replaceState");
+
+    stripSsoTokenFromHistory({
+      returnTo: "/requests/abc?mode=process",
+      reason: "inactividad",
+    });
+
+    expect(replaceState).toHaveBeenCalledWith(
+      null,
+      "",
+      "/login?returnTo=%2Frequests%2Fabc%3Fmode%3Dprocess&reason=inactividad",
+    );
+    expect(window.location.search).not.toContain("token");
+    expect(window.location.search).not.toContain("extra");
+  });
+
+  it("retains no query data when cleanup inputs are unsafe", () => {
+    window.history.replaceState(null, "", "/login?token=secret&extra=leak");
+    stripSsoTokenFromHistory({ returnTo: "//evil.test", reason: "arbitrary" });
+
+    expect(window.location.pathname).toBe("/login");
+    expect(window.location.search).toBe("");
+  });
+
   it("mantiene single-flight para Strict Mode, remount y doble efecto", async () => {
     const response = { accessToken: "access" } as never;
     const api = { get: vi.fn().mockResolvedValue(response) };

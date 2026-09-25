@@ -19,10 +19,10 @@ import { refreshSession } from "@/lib/auth/refresh-session";
 import { clearClientAuthSession } from "@/lib/auth/session-sync";
 import { useAuthStore } from "@/stores/auth-store";
 import type { AuthUser } from "@/types/auth";
+import { buildLoginPath, buildLoginPathForCurrentLocation } from "@/lib/auth/return-to";
 import {
   INACTIVITY_WARNING_MINUTES,
   INACTIVITY_TIMEOUT_MINUTES,
-  ROUTES,
 } from "@/lib/constants";
 
 // -------------------------------------------------------
@@ -64,7 +64,7 @@ export function DashboardShell({
   const clearAuth = useAuthStore((s) => s.clearAuth);
   const [showWarning, setShowWarning] = useState(false);
 
-  async function handleLogout() {
+  async function handleLogout(preserveReturnTo: boolean) {
     if (loggingOut.current) return;
     loggingOut.current = true;
     setShowWarning(false);
@@ -77,7 +77,13 @@ export function DashboardShell({
       await clearSessionAction();
       clearClientAuthSession();
       clearAuth();
-      router.replace(`${ROUTES.LOGIN}?reason=inactividad`);
+      router.replace(
+        (preserveReturnTo
+          ? buildLoginPathForCurrentLocation("inactividad")
+          : buildLoginPath({ reason: "inactividad" })) as Parameters<
+            typeof router.replace
+          >[0],
+      );
     }
   }
 
@@ -87,13 +93,13 @@ export function DashboardShell({
       setShowWarning(false);
       reset();
     } catch {
-      await handleLogout();
+      await handleLogout(true);
     }
   }
 
   const { reset } = useInactivityTimer({
     onWarning: () => setShowWarning(true),
-    onTimeout: handleLogout,
+    onTimeout: () => handleLogout(true),
   });
 
   return (
@@ -120,7 +126,8 @@ export function DashboardShell({
         open={showWarning}
         remainingSeconds={WARNING_COUNTDOWN_SECONDS}
         onContinue={handleContinueSession}
-        onLogout={handleLogout}
+        onLogout={() => handleLogout(false)}
+        onExpire={() => handleLogout(true)}
       />
     </SidebarProvider>
   );

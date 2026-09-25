@@ -9,7 +9,7 @@ import { toast } from "sonner";
 
 import { api, ApiRequestError } from "@/lib/api-client";
 import { syncAuthSession, toSessionSyncInput } from "@/lib/auth/session-sync";
-import { getRoleHomePath } from "@/lib/auth/role-redirect";
+import { resolvePostAuthDestination, sanitizeReturnTo } from "@/lib/auth/return-to";
 import {
   ONBOARDING_EMAIL_RECOMMENDATION_MESSAGE,
   shouldShowOnboardingEmailRecommendation,
@@ -90,12 +90,15 @@ function getApiErrorMessage(error: ApiRequestError): string {
 interface OnboardingFormProps {
   epeUserName: string;
   authSource: "LOCAL" | "EPE";
+  returnTo?: string | null;
 }
 
 export function OnboardingForm({
   epeUserName,
   authSource,
+  returnTo,
 }: OnboardingFormProps) {
+  const safeReturnTo = sanitizeReturnTo(returnTo);
   const [showNewPassword, setShowNewPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
 
@@ -131,7 +134,10 @@ export function OnboardingForm({
 
       // Use full page navigation so the browser sends the updated cookie in the
       // very first request and the Edge middleware can read it without timing issues.
-      window.location.href = getRoleHomePath(normalizedUser.role?.code ?? "");
+      window.location.href = resolvePostAuthDestination(
+        safeReturnTo,
+        normalizedUser.role?.code ?? "",
+      );
     } catch (error) {
       if (error instanceof ApiRequestError) {
         toast.error(getApiErrorMessage(error));

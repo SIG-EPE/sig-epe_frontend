@@ -8,13 +8,16 @@ import { Eye, EyeOff, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 
 import { api, ApiRequestError } from "@/lib/api-client";
-import { ROUTES } from "@/lib/constants";
 import {
   syncAuthSession,
   toSessionSyncInput,
 } from "@/lib/auth/session-sync";
 import { startSsoExchange } from "@/lib/auth/sso-exchange";
-import { getRoleHomePath } from "@/lib/auth/role-redirect";
+import {
+  buildOnboardingPath,
+  resolvePostAuthDestination,
+  sanitizeReturnTo,
+} from "@/lib/auth/return-to";
 import type { LoginResponse } from "@/types/auth";
 
 import { Button } from "@/components/ui/button";
@@ -51,6 +54,8 @@ type LoginFormValues = z.infer<typeof loginSchema>;
 
 interface LoginFormProps {
   ssoToken?: string;
+  returnTo?: string | null;
+  reason?: string;
 }
 
 const LOGIN_PHASE = {
@@ -61,7 +66,8 @@ const LOGIN_PHASE = {
 
 type LoginPhase = (typeof LOGIN_PHASE)[keyof typeof LOGIN_PHASE];
 
-export function LoginForm({ ssoToken }: LoginFormProps) {
+export function LoginForm({ ssoToken, returnTo, reason }: LoginFormProps) {
+  const safeReturnTo = sanitizeReturnTo(returnTo);
   const [showPassword, setShowPassword] = useState(false);
   const [phase, setPhase] = useState<LoginPhase>(
     ssoToken ? LOGIN_PHASE.SSO_PENDING : LOGIN_PHASE.MANUAL_READY,
@@ -72,7 +78,7 @@ export function LoginForm({ ssoToken }: LoginFormProps) {
     if (!ssoToken) return;
 
     let cancelled = false;
-    const exchange = startSsoExchange(ssoToken, api);
+    const exchange = startSsoExchange(ssoToken, api, { returnTo: safeReturnTo, reason });
 
     async function doSsoLogin() {
       try {
@@ -83,8 +89,8 @@ export function LoginForm({ ssoToken }: LoginFormProps) {
         const normalizedUser = { ...data.user, role: data.user.roles?.[0] ?? data.user.role };
         const roleCode = normalizedUser.role?.code;
         const destination = data.onboardingRequired
-          ? ROUTES.ONBOARDING
-          : getRoleHomePath(roleCode ?? "");
+          ? buildOnboardingPath(safeReturnTo)
+          : resolvePostAuthDestination(safeReturnTo, roleCode ?? "");
 
         setPhase(LOGIN_PHASE.NAVIGATING);
 
@@ -165,9 +171,12 @@ export function LoginForm({ ssoToken }: LoginFormProps) {
       // Use full page navigation so the browser sends the cookie in the very
       // first request and the Edge middleware can read it without timing issues.
       if (data.onboardingRequired) {
-        window.location.href = ROUTES.ONBOARDING;
+        window.location.href = buildOnboardingPath(safeReturnTo);
       } else {
-        window.location.href = getRoleHomePath(normalizedUser.role?.code ?? "");
+        window.location.href = resolvePostAuthDestination(
+          safeReturnTo,
+          normalizedUser.role?.code ?? "",
+        );
       }
     } catch (error) {
       // Navigation did not happen — return to the operable manual phase.

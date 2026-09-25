@@ -34,19 +34,17 @@ vi.mock("sonner", () => ({
   },
 }));
 
+
 const mockPush = vi.fn();
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: mockPush }),
   usePathname: () => "/onboarding",
 }));
 
-vi.mock("@/lib/constants", () => ({
-  ROUTES: {
-    LOGIN: "/login",
-    ONBOARDING: "/onboarding",
-    DASHBOARD: "/dashboard",
-  },
-}));
+vi.mock("@/lib/constants", async () => {
+  const actual = await vi.importActual<typeof import("@/lib/constants")>("@/lib/constants");
+  return actual;
+});
 
 // -------------------------------------------------------
 // Helpers
@@ -56,8 +54,10 @@ import { toast } from "sonner";
 import { api, ApiRequestError } from "@/lib/api-client";
 import { OnboardingForm } from "@/components/auth/onboarding-form";
 
-function renderOnboardingForm(epeUserName = "Juan Pérez") {
-  return render(<OnboardingForm epeUserName={epeUserName} authSource="LOCAL" />);
+function renderOnboardingForm(epeUserName = "Juan Pérez", returnTo?: string) {
+  return render(
+    <OnboardingForm epeUserName={epeUserName} authSource="LOCAL" returnTo={returnTo} />,
+  );
 }
 
 function fillLocalOnboardingForm({
@@ -246,4 +246,5 @@ describe("OnboardingForm", () => {
     });
     expect(api.post).not.toHaveBeenCalled();
   });
+
 });

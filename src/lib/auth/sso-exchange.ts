@@ -1,4 +1,5 @@
 import type { LoginResponse } from "@/types/auth";
+import { buildLoginPath } from "@/lib/auth/return-to";
 
 interface SsoApi {
   get<T>(path: string, options?: RequestInit): Promise<T>;
@@ -19,20 +20,26 @@ function createExchangeId(): string {
   );
 }
 
-export function stripSsoTokenFromHistory(): void {
+interface SsoHistoryInput {
+  returnTo?: string | null;
+  reason?: string | null;
+}
+
+export function stripSsoTokenFromHistory(input: SsoHistoryInput = {}): void {
   if (typeof window === "undefined") return;
 
   // Next App Router patches window.history.replaceState and merges its route
   // tree, which still contains the original `?token=...`. Call the native
   // implementation so neither the visible URL nor history.state retains it.
-  History.prototype.replaceState.call(window.history, null, "", "/login");
+  History.prototype.replaceState.call(window.history, null, "", buildLoginPath(input));
 }
 
 export function startSsoExchange(
   token: string,
   api: SsoApi,
+  historyInput: SsoHistoryInput = {},
 ): Promise<LoginResponse> {
-  stripSsoTokenFromHistory();
+  stripSsoTokenFromHistory(historyInput);
 
   let flight = flights.get(token);
   if (!flight) {

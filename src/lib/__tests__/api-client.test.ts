@@ -3,6 +3,19 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { api, ApiRequestError } from "@/lib/api-client";
 import { useAuthStore } from "@/stores/auth-store";
 
+const { mockRefreshSession, mockBuildCurrentLoginPath } = vi.hoisted(() => ({
+  mockRefreshSession: vi.fn(),
+  mockBuildCurrentLoginPath: vi.fn(() => "/login?returnTo=%2Frequests%2Fabc%3Fmode%3Dprocess"),
+}));
+
+vi.mock("@/lib/auth/refresh-session", () => ({ refreshSession: mockRefreshSession }));
+vi.mock("@/lib/auth/return-to", async () => {
+  const actual = await vi.importActual<typeof import("@/lib/auth/return-to")>(
+    "@/lib/auth/return-to",
+  );
+  return { ...actual, buildLoginPathForCurrentLocation: mockBuildCurrentLoginPath };
+});
+
 function mockJsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
     status,
@@ -39,11 +52,22 @@ describe("api client auth headers", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
     vi.stubGlobal("fetch", vi.fn());
+    mockRefreshSession.mockReset();
+    mockBuildCurrentLoginPath.mockClear();
     useAuthStore.setState({
       user: null,
       accessToken: "stale-admin-token",
       isLoading: false,
     });
+  });
+
+  it("preserves current intent after a terminal API refresh failure", async () => {
+    vi.mocked(fetch).mockResolvedValue(mockJsonResponse({ message: "Unauthorized" }, 401));
+    mockRefreshSession.mockRejectedValue(new Error("refresh failed"));
+
+    await expect(api.get("/requests/abc")).rejects.toMatchObject({ status: 401 });
+
+    expect(mockBuildCurrentLoginPath).toHaveBeenCalledTimes(1);
   });
 
   it("does not send stale Authorization headers to the SSO exchange", async () => {

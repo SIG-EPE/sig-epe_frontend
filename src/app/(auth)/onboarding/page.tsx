@@ -1,13 +1,15 @@
 "use client";
 
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useTransition } from "react";
 import { useAuthStore } from "@/stores/auth-store";
-import { getRoleHomePath } from "@/lib/auth/role-redirect";
+import { resolvePostAuthDestination, sanitizeReturnTo } from "@/lib/auth/return-to";
 import { OnboardingForm } from "@/components/auth/onboarding-form";
 
 export default function OnboardingPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const returnTo = sanitizeReturnTo(searchParams.get("returnTo"));
   const [, startTransition] = useTransition();
   const user = useAuthStore((state) => state.user);
   const authSource = useAuthStore((state) => state.user?.authSource) ?? "LOCAL";
@@ -19,10 +21,14 @@ export default function OnboardingPage() {
   useEffect(() => {
     if (user && !needsOnboarding) {
       startTransition(() => {
-        router.push(getRoleHomePath(user.role?.code ?? "") as any);
+        router.push(
+          resolvePostAuthDestination(returnTo, user.role?.code ?? "") as Parameters<
+            typeof router.push
+          >[0],
+        );
       });
     }
-  }, [user, needsOnboarding, router]);
+  }, [user, needsOnboarding, returnTo, router]);
 
   if (!user || !needsOnboarding) {
     return null;
@@ -30,5 +36,11 @@ export default function OnboardingPage() {
 
   const displayName = `${user.firstName} ${user.lastName}`.trim() || "Usuario";
 
-  return <OnboardingForm epeUserName={displayName} authSource={authSource} />;
+  return (
+    <OnboardingForm
+      epeUserName={displayName}
+      authSource={authSource}
+      returnTo={returnTo}
+    />
+  );
 }

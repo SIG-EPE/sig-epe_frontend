@@ -4,6 +4,12 @@ import { jwtVerify } from "jose";
 import type { TokenPayload } from "@/types/auth";
 import { getRoleHomePath } from "@/lib/auth/role-redirect";
 import { canAccessRoute, getRouteAccessRule } from "@/lib/auth/route-access";
+import {
+  buildLoginPath,
+  buildOnboardingPath,
+  resolvePostAuthDestination,
+  sanitizeReturnTo,
+} from "@/lib/auth/return-to";
 
 // -------------------------------------------------------
 // Next.js Middleware — Edge Runtime JWT verification
@@ -38,6 +44,8 @@ function canUseSessionHintForPath(pathname: string): boolean {
 
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
+  const requestedTarget = sanitizeReturnTo(`${pathname}${request.nextUrl.search}`);
+  const returnTo = sanitizeReturnTo(request.nextUrl.searchParams.get("returnTo"));
 
   // Allow static/infra paths through without any token check
   if (isPublicPath(pathname)) {
@@ -56,10 +64,12 @@ export async function middleware(request: NextRequest) {
     if (token) {
       const tokenPayload = await verifyToken(token);
       if (tokenPayload?.scope === "full") {
-        return NextResponse.redirect(new URL(getRoleHomePath(tokenPayload.role), request.url));
+        return NextResponse.redirect(
+          new URL(resolvePostAuthDestination(returnTo, tokenPayload.role), request.url),
+        );
       }
       if (tokenPayload?.scope === "onboarding") {
-        return NextResponse.redirect(new URL("/onboarding", request.url));
+        return NextResponse.redirect(new URL(buildOnboardingPath(returnTo), request.url));
       }
     }
     // No token or invalid token → show login page
@@ -74,7 +84,9 @@ export async function middleware(request: NextRequest) {
       return NextResponse.next();
     }
 
-    return NextResponse.redirect(new URL("/login", request.url));
+    return NextResponse.redirect(
+      new URL(buildLoginPath({ returnTo: requestedTarget }), request.url),
+    );
   }
 
   const tokenPayload = await verifyToken(token);
@@ -84,17 +96,21 @@ export async function middleware(request: NextRequest) {
       return NextResponse.next();
     }
 
-    return NextResponse.redirect(new URL("/login", request.url));
+    return NextResponse.redirect(
+      new URL(buildLoginPath({ returnTo: requestedTarget }), request.url),
+    );
   }
 
   // Onboarding scope: only allow /onboarding
   if (tokenPayload.scope === "onboarding" && !pathname.startsWith("/onboarding")) {
-    return NextResponse.redirect(new URL("/onboarding", request.url));
+    return NextResponse.redirect(new URL(buildOnboardingPath(requestedTarget), request.url));
   }
 
   // Full scope: redirect away from /onboarding
   if (tokenPayload.scope === "full" && pathname.startsWith("/onboarding")) {
-    return NextResponse.redirect(new URL(getRoleHomePath(tokenPayload.role), request.url));
+    return NextResponse.redirect(
+      new URL(resolvePostAuthDestination(returnTo, tokenPayload.role), request.url),
+    );
   }
 
   // Redirect root "/" to role-specific home page

@@ -4,8 +4,8 @@ import { useEffect } from "react";
 import { useRouter } from "next/navigation";
 
 import { api, ApiRequestError } from "@/lib/api-client";
-import { ROUTES } from "@/lib/constants";
 import { refreshSession } from "@/lib/auth/refresh-session";
+import { buildLoginPathForCurrentLocation } from "@/lib/auth/return-to";
 import {
   clearClientAuthSession,
   getAccessTokenFromCookie,
@@ -66,7 +66,9 @@ export function SessionManager({ children }: { children: React.ReactNode }) {
         } catch {
           if (!cancelled) {
             clearClientAuthSession();
-            router.replace(ROUTES.LOGIN);
+            router.replace(
+              buildLoginPathForCurrentLocation() as Parameters<typeof router.replace>[0],
+            );
           }
         }
         return;
@@ -93,7 +95,9 @@ export function SessionManager({ children }: { children: React.ReactNode }) {
             await refreshSession({ reason: "hydrate" });
           } catch {
             clearClientAuthSession();
-            router.replace(ROUTES.LOGIN);
+            router.replace(
+              buildLoginPathForCurrentLocation() as Parameters<typeof router.replace>[0],
+            );
           }
         } else {
           setLoading(false);
@@ -114,7 +118,9 @@ export function SessionManager({ children }: { children: React.ReactNode }) {
     const timer = window.setTimeout(() => {
       refreshSession({ reason: "proactive" }).catch(() => {
         clearClientAuthSession();
-        router.replace(ROUTES.LOGIN);
+        router.replace(
+          buildLoginPathForCurrentLocation() as Parameters<typeof router.replace>[0],
+        );
       });
     }, Math.max(getRefreshDelay(accessTokenExpiresAt), MIN_REFRESH_DELAY_MS));
 
@@ -129,7 +135,9 @@ export function SessionManager({ children }: { children: React.ReactNode }) {
 
       refreshSession({ reason: "proactive" }).catch(() => {
         clearClientAuthSession();
-        router.replace(ROUTES.LOGIN);
+        router.replace(
+          buildLoginPathForCurrentLocation() as Parameters<typeof router.replace>[0],
+        );
       });
     }
 

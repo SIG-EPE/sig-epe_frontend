@@ -61,6 +61,7 @@ describe("SessionManager", () => {
     vi.useRealTimers();
     vi.clearAllMocks();
     resetAuthStore();
+    window.history.replaceState(null, "", "/requests/abc?mode=process");
     mockGetAccessTokenFromCookie.mockReturnValue(null);
     mockRefreshSession.mockResolvedValue({
       accessToken: "refreshed-token",
@@ -147,8 +148,33 @@ describe("SessionManager", () => {
 
     await waitFor(() => {
       expect(mockClearClientAuthSession).toHaveBeenCalledTimes(1);
-      expect(mockReplace).toHaveBeenCalledWith("/login");
+      expect(mockReplace).toHaveBeenCalledWith(
+        "/login?returnTo=%2Frequests%2Fabc%3Fmode%3Dprocess",
+      );
     });
+  });
+
+  it("preserves the current target after terminal proactive refresh failure", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
+    mockRefreshSession.mockRejectedValue(new Error("refresh failed"));
+    useAuthStore.setState({
+      user: AUTH_USER,
+      accessToken: "live-token",
+      accessTokenExpiresAt: "2026-01-01T00:01:05.000Z",
+      sessionExpiresAt: "2026-01-01T02:00:00.000Z",
+      isLoading: false,
+    });
+
+    render(<SessionManager><div>protected shell</div></SessionManager>);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_000);
+    });
+
+    expect(mockClearClientAuthSession).toHaveBeenCalledTimes(1);
+    expect(mockReplace).toHaveBeenCalledWith(
+      "/login?returnTo=%2Frequests%2Fabc%3Fmode%3Dprocess",
+    );
   });
 
   it("recovers the protected shell after reload when access expired but refresh succeeds", async () => {
