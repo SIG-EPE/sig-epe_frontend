@@ -70,6 +70,42 @@ describe("api client auth headers", () => {
     expect(mockBuildCurrentLoginPath).toHaveBeenCalledTimes(1);
   });
 
+  it("no reintenta ni cierra la sesión si se aborta el GET mientras espera el refresh 401", async () => {
+    let finishRefresh!: (value: { accessToken: string }) => void;
+    mockRefreshSession.mockReturnValue(
+      new Promise((resolve) => {
+        finishRefresh = resolve;
+      }),
+    );
+    vi.mocked(fetch).mockResolvedValue(
+      mockJsonResponse({ message: "Unauthorized" }, 401),
+    );
+    const controller = new AbortController();
+    const pending = api.get("/requests/abc", { signal: controller.signal });
+    await vi.waitFor(() => expect(mockRefreshSession).toHaveBeenCalledOnce());
+    controller.abort();
+    finishRefresh({ accessToken: "new-token" });
+    await expect(pending).rejects.toMatchObject({ name: "AbortError" });
+    expect(fetch).toHaveBeenCalledOnce();
+    expect(mockBuildCurrentLoginPath).not.toHaveBeenCalled();
+  });
+
+  it("conserva la señal en el reintento del GET tras refresh válido", async () => {
+    mockRefreshSession.mockResolvedValue({ accessToken: "new-token" });
+    vi.mocked(fetch)
+      .mockResolvedValueOnce(mockJsonResponse({ message: "Unauthorized" }, 401))
+      .mockResolvedValueOnce(mockJsonResponse({ data: { id: "abc" } }));
+    const signal = new AbortController().signal;
+    await expect(api.get("/requests/abc", { signal })).resolves.toEqual({
+      id: "abc",
+    });
+    expect(vi.mocked(fetch).mock.calls[0]?.[1]?.signal).toBe(signal);
+    expect(vi.mocked(fetch).mock.calls[1]?.[1]?.signal).toBe(signal);
+    expect(getLastRequestHeaders().get("Authorization")).toBe(
+      "Bearer new-token",
+    );
+  });
+
   it("does not send stale Authorization headers to the SSO exchange", async () => {
     vi.mocked(fetch).mockResolvedValue(
       mockJsonResponse({ data: { accessToken: "sso-token" } }),

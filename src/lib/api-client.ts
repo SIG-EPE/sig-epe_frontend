@@ -80,12 +80,15 @@ async function apiFetch<T>(
     headers,
     credentials: "include", // always send cookies (for refresh)
   });
+  // Un 401 puede terminar después de que el consumidor ya canceló el detalle.
+  options.signal?.throwIfAborted();
 
   // --- 401: attempt token refresh + retry ---
   if (res.status === 401 && shouldAttachAuthHeader(path)) {
     const refreshResult = await refreshSession({ reason: "api-401" }).catch(
       () => null,
     );
+    options.signal?.throwIfAborted();
     const newToken = refreshResult?.accessToken ?? null;
 
     if (newToken) {

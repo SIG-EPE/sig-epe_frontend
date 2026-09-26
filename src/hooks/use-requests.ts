@@ -821,6 +821,8 @@ export function useRequest(id?: string) {
   const [request, setRequest] = useState<PaymentRequest | null>(null);
   const hasLoadedRequestRef = useRef(false);
   const rexanPollCountRef = useRef(0);
+  const generationRef = useRef(0);
+  const abortControllerRef = useRef<AbortController | null>(null);
   const [isInitialLoading, setIsInitialLoading] = useState(Boolean(id));
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [error, setError] = useState<Error | null>(null);
@@ -831,30 +833,65 @@ export function useRequest(id?: string) {
   const refetch = useCallback(
     async (options?: RequestResourceRefetchOptions) => {
       if (!id || authIsLoading || !accessToken) return;
+      const generation = ++generationRef.current;
+      abortControllerRef.current?.abort();
+      const controller = new AbortController();
+      abortControllerRef.current = controller;
       const background =
         options?.background === true || hasLoadedRequestRef.current;
       setIsInitialLoading(!background);
       setIsRefreshing(background);
       setError(null);
       try {
-        setRequest(await api.get<PaymentRequest>(`/requests/${id}`));
+        const nextRequest = await api.get<PaymentRequest>(`/requests/${id}`, {
+          signal: controller.signal,
+        });
+        if (
+          generation !== generationRef.current ||
+          controller.signal.aborted
+        )
+          return;
+        setRequest(nextRequest);
         hasLoadedRequestRef.current = true;
       } catch (e) {
+        if (
+          generation !== generationRef.current ||
+          controller.signal.aborted ||
+          (e instanceof Error && e.name === "AbortError")
+        )
+          return;
         setError(
           e instanceof Error ? e : new Error("Error al cargar la solicitud"),
         );
       } finally {
-        setIsInitialLoading(false);
-        setIsRefreshing(false);
+        if (generation === generationRef.current) {
+          if (abortControllerRef.current === controller)
+            abortControllerRef.current = null;
+          setIsInitialLoading(false);
+          setIsRefreshing(false);
+        }
       }
     },
     [accessToken, authIsLoading, id],
   );
 
   useEffect(() => {
-    if (authIsLoading || !accessToken) return;
+    hasLoadedRequestRef.current = false;
+    rexanPollCountRef.current = 0;
+    setRequest(null);
+    setError(null);
+    if (!id || authIsLoading || !accessToken) {
+      setIsInitialLoading(false);
+      setIsRefreshing(false);
+      return;
+    }
     void refetch();
-  }, [accessToken, authIsLoading, refetch]);
+    return () => {
+      generationRef.current += 1;
+      abortControllerRef.current?.abort();
+      abortControllerRef.current = null;
+    };
+  }, [accessToken, authIsLoading, id, refetch]);
 
   useEffect(() => {
     const status = request?.rexan_activation?.status;
@@ -876,8 +913,14 @@ export function useRequest(id?: string) {
   ]);
 
   const patchRequest = (nextRequest: PaymentRequest): void => {
+    generationRef.current += 1;
+    abortControllerRef.current?.abort();
+    abortControllerRef.current = null;
     hasLoadedRequestRef.current = true;
     setRequest(nextRequest);
+    setError(null);
+    setIsInitialLoading(false);
+    setIsRefreshing(false);
   };
 
   return {
