@@ -10,6 +10,7 @@ const replaceMock = vi.fn((href: string) => {
 const pushMock = vi.fn();
 const refetchMock = vi.fn();
 const usePlanningLinesMock = vi.fn();
+const auth = vi.hoisted(() => ({ role: "GIOF_GESTOR" }));
 let currentQuery = "";
 
 vi.mock("next/navigation", () => ({
@@ -18,8 +19,12 @@ vi.mock("next/navigation", () => ({
 }));
 
 vi.mock("@/stores/auth-store", () => ({
-  useAuthStore: (selector?: (state: { user: null }) => unknown) =>
-    selector ? selector({ user: null }) : { user: null },
+  useAuthStore: (
+    selector?: (state: { user: { role: { code: string } } }) => unknown,
+  ) =>
+    selector
+      ? selector({ user: { role: { code: auth.role } } })
+      : { user: { role: { code: auth.role } } },
 }));
 
 vi.mock("@/hooks/use-budget", () => ({
@@ -27,6 +32,10 @@ vi.mock("@/hooks/use-budget", () => ({
   useOrganizationalUnits: () => ({ data: [] }),
   usePlanningLineStats: () => ({ data: null, isLoading: false }),
   usePlanningLines: (filters: unknown) => usePlanningLinesMock(filters),
+}));
+const readiness = vi.hoisted(() => ({ enabled: true }));
+vi.mock("@/hooks/use-catalogs", () => ({
+  usePoaHierarchyCapability: () => ({ enabled: readiness.enabled }),
 }));
 
 function planningLinesResult(overrides: Record<string, unknown> = {}) {
@@ -47,10 +56,36 @@ describe("PlanningLinesPage code search", () => {
     vi.useFakeTimers();
     vi.clearAllMocks();
     currentQuery = "";
+    auth.role = "GIOF_GESTOR";
+    readiness.enabled = true;
     usePlanningLinesMock.mockReturnValue(planningLinesResult());
   });
 
   afterEach(() => vi.useRealTimers());
+
+  it("offers Add only to the effective manager or admin role", () => {
+    const { rerender } = render(<PlanningLinesPage />);
+    expect(
+      screen.queryByRole("button", { name: "Agregar línea" }),
+    ).not.toBeInTheDocument();
+    auth.role = "GIOF_MANAGER";
+    rerender(<PlanningLinesPage />);
+    fireEvent.click(screen.getByRole("button", { name: "Agregar línea" }));
+    expect(pushMock).toHaveBeenCalledWith("/budget/planning/new");
+    auth.role = "ADMIN_SISTEMA";
+    rerender(<PlanningLinesPage />);
+    expect(
+      screen.getByRole("button", { name: "Agregar línea" }),
+    ).toBeInTheDocument();
+  });
+
+  it("hides Add when catalog readiness is unready without hiding historical results", () => {
+    auth.role = "GIOF_MANAGER";
+    readiness.enabled = false;
+    render(<PlanningLinesPage />);
+    expect(screen.queryByRole("button", { name: "Agregar línea" })).not.toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Planificación POA" })).toBeInTheDocument();
+  });
 
   it("debounces 300 ms, trims code, composes current filters, and resets page", async () => {
     currentQuery = "fiscal_year_id=fy-1&org_unit_id=ou-1&status=APPROVED";

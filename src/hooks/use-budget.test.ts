@@ -8,6 +8,7 @@ import {
   recoverFromPlanningLineStateConflict,
   useMonthlyDistribution,
   usePlanningLines,
+  useCreatePlanningLine,
 } from "@/hooks/use-budget";
 import { clearQueryCache, setQueryCacheAuthNamespace } from "@/lib/query-cache";
 
@@ -24,7 +25,7 @@ vi.mock("@/lib/api-client", async (importActual) => {
   const actual = await importActual<typeof import("@/lib/api-client")>();
   return {
     ...actual,
-    api: { ...actual.api, get: vi.fn() },
+    api: { ...actual.api, get: vi.fn(), post: vi.fn() },
   };
 });
 
@@ -115,6 +116,35 @@ describe("POA monthly distribution contract", () => {
   });
 });
 
+describe("POA creation response contract", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it("returns the committed line id from the unwrapped API data and invalidates caches", async () => {
+    vi.mocked(api.post).mockResolvedValueOnce({
+      id: "draft-from-server",
+      status: "DRAFT",
+    });
+    const { result } = renderHook(() => useCreatePlanningLine());
+    let created: { id: string } | undefined;
+    await act(async () => {
+      created = await result.current.create({
+        fiscal_year_id: "fy-1",
+        organizational_unit_id: "org-1",
+        budget_category_id: "cat-1",
+        planning_type: "PROGRAMA",
+        unit_price: 0,
+        quantity: 0,
+      });
+    });
+    expect(api.post).toHaveBeenCalledWith(
+      "/budget/planning-lines",
+      expect.any(Object),
+    );
+    expect(created?.id).toBe("draft-from-server");
+    expect(invalidateQueryTag).toHaveBeenCalledWith("budget");
+  });
+});
+
 function deferred<T>() {
   let resolve!: (value: T) => void;
   const promise = new Promise<T>((promiseResolve) => {
@@ -153,6 +183,7 @@ describe("POA planning line code query", () => {
     await waitFor(() =>
       expect(api.get).toHaveBeenCalledWith(
         "/budget/planning-lines?fiscal_year_id=fy-1&org_unit_id=ou-1&status=APPROVED&code=PoA-17&page=1",
+        { signal: expect.any(AbortSignal) },
       ),
     );
 
@@ -160,6 +191,7 @@ describe("POA planning line code query", () => {
     await waitFor(() => expect(api.get).toHaveBeenCalledTimes(2));
     expect(api.get).toHaveBeenLastCalledWith(
       "/budget/planning-lines?fiscal_year_id=fy-1&org_unit_id=ou-1&status=APPROVED&page=1",
+      { signal: expect.any(AbortSignal) },
     );
   });
 

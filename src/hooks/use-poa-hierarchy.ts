@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 
-import { isPoaCatalogCodeModelEnabled } from "@/config/features";
+import { usePoaHierarchyCapability } from "@/hooks/use-catalogs";
 import { api } from "@/lib/api-client";
 import { invalidateCatalogDomain } from "@/lib/query-tags";
 import { useAuthStore } from "@/stores/auth-store";
@@ -108,10 +108,12 @@ export function usePoaHierarchy() {
   const [refreshKey, setRefreshKey] = useState(0);
   const authIsLoading = useAuthStore((state) => state.isLoading);
   const accessToken = useAuthStore((state) => state.accessToken);
+  const capability = usePoaHierarchyCapability();
 
   useEffect(() => {
-    if (!isPoaCatalogCodeModelEnabled() || authIsLoading || !accessToken) {
+    if (!capability?.enabled || authIsLoading || !accessToken) {
       setData(EMPTY_HIERARCHY);
+      setError(capability && !capability.enabled ? capability.reason : null);
       return;
     }
 
@@ -148,7 +150,7 @@ export function usePoaHierarchy() {
     return () => {
       active = false;
     };
-  }, [accessToken, authIsLoading, refreshKey]);
+  }, [accessToken, authIsLoading, refreshKey, capability?.enabled, capability?.reason]);
 
   return {
     data,

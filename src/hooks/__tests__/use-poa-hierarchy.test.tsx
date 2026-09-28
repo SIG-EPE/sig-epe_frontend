@@ -15,6 +15,7 @@ describe("usePoaHierarchy", () => {
   beforeEach(() => {
     useAuthStore.setState({ accessToken: "token", isLoading: false });
     vi.mocked(api.get).mockImplementation(async (path) => {
+      if (path === "/catalogs/poa-hierarchy-capability") return { enabled: true, legacyAllowed: true, reason: null };
       if (path === "/catalogs/budget-programs") return [];
       if (path.endsWith("/dependencies")) return { total: 0 };
       return [];
@@ -23,10 +24,18 @@ describe("usePoaHierarchy", () => {
 
   it("carga todos los niveles e incluye inactivos", async () => {
     const { result } = renderHook(() => usePoaHierarchy());
+    await waitFor(() => expect(api.get).toHaveBeenCalledWith("/catalogs/strategic-components?include_inactive=true"));
     await waitFor(() => expect(result.current.isLoading).toBe(false));
     expect(api.get).toHaveBeenCalledWith("/catalogs/strategic-components?include_inactive=true");
     expect(api.get).toHaveBeenCalledWith("/catalogs/operative-actions?include_inactive=true");
     expect(api.get).toHaveBeenCalledWith("/catalogs/poa-resources?include_inactive=true");
+  });
+
+  it("fails closed on capability lookup error without fetching hierarchy", async () => {
+    vi.mocked(api.get).mockRejectedValue(new Error("network unavailable"));
+    const { result } = renderHook(() => usePoaHierarchy());
+    await waitFor(() => expect(result.current.error).toMatch(/No se pudo verificar/));
+    expect(api.get).not.toHaveBeenCalledWith("/catalogs/poa-resources?include_inactive=true");
   });
 
   it("usa rutas backend existentes y nunca envía código al crear", async () => {

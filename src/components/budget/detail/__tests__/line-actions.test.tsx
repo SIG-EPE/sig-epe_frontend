@@ -67,13 +67,15 @@ describe("LineActions", () => {
     const user = userEvent.setup();
     mocks.approve.mockRejectedValue(new Error("No puedes aprobar tu propia línea"));
 
-    render(<LineActions line={makePlanningLine()} isGiof onRefetch={vi.fn()} />);
+    const onApproved = vi.fn();
+    render(<LineActions line={makePlanningLine()} roleCode="GIOF_MANAGER" onRefetch={vi.fn()} onApproved={onApproved} />);
 
     await user.click(screen.getByRole("button", { name: "Aprobar" }));
     await user.click(within(screen.getByRole("dialog", { name: "Confirmar aprobacion" })).getByRole("button", { name: "Aprobar" }));
 
     await waitFor(() => {
       expect(mocks.toastError).toHaveBeenCalledWith("No puedes aprobar tu propia línea");
+      expect(onApproved).not.toHaveBeenCalled();
     });
   });
 
@@ -91,7 +93,7 @@ describe("LineActions", () => {
       }),
     );
 
-    render(<LineActions line={makePlanningLine()} isGiof onRefetch={onRefetch} />);
+    render(<LineActions line={makePlanningLine()} roleCode="GIOF_MANAGER" onRefetch={onRefetch} onApproved={vi.fn()} />);
     await user.click(screen.getByRole("button", { name: "Aprobar" }));
     await user.click(within(screen.getByRole("dialog", { name: "Confirmar aprobacion" })).getByRole("button", { name: "Aprobar" }));
 
@@ -101,4 +103,29 @@ describe("LineActions", () => {
       expect(screen.queryByRole("dialog", { name: "Confirmar aprobacion" })).not.toBeInTheDocument();
     });
   });
+
+  it("aplica la respuesta aprobada sin GET adicional y respeta acceso GIOF", async () => {
+    const approved = makePlanningLine({ status: "APPROVED", approved_at: "2026-09-27T12:00:00Z" });
+    const onApproved = vi.fn();
+    const onRefetch = vi.fn();
+    mocks.approve.mockResolvedValue(approved);
+    const user = userEvent.setup();
+    const { rerender } = render(<LineActions line={makePlanningLine()} roleCode="ADMIN_SISTEMA" onRefetch={onRefetch} onApproved={onApproved} />);
+    expect(screen.queryByRole("button", { name: "Aprobar" })).not.toBeInTheDocument();
+    rerender(<LineActions line={makePlanningLine()} roleCode="GIOF_MANAGER" onRefetch={onRefetch} onApproved={onApproved} />);
+    await user.click(screen.getByRole("button", { name: "Aprobar" }));
+    await user.click(within(screen.getByRole("dialog", { name: "Confirmar aprobacion" })).getByRole("button", { name: "Aprobar" }));
+    await waitFor(() => expect(onApproved).toHaveBeenCalledWith(approved));
+    expect(onRefetch).not.toHaveBeenCalled();
+  });
+
+  it.each(["ADMIN_SISTEMA", "GIOF_GESTOR", "SOLICITANTE_EPE"])(
+    "does not offer approval, rejection or confirmation to %s",
+    (roleCode) => {
+      render(<LineActions line={makePlanningLine()} onRefetch={vi.fn()} onApproved={vi.fn()} roleCode={roleCode} />);
+      expect(screen.queryByRole("button", { name: "Aprobar" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Rechazar" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("dialog", { name: "Confirmar aprobacion" })).not.toBeInTheDocument();
+    },
+  );
 });

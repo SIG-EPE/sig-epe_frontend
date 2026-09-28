@@ -132,8 +132,11 @@ export interface PlanningLine {
   territory_id?: string | null;
   importance?: string | null;
   frequency?: string | null;
-  unit_price: number | null;
-  quantity: number | null;
+  unit_price: number | string | null;
+  quantity: number | string | null;
+  /** Texto exacto del numeric DB para edición aprobada; nunca derivar de unit_price. */
+  unit_price_decimal?: string | null;
+  quantity_decimal?: string | null;
   total_cost: number;
   status: "DRAFT" | "SUBMITTED" | "APPROVED" | "REJECTED";
   rejection_reason?: string | null;
@@ -252,9 +255,9 @@ export interface MonthlyEntry {
   id: string;
   planning_line_id: string;
   month: number;
-  planned_amount: number;
+  planned_amount: number | null;
   executed_amount: number;
-  monthly_programmed_decimal?: string;
+  monthly_programmed_decimal?: string | null;
   executed_amount_decimal?: string;
   execution_provenance?: PoaExecutionProvenance;
   execution_details?: MonthlyExecutionDetail[];

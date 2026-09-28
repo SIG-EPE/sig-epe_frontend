@@ -41,7 +41,7 @@ export function ManualExecutionModal({
   onClose,
   onSuccess,
 }: ManualExecutionModalProps) {
-  const [month, setMonth] = useState<number>(initialMonth ?? 1);
+  const [month, setMonth] = useState<number | null>(initialMonth ?? null);
   const [amount, setAmount] = useState<string>("");
   const [concept, setConcept] = useState<string>("");
   const [executionDate, setExecutionDate] = useState<string>("");
@@ -52,7 +52,7 @@ export function ManualExecutionModal({
   function validate(): string | null {
     if (!month || month < 1 || month > 12) return "Seleccione un mes válido";
     const amountNum = parseFloat(amount);
-    if (isNaN(amountNum) || amountNum < 0.01) return "El monto debe ser mayor a S/ 0.01";
+    if (!Number.isFinite(amountNum) || amountNum < 0.01) return "El monto debe ser al menos S/ 0.01";
     if (!concept.trim()) return "El concepto es requerido";
     if (concept.trim().length > 500) return "El concepto no puede superar los 500 caracteres";
     if (!executionDate) return "La fecha de ejecución es requerida";
@@ -60,6 +60,7 @@ export function ManualExecutionModal({
   }
 
   async function handleSave() {
+    if (isLoading) return;
     const error = validate();
     if (error) {
       setLocalError(error);
@@ -69,7 +70,7 @@ export function ManualExecutionModal({
 
     await mutate(
       {
-        month,
+        month: month!,
         amount: parseFloat(amount),
         concept: concept.trim(),
         execution_date: executionDate,
@@ -99,19 +100,24 @@ export function ManualExecutionModal({
         <DialogHeader>
           <DialogTitle>Registrar ejecución manual</DialogTitle>
           <DialogDescription>
-            Complete los datos de la ejecución presupuestal manual.
+            Ejecución presupuestal sin solicitud; no genera pago bancario ni constancia
           </DialogDescription>
         </DialogHeader>
 
         <div className="flex flex-col gap-4">
           {/* Mes */}
           <div className="flex flex-col gap-1">
-            <label className="text-sm font-medium">Mes</label>
+            <label htmlFor="manual-month" className="text-sm font-medium">
+              Mes
+            </label>
             <Select
-              value={String(month)}
-              onValueChange={(val) => setMonth(Number(val))}
+              value={month === null ? undefined : String(month)}
+              onValueChange={(val) => {
+                setMonth(Number(val));
+                setLocalError(null);
+              }}
             >
-              <SelectTrigger>
+              <SelectTrigger id="manual-month" aria-label="Mes">
                 <SelectValue placeholder="Seleccione el mes" />
               </SelectTrigger>
               <SelectContent>
@@ -126,8 +132,11 @@ export function ManualExecutionModal({
 
           {/* Monto */}
           <div className="flex flex-col gap-1">
-            <label className="text-sm font-medium">Monto (S/)</label>
+            <label htmlFor="manual-amount" className="text-sm font-medium">
+              Monto (S/)
+            </label>
             <input
+              id="manual-amount"
               type="number"
               min={0.01}
               step={0.01}
@@ -140,10 +149,11 @@ export function ManualExecutionModal({
 
           {/* Concepto */}
           <div className="flex flex-col gap-1">
-            <label className="text-sm font-medium">
+            <label htmlFor="manual-concept" className="text-sm font-medium">
               Concepto <span className="text-muted-foreground font-normal">({concept.length}/500)</span>
             </label>
             <Textarea
+              id="manual-concept"
               placeholder="Descripción del gasto ejecutado"
               value={concept}
               maxLength={500}
@@ -154,8 +164,11 @@ export function ManualExecutionModal({
 
           {/* Fecha de ejecución */}
           <div className="flex flex-col gap-1">
-            <label className="text-sm font-medium">Fecha de ejecución</label>
+            <label htmlFor="manual-date" className="text-sm font-medium">
+              Fecha de ejecución
+            </label>
             <input
+              id="manual-date"
               type="date"
               className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus:outline-none focus:ring-1 focus:ring-ring"
               value={executionDate}
@@ -165,12 +178,18 @@ export function ManualExecutionModal({
 
           {/* Error local */}
           {localError && (
-            <p className="text-sm text-destructive">{localError}</p>
+            <p role="alert" className="text-sm text-destructive">
+              {localError}
+            </p>
           )}
         </div>
 
         <DialogFooter>
-          <Button variant="outline" onClick={onClose} disabled={isLoading}>
+          <Button
+            variant="outline"
+            onClick={() => handleOpenChange(false)}
+            disabled={isLoading}
+          >
             Cancelar
           </Button>
           <Button onClick={handleSave} disabled={isLoading}>

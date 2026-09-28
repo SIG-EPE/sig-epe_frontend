@@ -1,7 +1,6 @@
 interface PlanningLineResourceFieldsInput {
-  enabled: boolean;
-  resourceId: string | null;
-  legacyDescription: string;
+  actionId: string | null;
+  name: string;
 }
 
 interface PoaCatalogOption {
@@ -11,14 +10,21 @@ interface PoaCatalogOption {
 
 export function buildPlanningLineResourceFields(
   input: PlanningLineResourceFieldsInput,
-): { resource_id: string } | { resource_description: string } {
-  if (input.enabled) {
-    if (!input.resourceId) {
-      throw new Error('Selecciona o crea un recurso POA.');
-    }
-    return { resource_id: input.resourceId };
+): {
+  new_resource: { name: string; action_id: string };
+} {
+  const name = input.name.trim();
+  if (
+    !input.actionId ||
+    !name ||
+    name.length > 500 ||
+    /[\u0000-\u001f\u007f]/.test(name)
+  ) {
+    throw new Error(
+      "Selecciona una acción operativa e ingresa un nombre válido (máximo 500 caracteres).",
+    );
   }
-  return { resource_description: input.legacyDescription };
+  return { new_resource: { name, action_id: input.actionId } };
 }
 
 export function poaCatalogOptionLabel(option: PoaCatalogOption): string {

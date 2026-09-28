@@ -1,6 +1,6 @@
 "use client";
 
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -8,6 +8,10 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { StatusBadge } from "@/components/budget/planning/status-badge";
 import { MonthlyTable } from "./monthly-table";
+import { ManualExecutionModal } from "./manual-execution-modal";
+import { DraftCostModal } from "./draft-cost-modal";
+import { ApprovedAmendmentModal, ApprovedAmendmentWarnings } from "./approved-amendment-modal";
+import type { ApprovedAmendmentWarning } from "@/hooks/use-approved-amendment";
 import { SourceMonthGrid } from "./source-month-grid";
 import { FundingSourceDistribution } from "./funding-source-distribution";
 import { StatusTimeline } from "./status-timeline";
@@ -24,6 +28,7 @@ import {
 } from "@/config/poa-territory-selection";
 import { isUnclassifiedLabel } from "@/lib/poa-territory-selection";
 import { ROLE_CAPABILITY, hasRoleCapability } from "@/lib/role-capabilities";
+import { ROLE_CODE } from "@/lib/constants";
 
 function formatCurrency(amount: number): string {
   return new Intl.NumberFormat("es-PE", {
@@ -32,8 +37,12 @@ function formatCurrency(amount: number): string {
   }).format(amount);
 }
 
-function formatFinancialBasis(value: number | null): string {
-  return value === null ? "Sin dato" : formatCurrency(value);
+function formatFinancialBasis(value: number | string | null): string {
+  return value === null
+    ? "Sin dato"
+    : typeof value === "string"
+      ? `S/ ${value}`
+      : formatCurrency(value);
 }
 
 function isPlanningType(value: string | null | undefined): value is PlanningType {
@@ -88,17 +97,37 @@ function getLineFundingSources(line: PlanningLine): FundingSourceAllocation[] {
 }
 
 export function LineDetailPage() {
+  const [manualModalOpen, setManualModalOpen] = useState(false);
+  const [manualMonth, setManualMonth] = useState<number | null>(null);
+  const [executionRefresh, setExecutionRefresh] = useState(0);
+  const [amendmentOpen, setAmendmentOpen] = useState(false);
+  const [draftCostOpen, setDraftCostOpen] = useState(false);
+  const [amendmentWarnings, setAmendmentWarnings] = useState<ApprovedAmendmentWarning[]>([]);
   const params = useParams();
   const router = useRouter();
   const id = params.id as string;
 
   const sourceMonthsEnabled =
     process.env.NEXT_PUBLIC_POA_SOURCE_MONTHS_ENABLED === "true";
-  const { line, isLoading, error, refetch } = usePlanningLine(id, {
+  const { line, isLoading, error, refetch, applyApprovedLine } = usePlanningLine(id, {
     measureAuthority: sourceMonthsEnabled ? "source" : "operational",
   });
   const { user } = useAuthStore();
   const isGiof = hasRoleCapability(user?.role?.code, ROLE_CAPABILITY.BUDGET_ADMIN);
+  const canRecordExecution =
+    user?.role?.code === ROLE_CODE.GIOF_MANAGER && line?.status === "APPROVED";
+  const canAmendApproved = canRecordExecution;
+  const canEditDraftCost = line?.status === "DRAFT" && (
+    user?.role?.code === ROLE_CODE.GIOF_GESTOR ||
+    user?.role?.code === ROLE_CODE.GIOF_MANAGER ||
+    user?.role?.code === ROLE_CODE.ADMIN_SISTEMA ||
+    (user?.role?.code === ROLE_CODE.SOLICITANTE_EPE && line.created_by === user.id)
+  );
+
+  function openManualExecution(month: number | null) {
+    setManualMonth(month);
+    setManualModalOpen(true);
+  }
 
   if (isLoading) {
     return (
@@ -142,7 +171,7 @@ export function LineDetailPage() {
     <div className="flex flex-col gap-6">
       {/* 1. Header */}
       <div className="flex flex-col gap-4">
-        <div className="flex items-start justify-between">
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
           <div className="flex flex-col gap-2">
             <p className="text-sm font-medium text-muted-foreground">
               {line.line_code ?? "Código POA pendiente"}
@@ -157,10 +186,28 @@ export function LineDetailPage() {
           </div>
           <LineActions
             line={line}
-            isGiof={isGiof}
+            roleCode={user?.role?.code}
             onRefetch={refetch}
+            onApproved={applyApprovedLine}
           />
         </div>
+        {canAmendApproved && <Button type="button" className="w-full sm:w-auto sm:self-start" variant="outline" onClick={() => setAmendmentOpen(true)}>Editar presupuesto aprobado</Button>}
+        <ApprovedAmendmentWarnings warnings={amendmentWarnings} />
+        {canRecordExecution && (
+          <div className="flex flex-col items-start gap-2">
+            <Button
+              type="button"
+              className="w-full sm:w-auto"
+              onClick={() => openManualExecution(null)}
+            >
+              Registrar ejecución directa del POA
+            </Button>
+            <p className="text-sm text-muted-foreground">
+              Ejecución presupuestal sin solicitud; no genera pago bancario ni
+              constancia
+            </p>
+          </div>
+        )}
       </div>
 
       <DetailSection title="Pertenencia POA">
@@ -204,7 +251,10 @@ export function LineDetailPage() {
 
       {/* 3. Cost */}
       <div className="flex flex-col gap-2 rounded-lg border bg-card p-4">
-        <h2 className="text-lg font-medium">Costo</h2>
+        <div className="flex items-center justify-between gap-3">
+          <h2 className="text-lg font-medium">Costo</h2>
+          {canEditDraftCost && <Button type="button" variant="outline" size="sm" onClick={() => setDraftCostOpen(true)}>Editar costo</Button>}
+        </div>
         <div className="flex items-baseline gap-2">
           <span className="text-muted-foreground">
             {formatFinancialBasis(line.unit_price)} x {line.quantity ?? "Sin dato"}
@@ -236,8 +286,34 @@ export function LineDetailPage() {
           lineStatus={line.status}
           onConflictRefetch={refetch}
           onExecutionCreated={refetch}
+          onOpenManualExecution={canRecordExecution ? openManualExecution : undefined}
+          executionRefresh={executionRefresh}
         />
       </div>
+
+      {canEditDraftCost && draftCostOpen && <DraftCostModal line={line} onClose={() => setDraftCostOpen(false)} onSuccess={async () => {
+        setDraftCostOpen(false);
+        await refetch();
+      }} />}
+
+      {canRecordExecution && manualModalOpen && (
+        <ManualExecutionModal
+          lineId={line.id}
+          initialMonth={manualMonth}
+          open={manualModalOpen}
+          onClose={() => setManualModalOpen(false)}
+          onSuccess={() => {
+            setManualModalOpen(false);
+            setExecutionRefresh((previous) => previous + 1);
+            void refetch();
+          }}
+        />
+      )}
+      {canAmendApproved && amendmentOpen && <ApprovedAmendmentModal line={line} onClose={() => setAmendmentOpen(false)} onSuccess={(warnings) => {
+        setAmendmentWarnings(warnings);
+        setAmendmentOpen(false);
+        void refetch();
+      }} />}
 
       {line.source_authority && (
         <SourceMonthGrid sourceAuthority={line.source_authority} />

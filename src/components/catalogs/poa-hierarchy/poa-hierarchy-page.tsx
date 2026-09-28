@@ -14,7 +14,6 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
-import { isPoaCatalogCodeModelEnabled } from "@/config/features";
 import { usePoaHierarchy } from "@/hooks/use-poa-hierarchy";
 import { ROLE_CAPABILITY, hasRoleCapability } from "@/lib/role-capabilities";
 import { useAuthStore } from "@/stores/auth-store";
@@ -30,20 +29,6 @@ export function PoaHierarchyPage() {
   const [status, setStatus] = useState<PoaStatusFilter>(POA_STATUS_FILTER.ALL);
   const [action, setAction] = useState<PoaHierarchyUiAction | null>(null);
   const canManage = hasRoleCapability(roleCode, ROLE_CAPABILITY.CATALOG_ADMIN);
-
-  if (!isPoaCatalogCodeModelEnabled()) {
-    return (
-      <div className="space-y-6">
-        <PageHeader />
-        <Alert>
-          <h2 className="mb-1 font-medium">Funcionalidad en preparación</h2>
-          <AlertDescription>
-            La administración de la jerarquía POA estará disponible cuando se habilite el modelo de códigos.
-          </AlertDescription>
-        </Alert>
-      </div>
-    );
-  }
 
   const filtered = filterPoaHierarchy(data, { search, programId, status });
 

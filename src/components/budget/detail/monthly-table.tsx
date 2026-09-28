@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import Link from "next/link";
 import type { Route } from "next";
 import { toast } from "sonner";
@@ -32,7 +32,7 @@ import {
   type MonthlyMovement,
 } from "@/types/budget";
 import { ManualExecutionModal } from "./manual-execution-modal";
-import { ROLE_CAPABILITY, hasRoleCapability } from "@/lib/role-capabilities";
+import { ROLE_CODE } from "@/lib/constants";
 
 const MONTHS_ES = [
   "Enero",
@@ -57,6 +57,8 @@ interface MonthlyTableProps {
   lineStatus?: string;
   onConflictRefetch?: () => void;
   onExecutionCreated?: () => void;
+  onOpenManualExecution?: (month: number) => void;
+  executionRefresh?: number;
 }
 
 function formatCurrency(amount: number): string {
@@ -161,6 +163,8 @@ export function MonthlyTable({
   lineStatus,
   onConflictRefetch,
   onExecutionCreated,
+  onOpenManualExecution,
+  executionRefresh = 0,
 }: MonthlyTableProps) {
   // Estado local para los 12 valores de planned_amount
   const [plannedAmounts, setPlannedAmounts] = useState<Record<number, number>>(
@@ -187,11 +191,11 @@ export function MonthlyTable({
     isLoading: manualLoading,
     refetch: refetchManualExecutions,
   } = useManualExecutions(lineId ?? "");
+  useEffect(() => {
+    if (executionRefresh > 0) void refetchManualExecutions();
+  }, [executionRefresh]);
   const { user } = useAuthStore();
-  const isGiofGestor = hasRoleCapability(
-    user?.role?.code,
-    ROLE_CAPABILITY.BUDGET_ADMIN,
-  );
+  const isGiofGestor = user?.role?.code === ROLE_CODE.GIOF_MANAGER;
 
   const totalPlanned = Object.values(plannedAmounts).reduce(
     (s, v) => s + Number(v),
@@ -620,8 +624,12 @@ export function MonthlyTable({
                             className="w-fit text-xs"
                             onClick={(e) => {
                               e.stopPropagation();
-                              setModalMonth(month);
-                              setShowManualModal(true);
+                              if (onOpenManualExecution) {
+                                onOpenManualExecution(month);
+                              } else {
+                                setModalMonth(month);
+                                setShowManualModal(true);
+                              }
                             }}
                           >
                             <Plus className="mr-1 h-3 w-3" />
@@ -716,7 +724,7 @@ export function MonthlyTable({
       )}
 
       {/* Modal de ejecución manual */}
-      {showManualModal && lineId && (
+      {!onOpenManualExecution && showManualModal && lineId && (
         <ManualExecutionModal
           lineId={lineId}
           initialMonth={modalMonth}

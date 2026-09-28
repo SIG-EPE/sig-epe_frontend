@@ -13,6 +13,7 @@ import { ApiRequestError } from "@/lib/api-client";
 const mocks = vi.hoisted(() => ({
   upsert: vi.fn(),
   toastError: vi.fn(),
+  role: "GIOF_MANAGER",
 }));
 
 let manualExecutionsMock: ManualExecution[] = [];
@@ -39,7 +40,7 @@ vi.mock("sonner", () => ({
 }));
 
 vi.mock("@/stores/auth-store", () => ({
-  useAuthStore: () => ({ user: { role: { code: "GIOF_MANAGER" } } }),
+  useAuthStore: () => ({ user: { role: { code: mocks.role } } }),
 }));
 
 vi.mock("@/components/budget/detail/manual-execution-modal", () => ({
@@ -97,6 +98,7 @@ async function renderExpandedTable(entries: MonthlyEntry[]) {
 
 describe("MonthlyTable", () => {
   beforeEach(() => {
+    mocks.role = "GIOF_MANAGER";
     manualExecutionsMock = [];
     manualErrorMock = null;
     manualLoadingMock = false;
@@ -538,6 +540,17 @@ describe("MonthlyTable", () => {
     ).toBeInTheDocument();
     expect(screen.getByText("Mes inicial: 5")).toBeInTheDocument();
   });
+
+  it.each(["ADMIN_SISTEMA", "GIOF_GESTOR"])(
+    "does not expose the manager-only monthly action to %s",
+    async (role) => {
+      mocks.role = role;
+      await renderExpandedTable([makeMonthlyEntry()]);
+      expect(
+        screen.queryByRole("button", { name: /Registrar ejecución manual/ }),
+      ).not.toBeInTheDocument();
+    },
+  );
 
   it("refreshes canonical monthly movements after registering a manual execution", async () => {
     const user = userEvent.setup();

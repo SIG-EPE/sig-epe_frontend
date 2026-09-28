@@ -36,7 +36,6 @@ import type {
   PoaResource,
   CreatePoaResourceDto,
 } from "@/types/catalogs";
-import { isPoaCatalogCodeModelEnabled } from "@/config/features";
 
 // -------------------------------------------------------
 // useCatalogList — helper genérico para listas
@@ -537,7 +536,25 @@ export function useDeactivateOrganizationalUnit(id: string) {
 // STRATEGIC COMPONENTS — filtrable por program_id
 // -------------------------------------------------------
 
+export function usePoaHierarchyCapability() {
+  const [capability, setCapability] = useState<{ enabled: boolean; legacyAllowed: boolean; reason: string | null } | null>(null);
+  const accessToken = useAuthStore((state) => state.accessToken);
+  useEffect(() => {
+    if (!accessToken) {
+      setCapability(null);
+      return;
+    }
+    let current = true;
+    api.get<{ enabled: boolean; legacyAllowed: boolean; reason: string | null }>("/catalogs/poa-hierarchy-capability")
+      .then((result) => { if (current) setCapability(result); })
+       .catch(() => { if (current) setCapability({ enabled: false, legacyAllowed: false, reason: "No se pudo verificar la disponibilidad del catálogo POA." }); });
+    return () => { current = false; };
+  }, [accessToken]);
+  return capability;
+}
+
 export function useStrategicComponents(programId?: string | null) {
+  const capability = usePoaHierarchyCapability();
   const [data, setData] = useState<StrategicComponent[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -546,7 +563,7 @@ export function useStrategicComponents(programId?: string | null) {
   const accessToken = useAuthStore((s) => s.accessToken);
 
   const refetch = useCallback(async () => {
-    if (!isPoaCatalogCodeModelEnabled() || authIsLoading || !accessToken || !programId) {
+    if (!capability?.enabled || authIsLoading || !accessToken || !programId) {
       setData([]);
       return;
     }
@@ -557,12 +574,13 @@ export function useStrategicComponents(programId?: string | null) {
         `/catalogs/strategic-components?program_id=${programId}`
       );
       setData(result);
+      return result;
     } catch (err) {
       setError(err instanceof Error ? err.message : "Error al cargar componentes");
     } finally {
       setIsLoading(false);
     }
-  }, [accessToken, authIsLoading, programId]);
+  }, [accessToken, authIsLoading, programId, capability?.enabled]);
 
   useEffect(() => {
     void refetch();
@@ -576,6 +594,7 @@ export function useStrategicComponents(programId?: string | null) {
 // -------------------------------------------------------
 
 export function useOperativeActions(componentId?: string | null) {
+  const capability = usePoaHierarchyCapability();
   const [data, setData] = useState<OperativeAction[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -584,7 +603,7 @@ export function useOperativeActions(componentId?: string | null) {
   const accessToken = useAuthStore((s) => s.accessToken);
 
   const refetch = useCallback(async () => {
-    if (!isPoaCatalogCodeModelEnabled() || authIsLoading || !accessToken || !componentId) {
+    if (!capability?.enabled || authIsLoading || !accessToken || !componentId) {
       setData([]);
       return;
     }
@@ -595,12 +614,13 @@ export function useOperativeActions(componentId?: string | null) {
         `/catalogs/operative-actions?component_id=${componentId}`
       );
       setData(result);
+      return result;
     } catch (err) {
       setError(err instanceof Error ? err.message : "Error al cargar acciones operativas");
     } finally {
       setIsLoading(false);
     }
-  }, [accessToken, authIsLoading, componentId]);
+  }, [accessToken, authIsLoading, componentId, capability?.enabled]);
 
   useEffect(() => {
     void refetch();
@@ -614,6 +634,7 @@ export function useOperativeActions(componentId?: string | null) {
 // -------------------------------------------------------
 
 export function usePoaResources(actionId?: string | null) {
+  const capability = usePoaHierarchyCapability();
   const [data, setData] = useState<PoaResource[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -621,22 +642,22 @@ export function usePoaResources(actionId?: string | null) {
   const accessToken = useAuthStore((state) => state.accessToken);
 
   const refetch = useCallback(async () => {
-    if (!isPoaCatalogCodeModelEnabled() || authIsLoading || !accessToken || !actionId) {
+    if (!capability?.enabled || authIsLoading || !accessToken || !actionId) {
       setData([]);
       return;
     }
     setIsLoading(true);
     setError(null);
     try {
-      setData(
-        await api.get<PoaResource[]>(`/catalogs/poa-resources?action_id=${actionId}`),
-      );
+      const result = await api.get<PoaResource[]>(`/catalogs/poa-resources?action_id=${actionId}`);
+      setData(result);
+      return result;
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Error al cargar recursos POA");
     } finally {
       setIsLoading(false);
     }
-  }, [accessToken, actionId, authIsLoading]);
+  }, [accessToken, actionId, authIsLoading, capability?.enabled]);
 
   useEffect(() => {
     void refetch();

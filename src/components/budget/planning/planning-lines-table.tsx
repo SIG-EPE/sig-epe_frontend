@@ -29,9 +29,10 @@ import { useState } from "react";
 import {
   getPlanningLineMutationErrorMessage,
   recoverFromPlanningLineStateConflict,
+  approvePlanningLine,
 } from "@/hooks/use-budget";
 import { Badge } from "@/components/ui/badge";
-import { ROUTES } from "@/lib/constants";
+import { ROLE_CODE, ROUTES } from "@/lib/constants";
 import { isUnclassifiedLabel } from "@/lib/poa-territory-selection";
 import { getPoaTerritorySelectionFeatures } from "@/config/poa-territory-selection";
 import { ROLE_CAPABILITY, hasRoleCapability } from "@/lib/role-capabilities";
@@ -61,6 +62,7 @@ export function PlanningLinesTable({ lines, isLoading, onRefetch }: PlanningLine
   const router = useRouter();
   const { user } = useAuthStore();
   const isGiof = hasRoleCapability(user?.role?.code, ROLE_CAPABILITY.BUDGET_ADMIN);
+  const canReviewLine = user?.role?.code === ROLE_CODE.GIOF_MANAGER;
   const userId = user?.id;
   const territoryFeatures = getPoaTerritorySelectionFeatures();
 
@@ -125,9 +127,8 @@ export function PlanningLinesTable({ lines, isLoading, onRefetch }: PlanningLine
   async function handleApprove(line: PlanningLine) {
     setLoadingLineId(line.id);
     try {
-      await api.post(`/budget/planning-lines/${line.id}/approve`);
+      await approvePlanningLine(line.id);
       toast.success("Linea aprobada");
-      onRefetch();
     } catch (error) {
       const conflictMessage = recoverFromPlanningLineStateConflict(error);
       toast.error(conflictMessage ?? getPlanningLineMutationErrorMessage(error) ?? "Error al aprobar la linea");
@@ -231,7 +232,7 @@ export function PlanningLinesTable({ lines, isLoading, onRefetch }: PlanningLine
                         </DropdownMenuItem>
                       )}
 
-                      {line.status === "SUBMITTED" && isGiof && (
+                      {line.status === "SUBMITTED" && canReviewLine && (
                         <>
                           <DropdownMenuItem
                             onClick={() => handleApprove(line)}
@@ -258,7 +259,7 @@ export function PlanningLinesTable({ lines, isLoading, onRefetch }: PlanningLine
         </TableBody>
       </Table>
 
-      {rejectLineId && (
+      {canReviewLine && rejectLineId && (
         <RejectModal
           lineId={rejectLineId}
           open={rejectModalOpen}

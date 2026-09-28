@@ -20,19 +20,22 @@ import {
   useSubmitPlanningLine,
 } from "@/hooks/use-budget";
 import type { PlanningLine } from "@/hooks/use-budget";
+import { ROLE_CODE } from "@/lib/constants";
 
 interface LineActionsProps {
   line: PlanningLine;
-  isGiof: boolean;
+  roleCode?: string;
   onRefetch: () => void;
+  onApproved: (line: PlanningLine) => void;
 }
 
-export function LineActions({ line, isGiof, onRefetch }: LineActionsProps) {
+export function LineActions({ line, roleCode, onRefetch, onApproved }: LineActionsProps) {
   const [approveConfirmOpen, setApproveConfirmOpen] = useState(false);
   const [rejectModalOpen, setRejectModalOpen] = useState(false);
 
   const { submit, isLoading: isSubmitting } = useSubmitPlanningLine(line.id);
   const { approve, isLoading: isApproving } = useApprovePlanningLine(line.id);
+  const canReviewLine = roleCode === ROLE_CODE.GIOF_MANAGER && line.status === "SUBMITTED";
 
   async function handleSubmit() {
     try {
@@ -48,10 +51,10 @@ export function LineActions({ line, isGiof, onRefetch }: LineActionsProps) {
 
   async function handleApprove() {
     try {
-      await approve();
+      const approvedLine = await approve();
+      onApproved(approvedLine);
       toast.success("Linea aprobada");
       setApproveConfirmOpen(false);
-      onRefetch();
     } catch (error) {
       const conflictMessage = recoverFromPlanningLineStateConflict(error);
       toast.error(conflictMessage ?? getPlanningLineMutationErrorMessage(error) ?? "Error al aprobar la linea");
@@ -72,8 +75,8 @@ export function LineActions({ line, isGiof, onRefetch }: LineActionsProps) {
           </Button>
         )}
 
-        {/* SUBMITTED + GIOF: Aprobar y Rechazar */}
-        {line.status === "SUBMITTED" && isGiof && (
+        {/* Solo GIOF_MANAGER puede aprobar o rechazar líneas enviadas */}
+        {canReviewLine && (
           <>
             <Button
               variant="default"
@@ -93,7 +96,7 @@ export function LineActions({ line, isGiof, onRefetch }: LineActionsProps) {
       </div>
 
       {/* Confirmacion de aprobacion */}
-      <Dialog open={approveConfirmOpen} onOpenChange={setApproveConfirmOpen}>
+      {canReviewLine && <Dialog open={approveConfirmOpen} onOpenChange={setApproveConfirmOpen}>
         <DialogContent className="max-w-sm">
           <DialogHeader>
             <DialogTitle>Confirmar aprobacion</DialogTitle>
@@ -117,15 +120,15 @@ export function LineActions({ line, isGiof, onRefetch }: LineActionsProps) {
             </Button>
           </DialogFooter>
         </DialogContent>
-      </Dialog>
+      </Dialog>}
 
       {/* Modal de rechazo */}
-      <RejectModal
+      {canReviewLine && <RejectModal
         lineId={line.id}
         open={rejectModalOpen}
         onOpenChange={setRejectModalOpen}
         onSuccess={onRefetch}
-      />
+      />}
     </>
   );
 }

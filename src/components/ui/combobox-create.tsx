@@ -2,6 +2,7 @@
 
 import { useState, useMemo, useRef, useEffect } from "react";
 import { ChevronsUpDown, Check, Plus, X } from "lucide-react";
+import { toast } from "sonner";
 
 // -------------------------------------------------------
 // ComboboxCreate — combobox inline con opción de crear
@@ -43,6 +44,7 @@ export function ComboboxCreate<T>({
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [isCreating, setIsCreating] = useState(false);
+  const pending = useRef(false);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -90,14 +92,18 @@ export function ComboboxCreate<T>({
   };
 
   const handleCreate = async () => {
-    if (!onCreateNew || !query.trim() || isCreating) return;
+    if (!onCreateNew || !query.trim() || pending.current) return;
+    pending.current = true;
     setIsCreating(true);
     try {
       const created = await onCreateNew(query.trim());
       onChange(created.id);
       setOpen(false);
       setQuery("");
+    } catch {
+      toast.error("No se pudo agregar el registro. Revisa el error e intenta de nuevo.");
     } finally {
+      pending.current = false;
       setIsCreating(false);
     }
   };

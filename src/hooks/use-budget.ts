@@ -5,7 +5,7 @@
 // Hooks para consumo del API de presupuesto
 // -------------------------------------------------------
 
-import { useState, useCallback, useEffect, useRef } from "react";
+import { useState, useCallback, useEffect, useRef, useSyncExternalStore } from "react";
 import { toast } from "sonner";
 import { api, ApiRequestError } from "@/lib/api-client";
 import { useCachedResource } from "@/hooks/use-cached-resource";
@@ -454,6 +454,22 @@ export interface PlanningLinesResponse {
   limit: number;
 }
 
+// Notificación acotada a aprobaciones; invalidar el caché por sí solo no actualiza hooks montados.
+let approvalGeneration = 0;
+const approvalListeners = new Set<() => void>();
+function subscribeApproval(listener: () => void) {
+  approvalListeners.add(listener);
+  return () => { approvalListeners.delete(listener); };
+}
+function getApprovalGeneration() { return approvalGeneration; }
+function notifyApproval() {
+  approvalGeneration += 1;
+  approvalListeners.forEach((listener) => listener());
+}
+function useApprovalGeneration() {
+  return useSyncExternalStore(subscribeApproval, getApprovalGeneration, () => 0);
+}
+
 // -------------------------------------------------------
 // usePlanningLines — lista paginada con filtros
 // GET /budget/planning-lines
@@ -467,14 +483,15 @@ export function usePlanningLines(filters?: {
   code?: string;
   page?: number;
 }) {
+  const approvalVersion = useApprovalGeneration();
   const code = filters?.code?.trim() || undefined;
   const normalizedFilters = filters ? { ...filters, code } : {};
   const resource = useCachedResource<PlanningLinesResponse>({
-    key: [QUERY_TAGS.BUDGET, "planning-lines", normalizedFilters],
+    key: [QUERY_TAGS.BUDGET, "planning-lines", normalizedFilters, approvalVersion],
     ttlMs: QUERY_CACHE_TTL_MS.MUTABLE_LIST,
     tags: [QUERY_TAGS.BUDGET, QUERY_TAGS.POA],
     errorMessage: "Error al cargar lineas",
-    queryFn: () => {
+    queryFn: (signal) => {
       const params = new URLSearchParams();
       if (filters?.fiscal_year_id)
         params.set("fiscal_year_id", filters.fiscal_year_id);
@@ -485,7 +502,7 @@ export function usePlanningLines(filters?: {
       if (filters?.page) params.set("page", String(filters.page));
 
       const query = params.toString() ? `?${params.toString()}` : "";
-      return api.get<PlanningLinesResponse>(`/budget/planning-lines${query}`);
+      return api.get<PlanningLinesResponse>(`/budget/planning-lines${query}`, { signal });
     },
   });
   const data = resource.data;
@@ -515,11 +532,17 @@ export function usePlanningLine(
   const [data, setData] = useState<PlanningLine | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const requestSequenceRef = useRef(0);
+  const requestControllerRef = useRef<AbortController | null>(null);
 
   const authIsLoading = useAuthStore((state) => state.isLoading);
   const accessToken = useAuthStore((state) => state.accessToken);
 
   const refetch = useCallback(async () => {
+    const sequence = ++requestSequenceRef.current;
+    requestControllerRef.current?.abort();
+    const controller = new AbortController();
+    requestControllerRef.current = controller;
     setIsLoading(true);
     setError(null);
     try {
@@ -529,22 +552,33 @@ export function usePlanningLine(
           : "";
       const result = await api.get<PlanningLine>(
         `/budget/planning-lines/${id}${query}`,
+        { signal: controller.signal },
       );
-      setData(result);
+      if (requestSequenceRef.current === sequence) setData(result);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Error al cargar linea");
+      if (requestSequenceRef.current === sequence && !controller.signal.aborted)
+        setError(e instanceof Error ? e.message : "Error al cargar linea");
     } finally {
-      setIsLoading(false);
+      if (requestSequenceRef.current === sequence) setIsLoading(false);
     }
   }, [id, options.measureAuthority]);
 
   useEffect(() => {
     if (!id || authIsLoading || !accessToken) return;
     void refetch();
+    return () => { requestSequenceRef.current += 1; requestControllerRef.current?.abort(); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, refetch, authIsLoading, accessToken]);
 
-  return { line: data, isLoading, error, refetch };
+  const applyApprovedLine = (approvedLine: PlanningLine) => {
+    requestSequenceRef.current += 1;
+    requestControllerRef.current?.abort();
+    setData(approvedLine);
+    setError(null);
+    setIsLoading(false);
+  };
+
+  return { line: data, isLoading, error, refetch, applyApprovedLine };
 }
 
 // -------------------------------------------------------
@@ -631,15 +665,21 @@ export function getSubmitPlanningLineErrorMessage(
 // POST /budget/planning-lines/:id/approve
 // -------------------------------------------------------
 
+export async function approvePlanningLine(id: string): Promise<PlanningLine> {
+  const result = await api.post<PlanningLine>(`/budget/planning-lines/${id}/approve`);
+  invalidateQueryTag("poa");
+  invalidateQueryTag("budget");
+  notifyApproval();
+  return result;
+}
+
 export function useApprovePlanningLine(id: string) {
   const [isLoading, setIsLoading] = useState(false);
 
-  const approve = async (): Promise<void> => {
+  const approve = async (): Promise<PlanningLine> => {
     setIsLoading(true);
     try {
-      await api.post(`/budget/planning-lines/${id}/approve`);
-      invalidateQueryTag("poa");
-      invalidateQueryTag("budget");
+      return await approvePlanningLine(id);
     } finally {
       setIsLoading(false);
     }
@@ -1237,6 +1277,7 @@ export interface CreatePlanningLineDto {
   unit_price: number;
   quantity: number;
   program_id?: string;
+  component_id?: string;
 }
 
 export function useUpdatePlanningLineTerritory(id: string) {
@@ -1256,6 +1297,28 @@ export function useUpdatePlanningLineTerritory(id: string) {
       invalidateBudgetMutationCaches();
       return result;
     } finally {
+      setIsLoading(false);
+    }
+  };
+
+  return { update, isLoading };
+}
+
+// PATCH ordinario para DRAFT: únicamente las dos bases del costo.
+export function useUpdateDraftPlanningLineCost(id: string) {
+  const [isLoading, setIsLoading] = useState(false);
+  const pending = useRef(false);
+
+  const update = async (dto: { unit_price: number; quantity: number }): Promise<PlanningLine> => {
+    if (pending.current) throw new Error("Operación en curso");
+    pending.current = true;
+    setIsLoading(true);
+    try {
+      const result = await api.patch<PlanningLine>(`/budget/planning-lines/${id}`, dto);
+      invalidateBudgetMutationCaches();
+      return result;
+    } finally {
+      pending.current = false;
       setIsLoading(false);
     }
   };
@@ -1502,20 +1565,27 @@ export function usePlanningLineStats(
   fiscalYearId?: string,
   orgUnitId?: string,
 ) {
+  const approvalVersion = useApprovalGeneration();
   const [data, setData] = useState<PlanningLineStats | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<Error | null>(null);
+  const requestSequenceRef = useRef(0);
+  const requestControllerRef = useRef<AbortController | null>(null);
 
   const authIsLoading = useAuthStore((s) => s.isLoading);
   const accessToken = useAuthStore((s) => s.accessToken);
 
   const refetch = useCallback(async () => {
+    const sequence = ++requestSequenceRef.current;
+    requestControllerRef.current?.abort();
     if (!fiscalYearId) {
       setData(null);
       setError(null);
       return;
     }
     if (authIsLoading || !accessToken) return;
+    const controller = new AbortController();
+    requestControllerRef.current = controller;
     setIsLoading(true);
     setError(null);
     try {
@@ -1524,23 +1594,25 @@ export function usePlanningLineStats(
       if (orgUnitId) params.set("org_unit_id", orgUnitId);
       const result = await api.get<
         PlanningLineStats | PlanningLineStatsResponse
-      >(`/budget/planning-lines/stats?${params.toString()}`);
-      setData(normalizePlanningLineStats(result));
+      >(`/budget/planning-lines/stats?${params.toString()}`, { signal: controller.signal });
+      if (requestSequenceRef.current === sequence) setData(normalizePlanningLineStats(result));
     } catch (e) {
+      if (requestSequenceRef.current !== sequence || controller.signal.aborted) return;
       // Si el endpoint aún no existe, no crashear — retornar null silenciosamente
       setData(null);
       setError(
         e instanceof Error ? e : new Error("Error al obtener estadísticas"),
       );
     } finally {
-      setIsLoading(false);
+      if (requestSequenceRef.current === sequence) setIsLoading(false);
     }
   }, [fiscalYearId, orgUnitId, authIsLoading, accessToken]);
 
   useEffect(() => {
     if (authIsLoading || !accessToken) return;
     void refetch();
-  }, [refetch, authIsLoading, accessToken]);
+    return () => { requestSequenceRef.current += 1; requestControllerRef.current?.abort(); };
+  }, [refetch, authIsLoading, accessToken, approvalVersion]);
 
   return { data, isLoading, error, refetch };
 }

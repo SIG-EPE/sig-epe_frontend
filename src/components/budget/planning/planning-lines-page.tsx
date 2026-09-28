@@ -26,6 +26,7 @@ import { api } from "@/lib/api-client";
 import { ROUTES } from "@/lib/constants";
 import { ROLE_CAPABILITY, hasRoleCapability } from "@/lib/role-capabilities";
 import { useAuthStore } from "@/stores/auth-store";
+import { usePoaHierarchyCapability } from "@/hooks/use-catalogs";
 import {
   Plus,
   FileText,
@@ -59,6 +60,7 @@ export function PlanningLinesPage() {
   const searchParams = useSearchParams();
   const searchParamsSignature = searchParams.toString();
   const user = useAuthStore((state) => state.user);
+  const hierarchyReady = usePoaHierarchyCapability()?.enabled === true;
 
   const { data: fiscalYearsData } = useFiscalYears();
   const { data: orgUnitsData } = useOrganizationalUnits();
@@ -85,6 +87,10 @@ export function PlanningLinesPage() {
   );
   const effectiveCode = codeInput.trim() ? debouncedCode : "";
   const canExport = hasRoleCapability(
+    user?.role?.code,
+    ROLE_CAPABILITY.BUDGET_ADMIN,
+  );
+  const canAddLine = hasRoleCapability(
     user?.role?.code,
     ROLE_CAPABILITY.BUDGET_ADMIN,
   );
@@ -261,10 +267,12 @@ export function PlanningLinesPage() {
                 : "Exportar Excel (fuente + actual)"}
             </Button>
           )}
-          <Button onClick={() => router.push(ROUTES.BUDGET_PLANNING_NEW)}>
-            <Plus className="h-4 w-4" />
-            Agregar línea
-          </Button>
+          {canAddLine && hierarchyReady && (
+            <Button onClick={() => router.push(ROUTES.BUDGET_PLANNING_NEW)}>
+              <Plus className="h-4 w-4" />
+              Agregar línea
+            </Button>
+          )}
         </div>
       </div>
 
