@@ -17,6 +17,7 @@ import { Button } from "@/components/ui/button";
 
 interface SearchSelectModalProps<T> {
   // Trigger
+  ariaLabel?: string;
   value: string | null;
   placeholder: string;
   displayValue?: string;
@@ -60,6 +61,7 @@ function normalize(str: string): string {
 }
 
 export function SearchSelectModal<T>({
+  ariaLabel,
   value,
   placeholder,
   displayValue,
@@ -138,6 +140,7 @@ export function SearchSelectModal<T>({
       {/* Trigger — aspecto de select nativo */}
       <button
         type="button"
+        aria-label={ariaLabel}
         data-testid={testId}
         disabled={disabled}
         onClick={() => !disabled && handleOpenChange(true)}

@@ -10,6 +10,8 @@ import { StatusBadge } from "@/components/budget/planning/status-badge";
 import { MonthlyTable } from "./monthly-table";
 import { ManualExecutionModal } from "./manual-execution-modal";
 import { DraftCostModal } from "./draft-cost-modal";
+import { PlanningHierarchyEditor } from "./planning-hierarchy-editor";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { ApprovedAmendmentModal, ApprovedAmendmentWarnings } from "./approved-amendment-modal";
 import type { ApprovedAmendmentWarning } from "@/hooks/use-approved-amendment";
 import { SourceMonthGrid } from "./source-month-grid";
@@ -102,6 +104,7 @@ export function LineDetailPage() {
   const [executionRefresh, setExecutionRefresh] = useState(0);
   const [amendmentOpen, setAmendmentOpen] = useState(false);
   const [draftCostOpen, setDraftCostOpen] = useState(false);
+  const [draftHierarchyOpen, setDraftHierarchyOpen] = useState(false);
   const [amendmentWarnings, setAmendmentWarnings] = useState<ApprovedAmendmentWarning[]>([]);
   const params = useParams();
   const router = useRouter();
@@ -216,9 +219,10 @@ export function LineDetailPage() {
         <DetailItem label="Unidad orgánica" value={formatCodeName(line.organizationalUnit ?? line.organizational_unit)} />
         <DetailItem label="Tipo de planificación" value={getPlanningTypeLabel(line.planning_type)} />
         <DetailItem label="Programa / proyecto / gestión" value={formatCodeName(line.program ?? line.budget_program)} />
-        <DetailItem label="Componente estratégico" value={line.operativeAction?.component?.name} />
-        <DetailItem label="Acción operativa" value={line.operativeAction?.name} />
+        <DetailItem label="Componente estratégico" value={line.poaHierarchy?.component?.name ?? line.operativeAction?.component?.name} />
+        <DetailItem label="Acción operativa" value={line.poaHierarchy?.action?.name ?? line.operativeAction?.name} />
       </DetailSection>
+      {canEditDraftCost && <Button type="button" variant="outline" className="w-full sm:w-auto sm:self-start" onClick={() => setDraftHierarchyOpen(true)}>Editar jerarquía</Button>}
 
       <DetailSection title="Clasificación y alcance">
         <DetailItem label="Recurso" value={line.resource_description} />
@@ -295,6 +299,7 @@ export function LineDetailPage() {
         setDraftCostOpen(false);
         await refetch();
       }} />}
+      {canEditDraftCost && draftHierarchyOpen && <Dialog open onOpenChange={(open) => { if (!open) setDraftHierarchyOpen(false); }}><DialogContent className="max-h-[90dvh] max-w-3xl overflow-y-auto"><DialogHeader><DialogTitle>Editar jerarquía del borrador</DialogTitle><DialogDescription>Modifica únicamente la clasificación actual de esta línea POA.</DialogDescription></DialogHeader><PlanningHierarchyEditor line={line} onSaved={async () => { setDraftHierarchyOpen(false); await refetch(); }} /></DialogContent></Dialog>}
 
       {canRecordExecution && manualModalOpen && (
         <ManualExecutionModal

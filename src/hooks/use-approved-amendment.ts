@@ -4,7 +4,7 @@ import { useState } from "react";
 import { api } from "@/lib/api-client";
 import { invalidateQueryTag } from "@/lib/query-cache";
 import type { ApprovedAmendmentRequest } from "@/lib/approved-amendment";
-import type { PlanningLine } from "@/types/budget";
+import type { PlanningLine, PlanningLineHierarchyInput } from "@/types/budget";
 
 export interface ApprovedAmendmentRevision {
   line_id: string;
@@ -33,6 +33,8 @@ export interface ApprovedAmendmentResult {
     importance: string;
     frequency: string;
     resource_description: string;
+    line_code?: string;
+    hierarchy?: PlanningLineHierarchyInput & { resource_id: string | null };
     monthly: { month: number; planned_amount: string }[];
   };
   revision: string;

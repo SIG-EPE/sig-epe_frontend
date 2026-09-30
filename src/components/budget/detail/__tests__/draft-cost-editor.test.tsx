@@ -101,6 +101,7 @@ describe("DRAFT cost editor", () => {
       expect(
         screen.getByRole("button", { name: "Editar costo" }),
       ).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Editar jerarquía" })).toBeInTheDocument();
     },
   );
   it("permits only the requester who created the draft", () => {
@@ -109,6 +110,7 @@ describe("DRAFT cost editor", () => {
     expect(
       screen.queryByRole("button", { name: "Editar costo" }),
     ).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Editar jerarquía" })).not.toBeInTheDocument();
     state.owner = "actor";
     render(<LineDetailPage />);
     expect(

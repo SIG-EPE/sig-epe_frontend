@@ -30,6 +30,12 @@ import {
   type ApprovedAmendmentWarning,
 } from "@/hooks/use-approved-amendment";
 import type { PlanningLine } from "@/types/budget";
+import type { PlanningLineHierarchyInput } from "@/types/budget";
+import { PLANNING_TYPE_LABELS } from "@/lib/planning-types";
+import {
+  PlanningHierarchyEditor,
+  type HierarchyReviewLabels,
+} from "./planning-hierarchy-editor";
 
 const MONTHS = [
   "Enero",
@@ -50,6 +56,58 @@ const EXACT_DECIMALS_ERROR =
   "El detalle no contiene los decimales exactos de precio, cantidad y los doce meses. No se completarán meses faltantes ni se redondearán valores. Solicita la proyección decimal exacta del servidor.";
 const CONFLICT_ERROR =
   "La línea cambió durante la lectura. Cierra y recarga el detalle antes de editar.";
+
+function currentHierarchyLabels(line: PlanningLine): HierarchyReviewLabels {
+  return {
+    unit: line.organizationalUnit?.name ?? line.organizational_unit?.name,
+    type: PLANNING_TYPE_LABELS[line.planning_type],
+    program: line.program?.name ?? line.budget_program?.name,
+    component:
+      line.poaHierarchy?.component?.name ??
+      line.operativeAction?.component?.name,
+    action: line.poaHierarchy?.action?.name ?? line.operativeAction?.name,
+    resource:
+      line.resource?.name ??
+      line.poaHierarchy?.resource?.name ??
+      line.resource_description,
+  };
+}
+
+function HierarchyReview({
+  title,
+  labels,
+}: {
+  title: string;
+  labels: HierarchyReviewLabels;
+}) {
+  return (
+    <div
+      role="group"
+      aria-label={title}
+      className="min-w-0 rounded-md border p-3"
+    >
+      <p className="font-medium">{title}</p>
+      <ol className="mt-2 space-y-1 text-sm">
+        {([
+          ["Unidad", labels.unit],
+          ["Tipo", labels.type],
+          ["Programa", labels.program],
+          ["Componente", labels.component],
+          ["Acción", labels.action],
+          ["Recurso", labels.resource],
+        ] as const).map(([label, value]) => (
+          <li
+            key={label}
+            className="min-w-0 break-words [overflow-wrap:anywhere]"
+          >
+            <span className="font-medium">{label}: </span>
+            {value?.trim() || "Sin dato"}
+          </li>
+        ))}
+      </ol>
+    </div>
+  );
+}
 
 function validRevision(
   value: { line_id: string; revision: string },
@@ -175,6 +233,32 @@ export function ApprovedAmendmentModal({ line, onClose, onSuccess }: Props) {
     revision: string;
   } | null>(null);
   const [conflictLoading, setConflictLoading] = useState(false);
+  const [pendingHierarchy, setPendingHierarchy] =
+    useState<HierarchyReviewLabels | null>(null);
+
+  async function resolveConflict(current: number) {
+    setConflictLoading(true);
+    setSaveError(
+      "La línea cambió. Tus cambios siguen aquí; revisa la versión actual antes de volver a guardar.",
+    );
+    try {
+      const latest = await readMatchingSnapshot(
+        line.id,
+        readRevision,
+        readDetail,
+        new AbortController().signal,
+      );
+      if (generation.current !== current) return;
+      setConflict(latest);
+    } catch {
+      if (generation.current !== current) return;
+      setSaveError(
+        "No se pudo cargar el detalle y la revisión actual. Conservamos tus cambios; cierra y recarga o vuelve a intentar.",
+      );
+    } finally {
+      if (generation.current === current) setConflictLoading(false);
+    }
+  }
 
   useEffect(() => {
     const current = ++generation.current;
@@ -184,6 +268,7 @@ export function ApprovedAmendmentModal({ line, onClose, onSuccess }: Props) {
     setRevision(null);
     setLoadError(null);
     setConflict(null);
+    setPendingHierarchy(null);
     setConflictLoading(false);
     setSaveError(null);
     setLoading(true);
@@ -286,6 +371,7 @@ export function ApprovedAmendmentModal({ line, onClose, onSuccess }: Props) {
     const result = buildApprovedAmendment(fields, revision, hasCatalogResource);
     setErrors(result.errors);
     if (!result.request) return;
+    setPendingHierarchy(null);
     setSaveError(null);
     saving.current = true;
     const current = generation.current;
@@ -297,28 +383,7 @@ export function ApprovedAmendmentModal({ line, onClose, onSuccess }: Props) {
     } catch (error) {
       if (generation.current !== current) return;
       if (error instanceof ApiRequestError && error.status === 409) {
-        setConflictLoading(true);
-        setSaveError(
-          "La línea cambió. Tus cambios siguen aquí; revisa la versión actual antes de volver a guardar.",
-        );
-        try {
-          const controller = new AbortController();
-          const latest = await readMatchingSnapshot(
-            line.id,
-            readRevision,
-            readDetail,
-            controller.signal,
-          );
-          if (generation.current !== current) return;
-          setConflict(latest);
-        } catch {
-          if (generation.current !== current) return;
-          setSaveError(
-            "No se pudo cargar el detalle y la revisión actual. Conservamos tus cambios; cierra y recarga o vuelve a intentar.",
-          );
-        } finally {
-          if (generation.current === current) setConflictLoading(false);
-        }
+        await resolveConflict(current);
       } else if (error instanceof ApiRequestError && error.status === 403)
         setSaveError(
           "No tienes permiso para editar este presupuesto aprobado.",
@@ -336,6 +401,51 @@ export function ApprovedAmendmentModal({ line, onClose, onSuccess }: Props) {
     }
   }
 
+  async function saveHierarchy(
+    hierarchy: PlanningLineHierarchyInput,
+    labels: HierarchyReviewLabels,
+  ) {
+    if (
+      !fields ||
+      revision === null ||
+      !snapshotLine ||
+      conflict ||
+      conflictLoading ||
+      saveError?.includes("No se pudo cargar el detalle") ||
+      isSaving ||
+      saving.current
+    )
+      return;
+    const result = buildApprovedAmendment(
+      fields,
+      revision,
+      hasCatalogResource,
+      hierarchy,
+    );
+    setErrors(result.errors);
+    if (!result.request)
+      throw new Error(
+        "Revisa los valores financieros y los doce meses antes de guardar.",
+      );
+    saving.current = true;
+    setPendingHierarchy(labels);
+    const current = generation.current;
+    setSaveError(null);
+    try {
+      const updated = await save(result.request);
+      if (generation.current !== current) return;
+      toast.success("Jerarquía y presupuesto aprobado actualizados");
+      onSuccess(updated.warnings);
+    } catch (error) {
+      if (generation.current !== current) return;
+      if (error instanceof ApiRequestError && error.status === 409)
+        await resolveConflict(current);
+      throw error;
+    } finally {
+      saving.current = false;
+    }
+  }
+
   return (
     <Dialog
       open
@@ -347,10 +457,9 @@ export function ApprovedAmendmentModal({ line, onClose, onSuccess }: Props) {
         <DialogHeader>
           <DialogTitle>Editar presupuesto aprobado</DialogTitle>
           <DialogDescription>
-            Solo precio, cantidad, programación mensual, importancia, frecuencia
-            y descripción libre sin recurso de catálogo. La identidad,
-            jerarquía, fuentes y ejecución permanecen sin cambios. Las
-            advertencias financieras son informativas.
+            Edita el presupuesto o la jerarquía de esta línea. La identidad,
+            fuentes y ejecución permanecen sin cambios. Las advertencias
+            financieras son informativas.
           </DialogDescription>
         </DialogHeader>
         {loading && <p role="status">Cargando detalle y revisión aprobada…</p>}
@@ -437,6 +546,19 @@ export function ApprovedAmendmentModal({ line, onClose, onSuccess }: Props) {
                 editable)
               </p>
             )}
+            {snapshotLine && (
+              <PlanningHierarchyEditor
+                line={snapshotLine}
+                approvedSave={saveHierarchy}
+                onSaved={() => {}}
+                disabled={
+                  isSaving ||
+                  !!conflict ||
+                  conflictLoading ||
+                  Boolean(saveError?.includes("No se pudo cargar el detalle"))
+                }
+              />
+            )}
             <fieldset className="space-y-3">
               <legend className="font-medium">
                 Programación de los doce meses (S/)
@@ -500,6 +622,18 @@ export function ApprovedAmendmentModal({ line, onClose, onSuccess }: Props) {
                       .join(" · ") || "Sin programación disponible"}
                     .
                   </p>{" "}
+                  <div className="my-3 grid min-w-0 gap-3 sm:grid-cols-2">
+                    <HierarchyReview
+                      title={`Jerarquía actual de la revisión ${conflict.revision}`}
+                      labels={currentHierarchyLabels(conflict.line)}
+                    />
+                    {pendingHierarchy && (
+                      <HierarchyReview
+                        title="Jerarquía que intentaste guardar"
+                        labels={pendingHierarchy}
+                      />
+                    )}
+                  </div>
                   <Button
                     type="button"
                     variant="outline"

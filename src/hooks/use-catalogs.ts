@@ -556,6 +556,7 @@ export function usePoaHierarchyCapability() {
 export function useStrategicComponents(programId?: string | null) {
   const capability = usePoaHierarchyCapability();
   const [data, setData] = useState<StrategicComponent[]>([]);
+  const [loadedFor, setLoadedFor] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -565,17 +566,21 @@ export function useStrategicComponents(programId?: string | null) {
   const refetch = useCallback(async () => {
     if (!capability?.enabled || authIsLoading || !accessToken || !programId) {
       setData([]);
+      setLoadedFor(null);
       return;
     }
     setIsLoading(true);
     setError(null);
+    setLoadedFor(null);
     try {
       const result = await api.get<StrategicComponent[]>(
         `/catalogs/strategic-components?program_id=${programId}`
       );
       setData(result);
+      setLoadedFor(programId);
       return result;
     } catch (err) {
+      setLoadedFor(null);
       setError(err instanceof Error ? err.message : "Error al cargar componentes");
     } finally {
       setIsLoading(false);
@@ -586,7 +591,7 @@ export function useStrategicComponents(programId?: string | null) {
     void refetch();
   }, [refetch]);
 
-  return { data, isLoading, error, refetch };
+  return { data, isLoading, error, refetch, loadedFor };
 }
 
 // -------------------------------------------------------
@@ -596,6 +601,7 @@ export function useStrategicComponents(programId?: string | null) {
 export function useOperativeActions(componentId?: string | null) {
   const capability = usePoaHierarchyCapability();
   const [data, setData] = useState<OperativeAction[]>([]);
+  const [loadedFor, setLoadedFor] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -605,17 +611,21 @@ export function useOperativeActions(componentId?: string | null) {
   const refetch = useCallback(async () => {
     if (!capability?.enabled || authIsLoading || !accessToken || !componentId) {
       setData([]);
+      setLoadedFor(null);
       return;
     }
     setIsLoading(true);
     setError(null);
+    setLoadedFor(null);
     try {
       const result = await api.get<OperativeAction[]>(
         `/catalogs/operative-actions?component_id=${componentId}`
       );
       setData(result);
+      setLoadedFor(componentId);
       return result;
     } catch (err) {
+      setLoadedFor(null);
       setError(err instanceof Error ? err.message : "Error al cargar acciones operativas");
     } finally {
       setIsLoading(false);
@@ -626,7 +636,7 @@ export function useOperativeActions(componentId?: string | null) {
     void refetch();
   }, [refetch]);
 
-  return { data, isLoading, error, refetch };
+  return { data, isLoading, error, refetch, loadedFor };
 }
 
 // -------------------------------------------------------

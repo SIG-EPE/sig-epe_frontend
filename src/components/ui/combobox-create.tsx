@@ -10,6 +10,7 @@ import { toast } from "sonner";
 // -------------------------------------------------------
 
 interface ComboboxCreateProps<T> {
+  id?: string;
   value: string | null;
   placeholder?: string;
   displayValue?: string;
@@ -30,6 +31,7 @@ function normalize(str: string): string {
 }
 
 export function ComboboxCreate<T>({
+  id,
   value,
   placeholder = "Buscar o agregar...",
   displayValue,
@@ -117,6 +119,7 @@ export function ComboboxCreate<T>({
     <div ref={containerRef} className="relative w-full">
       {/* Trigger */}
       <button
+        id={id}
         type="button"
         disabled={disabled}
         onClick={() => !disabled && setOpen(true)}

@@ -1,4 +1,4 @@
-import type { PlanningLine } from "@/types/budget";
+import type { PlanningLine, PlanningLineHierarchyInput } from "@/types/budget";
 
 export const APPROVED_IMPORTANCE = [
   "Actividad estratégica",
@@ -31,6 +31,7 @@ export interface ApprovedAmendmentRequest {
   frequency: string;
   monthly: ApprovedAmendmentMonth[];
   resource_description?: string;
+  hierarchy?: PlanningLineHierarchyInput;
 }
 export interface ApprovedAmendmentErrors {
   unit_price?: string;
@@ -129,6 +130,7 @@ export function buildApprovedAmendment(
   fields: ApprovedAmendmentFields,
   revision: string,
   hasCatalogResource: boolean,
+  hierarchy?: PlanningLineHierarchyInput,
 ): {
   request: ApprovedAmendmentRequest | null;
   errors: ApprovedAmendmentErrors;
@@ -185,7 +187,7 @@ export function buildApprovedAmendment(
     errors.monthly =
       "La suma de los doce meses debe coincidir exactamente con precio por cantidad.";
   if (
-    !hasCatalogResource &&
+    !hasCatalogResource && !hierarchy &&
     (!fields.resource_description.trim() ||
       fields.resource_description.length > 2000)
   )
@@ -207,9 +209,10 @@ export function buildApprovedAmendment(
       monthly: fields.monthly
         .map(({ month, planned_amount }) => ({ month, planned_amount }))
         .sort((a, b) => a.month - b.month),
-      ...(!hasCatalogResource
+      ...(!hasCatalogResource && !hierarchy
         ? { resource_description: fields.resource_description }
         : {}),
+      ...(hierarchy ? { hierarchy } : {}),
     },
     errors,
     total: decimal(total!),

@@ -84,6 +84,16 @@ export interface PlanningLinePoaHierarchy {
   resource: PlanningLineResourceRelation;
 }
 
+/** Payload completo para cambiar la clasificación de una sola línea POA. */
+export interface PlanningLineHierarchyInput {
+  organizational_unit_id: string;
+  planning_type: PlanningType;
+  program_id: string;
+  component_id: string;
+  operative_action_id: string;
+  resource_name: string;
+}
+
 /** Datos de saldo presupuestal devueltos por GET /budget/balance/:fiscalYearId */
 export interface BalanceData {
   fiscal_year_id: string;
