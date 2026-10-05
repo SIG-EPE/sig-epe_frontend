@@ -1,6 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { Download, Loader2 } from "lucide-react";
+import { toast } from "sonner";
 import type { Route } from "next";
 import { useRouter, useSearchParams } from "next/navigation";
 
@@ -15,6 +17,10 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { useRenditionsInbox } from "@/hooks/use-requests";
+import { ApiRequestError } from "@/lib/api-client";
+import { isRenditionExportReady } from "@/lib/business-queue-export-readiness";
+import { ROLE_CODE } from "@/lib/constants";
+import { downloadRenditionsExport, saveRenditionsExport } from "@/lib/renditions-export";
 import {
   parseRenditionsQueueUrl,
   serializeRenditionsQueueUrl,
@@ -53,6 +59,18 @@ function buildRenditionsRoute(params: URLSearchParams): Route {
   return (query ? `/renditions?${query}` : "/renditions") as Route;
 }
 
+function getRenditionsExportErrorMessage(error: unknown): string {
+  if (error instanceof DOMException && error.name === "AbortError")
+    return "La descarga del Excel fue cancelada.";
+  if (error instanceof ApiRequestError) {
+    if (error.status === 403) return "No tienes permisos para exportar la Bandeja de Rendiciones.";
+    if (error.status === 400) return "Revisa los filtros activos antes de exportar el Excel.";
+    if (error.status === 422) return "El Excel supera el límite permitido. Ajusta los filtros activos.";
+    if (error.status === 401) return "Tu sesión no está disponible. Vuelve a iniciar sesión.";
+  }
+  return "No se pudo descargar el Excel. Inténtalo nuevamente.";
+}
+
 export function RenditionsInboxPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -61,6 +79,12 @@ export function RenditionsInboxPage() {
   const isGiofManager = isGiofManagerRole(roleCode);
   const canManageAssignments = canManageGiofAssignments(roleCode);
   const isGiofOperational = isGiofOperationalRole(roleCode);
+  const canExport = roleCode === ROLE_CODE.GIOF_GESTOR ||
+    roleCode === ROLE_CODE.GIOF_MANAGER ||
+    roleCode === ROLE_CODE.AUDITOR_DIRECCION ||
+    roleCode === ROLE_CODE.ADMIN_SISTEMA;
+  const [isExporting, setIsExporting] = useState(false);
+  const exportControllerRef = useRef<AbortController | null>(null);
   const [selectedAssignmentIds, setSelectedAssignmentIds] = useState<string[]>(
     [],
   );
@@ -134,6 +158,28 @@ export function RenditionsInboxPage() {
     setSelectedAssignmentIds([]);
   }, [assignmentResultIdentity, bulkAssignmentMode, viewIdentity]);
 
+  useEffect(() => () => exportControllerRef.current?.abort(), []);
+
+  async function exportExcel(): Promise<void> {
+    if (!canExport || hasInvalidUrl || exportControllerRef.current) return;
+    const controller = new AbortController();
+    exportControllerRef.current = controller;
+    setIsExporting(true);
+    try {
+      const download = await downloadRenditionsExport(effectiveFilters, controller.signal);
+      controller.signal.throwIfAborted();
+      saveRenditionsExport(download);
+      toast.success("Excel de Bandeja de Rendiciones descargado correctamente.");
+    } catch (error) {
+      toast.error(getRenditionsExportErrorMessage(error));
+    } finally {
+      if (exportControllerRef.current === controller) {
+        exportControllerRef.current = null;
+        setIsExporting(false);
+      }
+    }
+  }
+
   function replaceRenditionsUrl(params: URLSearchParams): void {
     router.replace(buildRenditionsRoute(params));
   }
@@ -189,14 +235,28 @@ export function RenditionsInboxPage() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold tracking-tight">
-          Bandeja de Rendiciones
-        </h1>
-        <p className="text-muted-foreground">
-          Da seguimiento a anticipos pagados, fechas límite y solicitudes REXAN
-          vinculadas.
-        </p>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h1 className="text-2xl font-bold tracking-tight">Bandeja de Rendiciones</h1>
+          <p className="text-muted-foreground">
+            Da seguimiento a anticipos pagados, fechas límite y solicitudes REXAN vinculadas.
+          </p>
+        </div>
+        {isRenditionExportReady() && canExport && (
+          <div className="flex flex-wrap items-center gap-2">
+            <Button type="button" variant="outline" onClick={() => void exportExcel()}
+              disabled={hasInvalidUrl || isExporting} aria-busy={isExporting}
+              aria-describedby="renditions-export-state">
+              {isExporting ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <Download className="h-4 w-4" aria-hidden="true" />}
+              {isExporting ? "Exportando Excel..." : "Exportar Excel"}
+            </Button>
+            {isExporting && <Button type="button" variant="ghost" onClick={() => exportControllerRef.current?.abort()}>Cancelar descarga</Button>}
+            <span id="renditions-export-state" role={isExporting ? "status" : undefined}
+              aria-live="polite" className={isExporting ? "text-sm text-muted-foreground" : "sr-only"}>
+              {isExporting ? "Preparando el Excel. La cancelación es best-effort." : hasInvalidUrl ? "Restablece los filtros inválidos antes de exportar." : "Exporta los anticipos pendientes y la última REXAN vinculada que coinciden con los filtros activos."}
+            </span>
+          </div>
+        )}
       </div>
 
       <div

@@ -987,7 +987,7 @@ describe("RequestsPage", () => {
   describe("exportación Excel de Bandeja Review", () => {
     it("exporta exactamente los filtros activos de la URL y deja page/limit al helper all-filtered", async () => {
       currentQuery =
-        "scope=review&page=3&limit=50&work_scope=assignee&assignee_id=11111111-1111-4111-8111-111111111111&status=OBSERVED&currency=PEN&amount_min=10.00&amount_max=200.00&search=viatico";
+        "scope=review&page=3&limit=50&work_scope=assignee&assignee_id=11111111-1111-4111-8111-111111111111&status=OBSERVED&submitted_from=2026-08-01T08%3A00&submitted_to=2026-08-15T18%3A00&currency=PEN&amount_min=10.00&amount_max=200.00&search=viatico";
       authUser = makeUser("GIOF_MANAGER");
       const user = userEvent.setup();
 
@@ -1001,6 +1001,8 @@ describe("RequestsPage", () => {
           work_scope: "assignee",
           assignee_id: "11111111-1111-4111-8111-111111111111",
           status: "OBSERVED",
+          submitted_from: "2026-08-01T08:00",
+          submitted_to: "2026-08-15T18:00",
           currency: "PEN",
           amount_min: "10.00",
           amount_max: "200.00",
@@ -1035,6 +1037,14 @@ describe("RequestsPage", () => {
       expect(
         screen.getByRole("button", { name: "Exportar Excel" }),
       ).toBeDisabled();
+    });
+
+    it("no ofrece descarga Review a un rol ajeno aunque la URL pida scope=review", () => {
+      currentQuery = "scope=review&status=OBSERVED";
+      authUser = makeUser("SOLICITANTE_EPE");
+      render(<RequestsPage />);
+      expect(screen.queryByRole("button", { name: "Exportar Excel" })).not.toBeInTheDocument();
+      expect(downloadReviewExportMock).not.toHaveBeenCalled();
     });
 
     it("muestra loading indeterminado, impide doble click y cancela best-effort", async () => {
@@ -1121,17 +1131,15 @@ describe("RequestsPage", () => {
       },
     );
 
-    it("muestra el conteo y límite del 422 para orientar el ajuste de filtros", async () => {
+    it("muestra el límite de filas del nuevo 422 sin inventar un conteo", async () => {
       currentQuery = "scope=review";
       const limitBody = {
         statusCode: 422,
-        code: "REQUEST_REVIEW_EXPORT_ROW_LIMIT_EXCEEDED",
-        message: "Review export contains 1048576 rows; maximum is 1048575",
+        code: "BUSINESS_REVIEW_EXPORT_ROW_LIMIT_EXCEEDED",
+        message: "Review business export supports at most 10000 data rows per sheet",
         error: "Unprocessable Entity",
         timestamp: "2026-08-28T00:00:00.000Z",
-        path: "/requests/review/export.xlsx",
-        count: 1_048_576,
-        max: 1_048_575,
+        path: "/requests/review/export-business.xlsx",
       };
       downloadReviewExportMock.mockRejectedValue(
         new ApiRequestError(422, limitBody),
@@ -1143,7 +1151,7 @@ describe("RequestsPage", () => {
 
       await waitFor(() =>
         expect(toastErrorMock).toHaveBeenCalledWith(
-          "El Excel tendría 1,048,576 filas y el máximo permitido es 1,048,575. Ajusta los filtros activos.",
+          "El Excel supera el máximo de 10,000 filas por hoja. Ajusta los filtros activos.",
         ),
       );
       expect(downloadReviewExportMock).toHaveBeenCalledOnce();
@@ -1165,6 +1173,24 @@ describe("RequestsPage", () => {
         ),
       );
       expect(downloadReviewExportMock).toHaveBeenCalledOnce();
+    });
+
+    it("no intenta la ruta antigua si el nuevo endpoint falla", async () => {
+      currentQuery = "scope=review";
+      downloadReviewExportMock.mockRejectedValue(
+        new ApiRequestError(404, {
+          statusCode: 404,
+          message: "Not Found",
+          error: "Not Found",
+          timestamp: "2026-09-30T00:00:00.000Z",
+          path: "/requests/review/export-business.xlsx",
+        }),
+      );
+      render(<RequestsPage />);
+      await userEvent.setup().click(screen.getByRole("button", { name: "Exportar Excel" }));
+      await waitFor(() => expect(toastErrorMock).toHaveBeenCalledOnce());
+      expect(downloadReviewExportMock).toHaveBeenCalledOnce();
+      expect(saveReviewExportMock).not.toHaveBeenCalled();
     });
   });
 });

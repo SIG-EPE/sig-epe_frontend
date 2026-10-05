@@ -1,9 +1,12 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { RenditionsInboxPage } from "@/components/renditions/renditions-inbox-page";
 import { useRenditionsInbox } from "@/hooks/use-requests";
+import { ApiRequestError } from "@/lib/api-client";
+import { downloadRenditionsExport, saveRenditionsExport } from "@/lib/renditions-export";
+import { toast } from "sonner";
 import {
   GIOF_WORK_ASSIGNMENT_STATE,
   GIOF_WORK_LEASE_STATE,
@@ -39,6 +42,18 @@ vi.mock("@/hooks/use-debounced-value", () => ({
 vi.mock("@/hooks/use-requests", () => ({
   useRenditionsInbox: vi.fn(),
 }));
+const exportGate = vi.hoisted(() => ({ paymentReady: false, renditionReady: false }));
+
+vi.mock("@/lib/business-queue-export-readiness", () => ({
+  isPaymentExportReady: () => exportGate.paymentReady,
+  isRenditionExportReady: () => exportGate.renditionReady,
+}));
+
+vi.mock("@/lib/renditions-export", () => ({
+  downloadRenditionsExport: vi.fn(),
+  saveRenditionsExport: vi.fn(),
+}));
+vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 
 vi.mock("@/stores/auth-store", () => ({
   useAuthStore: (selector: (state: unknown) => unknown) =>
@@ -147,6 +162,11 @@ function makeFacets(): RenditionInboxFacets {
 
 describe("RenditionsInboxPage", () => {
   beforeEach(() => {
+    exportGate.paymentReady = false;
+    exportGate.renditionReady = false;
+    vi.mocked(downloadRenditionsExport).mockReset();
+    vi.mocked(saveRenditionsExport).mockReset();
+    vi.mocked(toast.error).mockReset();
     replaceMock.mockReset();
     roleCode = "GIOF_GESTOR";
     searchParams = new URLSearchParams("status=PENDING&page=1");
@@ -267,6 +287,90 @@ describe("RenditionsInboxPage", () => {
       expect.stringContaining("mode=process"),
     );
   });
+
+  it.each(["GIOF_GESTOR", "GIOF_MANAGER", "AUDITOR_DIRECCION", "ADMIN_SISTEMA"])(
+    "permite exportar la bandeja para %s sin exigir REXAN enlazado",
+    async (role) => {
+      exportGate.renditionReady = true;
+      roleCode = role;
+      searchParams = new URLSearchParams(`status=PENDING&page=4&limit=20${role.startsWith("GIOF") ? "&work_scope=all" : ""}`);
+      vi.mocked(useRenditionsInbox).mockReturnValue({
+        renditions: [makeRendition({ settlement_request_id: null })],
+        total: 1, page: 4, limit: 20, counts: makeCounts(), summary: { count: 1 },
+        facets: makeFacets(), isLoading: false, isInitialLoading: false,
+        isRefreshing: false, error: null, refetch: vi.fn(),
+      });
+      const download = { blob: new Blob(["xlsx"]), filename: "bandeja-rendiciones.xlsx" };
+      vi.mocked(downloadRenditionsExport).mockResolvedValue(download);
+      render(<RenditionsInboxPage />);
+      expect(screen.getByText(/anticipos pendientes y la última REXAN vinculada/)).toBeInTheDocument();
+      await userEvent.setup().click(screen.getByRole("button", { name: "Exportar Excel" }));
+      await waitFor(() => expect(saveRenditionsExport).toHaveBeenCalledWith(download));
+      expect(downloadRenditionsExport).toHaveBeenCalledWith(
+        expect.objectContaining({ status: "PENDING", page: 4, work_scope: role.startsWith("GIOF") ? "all" : undefined }),
+        expect.any(AbortSignal),
+      );
+    },
+  );
+
+  it.each(["SOLICITANTE_EPE", "PATROCINADOR"])("oculta exportación para %s", (role) => {
+    roleCode = role;
+    render(<RenditionsInboxPage />);
+    expect(screen.queryByRole("button", { name: "Exportar Excel" })).not.toBeInTheDocument();
+  });
+
+  it("bloquea URL inválida y muestra errores 403/400/422 sin guardar", async () => {
+    exportGate.renditionReady = true;
+    searchParams = new URLSearchParams("status=PENDING&tab=draft");
+    const view = render(<RenditionsInboxPage />);
+    expect(screen.getByRole("button", { name: "Exportar Excel" })).toBeDisabled();
+    searchParams = new URLSearchParams("status=PENDING");
+    view.rerender(<RenditionsInboxPage />);
+    for (const status of [403, 400, 422]) {
+      vi.mocked(downloadRenditionsExport).mockRejectedValueOnce(new ApiRequestError(status, {
+        statusCode: status, message: "error", error: "Error", timestamp: "2026-09-30", path: "export",
+      }));
+      await userEvent.setup().click(screen.getByRole("button", { name: "Exportar Excel" }));
+      await waitFor(() => expect(toast.error).toHaveBeenCalledTimes(status === 403 ? 1 : status === 400 ? 2 : 3));
+    }
+    expect(saveRenditionsExport).not.toHaveBeenCalled();
+  });
+
+  it("anuncia progreso, cancela y no guarda respuesta tardía", async () => {
+    exportGate.renditionReady = true;
+    let resolveDownload!: (value: { blob: Blob; filename: string }) => void;
+    vi.mocked(downloadRenditionsExport).mockImplementation(() => new Promise((resolve) => { resolveDownload = resolve; }));
+    render(<RenditionsInboxPage />);
+    await userEvent.setup().click(screen.getByRole("button", { name: "Exportar Excel" }));
+    expect(screen.getByRole("button", { name: "Exportando Excel..." })).toBeDisabled();
+    expect(screen.getByText(/Preparando el Excel/)).toHaveAttribute("role", "status");
+    const signal = vi.mocked(downloadRenditionsExport).mock.calls[0][1];
+    await userEvent.setup().click(screen.getByRole("button", { name: "Cancelar descarga" }));
+    expect(signal.aborted).toBe(true);
+    resolveDownload({ blob: new Blob(["late"]), filename: "late.xlsx" });
+    await waitFor(() => expect(screen.getByRole("button", { name: "Exportar Excel" })).toBeEnabled());
+    expect(saveRenditionsExport).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    "GIOF_GESTOR",
+    "GIOF_MANAGER",
+    "AUDITOR_DIRECCION",
+    "ADMIN_SISTEMA",
+    "SOLICITANTE_EPE",
+  ])(
+    "mantiene oculto el nuevo Excel de Rendiciones para %s hasta aceptación",
+    (role) => {
+      exportGate.paymentReady = true;
+      roleCode = role;
+      render(<RenditionsInboxPage />);
+      expect(screen.getByText("Bandeja de Rendiciones")).toBeInTheDocument();
+      expect(
+        screen.queryByRole("button", { name: "Exportar Excel" }),
+      ).not.toBeInTheDocument();
+      expect(downloadRenditionsExport).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([
     ["GIOF_GESTOR", "Todos", ["Todos", "Mi trabajo", "Sin asignar", "Por responsable"]],

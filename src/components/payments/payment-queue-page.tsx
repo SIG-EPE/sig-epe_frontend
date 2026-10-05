@@ -1,9 +1,17 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { useRouter, useSearchParams } from "next/navigation";
 
+import { ApiRequestError } from "@/lib/api-client";
+import { isPaymentExportReady } from "@/lib/business-queue-export-readiness";
+import { ROLE_CODE } from "@/lib/constants";
+import {
+  downloadPaymentQueueExport,
+  getAppliedPaymentQueueFilters,
+  savePaymentQueueExport,
+} from "@/lib/payment-queue-export";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -13,14 +21,9 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { usePaymentQueue, useRetryRexanActivation } from "@/hooks/use-requests";
-import {
-  PAYMENT_QUEUE_STATUS,
-  getApiErrorMessage,
-  getPaymentRexanStatusLabel,
-} from "@/lib/requests";
+import { getApiErrorMessage, getPaymentRexanStatusLabel } from "@/lib/requests";
 import { cn } from "@/lib/utils";
 import {
-  PAYMENT_COMPLETENESS,
   REQUEST_STATUS,
   type PaymentRequest,
   type PaymentQueueRequest,
@@ -130,6 +133,9 @@ export function PaymentQueuePage() {
     null,
   );
   const [isRejectionOpen, setIsRejectionOpen] = useState(false);
+  const [isExportingPayment, setIsExportingPayment] = useState(false);
+  const paymentExportControllerRef = useRef<AbortController | null>(null);
+  const paymentExportInFlightRef = useRef(false);
   const parsedUrl = parsePaymentQueueUrl(
     new URLSearchParams(searchParams.toString()),
   );
@@ -164,25 +170,14 @@ export function PaymentQueuePage() {
     canManageAssignments && workScope === GIOF_WORK_SCOPE.ASSIGNEE
       ? urlFilters.assignee_id
       : undefined;
-  const { tab: _tab, ...paymentUrlFilters } = urlFilters;
-  const activeQueue = usePaymentQueue(
-    {
-      ...paymentUrlFilters,
-      status:
-        tab === PAYMENT_QUEUE_TAB.APPROVED
-          ? PAYMENT_QUEUE_STATUS.PENDING
-          : tab === PAYMENT_QUEUE_TAB.REJECTED
-            ? PAYMENT_QUEUE_STATUS.REJECTED
-            : PAYMENT_QUEUE_STATUS.PAID,
-      completeness:
-        tab === PAYMENT_QUEUE_TAB.PENDING_DATA
-          ? PAYMENT_COMPLETENESS.ANY_MISSING
-          : paymentUrlFilters.completeness,
-      work_scope: workScope,
-      assignee_id: workAssigneeId,
-    },
-    { enabled: !hasInvalidUrl },
+  const appliedPaymentFilters = getAppliedPaymentQueueFilters(
+    urlFilters,
+    workScope,
+    workAssigneeId,
   );
+  const activeQueue = usePaymentQueue(appliedPaymentFilters, {
+    enabled: !hasInvalidUrl,
+  });
   const displayedRequests = activeQueue.requests;
   const displayedError = activeQueue.error;
   const displayedIsLoading = activeQueue.isLoading;
@@ -200,6 +195,62 @@ export function PaymentQueuePage() {
     ? viewIdentity
     : serializePaymentQueueUrl(urlFilters).toString();
   const rawQuery = searchParams.toString();
+  const canExportPayment =
+    roleCode === ROLE_CODE.GIOF_GESTOR ||
+    roleCode === ROLE_CODE.GIOF_MANAGER ||
+    roleCode === ROLE_CODE.AUDITOR_DIRECCION ||
+    roleCode === ROLE_CODE.ADMIN_SISTEMA;
+
+  useEffect(
+    () => () => paymentExportControllerRef.current?.abort(),
+    [viewIdentity, roleCode, user?.id],
+  );
+
+  async function exportPaymentExcel(): Promise<void> {
+    if (paymentExportInFlightRef.current || !canExportPayment || hasInvalidUrl)
+      return;
+    const controller = new AbortController();
+    paymentExportControllerRef.current = controller;
+    paymentExportInFlightRef.current = true;
+    setIsExportingPayment(true);
+    try {
+      const download = await downloadPaymentQueueExport(
+        appliedPaymentFilters,
+        controller.signal,
+      );
+      controller.signal.throwIfAborted();
+      savePaymentQueueExport(download);
+      toast.success("Excel de la Cola de Pagos descargado correctamente.");
+    } catch (error) {
+      if (
+        controller.signal.aborted ||
+        (error instanceof Error && error.name === "AbortError")
+      )
+        toast.error("La descarga del Excel fue cancelada.");
+      else if (error instanceof ApiRequestError && error.status === 403)
+        toast.error("No tienes permisos para exportar la Cola de Pagos.");
+      else if (
+        error instanceof ApiRequestError &&
+        error.status === 422 &&
+        error.body.code === "PAYMENT_EXPORT_ROW_LIMIT_EXCEEDED"
+      )
+        toast.error(
+          "El Excel supera el máximo de 10,000 pagos. Ajusta los filtros activos.",
+        );
+      else if (error instanceof ApiRequestError && error.status === 400)
+        toast.error("Revisa los filtros activos antes de exportar el Excel.");
+      else
+        toast.error(
+          "No se pudo descargar el Excel de pagos. Inténtalo nuevamente.",
+        );
+    } finally {
+      if (paymentExportControllerRef.current === controller) {
+        paymentExportControllerRef.current = null;
+        paymentExportInFlightRef.current = false;
+        setIsExportingPayment(false);
+      }
+    }
+  }
 
   useEffect(() => {
     if (!hasInvalidUrl && rawQuery !== canonicalQuery) {
@@ -689,6 +740,29 @@ export function PaymentQueuePage() {
             </CardDescription>
           </div>
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+            {isPaymentExportReady() && canExportPayment && !hasInvalidUrl ? (
+              <div className="flex items-center gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={isExportingPayment}
+                  aria-busy={isExportingPayment}
+                  onClick={() => void exportPaymentExcel()}
+                >
+                  {isExportingPayment ? "Exportando Excel..." : "Exportar Excel"}
+                </Button>
+                {isExportingPayment ? (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    disabled={paymentExportControllerRef.current?.signal.aborted}
+                    onClick={() => paymentExportControllerRef.current?.abort()}
+                  >
+                    Cancelar descarga
+                  </Button>
+                ) : null}
+              </div>
+            ) : null}
             <div
               className="inline-flex rounded-md border p-1"
               role="group"
@@ -750,6 +824,13 @@ export function PaymentQueuePage() {
           </div>
         </CardHeader>
         <CardContent>
+          {isPaymentExportReady() && canExportPayment && !hasInvalidUrl && (
+            <p className="mb-3 text-sm text-muted-foreground">
+              El Excel incluye solicitudes aprobadas pendientes de pago, pagos
+              rechazados sin pago y pagos registrados que coincidan con los
+              filtros aplicados.
+            </p>
+          )}
           {canManagePayments && tab === PAYMENT_QUEUE_TAB.APPROVED ? (
             <div
               className="mb-3 flex items-center gap-3"

@@ -21,6 +21,11 @@ import {
 
 import { PaymentQueueTable } from "@/components/payments/payment-queue-table";
 import {
+  downloadPaymentQueueExport,
+  savePaymentQueueExport,
+} from "@/lib/payment-queue-export";
+import { ApiRequestError } from "@/lib/api-client";
+import {
   getPaymentRegisteredToast,
   PaymentQueuePage,
 } from "@/components/payments/payment-queue-page";
@@ -45,7 +50,10 @@ const mocks = vi.hoisted(() => ({
   apiGet: vi.fn(),
   rejectApprovedPayment: vi.fn(),
   invalidateRequestDomain: vi.fn(),
+  toastError: vi.fn(),
+  toastSuccess: vi.fn(),
 }));
+const exportGate = vi.hoisted(() => ({ paymentReady: false, renditionReady: false }));
 let currentQuery = "";
 let roleCode = "GIOF_GESTOR";
 const replaceMock = vi.fn((href: string) => {
@@ -102,6 +110,21 @@ vi.mock("@/stores/auth-store", () => ({
 vi.mock("@/lib/api-client", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/api-client")>()),
   api: { get: mocks.apiGet },
+}));
+
+vi.mock("sonner", () => ({
+  toast: { error: mocks.toastError, success: mocks.toastSuccess },
+}));
+
+vi.mock("@/lib/payment-queue-export", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/payment-queue-export")>()),
+  downloadPaymentQueueExport: vi.fn(),
+  savePaymentQueueExport: vi.fn(),
+}));
+
+vi.mock("@/lib/business-queue-export-readiness", () => ({
+  isPaymentExportReady: () => exportGate.paymentReady,
+  isRenditionExportReady: () => exportGate.renditionReady,
 }));
 
 vi.mock("@/lib/query-tags", async (importOriginal) => ({
@@ -1595,6 +1618,186 @@ describe("payment pending queue action", () => {
 
       const retry = screen.queryByRole("button", { name: "Reintentar REXAN" });
       expect(Boolean(retry)).toBe(visible);
+    },
+  );
+});
+
+describe("payment-only Excel action", () => {
+  beforeEach(() => {
+    exportGate.paymentReady = true;
+    vi.clearAllMocks();
+    currentQuery = "";
+    roleCode = "GIOF_GESTOR";
+    mocks.usePaymentQueue.mockReturnValue({
+      requests: [],
+      total: 0,
+      page: 1,
+      limit: 50,
+      isLoading: false,
+      isRefreshing: false,
+      error: null,
+      summary: { count: 0, payable_amount_by_currency: {}, status_counts: {} },
+      refetch: vi.fn(),
+    });
+  });
+
+  it.each(["GIOF_GESTOR", "GIOF_MANAGER", "AUDITOR_DIRECCION", "ADMIN_SISTEMA"])(
+    "offers export to authorized queue role %s without mutating or refreshing", async (role) => {
+      roleCode = role;
+      currentQuery = "tab=paid&page=3&sort=queue_date_asc&search=SOL";
+      const result = {
+        blob: new Blob(["xlsx"]),
+        filename: "bandeja-pagos.xlsx",
+      };
+      vi.mocked(downloadPaymentQueueExport).mockResolvedValue(result);
+      const user = userEvent.setup();
+      render(<PaymentQueuePage />);
+      await user.click(screen.getByRole("button", { name: "Exportar Excel" }));
+      expect(downloadPaymentQueueExport).toHaveBeenCalledOnce();
+      expect(downloadPaymentQueueExport).toHaveBeenCalledWith(
+        expect.objectContaining({
+          status: "PAID",
+          page: 3,
+          sort: "queue_date_asc",
+          search: "SOL",
+          work_scope: role.startsWith("GIOF_") ? "all" : undefined,
+        }),
+        expect.any(AbortSignal),
+      );
+      expect(savePaymentQueueExport).toHaveBeenCalledWith(result);
+      expect(
+        mocks.usePaymentQueue.mock.results.at(-1)?.value.refetch,
+      ).not.toHaveBeenCalled();
+    },
+  );
+
+  it("hides export for unauthorized role or invalid URL", () => {
+    roleCode = "SOLICITANTE_EPE";
+    const view = render(<PaymentQueuePage />);
+    expect(
+      screen.queryByRole("button", { name: "Exportar Excel" }),
+    ).not.toBeInTheDocument();
+    roleCode = "GIOF_GESTOR";
+    currentQuery = "tab=paid&status=PAID";
+    view.rerender(<PaymentQueuePage />);
+    expect(
+      screen.queryByRole("button", { name: "Exportar Excel" }),
+    ).not.toBeInTheDocument();
+    expect(downloadPaymentQueueExport).not.toHaveBeenCalled();
+  });
+
+  it("explains the complete workbook scope when the payment export is ready", () => {
+    render(<PaymentQueuePage />);
+    expect(screen.getByText(/solicitudes aprobadas pendientes de pago, pagos rechazados sin pago y pagos registrados/)).toBeInTheDocument();
+  });
+
+  it("exports applied pending-data and manager assignee filters, not draft controls", async () => {
+    roleCode = "GIOF_MANAGER";
+    const assignee = "11111111-1111-4111-8111-111111111111";
+    currentQuery = `tab=pending-data&work_scope=assignee&assignee_id=${assignee}&page=5&sort=payable_amount_desc`;
+    vi.mocked(downloadPaymentQueueExport).mockResolvedValue({
+      blob: new Blob(["xlsx"]),
+      filename: "bandeja-pagos.xlsx",
+    });
+    render(<PaymentQueuePage />);
+    await userEvent
+      .setup()
+      .click(screen.getByRole("button", { name: "Exportar Excel" }));
+    expect(downloadPaymentQueueExport).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: "PAID",
+        completeness: "any_missing",
+        page: 5,
+        work_scope: "assignee",
+        assignee_id: assignee,
+        sort: "payable_amount_desc",
+      }),
+      expect.any(AbortSignal),
+    );
+  });
+
+  it("guards double-click and cancel, never saves late response", async () => {
+    let finish!: (value: { blob: Blob; filename: string }) => void;
+    vi.mocked(downloadPaymentQueueExport).mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
+    const user = userEvent.setup();
+    render(<PaymentQueuePage />);
+    await user.click(screen.getByRole("button", { name: "Exportar Excel" }));
+    expect(
+      screen.getByRole("button", { name: "Exportando Excel..." }),
+    ).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: "Cancelar descarga" }));
+    finish({ blob: new Blob(["late"]), filename: "bandeja-pagos.xlsx" });
+    await waitFor(() =>
+      expect(mocks.toastError).toHaveBeenCalledWith(
+        "La descarga del Excel fue cancelada.",
+      ),
+    );
+    expect(downloadPaymentQueueExport).toHaveBeenCalledTimes(1);
+    expect(savePaymentQueueExport).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [403, "No tienes permisos para exportar la Cola de Pagos."],
+    [422, "El Excel supera el máximo de 10,000 pagos. Ajusta los filtros activos."],
+  ])("handles %i without fallback or second GET", async (status, message) => {
+    vi.mocked(downloadPaymentQueueExport).mockRejectedValue(
+      new ApiRequestError(status, {
+        statusCode: status,
+        code:
+          status === 422 ? "PAYMENT_EXPORT_ROW_LIMIT_EXCEEDED" : undefined,
+        message: "backend details",
+        error: "error",
+        timestamp: "2026-09-30",
+        path: "/request-payments/export-business.xlsx",
+      }),
+    );
+    render(<PaymentQueuePage />);
+    await userEvent
+      .setup()
+      .click(screen.getByRole("button", { name: "Exportar Excel" }));
+    await waitFor(() => expect(mocks.toastError).toHaveBeenCalledWith(message));
+    expect(downloadPaymentQueueExport).toHaveBeenCalledTimes(1);
+    expect(savePaymentQueueExport).not.toHaveBeenCalled();
+  });
+});
+
+describe("payment Excel demo visibility", () => {
+  it.each([
+    "GIOF_GESTOR",
+    "GIOF_MANAGER",
+    "AUDITOR_DIRECCION",
+    "ADMIN_SISTEMA",
+    "SOLICITANTE_EPE",
+  ])(
+    "keeps the new payment export hidden until accepted for %s",
+    (role) => {
+      exportGate.paymentReady = false;
+      exportGate.renditionReady = true;
+      roleCode = role;
+      currentQuery = "tab=paid";
+      mocks.usePaymentQueue.mockReturnValue({
+        requests: [],
+        total: 0,
+        page: 1,
+        limit: 50,
+        isLoading: false,
+        isRefreshing: false,
+        error: null,
+        summary: null,
+        refetch: vi.fn(),
+      });
+      render(<PaymentQueuePage />);
+      expect(screen.getByText("Solicitudes para pago")).toBeInTheDocument();
+      expect(
+        screen.queryByRole("button", { name: "Exportar Excel" }),
+      ).not.toBeInTheDocument();
+      expect(screen.queryByText(/El Excel incluye solicitudes aprobadas/)).not.toBeInTheDocument();
+      expect(downloadPaymentQueueExport).not.toHaveBeenCalled();
     },
   );
 });

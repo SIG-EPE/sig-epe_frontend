@@ -217,6 +217,20 @@ describe("api client auth headers", () => {
     );
   });
 
+  it("reads an exposed business filename and returns null when Content-Disposition is not readable", async () => {
+    const filename = "pagos_2026-09-30_23-59.xlsx";
+    vi.mocked(fetch).mockResolvedValueOnce(new Response(new Uint8Array(VALID_XLSX_BYTES).buffer, {
+      status: 200,
+      headers: { "Content-Type": XLSX_MEDIA_TYPE, "Content-Disposition": `attachment; filename="${filename}"` },
+    }));
+    await expect(api.download("/request-payments/export-business.xlsx")).resolves.toMatchObject({ filename });
+    vi.mocked(fetch).mockResolvedValueOnce(new Response(new Uint8Array(VALID_XLSX_BYTES).buffer, {
+      status: 200,
+      headers: { "Content-Type": XLSX_MEDIA_TYPE },
+    }));
+    await expect(api.download("/request-payments/export-business.xlsx")).resolves.toMatchObject({ filename: null });
+  });
+
   it("posts an authenticated JSON review payload and accepts the exact CSV header", async () => {
     vi.mocked(fetch).mockResolvedValue(
       new Response(

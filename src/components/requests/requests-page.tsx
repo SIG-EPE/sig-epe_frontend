@@ -156,6 +156,8 @@ function getRequestReviewExportErrorMessage(error: unknown): string {
     if (error.status === 403)
       return "No tienes permisos para exportar la Bandeja de Revisión.";
     if (error.status === 422) {
+      if (error.body.code === "BUSINESS_REVIEW_EXPORT_ROW_LIMIT_EXCEEDED")
+        return "El Excel supera el máximo de 10,000 filas por hoja. Ajusta los filtros activos.";
       const { count, max } = error.body;
       if (
         error.body.code === "REQUEST_REVIEW_EXPORT_ROW_LIMIT_EXCEEDED" &&
