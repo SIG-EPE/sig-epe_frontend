@@ -39,6 +39,10 @@ export function unbindGiofLeaseCredential(lease: GiofWorkLease): void {
 export function getGiofMutationHeaders(path: string, method?: string): HeadersInit | undefined {
   const normalizedMethod = method?.toUpperCase() ?? "GET";
   if (normalizedMethod === "GET" || normalizedMethod === "HEAD") return undefined;
+  // EXTRA tiene autorización propia por rol/lectura, sin lease financiero ambiental.
+  if (
+    /^\/requests\/[^/?#]+\/documents\/extra(?:\/[^/?#]+)?(?:[?#].*)?$/.test(path)
+  ) return undefined;
 
   for (const [target, lease] of credentialsByTarget.entries()) {
     if (path.split(/[/?#]/).includes(target)) {
@@ -53,4 +57,8 @@ export function getGiofMutationHeaders(path: string, method?: string): HeadersIn
 
 export function getGiofLeaseCredential(target: string): GiofWorkLease | undefined {
   return credentialsByTarget.get(target);
+}
+
+export function clearGiofLeaseCredentials(): void {
+  credentialsByTarget.clear();
 }

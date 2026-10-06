@@ -29,6 +29,7 @@ import {
   normalizeRequestReviewFilters,
   rejectApprovedPayment as submitApprovedPaymentRejection,
   serializeRequestReviewUrl,
+  uploadExtraRequestDocument,
 } from "@/lib/requests";
 import type {
   AttachPaymentProofInput,
@@ -58,6 +59,8 @@ import type {
   RequestReviewFilters,
   RequestReviewResponse,
   RequestDocument,
+  RequestDocumentUploadResponse,
+  ExtraRequestDocumentMutationContext,
   RequestReceiptReview,
   RequestRenditionReport,
   RequestRenditionGenerateResponse,
@@ -1417,47 +1420,87 @@ export function useConfirmRequestReceiptReview() {
   return { confirmReceiptReview, isLoading, error };
 }
 
-export function useUploadRequestDocument() {
+export function useUploadExtraRequestDocument(
+  context:
+    | ExtraRequestDocumentMutationContext
+    | undefined
+    | (() => ExtraRequestDocumentMutationContext),
+) {
+  return useUploadRequestDocument((requestId, input) => {
+    if (
+      (input.scope_type && input.scope_type !== "REQUEST") ||
+      input.request_allocation_id ||
+      input.document_section
+    ) {
+      return Promise.reject(
+        new Error("Los documentos extra solo admiten alcance de solicitud."),
+      );
+    }
+    return uploadExtraRequestDocument(
+      requestId,
+      { ...input, idempotency_key: input.idempotency_key ?? "" },
+      typeof context === "function" ? context() : context,
+    );
+  });
+}
+
+export function useUploadRequestDocument(
+  sendDocument?: (
+    requestId: string,
+    input: UploadRequestDocumentInput,
+  ) => Promise<RequestDocumentUploadResponse>,
+) {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<Error | null>(null);
 
   const uploadDocument = async (
     requestId: string,
     input: UploadRequestDocumentInput,
-  ): Promise<RequestDocument> => {
+  ): Promise<RequestDocumentUploadResponse> => {
     setIsLoading(true);
     setError(null);
     try {
-      const formData = new FormData();
-      formData.append("file", input.file);
-      formData.append("document_category", input.document_category);
-      if (
-        input.scope_type &&
-        input.document_category !== REQUEST_DOCUMENT_CATEGORY.PAYMENT_PROOF
-      ) {
-        formData.append("scope_type", input.scope_type);
-      }
-      if (
-        input.request_allocation_id &&
-        input.document_category !== REQUEST_DOCUMENT_CATEGORY.PAYMENT_PROOF
-      ) {
-        formData.append("request_allocation_id", input.request_allocation_id);
-      }
-      if (input.document_section) {
-        formData.append("document_section", input.document_section);
-      }
-      if (input.metadata_json) {
-        formData.append("metadata_json", JSON.stringify(input.metadata_json));
-      }
-      const result = await api.postForm<RequestDocument>(
-        `/requests/${requestId}/documents`,
-        formData,
-        {
-          headers: {
-            "Idempotency-Key": input.idempotency_key ?? crypto.randomUUID(),
+      const sendOrdinaryDocument = async () => {
+        const formData = new FormData();
+        formData.append("file", input.file);
+        formData.append("document_category", input.document_category);
+        if (
+          input.document_category === REQUEST_DOCUMENT_CATEGORY.OTHER &&
+          input.display_name
+        ) {
+          formData.append("display_name", input.display_name);
+        }
+        if (
+          input.scope_type &&
+          input.document_category !== REQUEST_DOCUMENT_CATEGORY.PAYMENT_PROOF
+        ) {
+          formData.append("scope_type", input.scope_type);
+        }
+        if (
+          input.request_allocation_id &&
+          input.document_category !== REQUEST_DOCUMENT_CATEGORY.PAYMENT_PROOF
+        ) {
+          formData.append("request_allocation_id", input.request_allocation_id);
+        }
+        if (input.document_section) {
+          formData.append("document_section", input.document_section);
+        }
+        if (input.metadata_json) {
+          formData.append("metadata_json", JSON.stringify(input.metadata_json));
+        }
+        return api.postForm<RequestDocumentUploadResponse>(
+          `/requests/${requestId}/documents`,
+          formData,
+          {
+            headers: {
+              "Idempotency-Key": input.idempotency_key ?? crypto.randomUUID(),
+            },
           },
-        },
-      );
+        );
+      };
+      const result = await (sendDocument
+        ? sendDocument(requestId, input)
+        : sendOrdinaryDocument());
       invalidateRequestCaches();
       return result;
     } catch (e) {

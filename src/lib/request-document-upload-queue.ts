@@ -1,6 +1,7 @@
 import {
   REQUEST_DOCUMENT_MAX_BATCH_FILES,
   validateRequestDocumentFile,
+  validateOtherDocumentDisplayName,
 } from "@/lib/requests";
 import {
   REQUEST_DOCUMENT_SCOPE_TYPE,
@@ -35,6 +36,8 @@ export interface RequestDocumentUploadQueueItem {
   id: string;
   file: File;
   documentCategory: RequestDocumentCategory;
+  displayName?: string;
+  titleSource?: "CUSTOM" | "ORIGINAL_FILENAME";
   scopeType?: RequestDocumentScopeType;
   requestAllocationId?: string;
   state: RequestDocumentUploadFileState;
@@ -69,6 +72,8 @@ export interface RequestDocumentUploadQueueSummary {
 
 export interface EnqueueRequestDocumentFilesOptions {
   category: RequestDocumentCategory;
+  displayName?: string;
+  fileTitles?: readonly string[];
   requiresAllocation?: boolean;
   requestAllocationId?: string;
 }
@@ -153,27 +158,47 @@ export function enqueueRequestDocumentFiles(
   const omittedCount = Math.max(files.length - retainedFiles.length, 0);
   const requiresAllocation = options.requiresAllocation === true;
 
-  const nextItems = retainedFiles.map<RequestDocumentUploadQueueItem>((file, index) => {
-    const validationError = validateRequestDocumentFile(file, options.category);
-    const allocationError = requiresAllocation && !options.requestAllocationId
-      ? "Selecciona la línea POA a la que corresponden los comprobantes."
-      : null;
-    const errorMessage = validationError ?? allocationError;
+  const nextItems = retainedFiles.map<RequestDocumentUploadQueueItem>(
+    (file, index) => {
+      const titleDraft = options.fileTitles?.[index] ?? options.displayName ?? "";
+      const normalizedTitle = titleDraft.normalize("NFKC").trim();
+      const isOther = options.category === "OTHER";
+      const titleError = isOther && normalizedTitle
+        ? validateOtherDocumentDisplayName(titleDraft)
+        : null;
+      const validationError = validateRequestDocumentFile(
+        file,
+        options.category,
+      );
+      const allocationError =
+        requiresAllocation && !options.requestAllocationId
+          ? "Selecciona la línea POA a la que corresponden los comprobantes."
+          : null;
+      const errorMessage = validationError ?? allocationError ?? titleError;
 
-    const id = idFactory(index);
-    return {
-      id,
-      idempotencyKey: id,
-      file,
-      documentCategory: options.category,
-      scopeType: requiresAllocation ? REQUEST_DOCUMENT_SCOPE_TYPE.ALLOCATION : undefined,
-      requestAllocationId: requiresAllocation ? options.requestAllocationId : undefined,
-      state: errorMessage ? REQUEST_DOCUMENT_UPLOAD_FILE_STATE.ERROR : REQUEST_DOCUMENT_UPLOAD_FILE_STATE.QUEUED,
-      retryable: !errorMessage,
-      errorMessage: errorMessage ?? undefined,
-      hasPersistentWarning: false,
-    };
-  });
+      const id = idFactory(index);
+      return {
+        id,
+        idempotencyKey: id,
+        file,
+        documentCategory: options.category,
+        displayName: isOther && normalizedTitle ? normalizedTitle : undefined,
+        titleSource: isOther ? (normalizedTitle ? "CUSTOM" : "ORIGINAL_FILENAME") : undefined,
+        scopeType: requiresAllocation
+          ? REQUEST_DOCUMENT_SCOPE_TYPE.ALLOCATION
+          : undefined,
+        requestAllocationId: requiresAllocation
+          ? options.requestAllocationId
+          : undefined,
+        state: errorMessage
+          ? REQUEST_DOCUMENT_UPLOAD_FILE_STATE.ERROR
+          : REQUEST_DOCUMENT_UPLOAD_FILE_STATE.QUEUED,
+        retryable: !errorMessage,
+        errorMessage: errorMessage ?? undefined,
+        hasPersistentWarning: false,
+      };
+    },
+  );
 
   return {
     ...currentState,

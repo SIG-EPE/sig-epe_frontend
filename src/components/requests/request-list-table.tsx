@@ -31,7 +31,7 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { ROUTES } from "@/lib/constants";
+import { ROLE_CODE, ROUTES } from "@/lib/constants";
 import {
   REQUEST_TYPE_LABELS,
   formatRequestCurrency,
@@ -47,7 +47,7 @@ import {
   getRequestTimelineLabel,
 } from "@/lib/requests";
 import { getSafeDocumentUrl } from "@/lib/safe-url";
-import { REQUEST_TYPE, type PaymentRequest } from "@/types/requests";
+import { REQUEST_STATUS, REQUEST_TYPE, type PaymentRequest } from "@/types/requests";
 import { StatusBadge } from "./status-badge";
 import { DriveProjectionState } from "./drive-projection-state";
 import { GiofWorkStatus } from "@/components/giof-work/giof-work-controls";
@@ -613,6 +613,17 @@ export function RequestListTable({
                               </Link>
                             </DropdownMenuItem>
                           ))}
+                          {(roleCode === ROLE_CODE.GIOF_MANAGER ||
+                            roleCode === ROLE_CODE.GIOF_GESTOR) &&
+                            request.status !== REQUEST_STATUS.DRAFT && (
+                              <DropdownMenuItem asChild>
+                                <Link
+                                  href={`${ROUTES.REQUESTS}/${request.id}?manageExtra=1#documents` as Route}
+                                >
+                                  Gestionar documentos extra
+                                </Link>
+                              </DropdownMenuItem>
+                            )}
                         </DropdownMenuContent>
                       </DropdownMenu>
                     </div>

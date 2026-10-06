@@ -1,5 +1,12 @@
 // -------------------------------------------------------
-import type { GiofWorkMetadata, GiofWorkScope } from "@/types/giof-work";
+import type {
+  GiofWorkMetadata,
+  GiofWorkScope,
+  GiofWorkPool,
+  GiofWorkAssignmentState,
+  GiofWorkLeaseState,
+} from "@/types/giof-work";
+
 // Request types — SIG-EPE
 // Tipos del frontend alineados a respuestas del backend
 // -------------------------------------------------------
@@ -912,6 +919,19 @@ export interface PaymentRequest {
   relatedRequest?: RelatedRequestSummary | null;
   advanceSettlements?: RelatedRequestSummary[];
   giof_work?: GiofWorkMetadata;
+  extra_document_context?: GiofExtraDocumentContext;
+}
+
+export interface GiofExtraDocumentContext {
+  requestId: string;
+  pool: GiofWorkPool;
+  assigneeId: string | null;
+  assignmentState: GiofWorkAssignmentState;
+  assignmentVersion: string;
+  leaseState: GiofWorkLeaseState;
+  leaseRequired: boolean;
+  canMutate: boolean;
+  readOnly: boolean;
 }
 
 export interface PaymentRejectionActor {
@@ -974,6 +994,18 @@ export interface RenditionNextStepGuidance {
   href: string | null;
 }
 
+export const REQUEST_DOCUMENT_PROVENANCE_ORIGIN = {
+  HUMAN: "HUMAN",
+  GENERATED: "GENERATED",
+} as const;
+
+export type RequestDocumentProvenanceOrigin =
+  (typeof REQUEST_DOCUMENT_PROVENANCE_ORIGIN)[keyof typeof REQUEST_DOCUMENT_PROVENANCE_ORIGIN];
+
+export const REQUEST_DOCUMENT_PURPOSE = { EXTRA: "EXTRA" } as const;
+export type RequestDocumentPurpose =
+  (typeof REQUEST_DOCUMENT_PURPOSE)[keyof typeof REQUEST_DOCUMENT_PURPOSE];
+
 export interface RequestDocument {
   id: string;
   payment_request_id: string;
@@ -994,9 +1026,15 @@ export interface RequestDocument {
   drive_web_url?: string | null;
   upload_status: RequestDocumentUploadStatus | string;
   metadata_json?: Record<string, unknown> | null;
+  provenance_label?: string;
+  provenance_origin?: RequestDocumentProvenanceOrigin | null;
+  document_purpose?: RequestDocumentPurpose | null;
   uploaded_by_id?: string | null;
   created_at: string;
 }
+
+// Contrato mínimo de carga compartido; la proyección de proveedor se integra aparte.
+export type RequestDocumentUploadResponse = RequestDocument;
 
 export interface RequestReceipt {
   id: string;
@@ -1247,12 +1285,27 @@ export interface RequiredDocumentChecklist {
 export interface UploadRequestDocumentInput {
   file: File;
   document_category: RequestDocumentCategory;
+  request_type?: RequestType;
+  display_name?: string;
   scope_type?: RequestDocumentScopeType;
   request_allocation_id?: string;
   document_section?: string;
   metadata_json?: Record<string, unknown>;
   idempotency_key?: string;
 }
+
+export interface ExtraRequestDocumentMutationContext {
+  /** @deprecated Informativo: EXTRA no envía ni usa versiones de asignación. */
+  assignmentVersion?: string | number;
+  /** @deprecated EXTRA no envía ni reutiliza leases financieros. */
+  token?: string;
+  signal?: AbortSignal;
+}
+
+export type UploadExtraRequestDocumentInput = Pick<
+  UploadRequestDocumentInput,
+  "file" | "document_category" | "display_name" | "metadata_json"
+> & { idempotency_key: string };
 
 export const REQUEST_DOCUMENT_UPLOAD_QUEUE_STATUS = {
   PENDING: "pending",

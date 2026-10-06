@@ -29,13 +29,16 @@ import {
 import {
   REQUEST_DOCUMENT_UPLOAD_STATUS,
   type RequestDocument,
+  type RequestDocumentUploadResponse,
+  type RequestType,
   type RequestReceiptReview,
   type UploadRequestDocumentInput,
 } from "@/types/requests";
 
 interface UseRequestDocumentUploadQueueOptions {
   requestId?: string;
-  uploadDocument?: (requestId: string, input: UploadRequestDocumentInput) => Promise<RequestDocument>;
+  requestType?: RequestType;
+  uploadDocument?: (requestId: string, input: UploadRequestDocumentInput) => Promise<RequestDocumentUploadResponse>;
   documents?: RequestDocument[];
   receipts?: RequestReceiptReview[];
   upsertDocument?: (document: RequestDocument) => void;
@@ -69,6 +72,7 @@ function wait(delayMs: number): Promise<void> {
 
 export function useRequestDocumentUploadQueue({
   requestId,
+  requestType,
   uploadDocument: injectedUploadDocument,
   documents = [],
   receipts = [],
@@ -142,6 +146,8 @@ export function useRequestDocumentUploadQueue({
           const uploaded = await uploadDocument(requestId, {
             file: item.file,
             document_category: item.documentCategory,
+            request_type: requestType,
+            display_name: item.documentCategory === "OTHER" ? item.displayName : undefined,
             scope_type: item.scopeType,
             request_allocation_id: item.requestAllocationId,
             idempotency_key: item.idempotencyKey ?? item.id,

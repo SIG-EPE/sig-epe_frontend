@@ -17,6 +17,7 @@ import {
 import { ROLE_CODE, ROUTES } from "@/lib/constants";
 import { isGiofOperationalRole } from "@/lib/role-capabilities";
 import { getSafeDocumentUrl } from "@/lib/safe-url";
+import { getSafeOtherDocumentDisplayFilename } from "@/lib/other-document-display-name";
 import {
   formatRexanActivationStatus,
   getPaymentCompletenessLabels,
@@ -86,6 +87,9 @@ import {
   type RejectApprovedPaymentLease,
   type RejectApprovedPaymentResponse,
   type PaymentRejectionProjection,
+  type ExtraRequestDocumentMutationContext,
+  type UploadExtraRequestDocumentInput,
+  type RequestDocumentUploadResponse,
 } from "@/types/requests";
 
 export {
@@ -177,6 +181,67 @@ export async function rejectApprovedPayment(
         "x-giof-lease-token": lease.token,
       },
     },
+  );
+}
+
+function getExtraDocumentMutationOptions(
+  context: ExtraRequestDocumentMutationContext | undefined,
+): RequestInit {
+  context?.signal?.throwIfAborted();
+  if (!context) {
+    throw new Error("El contexto de autorización del documento extra no es válido.");
+  }
+  return {
+    signal: context?.signal,
+  };
+}
+
+export async function uploadExtraRequestDocument(
+  requestId: string,
+  input: UploadExtraRequestDocumentInput,
+  context: ExtraRequestDocumentMutationContext | undefined,
+): Promise<RequestDocumentUploadResponse> {
+  const options = getExtraDocumentMutationOptions(context);
+  if (
+    typeof input.idempotency_key !== "string" ||
+    !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(input.idempotency_key)
+  ) {
+    throw new Error("La identidad de carga del documento extra no es válida.");
+  }
+  const formData = new FormData();
+  formData.append("file", input.file);
+  formData.append("document_category", input.document_category);
+  if (
+    input.document_category === REQUEST_DOCUMENT_CATEGORY.OTHER &&
+    input.display_name
+  ) {
+    formData.append("display_name", input.display_name);
+  }
+  if (input.metadata_json) {
+    const metadata = { ...input.metadata_json };
+    delete metadata.document_purpose;
+    delete metadata.giof_extra_document_v1;
+    delete metadata.document_upload_provenance_v1;
+    formData.append("metadata_json", JSON.stringify(metadata));
+  }
+  const headers = new Headers(options.headers);
+  headers.set("Idempotency-Key", input.idempotency_key);
+  return api.postForm<RequestDocumentUploadResponse>(
+    `/requests/${requestId}/documents/extra`,
+    formData,
+    { ...options, headers },
+  );
+}
+
+// Preparado para la futura confirmación; no habilita acciones visibles de borrado.
+export async function deleteExtraRequestDocument(
+  requestId: string,
+  documentId: string,
+  context: ExtraRequestDocumentMutationContext | undefined,
+): Promise<void> {
+  return api.delete<void>(
+    `/requests/${requestId}/documents/extra/${documentId}`,
+    getExtraDocumentMutationOptions(context),
   );
 }
 
@@ -1291,6 +1356,116 @@ export function getRequestDocumentDisplayName(
   return decodePotentialUtf8Mojibake(filename);
 }
 
+export const OTHER_DOCUMENT_TITLE_ERROR = {
+  LENGTH: "Ingresa un nombre de 3 a 120 caracteres.",
+  FORBIDDEN:
+    "Usa letras o números; no incluyas /, \\, <, >, comillas ni saltos de línea.",
+} as const;
+
+const OTHER_DOCUMENT_TITLE_PATTERN =
+  /^[\p{L}\p{N}\p{M}\p{Zs}.,;:()\[\]\-_'&+#%]+$/u;
+const OTHER_DOCUMENT_TITLE_CONTENT_PATTERN = /[\p{L}\p{N}]/u;
+const OTHER_DOCUMENT_RESERVED_NAME_PATTERN =
+  /^(?:CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\..*)?$/i;
+
+export function validateOtherDocumentDisplayName(value: string): string | null {
+  const normalized = value.normalize("NFKC").trim();
+  const characterCount = Array.from(normalized).length;
+  if (characterCount < 3 || characterCount > 120) {
+    return OTHER_DOCUMENT_TITLE_ERROR.LENGTH;
+  }
+  if (
+    !OTHER_DOCUMENT_TITLE_CONTENT_PATTERN.test(normalized) ||
+    !OTHER_DOCUMENT_TITLE_PATTERN.test(normalized) ||
+    OTHER_DOCUMENT_RESERVED_NAME_PATTERN.test(normalized) ||
+    normalized.endsWith(".")
+  ) {
+    return OTHER_DOCUMENT_TITLE_ERROR.FORBIDDEN;
+  }
+  return null;
+}
+
+interface SupplierOtherDocumentMetadata {
+  displayName: string | null;
+  originalFilename: string;
+  isLegacy: boolean;
+}
+
+export function getSupplierOtherDocumentMetadata(
+  document: RequestDocument,
+): SupplierOtherDocumentMetadata {
+  // Business title/provenance come from the ordinary document response;
+  // supplier evidence stays privacy-minimal and eligibility-only.
+  const supplierMetadata = document.metadata_json?.supplier_document_v2;
+  const versionedMetadata =
+    typeof supplierMetadata === "object" && supplierMetadata !== null
+      ? supplierMetadata
+      : null;
+  const displayName =
+    versionedMetadata &&
+    "display_name" in versionedMetadata &&
+    typeof versionedMetadata.display_name === "string" &&
+    versionedMetadata.display_name.trim()
+      ? versionedMetadata.display_name.trim()
+      : null;
+  const metadataOriginalFilename =
+    versionedMetadata &&
+    "original_filename" in versionedMetadata &&
+    typeof versionedMetadata.original_filename === "string" &&
+    versionedMetadata.original_filename.trim()
+      ? versionedMetadata.original_filename.trim()
+      : null;
+  const originalFilename = decodePotentialUtf8Mojibake(
+    metadataOriginalFilename ||
+      document.original_filename ||
+      "Documento sin nombre",
+  );
+
+  return {
+    displayName,
+    originalFilename,
+    isLegacy: displayName === null,
+  };
+}
+
+export function getOtherDocumentBusinessMetadata(document: RequestDocument): {
+  displayName: string;
+  originalFilename: string;
+  titleSource: "CUSTOM" | "ORIGINAL_FILENAME" | "LEGACY";
+} {
+  const supplier = getSupplierOtherDocumentMetadata(document);
+  const raw =
+    document.metadata_json?.request_other_document_v1 ??
+    document.metadata_json?.supplier_document_v2;
+  const metadata =
+    raw && typeof raw === "object" ? (raw as Record<string, unknown>) : null;
+  const source =
+    metadata?.title_source === "ORIGINAL_FILENAME"
+      ? "ORIGINAL_FILENAME"
+      : metadata?.display_name
+        ? "CUSTOM"
+        : "LEGACY";
+  const originalFilename =
+    typeof metadata?.original_filename === "string" &&
+    metadata.original_filename.trim()
+      ? decodePotentialUtf8Mojibake(metadata.original_filename)
+      : supplier.originalFilename;
+  const displayName =
+    typeof metadata?.display_filename === "string" &&
+    metadata.display_filename.trim()
+      ? metadata.display_filename
+      : source === "CUSTOM" &&
+          typeof metadata?.display_name === "string" &&
+          metadata.display_name.trim()
+        ? metadata.display_name
+        : originalFilename;
+  return {
+    displayName: getSafeOtherDocumentDisplayFilename(displayName),
+    originalFilename: getSafeOtherDocumentDisplayFilename(originalFilename),
+    titleSource: source,
+  };
+}
+
 export function getReturnProofDocuments(
   documents: RequestDocument[],
 ): RequestDocument[] {
@@ -1606,6 +1781,8 @@ export function getRequestDocumentUploadErrorCode(
 }
 
 export function isRetryableRequestDocumentUploadError(error: unknown): boolean {
+  // fetch rechaza con TypeError ante un fallo de red; AbortError no es reintentable.
+  if (error instanceof TypeError) return true;
   if (
     error instanceof ApiRequestError &&
     typeof error.body.retryable === "boolean"
@@ -2987,6 +3164,10 @@ export function getApiErrorMessages(error: unknown): string[] {
   if (error instanceof ApiRequestError) {
     const code = typeof error.body.code === "string" ? error.body.code : null;
     const paymentErrorMessages: Record<string, string> = {
+      OTHER_DISPLAY_NAME_REQUIRED:
+        "Ingresa un nombre personalizado para el documento Otro documento.",
+      OTHER_DISPLAY_NAME_INVALID:
+        "El nombre personalizado de Otro documento no es válido. Usa de 3 a 120 caracteres permitidos.",
       PAYMENT_ALREADY_EXISTS:
         "Esta solicitud ya tiene un pago registrado. Actualiza la cola para ver su estado.",
       PAYMENT_PROOF_ALREADY_EXISTS:

@@ -55,6 +55,7 @@ import { useAuthStore } from "@/stores/auth-store";
 import { RENDITION_NEXT_STEP_ACTION, REQUEST_DOCUMENT_CATEGORY, REQUEST_DOCUMENT_SCOPE_TYPE, REQUEST_DOCUMENT_UPLOAD_STATUS, REQUEST_RENDITION_REPORT_STATUS, REQUEST_TYPE, REXAN_OUTCOME, type ApproveRequestDto, type RequestDocument, type RequestRenditionAllocationCoverage, type RequestRenditionReport, type RexanOutcome } from "@/types/requests";
 import { RequestStatusStepper } from "./request-status-stepper";
 import { RequestDocumentsCard } from "./request-documents-card";
+import { RequestExtraDocumentsModal } from "./request-extra-documents-modal";
 import { StructuredRenditionReportCard } from "./structured-rendition-report-card";
 import { StatusBadge } from "./status-badge";
 import { DriveProjectionState } from "./drive-projection-state";
@@ -701,6 +702,19 @@ export function RequestDetailPage() {
       {isAdvanceSettlement && <StructuredRenditionReportCard request={request} readOnly reportResource={structuredReportState} documentsResource={requestDocuments} onChanged={() => requestDocuments.refetch({ background: true })} />}
 
       <RequestDocumentsCard request={request} readOnly documentsResource={requestDocuments} />
+      <RequestExtraDocumentsModal
+        initialOpen={searchParams.get("manageExtra") === "1"}
+        request={request}
+        documents={requestDocuments.documents}
+        unavailable={requestDocuments.isLoading || Boolean(requestDocuments.error)}
+        refreshing={isRefreshing || requestDocuments.isRefreshing}
+        onRefresh={async () => {
+          await Promise.all([
+            refetch({ background: true }),
+            requestDocuments.refetch({ background: true }),
+          ]);
+        }}
+      />
 
       <Card>
         <CardHeader><CardTitle>Datos principales</CardTitle></CardHeader>

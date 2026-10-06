@@ -3,6 +3,7 @@ import { ExternalLink, FileText } from "lucide-react";
 import type { ReactNode } from "react";
 
 import { Badge } from "@/components/ui/badge";
+import { RequestDocumentProvenanceBadge } from "./request-document-provenance-badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { ROUTES } from "@/lib/constants";
@@ -137,6 +138,7 @@ function DocumentRows({ documents, emptyMessage = "Sin documentos visibles." }: 
                 <p className="truncate text-sm font-medium">{getRequestDocumentDisplayName(document)}</p>
                 <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
                   <Badge variant="secondary">{getRequestDocumentCategoryLabel(document.document_category)}</Badge>
+                  <RequestDocumentProvenanceBadge document={document} />
                   <Badge variant="outline">Solo lectura</Badge>
                   <span>{getRequestDocumentMimeLabel(document.mime_type)}</span>
                   <span>{formatRequestDocumentSize(document.size_bytes)}</span>

@@ -57,6 +57,7 @@ import {
   type UpdateRequestReceiptReviewInput,
 } from "@/types/requests";
 import { SettlementUploadFileRow } from "./settlement-preparation/settlement-upload-file-row";
+import { RequestDocumentProvenanceBadge } from "./request-document-provenance-badge";
 
 interface RequestDocumentsCardProps {
   request: PaymentRequest;
@@ -647,6 +648,7 @@ export function RequestDocumentsCard({
                   <p className="truncate text-sm font-medium">{getRequestDocumentDisplayName(document)}</p>
                   <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
                     <Badge variant="secondary">{getRequestDocumentCategoryLabel(document.document_category)}</Badge>
+                    <RequestDocumentProvenanceBadge document={document} />
                     <span>{getRequestDocumentMimeLabel(document.mime_type)}</span>
                     <span>{formatRequestDocumentSize(document.size_bytes)}</span>
                     <span>Subido: {formatRequestDateTime(document.created_at)}</span>

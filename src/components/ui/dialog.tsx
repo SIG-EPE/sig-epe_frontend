@@ -118,6 +118,9 @@ export function DialogContent({
     initialTarget?.focus();
 
     const handleKeyDown = (event: KeyboardEvent) => {
+      // Solo el diálogo superior debe recibir Escape y contener el foco.
+      const dialogs = document.querySelectorAll('[role="dialog"]');
+      if (dialogs[dialogs.length - 1] !== content) return;
       if (event.key === "Escape") {
         if (!closeDisabled) onOpenChangeRef.current(false);
         event.preventDefault();

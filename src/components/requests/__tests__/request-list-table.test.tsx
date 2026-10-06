@@ -277,6 +277,27 @@ describe("RequestListTable", () => {
     ).toHaveAttribute("href", "/requests/req-1?mode=process");
   });
 
+  it.each([ROLE_CODE.GIOF_MANAGER, ROLE_CODE.GIOF_GESTOR])(
+    "ofrece EXTRA desde el menú PAID sin Procesar para %s",
+    async (role) => {
+      const user = userEvent.setup();
+      render(
+        <RequestListTable
+          requests={[makeRequest({ status: REQUEST_STATUS.PAID })]}
+          isLoading={false}
+          roleCode={role}
+          currentUserId="operator"
+        />,
+      );
+      await user.click(
+        screen.getByRole("button", { name: "Más acciones de solicitud" }),
+      );
+      expect(
+        screen.getByRole("menuitem", { name: "Gestionar documentos extra" }),
+      ).toHaveAttribute("href", "/requests/req-1?manageExtra=1#documents");
+    },
+  );
+
   it("no muestra estado ni acciones de ownership/proceso para REQUEST DRAFT", async () => {
     const user = userEvent.setup();
     render(

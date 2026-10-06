@@ -188,6 +188,49 @@ function makeUploadError(status: number, message: string, code?: string): ApiReq
 }
 
 describe("RequestDocumentsCard", () => {
+  it.each([false, true])(
+    "shows stable backend provenance without changing actions in readOnly=%s",
+    async (readOnly) => {
+      vi.mocked(api.get).mockResolvedValue([]);
+      const storedDocument = makeDocument({
+        provenance_label: "Agregado por GIOF",
+        provenance_origin: "HUMAN",
+        drive_web_url: "https://drive.google.com/file/d/example/view",
+        metadata_json: { provenance_label: "Forged label" },
+      });
+      const { rerender, container } = render(
+        <RequestDocumentsCard
+          request={makeRequest()}
+          readOnly={readOnly}
+          documents={[storedDocument]}
+        />,
+      );
+      expect(await screen.findByText("Agregado por GIOF")).toBeInTheDocument();
+      expect(
+        screen.getByRole("link", { name: /^Ver documento$/ }),
+      ).toBeInTheDocument();
+      expect(
+        screen.queryByRole("button", { name: "Eliminar" }) !==
+          null,
+      ).toBe(!readOnly);
+      rerender(
+        <RequestDocumentsCard
+          request={makeRequest()}
+          readOnly={readOnly}
+          documents={[
+            {
+              ...storedDocument,
+              uploaded_by_id: "private-refetched-actor",
+              metadata_json: { provenance_label: "Another forged label" },
+            },
+          ]}
+        />,
+      );
+      expect(screen.getByText("Agregado por GIOF")).toBeInTheDocument();
+      expect(screen.queryByText(/forged label/i)).not.toBeInTheDocument();
+      expect(container.innerHTML).not.toContain("private-refetched-actor");
+    },
+  );
   let queryCacheSession = 0;
   it.each([
     { requestType: REQUEST_TYPE.ADVANCE, readOnly: false },

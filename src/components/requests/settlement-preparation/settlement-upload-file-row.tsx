@@ -50,7 +50,14 @@ export function SettlementUploadFileRow({ item, disabled = false, onRetry, onRem
     <li className="space-y-2 rounded-md border bg-background p-3">
       <div className="flex min-w-0 items-start justify-between gap-3">
         <div className="min-w-0 space-y-1">
-          <p className="truncate text-sm font-medium">{item.file.name}</p>
+          <p className="truncate text-sm font-medium">
+            {item.displayName ?? item.file.name}
+          </p>
+          {item.displayName && item.displayName !== item.file.name ? (
+            <p className="truncate text-xs text-muted-foreground">
+              {item.file.name}
+            </p>
+          ) : null}
           <p className="text-xs text-muted-foreground">
             {formatRequestDocumentSize(item.file.size)} · {getRequestDocumentCategoryLabel(item.documentCategory)}
           </p>
