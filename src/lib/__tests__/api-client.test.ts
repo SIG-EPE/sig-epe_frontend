@@ -106,6 +106,26 @@ describe("api client auth headers", () => {
     );
   });
 
+  it("accepts an empty 204 after refreshing an extra-document deletion", async () => {
+    mockRefreshSession.mockResolvedValue({ accessToken: "new-token" });
+    const completed = new Response(null, { status: 204 });
+    const parseJson = vi.spyOn(completed, "json");
+    vi.mocked(fetch)
+      .mockResolvedValueOnce(mockJsonResponse({ message: "Unauthorized" }, 401))
+      .mockResolvedValueOnce(completed);
+    const signal = new AbortController().signal;
+
+    await expect(
+      api.delete<void>("/requests/abc/documents/extra/document-1", { signal }),
+    ).resolves.toBeUndefined();
+
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(mockRefreshSession).toHaveBeenCalledOnce();
+    expect(parseJson).not.toHaveBeenCalled();
+    expect(vi.mocked(fetch).mock.calls[1]?.[1]?.signal).toBe(signal);
+    expect(getLastRequestHeaders().get("Authorization")).toBe("Bearer new-token");
+  });
+
   it("does not send stale Authorization headers to the SSO exchange", async () => {
     vi.mocked(fetch).mockResolvedValue(
       mockJsonResponse({ data: { accessToken: "sso-token" } }),

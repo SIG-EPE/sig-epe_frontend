@@ -111,6 +111,8 @@ async function apiFetch<T>(
         throw new ApiRequestError(retryRes.status, errorBody, retryRes.headers);
       }
 
+      if (retryRes.status === 204) return undefined as T;
+
       const retryJson = (await retryRes.json()) as ApiResponse<T>;
       return retryJson.data;
     }
