@@ -348,8 +348,8 @@ describe("RequestDocumentsCard", () => {
     vi.mocked(api.postForm).mockImplementation(async (_url, body) => makeDocument({ id: crypto.randomUUID(), document_category: REQUEST_DOCUMENT_CATEGORY.OTHER, original_filename: (body as FormData).get("file") instanceof File ? ((body as FormData).get("file") as File).name : "fallback.pdf" }));
     const user = userEvent.setup();
     render(<RequestDocumentsCard request={makeRequest({ request_type: requestType })} />);
-    if (requestType === REQUEST_TYPE.ADVANCE_SETTLEMENT) await user.click(screen.getByRole("combobox", { name: /categoría/i }));
-    if (requestType === REQUEST_TYPE.ADVANCE_SETTLEMENT) await user.click(screen.getByRole("option", { name: /otro documento/i }));
+    if (requestType !== REQUEST_TYPE.REIMBURSEMENT) await user.click(screen.getByRole("combobox", { name: /categoría/i }));
+    if (requestType !== REQUEST_TYPE.REIMBURSEMENT) await user.click(screen.getByRole("option", { name: /otro documento/i }));
     else await user.click(screen.getByRole("button", { name: /otros documentos ·/i }));
     fireEvent.change(screen.getByLabelText(/^archivo$/i), { target: { files: [new File(["a"], "uno.pdf", { type: "application/pdf" }), new File(["b"], "dos.pdf", { type: "application/pdf" })] } });
     await user.type(screen.getByRole("textbox", { name: /título.*uno.pdf/i }), "Primer informe");
@@ -358,13 +358,15 @@ describe("RequestDocumentsCard", () => {
     await user.click(screen.getByRole("button", { name: /^adjuntar$/i }));
     await waitFor(() => expect(api.postForm).toHaveBeenCalledTimes(2));
     expect(vi.mocked(api.postForm).mock.calls.map((call) => (call[1] as FormData).get("display_name"))).toEqual(["Primer informe", "Segundo informe"]);
+    expect(vi.mocked(api.postForm).mock.calls.map((call) => (call[1] as FormData).get("document_category"))).toEqual([REQUEST_DOCUMENT_CATEGORY.OTHER, REQUEST_DOCUMENT_CATEGORY.OTHER]);
   });
 
-  it("allows blank OTHER title and blocks invalid explicit title inline before enqueue", async () => {
+  it("requires a custom OTHER title and blocks blank or invalid titles before enqueue", async () => {
     vi.mocked(api.get).mockResolvedValue([]);
     const user = userEvent.setup();
     render(<RequestDocumentsCard request={makeRequest()} />);
-    await user.click(screen.getByRole("button", { name: /otros documentos ·/i }));
+    await user.click(screen.getByRole("combobox", { name: /categoría/i }));
+    await user.click(screen.getByRole("option", { name: /otro documento/i }));
     fireEvent.change(screen.getByLabelText(/^archivo$/i), { target: { files: [new File(["a"], "anexo.pdf", { type: "application/pdf" })] } });
     const title = screen.getByRole("textbox", { name: /título.*anexo.pdf/i });
     await user.type(title, "../inseguro");
@@ -373,7 +375,11 @@ describe("RequestDocumentsCard", () => {
     expect(title).toHaveFocus();
     await user.clear(title);
     await user.type(title, "   ");
-    expect(screen.getByRole("button", { name: /agregar.*cola/i })).toBeEnabled();
+    await user.click(screen.getByRole("button", { name: /agregar.*cola/i }));
+    expect(title).toHaveFocus();
+    expect(title).toHaveAttribute("aria-invalid", "true");
+    expect(screen.queryByText("Cola de carga")).not.toBeInTheDocument();
+    expect(api.postForm).not.toHaveBeenCalled();
   });
   it("uploads supplier OTHER with no title and retains server provenance on display", async () => {
     vi.mocked(api.get).mockResolvedValue([]);
@@ -1757,7 +1763,8 @@ describe("RequestDocumentsCard", () => {
     });
     expect(await screen.findByText("pendiente.pdf")).toBeInTheDocument();
 
-    await user.click(within(screen.getByTestId("contextual-document-options")).getByRole("button", { name: /^Contrato ·/i }));
+    await user.click(screen.getByRole("combobox", { name: "Categoría" }));
+    await user.click(screen.getByRole("option", { name: "Contrato" }));
 
     expect(
       screen.getByRole("dialog", { name: "¿Cambiar la selección de carga?" }),
@@ -1769,7 +1776,8 @@ describe("RequestDocumentsCard", () => {
     ).not.toBeInTheDocument();
     expect(screen.getByText("pendiente.pdf")).toBeInTheDocument();
 
-    await user.click(within(screen.getByTestId("contextual-document-options")).getByRole("button", { name: /^Contrato ·/i }));
+    await user.click(screen.getByRole("combobox", { name: "Categoría" }));
+    await user.click(screen.getByRole("option", { name: "Contrato" }));
     await user.click(
       screen.getByRole("button", { name: "Cambiar y retirar cola" }),
     );
@@ -1906,11 +1914,40 @@ describe("RequestDocumentsCard", () => {
     expect(screen.getByText("Adjunto")).toBeInTheDocument();
   });
 
+  it("restores direct PXQ and category-file-attach controls for editable ADVANCE drafts", () => {
+    vi.mocked(api.get).mockResolvedValue([]);
+    const { container } = render(
+      <RequestDocumentsCard
+        request={makeRequest({ allocations: [makeAllocation(), makeAllocation({ id: "alloc-2" })] })}
+        documents={[]}
+      />,
+    );
+    expect(screen.getByRole("button", { name: /Adjuntar PXQ/i })).toBeEnabled();
+    expect(screen.getByRole("combobox", { name: "Categoría" })).toBeEnabled();
+    expect(screen.getByLabelText("Archivo")).toHaveAttribute("multiple");
+    expect(screen.getByRole("button", { name: /^Adjuntar$/i })).toBeInTheDocument();
+    expect(screen.queryByTestId("contextual-document-options")).not.toBeInTheDocument();
+    expect(container.querySelector("fieldset details")).toBeNull();
+    expect(api.postForm).not.toHaveBeenCalled();
+  });
+
+  it.each([REQUEST_STATUS.DRAFT, REQUEST_STATUS.OBSERVED])(
+    "keeps read-only ADVANCE %s free of upload actions",
+    (status) => {
+      vi.mocked(api.get).mockResolvedValue([]);
+      render(<RequestDocumentsCard request={makeRequest({ status })} readOnly documents={[]} />);
+      expect(screen.queryByRole("combobox", { name: "Categoría" })).not.toBeInTheDocument();
+      expect(screen.queryByTestId("contextual-document-options")).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: /Adjuntar/i })).not.toBeInTheDocument();
+      expect(api.postForm).not.toHaveBeenCalled();
+    },
+  );
+
   it.each([REQUEST_TYPE.ADVANCE, REQUEST_TYPE.REIMBURSEMENT])(
     "shows compact contextual options and operation limits for %s",
     (requestType) => {
       vi.mocked(api.get).mockResolvedValue([]);
-      render(<RequestDocumentsCard request={makeRequest({ request_type: requestType })} documents={[]} />);
+      render(<RequestDocumentsCard request={makeRequest({ request_type: requestType, status: REQUEST_STATUS.OBSERVED })} documents={[]} />);
       const groups = screen.getByTestId("contextual-document-options");
       expect(within(groups).queryByRole("combobox", { name: "Categoría" })).not.toBeInTheDocument();
       expect(within(groups).getByRole("button", { name: /Hoja de movilidad.*PDF.*XLSX/i })).toBeEnabled();
@@ -1930,7 +1967,7 @@ describe("RequestDocumentsCard", () => {
     async (requestType) => {
       vi.mocked(api.get).mockResolvedValue([]);
       const user = userEvent.setup();
-      render(<RequestDocumentsCard request={makeRequest({ request_type: requestType })} documents={[]} />);
+      render(<RequestDocumentsCard request={makeRequest({ request_type: requestType, status: REQUEST_STATUS.OBSERVED })} documents={[]} />);
       const choices = screen.getByRole("group", { name: "Categorías disponibles" });
       expect(within(choices).getAllByRole("group").length).toBeGreaterThan(1);
       expect(screen.getByRole("heading", { level: 2, name: "Documentos adjuntos" })).toBeInTheDocument();
@@ -1952,7 +1989,8 @@ describe("RequestDocumentsCard", () => {
     vi.mocked(api.get).mockResolvedValue([]);
     const user = userEvent.setup();
     render(<RequestDocumentsCard request={makeRequest()} documents={[]} />);
-    await user.click(screen.getByRole("button", { name: /otros documentos ·/i }));
+    await user.click(screen.getByRole("combobox", { name: "Categoría" }));
+    await user.click(screen.getByRole("option", { name: /otro documento/i }));
     fireEvent.change(screen.getByLabelText(/^archivo$/i), { target: { files: [new File(["a"], "uno.pdf", { type: "application/pdf" }), new File(["b"], "dos.pdf", { type: "application/pdf" })] } });
     const first = screen.getByRole("textbox", { name: "Título de uno.pdf" });
     const second = screen.getByRole("textbox", { name: "Título de dos.pdf" });
@@ -1965,7 +2003,7 @@ describe("RequestDocumentsCard", () => {
     expect(second).toHaveValue("Informe dos");
     expect(first.closest("div.rounded-md")).toHaveClass("min-w-0");
     expect(first.parentElement).toHaveClass("flex-col");
-    expect(screen.getByRole("alert")).toHaveAttribute("id", first.getAttribute("aria-describedby"));
+    expect(document.getElementById(first.getAttribute("aria-describedby")!)).toHaveAttribute("role", "alert");
     expect(api.postForm).not.toHaveBeenCalled();
   });
 
@@ -1997,9 +2035,8 @@ describe("RequestDocumentsCard", () => {
     vi.mocked(api.get).mockResolvedValue([]);
     vi.mocked(api.postForm).mockResolvedValue(makeDocument({ document_category: REQUEST_DOCUMENT_CATEGORY.MOBILITY_SHEET }));
     render(<RequestDocumentsCard request={makeRequest()} documents={[]} />);
-    const choice = within(screen.getByTestId("contextual-document-options")).getByRole("button", { name: /Hoja de movilidad/ });
-    await userEvent.click(choice);
-    expect(choice).toHaveAttribute("aria-pressed", "true");
+    await userEvent.click(screen.getByRole("combobox", { name: "Categoría" }));
+    await userEvent.click(screen.getByRole("option", { name: /Hoja de movilidad/ }));
     const input = screen.getByLabelText("Archivo");
     expect(input).toHaveAttribute("accept", expect.stringContaining(".xlsx"));
     fireEvent.change(input, { target: { files: [new File(["sheet"], "movilidad.xlsx", { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" })] } });

@@ -1188,6 +1188,8 @@ export function RequestDocumentsCard({
   const isAdvanceSettlement =
     request.request_type === REQUEST_TYPE.ADVANCE_SETTLEMENT;
   const isAdvance = request.request_type === REQUEST_TYPE.ADVANCE;
+  const useSimpleAdvanceUploader =
+    isAdvance && request.status === REQUEST_STATUS.DRAFT && canManageActions;
   const isContextualDocumentFlow =
     isAdvance || request.request_type === REQUEST_TYPE.REIMBURSEMENT;
   const isSupplierPayment =
@@ -1722,7 +1724,9 @@ export function RequestDocumentsCard({
 
   function addOtherDraftsToQueue(): void {
     if (otherQueueDrafts.length === 0) return;
-    const invalidDraft = otherQueueDrafts.find((draft) => draft.title.trim() && validateOtherDocumentDisplayName(draft.title));
+    const invalidDraft = otherQueueDrafts.find((draft) =>
+      validateOtherDocumentDisplayName(draft.title),
+    );
     if (invalidDraft) {
       otherDraftsRef.current?.querySelector<HTMLInputElement>(`[id="other-queue-title-${invalidDraft.id}"]`)?.focus();
       return;
@@ -3371,7 +3375,7 @@ export function RequestDocumentsCard({
               </div>
               {hasOptionalCategoryOptions ? (
                 <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-[220px_minmax(0,1fr)_minmax(220px,320px)_auto] xl:items-end">
-                   {isContextualDocumentFlow ? (
+                   {isContextualDocumentFlow && !useSimpleAdvanceUploader ? (
                      <fieldset className="min-w-0 space-y-2 md:col-span-2 xl:col-span-4" data-testid="contextual-document-options">
                        <legend className="text-sm font-medium">Categorías disponibles</legend>
                        {Object.values(REQUEST_DOCUMENT_PRESENTATION_GROUP).map((group) => {
@@ -3454,9 +3458,9 @@ export function RequestDocumentsCard({
                   </div>
                   {category === REQUEST_DOCUMENT_CATEGORY.OTHER && otherQueueDrafts.length > 0 ? (
                      <div ref={otherDraftsRef} className="min-w-0 space-y-2 md:col-span-2 xl:col-span-4">
-                      <p className="text-sm font-medium">Título opcional por archivo</p>
+                      <p className="text-sm font-medium">Título obligatorio por archivo</p>
                       {otherQueueDrafts.map((draft) => {
-                        const error = draft.title.trim() ? validateOtherDocumentDisplayName(draft.title) : null;
+                        const error = validateOtherDocumentDisplayName(draft.title);
                         return (
                           <div key={draft.id} className="min-w-0 space-y-1 rounded-md border p-2">
                             <label className="block text-sm" htmlFor={`other-queue-title-${draft.id}`}>Título de {draft.file.name}</label>
@@ -3468,7 +3472,7 @@ export function RequestDocumentsCard({
                           </div>
                         );
                       })}
-                      <p className="text-xs text-muted-foreground">Deja el título en blanco para usar el nombre original del archivo.</p>
+                      <p className="text-xs text-muted-foreground">Ingresa un título personalizado para cada archivo antes de agregarlo a la cola.</p>
                        <Button type="button" variant="outline" className="min-h-11" onClick={addOtherDraftsToQueue}>Agregar a la cola</Button>
                     </div>
                   ) : null}
