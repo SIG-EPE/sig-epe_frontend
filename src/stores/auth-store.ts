@@ -5,6 +5,7 @@ import {
   clearQueryCache,
 } from "@/lib/query-cache";
 import { clearBulkMarkPaidRunStorage } from "@/lib/bulk-mark-paid-run-storage";
+import { clearGiofLeaseCredentials } from "@/lib/giof-work-lease-session";
 import type { AuthUser } from "@/types/auth";
 
 // -------------------------------------------------------
@@ -51,8 +52,10 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
       (current.user.id !== user.id ||
         (current.sessionExpiresAt !== null &&
           current.sessionExpiresAt !== (expiries?.sessionExpiresAt ?? null)))
-    )
+    ) {
       clearBulkMarkPaidRunStorage();
+      clearGiofLeaseCredentials();
+    }
     setQueryCacheAuthNamespace(buildAuthCacheNamespace(user));
     set({
       user,
@@ -65,6 +68,7 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
 
   clearAuth: () => {
     clearBulkMarkPaidRunStorage();
+    clearGiofLeaseCredentials();
     clearQueryCache();
     bumpQueryCacheSessionGeneration();
     if (typeof document !== "undefined") {

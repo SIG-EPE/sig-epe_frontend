@@ -6,6 +6,7 @@ import { useCachedResource } from "@/hooks/use-cached-resource";
 import { api, ApiRequestError } from "@/lib/api-client";
 import {
   bindGiofLeaseCredential,
+  getGiofLeaseCredentialGeneration,
   isGiofLeaseCurrent,
   unbindGiofLeaseCredential,
 } from "@/lib/giof-work-lease-session";
@@ -44,6 +45,23 @@ import type {
 import { GIOF_OWNERSHIP_ERROR_CODE } from "@/types/giof-work";
 
 const DEFAULT_HEARTBEAT_MS = 60_000;
+const STALE_LEASE_OPERATION_MESSAGE =
+  "La sesión operativa cambió mientras se procesaba la solicitud. Vuelve a abrir el trabajo.";
+
+export function isExpectedPostCompletionLifecycleConflict(
+  error: unknown,
+): boolean {
+  return (
+    error instanceof ApiRequestError &&
+    error.status === 409 &&
+    error.body.code === "GIOF_LIFECYCLE_CONFLICT"
+  );
+}
+
+interface LeaseOperationFence {
+  credentialGeneration: number;
+  operationGeneration: number;
+}
 
 function toExpectedVersion(version: string): number {
   const value = Number(version);
@@ -109,6 +127,22 @@ export function useGiofWorkLease() {
   const [error, setError] = useState<Error | null>(null);
   const leaseRef = useRef<GiofWorkLease | null>(null);
   const aliasesRef = useRef<readonly string[]>([]);
+  const operationGenerationRef = useRef(0);
+
+  function beginOperation(): LeaseOperationFence {
+    operationGenerationRef.current += 1;
+    return {
+      credentialGeneration: getGiofLeaseCredentialGeneration(),
+      operationGeneration: operationGenerationRef.current,
+    };
+  }
+
+  function isOperationCurrent(fence: LeaseOperationFence): boolean {
+    return (
+      fence.operationGeneration === operationGenerationRef.current &&
+      fence.credentialGeneration === getGiofLeaseCredentialGeneration()
+    );
+  }
 
   function storeLease(
     nextLease: GiofWorkLease | null,
@@ -125,6 +159,7 @@ export function useGiofWorkLease() {
   async function release(): Promise<void> {
     const current = leaseRef.current;
     if (!current) return;
+    beginOperation();
     storeLease(null);
     await api
       .post<{ released: true }>("/giof-work/leases/release", {
@@ -149,6 +184,7 @@ export function useGiofWorkLease() {
     if (leaseRef.current?.requestId !== requestId) await release();
     setIsLoading(true);
     setError(null);
+    const fence = beginOperation();
     try {
       const nextLease = await api.post<GiofWorkLease>(
         "/giof-work/leases/acquire",
@@ -158,6 +194,8 @@ export function useGiofWorkLease() {
           expectedVersion: toExpectedVersion(work.assignmentVersion),
         },
       );
+      if (!isOperationCurrent(fence))
+        throw new Error(STALE_LEASE_OPERATION_MESSAGE);
       storeLease(nextLease, aliases);
       invalidateRequestDomain(requestId);
       return nextLease;
@@ -179,6 +217,7 @@ export function useGiofWorkLease() {
     const intervalId = window.setInterval(() => {
       const current = leaseRef.current;
       if (!current) return;
+      const fence = beginOperation();
       void api
         .post<GiofWorkLease>("/giof-work/leases/heartbeat", {
           pool: current.pool,
@@ -186,8 +225,20 @@ export function useGiofWorkLease() {
           expectedVersion: toExpectedVersion(current.assignmentVersion),
           token: current.token,
         })
-        .then((renewed) => storeLease(renewed))
+        .then((renewed) => {
+          if (
+            !isOperationCurrent(fence) ||
+            leaseRef.current?.token !== current.token
+          )
+            return;
+          storeLease(renewed);
+        })
         .catch((reason: unknown) => {
+          if (
+            !isOperationCurrent(fence) ||
+            leaseRef.current?.token !== current.token
+          )
+            return;
           storeLease(null);
           setError(new Error(getGiofConflictMessage(reason)));
         });
@@ -197,6 +248,7 @@ export function useGiofWorkLease() {
 
   useEffect(
     () => () => {
+      operationGenerationRef.current += 1;
       const current = leaseRef.current;
       if (!current) return;
       unbindGiofLeaseCredential(current);
@@ -299,14 +351,51 @@ export function useAutoAcquireGiofWorkLease({
   return leaseSession;
 }
 
-export function useGiofWorkLeaseSet() {
+export function useGiofWorkLeaseSet(
+  onLeaseLost?: (requestId: string, error: Error) => void,
+) {
   const [leases, setLeases] = useState<GiofWorkLease[]>([]);
   const leasesRef = useRef<GiofWorkLease[]>([]);
   const aliasesRef = useRef(new Map<string, readonly string[]>());
+  const operationGenerationsRef = useRef(new Map<string, number>());
+  const explicitRenewalsRef = useRef(new Set<string>());
+  const acknowledgedRequestsRef = useRef(new Set<string>());
+  const releasedCapturedLeasesRef = useRef(new Set<string>());
+  const onLeaseLostRef = useRef(onLeaseLost);
+  onLeaseLostRef.current = onLeaseLost;
 
   function replaceLeases(next: GiofWorkLease[]): void {
     leasesRef.current = next;
     setLeases(next);
+  }
+
+  function beginOperation(requestId: string): LeaseOperationFence {
+    const operationGeneration =
+      (operationGenerationsRef.current.get(requestId) ?? 0) + 1;
+    operationGenerationsRef.current.set(requestId, operationGeneration);
+    return {
+      credentialGeneration: getGiofLeaseCredentialGeneration(),
+      operationGeneration,
+    };
+  }
+
+  function isOperationCurrent(
+    requestId: string,
+    fence: LeaseOperationFence,
+    token?: string,
+  ): boolean {
+    const tokenIsCurrent =
+      token === undefined ||
+      leasesRef.current.some(
+        (candidate) =>
+          candidate.requestId === requestId && candidate.token === token,
+      );
+    return (
+      operationGenerationsRef.current.get(requestId) ===
+        fence.operationGeneration &&
+      getGiofLeaseCredentialGeneration() === fence.credentialGeneration &&
+      tokenIsCurrent
+    );
   }
 
   async function acquire(
@@ -314,6 +403,7 @@ export function useGiofWorkLeaseSet() {
     work: GiofWorkMetadata,
     aliases: readonly string[] = [],
   ): Promise<GiofWorkLease> {
+    acknowledgedRequestsRef.current.delete(requestId);
     const existing = leasesRef.current.find(
       (candidate) => candidate.requestId === requestId,
     );
@@ -323,13 +413,20 @@ export function useGiofWorkLeaseSet() {
         pool: work.pool,
         assignmentVersion: work.assignmentVersion,
       })
-    )
+    ) {
+      const mergedAliases = Array.from(
+        new Set([...(aliasesRef.current.get(requestId) ?? []), ...aliases]),
+      ).filter(Boolean);
+      aliasesRef.current.set(requestId, mergedAliases);
+      bindGiofLeaseCredential(existing, mergedAliases);
       return existing;
+    }
     if (existing) await release(requestId);
     if (!work.canAcquire)
       throw new Error(
         "Este trabajo está disponible únicamente en modo de solo lectura.",
       );
+    const fence = beginOperation(requestId);
     try {
       const nextLease = await api.post<GiofWorkLease>(
         "/giof-work/leases/acquire",
@@ -339,8 +436,13 @@ export function useGiofWorkLeaseSet() {
           expectedVersion: toExpectedVersion(work.assignmentVersion),
         },
       );
+      if (!isOperationCurrent(requestId, fence))
+        throw new Error(STALE_LEASE_OPERATION_MESSAGE);
       aliasesRef.current.set(requestId, aliases);
-      bindGiofLeaseCredential(nextLease, aliases);
+      if (
+        !bindGiofLeaseCredential(nextLease, aliases, fence.credentialGeneration)
+      )
+        throw new Error(STALE_LEASE_OPERATION_MESSAGE);
       replaceLeases([...leasesRef.current, nextLease]);
       invalidateRequestDomain(requestId);
       return nextLease;
@@ -354,13 +456,7 @@ export function useGiofWorkLeaseSet() {
       (candidate) => candidate.requestId === requestId,
     );
     if (!current) return;
-    unbindGiofLeaseCredential(current);
-    aliasesRef.current.delete(requestId);
-    replaceLeases(
-      leasesRef.current.filter(
-        (candidate) => candidate.requestId !== requestId,
-      ),
-    );
+    beginOperation(requestId);
     await api
       .post("/giof-work/leases/release", {
         pool: current.pool,
@@ -369,6 +465,13 @@ export function useGiofWorkLeaseSet() {
         token: current.token,
       })
       .catch(() => undefined);
+    unbindGiofLeaseCredential(current);
+    aliasesRef.current.delete(requestId);
+    replaceLeases(
+      leasesRef.current.filter(
+        (candidate) => candidate.requestId !== requestId,
+      ),
+    );
   }
 
   async function releaseAll(): Promise<void> {
@@ -377,10 +480,120 @@ export function useGiofWorkLeaseSet() {
     );
   }
 
+  function clearLocal(): void {
+    for (const [requestId, generation] of operationGenerationsRef.current) {
+      operationGenerationsRef.current.set(requestId, generation + 1);
+    }
+    for (const current of leasesRef.current) {
+      unbindGiofLeaseCredential(current);
+    }
+    aliasesRef.current.clear();
+    replaceLeases([]);
+  }
+
+  function captureAndFence(requestId: string): GiofWorkLease | null {
+    const current = leasesRef.current.find(
+      (candidate) => candidate.requestId === requestId,
+    );
+    acknowledgedRequestsRef.current.add(requestId);
+    beginOperation(requestId);
+    if (!current) return null;
+    unbindGiofLeaseCredential(current);
+    aliasesRef.current.delete(requestId);
+    replaceLeases(
+      leasesRef.current.filter(
+        (candidate) => candidate.requestId !== requestId,
+      ),
+    );
+    return { ...current };
+  }
+
+  async function releaseCaptured(captured: GiofWorkLease): Promise<void> {
+    const releaseIdentity = `${captured.requestId}:${captured.token}`;
+    if (releasedCapturedLeasesRef.current.has(releaseIdentity)) return;
+    releasedCapturedLeasesRef.current.add(releaseIdentity);
+    await api
+      .post("/giof-work/leases/release", {
+        pool: captured.pool,
+        requestId: captured.requestId,
+        expectedVersion: toExpectedVersion(captured.assignmentVersion),
+        token: captured.token,
+      })
+      .catch(() => undefined);
+  }
+
+  async function renew(requestId: string): Promise<GiofWorkLease> {
+    const current = leasesRef.current.find(
+      (candidate) => candidate.requestId === requestId,
+    );
+    if (!current) {
+      throw new Error(
+        "Falta la sesión operativa de este trabajo. Vuelve a abrirlo desde la bandeja.",
+      );
+    }
+    explicitRenewalsRef.current.add(requestId);
+    const fence = beginOperation(requestId);
+    try {
+      const renewed = await api.post<GiofWorkLease>(
+        "/giof-work/leases/heartbeat",
+        {
+          pool: current.pool,
+          requestId: current.requestId,
+          expectedVersion: toExpectedVersion(current.assignmentVersion),
+          token: current.token,
+        },
+      );
+      if (!isOperationCurrent(requestId, fence, current.token))
+        throw new Error(STALE_LEASE_OPERATION_MESSAGE);
+      unbindGiofLeaseCredential(current);
+      if (
+        !bindGiofLeaseCredential(
+          renewed,
+          aliasesRef.current.get(renewed.requestId),
+          fence.credentialGeneration,
+        )
+      )
+        throw new Error(STALE_LEASE_OPERATION_MESSAGE);
+      replaceLeases(
+        leasesRef.current.map((candidate) =>
+          candidate.requestId === renewed.requestId ? renewed : candidate,
+        ),
+      );
+      return renewed;
+    } catch (reason) {
+      if (!isOperationCurrent(requestId, fence, current.token))
+        throw new Error(STALE_LEASE_OPERATION_MESSAGE);
+      await api
+        .post("/giof-work/leases/release", {
+          pool: current.pool,
+          requestId: current.requestId,
+          expectedVersion: toExpectedVersion(current.assignmentVersion),
+          token: current.token,
+        })
+        .catch(() => undefined);
+      unbindGiofLeaseCredential(current);
+      aliasesRef.current.delete(current.requestId);
+      replaceLeases(
+        leasesRef.current.filter(
+          (candidate) => candidate.requestId !== current.requestId,
+        ),
+      );
+      throw new Error(getGiofConflictMessage(reason));
+    } finally {
+      explicitRenewalsRef.current.delete(requestId);
+    }
+  }
+
   useEffect(() => {
     if (leases.length === 0) return;
     const intervalId = window.setInterval(() => {
       for (const current of leasesRef.current) {
+        if (explicitRenewalsRef.current.has(current.requestId)) continue;
+        const fence: LeaseOperationFence = {
+          credentialGeneration: getGiofLeaseCredentialGeneration(),
+          operationGeneration:
+            operationGenerationsRef.current.get(current.requestId) ?? 0,
+        };
         void api
           .post<GiofWorkLease>("/giof-work/leases/heartbeat", {
             pool: current.pool,
@@ -389,24 +602,55 @@ export function useGiofWorkLeaseSet() {
             token: current.token,
           })
           .then((renewed) => {
+            if (
+              explicitRenewalsRef.current.has(current.requestId) ||
+              !isOperationCurrent(current.requestId, fence, current.token)
+            )
+              return;
             unbindGiofLeaseCredential(current);
-            bindGiofLeaseCredential(
-              renewed,
-              aliasesRef.current.get(renewed.requestId),
-            );
+            if (
+              !bindGiofLeaseCredential(
+                renewed,
+                aliasesRef.current.get(renewed.requestId),
+                fence.credentialGeneration,
+              )
+            )
+              return;
             replaceLeases(
               leasesRef.current.map((candidate) =>
                 candidate.requestId === renewed.requestId ? renewed : candidate,
               ),
             );
           })
-          .catch(() => {
+          .catch(async (reason: unknown) => {
+            if (
+              acknowledgedRequestsRef.current.has(current.requestId) &&
+              isExpectedPostCompletionLifecycleConflict(reason)
+            )
+              return;
+            if (
+              explicitRenewalsRef.current.has(current.requestId) ||
+              !isOperationCurrent(current.requestId, fence, current.token)
+            )
+              return;
+            await api
+              .post("/giof-work/leases/release", {
+                pool: current.pool,
+                requestId: current.requestId,
+                expectedVersion: toExpectedVersion(current.assignmentVersion),
+                token: current.token,
+              })
+              .catch(() => undefined);
             unbindGiofLeaseCredential(current);
             aliasesRef.current.delete(current.requestId);
             replaceLeases(
               leasesRef.current.filter(
                 (candidate) => candidate.requestId !== current.requestId,
               ),
+            );
+            onLeaseLostRef.current?.(
+              current.requestId,
+              new Error(getGiofConflictMessage(reason)),
             );
           });
       }
@@ -416,6 +660,9 @@ export function useGiofWorkLeaseSet() {
 
   useEffect(
     () => () => {
+      for (const [requestId, generation] of operationGenerationsRef.current) {
+        operationGenerationsRef.current.set(requestId, generation + 1);
+      }
       for (const current of leasesRef.current) {
         unbindGiofLeaseCredential(current);
         void api
@@ -431,7 +678,16 @@ export function useGiofWorkLeaseSet() {
     [],
   );
 
-  return { leases, acquire, release, releaseAll };
+  return {
+    leases,
+    acquire,
+    renew,
+    release,
+    releaseAll,
+    clearLocal,
+    captureAndFence,
+    releaseCaptured,
+  };
 }
 
 export async function fetchGiofAssignees(
