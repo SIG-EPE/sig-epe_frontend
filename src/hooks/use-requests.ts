@@ -18,7 +18,11 @@ import {
 } from "@/lib/query-cache";
 import { QUERY_TAGS, invalidateRequestDomain } from "@/lib/query-tags";
 import { useAuthStore } from "@/stores/auth-store";
-import { REQUEST_DOCUMENT_CATEGORY } from "@/types/requests";
+import {
+  REQUEST_DOCUMENT_CATEGORY,
+  REQUEST_TYPE,
+  SUPPLIER_DOCUMENT_PROJECTION_STATE,
+} from "@/types/requests";
 import {
   GIOF_WORK_POOL,
   type GiofWorkLease,
@@ -27,6 +31,7 @@ import {
 import { isGiofLeaseCurrent } from "@/lib/giof-work-lease-session";
 import {
   normalizeRequestReviewFilters,
+  parseSupplierDocumentEvidence,
   rejectApprovedPayment as submitApprovedPaymentRejection,
   serializeRequestReviewUrl,
   uploadExtraRequestDocument,
@@ -36,6 +41,7 @@ import type {
   BulkMarkPaidInput,
   BulkMarkPaidResponse,
   CompletePaymentDetailsInput,
+  CompletePaymentDetailsResponse,
   CreateManualRenditionRowInput,
   ApproveRequestDto,
   CreateRequestDto,
@@ -60,7 +66,6 @@ import type {
   RequestReviewResponse,
   RequestDocument,
   RequestDocumentUploadResponse,
-  ExtraRequestDocumentMutationContext,
   RequestReceiptReview,
   ResolveRequestReceiptDuplicateInput,
   RequestRenditionReport,
@@ -78,7 +83,10 @@ import type {
   RequestsListFilters,
   RequestsListResponse,
   SettlementContextResponse,
+  SupplierDocumentEvidenceProjection,
+  RequestType,
   UpdateRequestDto,
+  ExtraRequestDocumentMutationContext,
 } from "@/types/requests";
 
 function appendIfPresent(
@@ -704,7 +712,7 @@ export function useCompletePaymentDetails() {
   const completePaymentDetails = async (
     paymentId: string,
     input: CompletePaymentDetailsInput,
-  ): Promise<PaymentRequest> => {
+  ): Promise<CompletePaymentDetailsResponse> => {
     setIsLoading(true);
     setError(null);
     try {
@@ -725,12 +733,25 @@ export function useCompletePaymentDetails() {
       if (input.notes?.trim()) formData.append("notes", input.notes.trim());
       if (input.proof_document_id?.trim())
         formData.append("proof_document_id", input.proof_document_id.trim());
-      const result = await api.patchForm<PaymentRequest>(
+      const browserHashDuration = input.browser_hash_duration_ms;
+      const options =
+        typeof browserHashDuration === "number" &&
+        Number.isFinite(browserHashDuration)
+          ? {
+              headers: {
+                "x-payment-proof-hash-duration-ms": String(
+                  Math.round(
+                    Math.min(60_000, Math.max(0, browserHashDuration)),
+                  ),
+                ),
+              },
+            }
+          : undefined;
+      return await api.patchForm<CompletePaymentDetailsResponse>(
         `/request-payments/${paymentId}/details`,
         formData,
+        options,
       );
-      invalidateRequestCaches();
-      return result;
     } catch (e) {
       const nextError =
         e instanceof Error ? e : new Error("Error al completar datos del pago");
@@ -1006,10 +1027,17 @@ export function useSettlementContext(requestId?: string, enabled = true) {
   };
 }
 
-export function useRequestDocuments(requestId?: string) {
+export function useRequestDocuments(
+  requestId?: string,
+  options?: Pick<UseRequestsOptions, "enabled">,
+) {
+  const enabled = options?.enabled ?? true;
   const [documents, setDocuments] = useState<RequestDocument[]>([]);
   const hasLoadedDocumentsRef = useRef(false);
-  const [isInitialLoading, setIsInitialLoading] = useState(Boolean(requestId));
+  const generationRef = useRef(0);
+  const [isInitialLoading, setIsInitialLoading] = useState(
+    Boolean(requestId && enabled),
+  );
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [error, setError] = useState<Error | null>(null);
 
@@ -1018,42 +1046,59 @@ export function useRequestDocuments(requestId?: string) {
 
   const refetch = useCallback(
     async (options?: RequestResourceRefetchOptions) => {
-      if (!requestId || authIsLoading || !accessToken) return;
+      if (!requestId || !enabled || authIsLoading || !accessToken) return;
+      const generation = ++generationRef.current;
       const background =
         options?.background === true || hasLoadedDocumentsRef.current;
       setIsInitialLoading(!background);
       setIsRefreshing(background);
       setError(null);
       try {
-        setDocuments(
-          await api.get<RequestDocument[]>(`/requests/${requestId}/documents`),
+        const result = await api.get<RequestDocument[]>(
+          `/requests/${requestId}/documents`,
         );
+        if (generation !== generationRef.current) return;
+        setDocuments(result);
         hasLoadedDocumentsRef.current = true;
       } catch (e) {
+        if (generation !== generationRef.current) return;
         setError(
           e instanceof Error ? e : new Error("Error al cargar documentos"),
         );
       } finally {
+        if (generation !== generationRef.current) return;
         setIsInitialLoading(false);
         setIsRefreshing(false);
       }
     },
-    [accessToken, authIsLoading, requestId],
+    [accessToken, authIsLoading, enabled, requestId],
   );
 
   useEffect(() => {
+    if (!requestId || !enabled) {
+      generationRef.current += 1;
+      setDocuments([]);
+      hasLoadedDocumentsRef.current = false;
+      setError(null);
+      setIsInitialLoading(false);
+      setIsRefreshing(false);
+      return;
+    }
     if (authIsLoading || !accessToken) return;
     void refetch();
-  }, [accessToken, authIsLoading, refetch]);
+  }, [accessToken, authIsLoading, enabled, refetch, requestId]);
 
   const upsertDocument = (document: RequestDocument): void => {
+    generationRef.current += 1;
     hasLoadedDocumentsRef.current = true;
     setDocuments((current) => upsertById(current, document));
   };
-  const removeDocument = (documentId: string): void =>
+  const removeDocument = (documentId: string): void => {
+    generationRef.current += 1;
     setDocuments((current) =>
       current.filter((document) => document.id !== documentId),
     );
+  };
 
   return {
     documents,
@@ -1068,10 +1113,137 @@ export function useRequestDocuments(requestId?: string) {
   };
 }
 
-export function useRequestReceiptReviews(requestId?: string) {
+function isAbortError(error: unknown): boolean {
+  return error instanceof Error && error.name === "AbortError";
+}
+
+export function useSupplierDocumentEvidence(
+  requestId?: string,
+  requestType?: RequestType | null,
+  options?: Pick<UseRequestsOptions, "enabled">,
+) {
+  const enabled =
+    (options?.enabled ?? true) &&
+    Boolean(requestId) &&
+    requestType === REQUEST_TYPE.SUPPLIER_PAYMENT;
+  const [evidence, setEvidence] =
+    useState<SupplierDocumentEvidenceProjection | null>(null);
+  const [isInitialLoading, setIsInitialLoading] = useState(enabled);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [error, setError] = useState<Error | null>(null);
+  const hasLoadedRef = useRef(false);
+  const generationRef = useRef(0);
+  const abortControllerRef = useRef<AbortController | null>(null);
+  const authIsLoading = useAuthStore((state) => state.isLoading);
+  const accessToken = useAuthStore((state) => state.accessToken);
+
+  const retry = useCallback(async (): Promise<void> => {
+    if (!requestId || !enabled || authIsLoading || !accessToken) return;
+    const generation = ++generationRef.current;
+    abortControllerRef.current?.abort();
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+    const background = hasLoadedRef.current;
+    setIsInitialLoading(!background);
+    setIsRefreshing(background);
+    setError(null);
+
+    try {
+      const response = await api.get<unknown>(
+        `/requests/${requestId}/document-evidence`,
+        { signal: controller.signal },
+      );
+      if (generation !== generationRef.current) return;
+      setEvidence(parseSupplierDocumentEvidence(response));
+      hasLoadedRef.current = true;
+    } catch (caught) {
+      if (
+        generation !== generationRef.current ||
+        controller.signal.aborted ||
+        isAbortError(caught)
+      ) {
+        return;
+      }
+      setEvidence(null);
+      setError(
+        caught instanceof Error
+          ? caught
+          : new Error("No se pudo confirmar el estado de los documentos."),
+      );
+    } finally {
+      if (generation === generationRef.current) {
+        setIsInitialLoading(false);
+        setIsRefreshing(false);
+      }
+    }
+  }, [accessToken, authIsLoading, enabled, requestId]);
+
+  useEffect(() => {
+    if (!enabled) {
+      generationRef.current += 1;
+      abortControllerRef.current?.abort();
+      abortControllerRef.current = null;
+      hasLoadedRef.current = false;
+      setEvidence(null);
+      setError(null);
+      setIsInitialLoading(false);
+      setIsRefreshing(false);
+      return;
+    }
+    if (authIsLoading || !accessToken) return;
+    void retry();
+    return () => {
+      generationRef.current += 1;
+      abortControllerRef.current?.abort();
+    };
+  }, [accessToken, authIsLoading, enabled, retry]);
+
+  const commitEvidence = (
+    nextEvidence: SupplierDocumentEvidenceProjection,
+  ): void => {
+    generationRef.current += 1;
+    abortControllerRef.current?.abort();
+    abortControllerRef.current = null;
+    hasLoadedRef.current = true;
+    setEvidence(parseSupplierDocumentEvidence(nextEvidence));
+    setError(null);
+    setIsInitialLoading(false);
+    setIsRefreshing(false);
+  };
+
+  const isBlocking =
+    enabled &&
+    (isInitialLoading ||
+      isRefreshing ||
+      error !== null ||
+      evidence === null ||
+      !evidence.primary_satisfied ||
+      evidence.state !== SUPPLIER_DOCUMENT_PROJECTION_STATE.READY);
+
+  return {
+    evidence,
+    data: evidence,
+    isInitialLoading,
+    isRefreshing,
+    isLoading: isInitialLoading,
+    isBlocking,
+    error,
+    retry,
+    refetch: retry,
+    commitEvidence,
+  };
+}
+
+export function useRequestReceiptReviews(
+  requestId?: string,
+  options?: Pick<UseRequestsOptions, "enabled">,
+) {
+  const enabled = options?.enabled ?? true;
   const [receipts, setReceipts] = useState<RequestReceiptReview[]>([]);
   const hasLoadedReceiptsRef = useRef(false);
-  const [isInitialLoading, setIsInitialLoading] = useState(Boolean(requestId));
+  const [isInitialLoading, setIsInitialLoading] = useState(
+    Boolean(requestId && enabled),
+  );
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [error, setError] = useState<Error | null>(null);
 
@@ -1080,7 +1252,7 @@ export function useRequestReceiptReviews(requestId?: string) {
 
   const refetch = useCallback(
     async (options?: RequestResourceRefetchOptions) => {
-      if (!requestId || authIsLoading || !accessToken) return;
+      if (!requestId || !enabled || authIsLoading || !accessToken) return;
       const background =
         options?.background === true || hasLoadedReceiptsRef.current;
       setIsInitialLoading(!background);
@@ -1104,13 +1276,21 @@ export function useRequestReceiptReviews(requestId?: string) {
         setIsRefreshing(false);
       }
     },
-    [accessToken, authIsLoading, requestId],
+    [accessToken, authIsLoading, enabled, requestId],
   );
 
   useEffect(() => {
+    if (!requestId || !enabled) {
+      setReceipts([]);
+      hasLoadedReceiptsRef.current = false;
+      setError(null);
+      setIsInitialLoading(false);
+      setIsRefreshing(false);
+      return;
+    }
     if (authIsLoading || !accessToken) return;
     void refetch();
-  }, [accessToken, authIsLoading, refetch]);
+  }, [accessToken, authIsLoading, enabled, refetch, requestId]);
 
   const upsertReceipt = (receipt: RequestReceiptReview): void => {
     hasLoadedReceiptsRef.current = true;
@@ -1566,6 +1746,11 @@ export function useUploadRequestDocument(
       const result = await (sendDocument
         ? sendDocument(requestId, input)
         : sendOrdinaryDocument());
+      if (result.supplier_document_evidence) {
+        result.supplier_document_evidence = parseSupplierDocumentEvidence(
+          result.supplier_document_evidence,
+        );
+      }
       invalidateRequestCaches();
       return result;
     } catch (e) {

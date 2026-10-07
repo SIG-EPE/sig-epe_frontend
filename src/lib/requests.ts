@@ -5,7 +5,8 @@ import {
 } from "@/lib/request-supplier-policy";
 import { USD_CONTRACT_NOTICE } from "@/lib/request-supplier-policy";
 import {
-  evaluateRequestEvidence,
+  evaluateNonSupplierRequestEvidence,
+  getPlannedCategoryPlacement,
   type RequestEvidenceContext,
   type EvidenceReceipt,
 } from "@/lib/request-document-policy";
@@ -43,6 +44,11 @@ import {
   REQUEST_DOCUMENT_UPLOAD_STATUS,
   REQUEST_DOCUMENT_UPLOAD_QUEUE_ERROR_KIND,
   REQUEST_DOCUMENT_UPLOAD_QUEUE_STATUS,
+  SUPPLIER_DOCUMENT_ACTIVITY_STATE,
+  SUPPLIER_DOCUMENT_ALLOWED_CATEGORIES,
+  SUPPLIER_DOCUMENT_ELIGIBILITY_STATE,
+  SUPPLIER_DOCUMENT_PROJECTION_REASON,
+  SUPPLIER_DOCUMENT_PROJECTION_STATE,
   RENDITION_NEXT_STEP_ACTION,
   RENDITION_DEADLINE_STATE,
   REQUEST_TYPE,
@@ -62,6 +68,8 @@ import {
   type RenditionStatus,
   type RenditionDeadlineState,
   type RequestDocument,
+  type SupplierDocumentEvidenceProjection,
+  type SupplierProjectedDocument,
   type RequestDocumentCategory,
   type RequestAllocation,
   type RequestAllocationFundingSource,
@@ -118,6 +126,91 @@ export const PAYMENT_REJECTION_REASON_MAX_LENGTH = 1000;
 
 function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
   return typeof value === "object" && value !== null;
+}
+
+const SUPPLIER_EVIDENCE_CONTRACT_ERROR =
+  "La respuesta de evidencia de documentos no es válida.";
+
+function hasValue<T extends string>(
+  values: readonly T[],
+  value: unknown,
+): value is T {
+  return typeof value === "string" && values.includes(value as T);
+}
+
+function parseSupplierProjectedDocument(
+  value: unknown,
+): SupplierProjectedDocument {
+  if (
+    !isRecord(value) ||
+    typeof value.id !== "string" ||
+    !hasValue(
+      Object.values(REQUEST_DOCUMENT_CATEGORY),
+      value.stored_category,
+    ) ||
+    !hasValue(
+      Object.values(REQUEST_DOCUMENT_CATEGORY),
+      value.effective_category,
+    ) ||
+    !hasValue(
+      Object.values(SUPPLIER_DOCUMENT_ACTIVITY_STATE),
+      value.activity_state,
+    ) ||
+    !hasValue(
+      Object.values(SUPPLIER_DOCUMENT_ELIGIBILITY_STATE),
+      value.eligibility_state,
+    ) ||
+    typeof value.eligible !== "boolean" ||
+    (value.reason_code !== null &&
+      !hasValue(
+        Object.values(SUPPLIER_DOCUMENT_PROJECTION_REASON),
+        value.reason_code,
+      ))
+  ) {
+    throw new Error(SUPPLIER_EVIDENCE_CONTRACT_ERROR);
+  }
+
+  return {
+    id: value.id,
+    stored_category: value.stored_category,
+    effective_category: value.effective_category,
+    activity_state: value.activity_state,
+    eligibility_state: value.eligibility_state,
+    eligible: value.eligible,
+    reason_code: value.reason_code,
+  };
+}
+
+export function parseSupplierDocumentEvidence(
+  value: unknown,
+): SupplierDocumentEvidenceProjection {
+  if (
+    !isRecord(value) ||
+    !hasValue(Object.values(SUPPLIER_DOCUMENT_PROJECTION_STATE), value.state) ||
+    typeof value.eligible !== "boolean" ||
+    typeof value.primary_satisfied !== "boolean" ||
+    (value.reason_code !== null &&
+      !hasValue(
+        Object.values(SUPPLIER_DOCUMENT_PROJECTION_REASON),
+        value.reason_code,
+      )) ||
+    !Array.isArray(value.allowed_categories) ||
+    !value.allowed_categories.every((category) =>
+      hasValue(SUPPLIER_DOCUMENT_ALLOWED_CATEGORIES, category),
+    ) ||
+    !Array.isArray(value.documents)
+  ) {
+    throw new Error(SUPPLIER_EVIDENCE_CONTRACT_ERROR);
+  }
+
+  return {
+    state: value.state,
+    eligible: value.eligible,
+    primary_satisfied: value.primary_satisfied,
+    reason_code: value.reason_code,
+    allowed_categories: value.allowed_categories,
+    documents: value.documents.map(parseSupplierProjectedDocument),
+  };
 }
 
 export function parsePaymentRejectionProjection(
@@ -616,6 +709,8 @@ export const REQUEST_DOCUMENT_CATEGORY_LABELS: Record<
   [REQUEST_DOCUMENT_CATEGORY.EVIDENCE]: "Sustento",
   [REQUEST_DOCUMENT_CATEGORY.FOURTH_CATEGORY_SUSPENSION]:
     "Suspensión de cuarta categoría",
+  [REQUEST_DOCUMENT_CATEGORY.MOBILITY_SHEET]: "Hoja de movilidad",
+  [REQUEST_DOCUMENT_CATEGORY.SWORN_DECLARATION]: "Declaración jurada",
   [REQUEST_DOCUMENT_CATEGORY.CONTRACT]: "Contrato",
   [REQUEST_DOCUMENT_CATEGORY.SETTLEMENT_REPORT]: "Informe de rendición",
   [REQUEST_DOCUMENT_CATEGORY.RETURN_PROOF]: "Constancia de devolución",
@@ -625,10 +720,16 @@ export const REQUEST_DOCUMENT_CATEGORY_LABELS: Record<
 
 export const REQUEST_DOCUMENT_CATEGORY_OPTIONS = Object.values(
   REQUEST_DOCUMENT_CATEGORY,
-).map((value) => ({
-  value,
-  label: REQUEST_DOCUMENT_CATEGORY_LABELS[value],
-}));
+)
+  .filter(
+    (value) =>
+      value !== REQUEST_DOCUMENT_CATEGORY.MOBILITY_SHEET &&
+      value !== REQUEST_DOCUMENT_CATEGORY.SWORN_DECLARATION,
+  )
+  .map((value) => ({
+    value,
+    label: REQUEST_DOCUMENT_CATEGORY_LABELS[value],
+  }));
 
 export const REQUEST_DOCUMENT_ALLOWED_MIME_TYPES = {
   PDF: "application/pdf",
@@ -693,8 +794,8 @@ export const REQUEST_DOCUMENT_STORAGE_PROVIDER_LABELS: Record<string, string> =
     [REQUEST_DOCUMENT_STORAGE_PROVIDER.LOCAL]: "Almacenamiento local",
     [REQUEST_DOCUMENT_STORAGE_PROVIDER.NOOP]: "Almacenamiento simulado",
     [REQUEST_DOCUMENT_STORAGE_PROVIDER.DRIVE]: "Google Drive",
-  [REQUEST_DOCUMENT_STORAGE_PROVIDER.AZURE_BLOB]: "Azure Blob Storage",
-};
+    [REQUEST_DOCUMENT_STORAGE_PROVIDER.AZURE_BLOB]: "Azure Blob Storage",
+  };
 
 export const REQUEST_LIST_SORT = {
   REVIEW_PRIORITY: "REVIEW_PRIORITY",
@@ -1334,9 +1435,7 @@ function decodePotentialUtf8Mojibake(value: string): string {
   if (characters.some((char) => char.charCodeAt(0) > 0xff)) return value;
 
   try {
-    const bytes = Uint8Array.from(
-      characters.map((char) => char.charCodeAt(0)),
-    );
+    const bytes = Uint8Array.from(characters.map((char) => char.charCodeAt(0)));
     const decoded = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
     return countUtf8Latin1MojibakeSequences(decoded) < originalMojibakeScore
       ? decoded
@@ -1524,6 +1623,11 @@ const REQUEST_DOCUMENT_BROAD_EXTENSIONS = [
   ".rar",
   ".zip",
 ] as const;
+const REQUEST_DOCUMENT_PDF_XLSX_EXTENSIONS = [".pdf", ".xlsx"] as const;
+const REQUEST_DOCUMENT_PDF_XLSX_DOCX_EXTENSIONS = [
+  ...REQUEST_DOCUMENT_PDF_XLSX_EXTENSIONS,
+  ".docx",
+] as const;
 
 function getTypedDocumentExtensions(
   category?: RequestDocumentCategory | null,
@@ -1538,6 +1642,10 @@ function getTypedDocumentExtensions(
     category === REQUEST_DOCUMENT_CATEGORY.OTHER
   )
     return REQUEST_DOCUMENT_BROAD_EXTENSIONS;
+  if (category === REQUEST_DOCUMENT_CATEGORY.MOBILITY_SHEET)
+    return REQUEST_DOCUMENT_PDF_XLSX_EXTENSIONS;
+  if (category === REQUEST_DOCUMENT_CATEGORY.SWORN_DECLARATION)
+    return REQUEST_DOCUMENT_PDF_XLSX_DOCX_EXTENSIONS;
   if (
     category === REQUEST_DOCUMENT_CATEGORY.INVOICE ||
     category === REQUEST_DOCUMENT_CATEGORY.PROFESSIONAL_FEE_RECEIPT ||
@@ -1640,6 +1748,184 @@ export function getRequestDocumentAcceptedFormatsLabel(
       .map((extension) => extension.slice(1).toUpperCase())
       .join(", ");
   return isExcelDocumentCategory(category) ? "XLS o XLSX" : "PDF, JPG o PNG";
+}
+
+export const REQUEST_DOCUMENT_PRESENTATION_GROUP = {
+  REQUIRED: "required",
+  SUPPORT: "support",
+  FISCAL: "fiscal",
+  COMPLEMENTARY: "complementary",
+  OPERATIONAL: "operational",
+} as const;
+
+export const REQUEST_DOCUMENT_PRESENTATION_GROUP_LABELS = {
+  [REQUEST_DOCUMENT_PRESENTATION_GROUP.REQUIRED]: "Documentos requeridos",
+  [REQUEST_DOCUMENT_PRESENTATION_GROUP.SUPPORT]: "Sustentos",
+  [REQUEST_DOCUMENT_PRESENTATION_GROUP.FISCAL]: "Comprobantes y cotizaciones",
+  [REQUEST_DOCUMENT_PRESENTATION_GROUP.COMPLEMENTARY]:
+    "Documentos complementarios",
+  [REQUEST_DOCUMENT_PRESENTATION_GROUP.OPERATIONAL]:
+    "Documentos operativos (acción específica)",
+} as const;
+
+type PresentationGroup =
+  (typeof REQUEST_DOCUMENT_PRESENTATION_GROUP)[keyof typeof REQUEST_DOCUMENT_PRESENTATION_GROUP];
+
+const REQUEST_DOCUMENT_GROUP_BY_CATEGORY: Record<
+  RequestDocumentCategory,
+  PresentationGroup
+> = {
+  [REQUEST_DOCUMENT_CATEGORY.PXQ]: REQUEST_DOCUMENT_PRESENTATION_GROUP.REQUIRED,
+  [REQUEST_DOCUMENT_CATEGORY.REQUEST_SUPPORT]: REQUEST_DOCUMENT_PRESENTATION_GROUP.SUPPORT,
+  [REQUEST_DOCUMENT_CATEGORY.RECEIPT]: REQUEST_DOCUMENT_PRESENTATION_GROUP.FISCAL,
+  [REQUEST_DOCUMENT_CATEGORY.INVOICE]: REQUEST_DOCUMENT_PRESENTATION_GROUP.FISCAL,
+  [REQUEST_DOCUMENT_CATEGORY.PROFESSIONAL_FEE_RECEIPT]:
+    REQUEST_DOCUMENT_PRESENTATION_GROUP.FISCAL,
+  [REQUEST_DOCUMENT_CATEGORY.SALES_RECEIPT]: REQUEST_DOCUMENT_PRESENTATION_GROUP.FISCAL,
+  [REQUEST_DOCUMENT_CATEGORY.CASH_RECEIPT]: REQUEST_DOCUMENT_PRESENTATION_GROUP.FISCAL,
+  [REQUEST_DOCUMENT_CATEGORY.QUOTATION]: REQUEST_DOCUMENT_PRESENTATION_GROUP.FISCAL,
+  [REQUEST_DOCUMENT_CATEGORY.EVIDENCE]: REQUEST_DOCUMENT_PRESENTATION_GROUP.SUPPORT,
+  [REQUEST_DOCUMENT_CATEGORY.FOURTH_CATEGORY_SUSPENSION]:
+    REQUEST_DOCUMENT_PRESENTATION_GROUP.COMPLEMENTARY,
+  [REQUEST_DOCUMENT_CATEGORY.MOBILITY_SHEET]:
+    REQUEST_DOCUMENT_PRESENTATION_GROUP.COMPLEMENTARY,
+  [REQUEST_DOCUMENT_CATEGORY.SWORN_DECLARATION]:
+    REQUEST_DOCUMENT_PRESENTATION_GROUP.COMPLEMENTARY,
+  [REQUEST_DOCUMENT_CATEGORY.CONTRACT]: REQUEST_DOCUMENT_PRESENTATION_GROUP.COMPLEMENTARY,
+  [REQUEST_DOCUMENT_CATEGORY.SETTLEMENT_REPORT]:
+    REQUEST_DOCUMENT_PRESENTATION_GROUP.OPERATIONAL,
+  [REQUEST_DOCUMENT_CATEGORY.RETURN_PROOF]:
+    REQUEST_DOCUMENT_PRESENTATION_GROUP.OPERATIONAL,
+  [REQUEST_DOCUMENT_CATEGORY.PAYMENT_PROOF]:
+    REQUEST_DOCUMENT_PRESENTATION_GROUP.OPERATIONAL,
+  [REQUEST_DOCUMENT_CATEGORY.OTHER]: REQUEST_DOCUMENT_PRESENTATION_GROUP.COMPLEMENTARY,
+};
+
+export const REQUEST_DOCUMENT_PRESENTATION_OPERATION = {
+  NONE: "none",
+  STRUCTURED_REPORT_EXPORT: "structured-report-export",
+  REXAN_ALLOCATION_RETURN: "rexan-allocation-return",
+  PAYMENT_EXECUTION: "payment-execution",
+} as const;
+
+type PresentationOperation =
+  (typeof REQUEST_DOCUMENT_PRESENTATION_OPERATION)[keyof typeof REQUEST_DOCUMENT_PRESENTATION_OPERATION];
+
+export interface RequestDocumentPresentationEntry {
+  category: RequestDocumentCategory;
+  label: string;
+  group: PresentationGroup;
+  formats: string;
+  scope: "REQUEST" | "REQUEST_OR_ALLOCATION";
+  uploadMode: "generic" | "required-or-generic" | "operational";
+  operation: PresentationOperation;
+  statuses: readonly RequestStatus[];
+  roles: readonly string[];
+  note: string;
+}
+
+const OPERATION_BY_CATEGORY: Partial<
+  Record<RequestDocumentCategory, PresentationOperation>
+> = {
+  [REQUEST_DOCUMENT_CATEGORY.PAYMENT_PROOF]:
+    REQUEST_DOCUMENT_PRESENTATION_OPERATION.PAYMENT_EXECUTION,
+  [REQUEST_DOCUMENT_CATEGORY.SETTLEMENT_REPORT]:
+    REQUEST_DOCUMENT_PRESENTATION_OPERATION.STRUCTURED_REPORT_EXPORT,
+  [REQUEST_DOCUMENT_CATEGORY.RETURN_PROOF]:
+    REQUEST_DOCUMENT_PRESENTATION_OPERATION.REXAN_ALLOCATION_RETURN,
+};
+
+// Matriz propuesta: NO sustituye el selector actual ni concede permiso de carga.
+const OPERATION_NOTES: Partial<Record<RequestDocumentCategory, string>> = {
+  [REQUEST_DOCUMENT_CATEGORY.PAYMENT_PROOF]:
+    "Operación de pago en APPROVED o PAID por GIOF gestor/manager o admin, sujeta a asignación y controles del servidor; no es una carga genérica.",
+  [REQUEST_DOCUMENT_CATEGORY.SETTLEMENT_REPORT]:
+    "En REXAN se genera desde la acción de informe, no se adjunta manualmente; en anticipo/reembolso el selector anterior sigue sujeto al servidor.",
+  [REQUEST_DOCUMENT_CATEGORY.RETURN_PROOF]:
+    "En REXAN se adjunta desde la línea POA de devolución; en anticipo/reembolso el selector anterior sigue sujeto al servidor.",
+  [REQUEST_DOCUMENT_CATEGORY.PXQ]:
+    "Anticipo: un PXQ activo por solicitud, general o de cualquier línea POA.",
+  [REQUEST_DOCUMENT_CATEGORY.RECEIPT]:
+    "Reembolso: requiere comprobante permanente vinculado a la solicitud; no depende del OCR.",
+};
+
+export const REQUEST_DOCUMENT_PRESENTATION: Record<
+  RequestDocumentCategory,
+  RequestDocumentPresentationEntry
+> = Object.values(REQUEST_DOCUMENT_CATEGORY).reduce<
+  Record<RequestDocumentCategory, RequestDocumentPresentationEntry>
+>(
+  (matrix, category) => {
+    const operation =
+      OPERATION_BY_CATEGORY[category] ??
+      REQUEST_DOCUMENT_PRESENTATION_OPERATION.NONE;
+    matrix[category] = {
+      category,
+      label: REQUEST_DOCUMENT_CATEGORY_LABELS[category],
+      group: REQUEST_DOCUMENT_GROUP_BY_CATEGORY[category],
+      formats: getRequestDocumentAcceptedFormatsLabel(category),
+      scope:
+        category === REQUEST_DOCUMENT_CATEGORY.PAYMENT_PROOF
+          ? "REQUEST"
+          : "REQUEST_OR_ALLOCATION",
+      uploadMode:
+        operation !== REQUEST_DOCUMENT_PRESENTATION_OPERATION.NONE
+          ? "operational"
+          : category === REQUEST_DOCUMENT_CATEGORY.PXQ ||
+              category === REQUEST_DOCUMENT_CATEGORY.RECEIPT
+            ? "required-or-generic"
+            : "generic",
+      operation,
+      statuses:
+        category === REQUEST_DOCUMENT_CATEGORY.PAYMENT_PROOF
+          ? [REQUEST_STATUS.APPROVED, REQUEST_STATUS.PAID]
+          : [],
+      roles:
+        category === REQUEST_DOCUMENT_CATEGORY.PAYMENT_PROOF
+          ? [ROLE_CODE.GIOF_GESTOR, ROLE_CODE.GIOF_MANAGER, ROLE_CODE.ADMIN_SISTEMA]
+          : [],
+      note:
+        OPERATION_NOTES[category] ??
+        "Sujeto a rol, estado, alcance y validación del servidor.",
+    };
+    return matrix;
+  },
+  {} as Record<RequestDocumentCategory, RequestDocumentPresentationEntry>,
+);
+
+export interface PlannedRequestDocumentCategory
+  extends RequestDocumentPresentationEntry {
+  placement: "required" | "grouped";
+}
+
+export function getPlannedRequestDocumentCategories(
+  requestType: RequestType,
+  pendingRequired: readonly RequestDocumentCategory[] = [],
+): PlannedRequestDocumentCategory[] {
+  if (requestType === REQUEST_TYPE.SUPPLIER_PAYMENT) return []; // Sus 4+7 tarjetas no se reemplazan.
+  const categories =
+    requestType === REQUEST_TYPE.ADVANCE_SETTLEMENT
+      ? REQUEST_DOCUMENT_CATEGORY_OPTIONS.map((option) => option.value).filter(
+          (category) =>
+            category !== REQUEST_DOCUMENT_CATEGORY.RETURN_PROOF &&
+            category !== REQUEST_DOCUMENT_CATEGORY.SETTLEMENT_REPORT,
+        )
+      : requestType === REQUEST_TYPE.ADVANCE ||
+          requestType === REQUEST_TYPE.REIMBURSEMENT
+        ? [
+            ...REQUEST_DOCUMENT_CATEGORY_OPTIONS.map((option) => option.value),
+            REQUEST_DOCUMENT_CATEGORY.MOBILITY_SHEET,
+            REQUEST_DOCUMENT_CATEGORY.SWORN_DECLARATION,
+          ]
+        : [];
+  return categories.map((category) => ({
+    ...REQUEST_DOCUMENT_PRESENTATION[category],
+    placement: getPlannedCategoryPlacement(
+      requestType,
+      category,
+      pendingRequired,
+    ),
+  }));
 }
 
 export function validateRequestDocumentFile(
@@ -1778,6 +2064,13 @@ export function getRequestDocumentUploadErrorCode(
   if (!(error instanceof ApiRequestError)) return null;
   const body = error.body as typeof error.body & { code?: unknown };
   return typeof body.code === "string" ? body.code : null;
+}
+
+export function isPaymentCompletionTerminalError(error: unknown): boolean {
+  return (
+    error instanceof ApiRequestError &&
+    (error.status === 403 || error.status === 409)
+  );
 }
 
 export function isRetryableRequestDocumentUploadError(error: unknown): boolean {
@@ -2233,7 +2526,7 @@ export function getRequestEditStepperItems(
           [REQUEST_EDIT_STEP.DATA]: "Datos",
           [REQUEST_EDIT_STEP.DOCUMENTS]: "Documentos",
           [REQUEST_EDIT_STEP.REVIEW]: "Revisión/Envío",
-  };
+        };
   const completeness: Record<RequestEditStep, boolean> = {
     [REQUEST_EDIT_STEP.DATA]: options.isDataComplete ?? true,
     [REQUEST_EDIT_STEP.DOCUMENTS]: options.isDocumentsComplete ?? true,
@@ -2249,7 +2542,7 @@ export function getRequestEditStepperItems(
         ? REQUEST_STEPPER_STATE.CURRENT
         : index < activeIndex && completeness[step]
           ? REQUEST_STEPPER_STATE.COMPLETED
-        : REQUEST_STEPPER_STATE.PENDING,
+          : REQUEST_STEPPER_STATE.PENDING,
   }));
 }
 
@@ -2747,44 +3040,39 @@ export function getRequiredDocumentChecklist(
   request?: RequestEvidenceContext,
   receipts: readonly EvidenceReceipt[] = [],
   annualUit?: string | null,
+  supplierEvidence?: Pick<
+    SupplierDocumentEvidenceProjection,
+    "primary_satisfied"
+  > | null,
 ): RequiredDocumentChecklist {
-  if (
-    requestType === REQUEST_TYPE.SUPPLIER_PAYMENT ||
-    requestType === REQUEST_TYPE.REIMBURSEMENT
-  ) {
+  if (requestType === REQUEST_TYPE.SUPPLIER_PAYMENT) {
     const context = request ?? {
       id: "",
       request_type: requestType,
       currency: null,
       requested_amount: "0",
     };
-    const evidence = evaluateRequestEvidence(
-      context,
-      documents,
-      receipts,
-      annualUit,
+    const activeContractPresent = documents.some(
+      (document) =>
+        document.payment_request_id === context.id &&
+        document.deleted_at == null &&
+        document.upload_status === REQUEST_DOCUMENT_UPLOAD_STATUS.PERMANENT &&
+        document.document_category === REQUEST_DOCUMENT_CATEGORY.CONTRACT &&
+        document.mime_type.toLowerCase() === "application/pdf",
     );
-    const supplier = requestType === REQUEST_TYPE.SUPPLIER_PAYMENT;
     const items: RequiredDocumentChecklistItem[] = [
       {
         key: "request-primary",
-        category: REQUEST_DOCUMENT_CATEGORY.RECEIPT,
-        label: supplier
-          ? "Comprobante primario del proveedor"
-          : "Comprobante real vinculado",
-        description: supplier
-          ? "Factura o RHE; boleta solo con declaración RUS, recibo de caja solo con Casa de Retiro. Contrato u otros sustentos no los sustituyen."
-          : "Adjunta un comprobante activo vinculado a esta solicitud. No requiere PXQ ni éxito de OCR.",
+        category: REQUEST_DOCUMENT_CATEGORY.INVOICE,
+        label: "Documento principal",
+        description:
+          "Adjunta al menos una Factura, Recibo por honorarios, Boleta o Recibo de caja.",
         required: true,
-        satisfied: evidence.primarySatisfied,
+        satisfied: supplierEvidence?.primary_satisfied === true,
         acceptedFormatsLabel: "PDF, JPG, JPEG o PNG",
-        missingMessage: supplier
-          ? "Falta un documento primario elegible del proveedor."
-          : "Falta adjuntar un comprobante real activo para continuar con el reembolso.",
+        missingMessage: "Debes adjuntar al menos uno.",
       },
-    ];
-    if (supplier)
-      items.push({
+      {
         key: "supplier-contract",
         category: REQUEST_DOCUMENT_CATEGORY.CONTRACT,
         label: "Contrato / convenio",
@@ -2793,15 +3081,48 @@ export function getRequiredDocumentChecklist(
             ? USD_CONTRACT_NOTICE
             : "Documento PDF opcional. Cuando el total en soles alcanza o supera ½ UIT del año de la solicitud, se recomienda adjuntarlo.",
         required: false,
-        satisfied: evidence.contractPresent,
+        satisfied: activeContractPresent,
         acceptedFormatsLabel: "PDF",
         missingMessage: "",
-      });
+      },
+    ];
     const missingMessages = items
       .filter((item) => item.required && !item.satisfied)
       .map((item) => item.missingMessage);
     return {
       items,
+      conditionalNotes: [],
+      missingMessages,
+      isComplete: missingMessages.length === 0,
+    };
+  }
+  if (requestType === REQUEST_TYPE.REIMBURSEMENT) {
+    const context = request ?? {
+      id: "",
+      request_type: requestType,
+      currency: null,
+      requested_amount: "0",
+    };
+    const evidence = evaluateNonSupplierRequestEvidence(
+      context,
+      documents,
+      receipts,
+    );
+    const item: RequiredDocumentChecklistItem = {
+      key: "request-primary",
+      category: REQUEST_DOCUMENT_CATEGORY.RECEIPT,
+      label: "Comprobante real vinculado",
+      description:
+        "Adjunta un comprobante activo vinculado a esta solicitud. No requiere PXQ ni éxito de OCR.",
+      required: true,
+      satisfied: evidence.primarySatisfied,
+      acceptedFormatsLabel: "PDF, JPG, JPEG o PNG",
+      missingMessage:
+        "Falta adjuntar un comprobante real activo para continuar con el reembolso.",
+    };
+    const missingMessages = item.satisfied ? [] : [item.missingMessage];
+    return {
+      items: [item],
       conditionalNotes: [],
       missingMessages,
       isComplete: missingMessages.length === 0,
@@ -3107,12 +3428,12 @@ const REQUEST_ERROR_POLICIES: Readonly<Record<string, RequestErrorPolicy>> = {
   },
   SUPPLIER_PRIMARY_DOCUMENT_REQUIRED: {
     message:
-      "Falta un documento primario elegible del proveedor: factura o recibo por honorarios; boleta solo con RUS o recibo de caja solo con Casa de Retiro.",
+      "Debes adjuntar al menos un documento principal del proveedor: Factura, Recibo por honorarios, Boleta o Recibo de caja.",
     step: REQUEST_EDIT_STEP.DOCUMENTS,
   },
   SUPPLIER_DOCUMENT_INELIGIBLE: {
     message:
-      "Revisa los documentos del proveedor y las declaraciones RUS y Casa de Retiro. Un contrato u otro sustento no sustituye al comprobante primario elegible.",
+      "El servidor no reconoce un documento principal elegible. Revisa su estado o vuelve a adjuntarlo antes de continuar.",
     step: REQUEST_EDIT_STEP.DOCUMENTS,
   },
   UIT_NOT_CONFIGURED: {
@@ -3172,6 +3493,12 @@ export function getApiErrorMessages(error: unknown): string[] {
         "Esta solicitud ya tiene un pago registrado. Actualiza la cola para ver su estado.",
       PAYMENT_PROOF_ALREADY_EXISTS:
         "Esta solicitud ya tiene una constancia global de pago.",
+      PAYMENT_COMPLETION_COMMAND_CONFLICT:
+        "La finalización del pago ya fue aceptada con otro comando o contenido.",
+      PAYMENT_ALREADY_COMPLETED:
+        "La finalización del pago ya fue aceptada con otro comando o contenido.",
+      PAYMENT_COMPLETION_CAS_CONFLICT:
+        "La finalización cambió concurrentemente; vuelve a consultar el pago.",
       PAYMENT_AMOUNT_MISMATCH:
         "El pago debe cubrir el importe completo de la solicitud; no se admiten pagos parciales.",
       REQUEST_STATE_CONFLICT:
@@ -3208,20 +3535,32 @@ export function getApiErrorMessages(error: unknown): string[] {
         "La solicitud ya no está aprobada para pago. Actualiza la cola antes de continuar.",
       PAYMENT_EXECUTION_EXISTS:
         "La solicitud ya tiene ejecución de pago y no puede rechazarse. Actualiza la cola.",
+      PAYMENT_PROOF_EMPTY:
+        "La constancia está vacía. Adjunta un archivo PDF, JPG o PNG válido.",
+      PAYMENT_PROOF_UNSUPPORTED_CONTENT:
+        "El contenido de la constancia debe ser PDF, JPG o PNG.",
+      PAYMENT_PROOF_EXTENSION_MISMATCH:
+        "La extensión de la constancia no coincide con su contenido.",
+      PAYMENT_PROOF_MIME_MISMATCH:
+        "El tipo declarado de la constancia no coincide con su contenido.",
+      PAYMENT_PROOF_MALFORMED_PDF:
+        "La constancia PDF está dañada o no se puede leer.",
+      PAYMENT_PROOF_MALFORMED_JPEG:
+        "La constancia JPG está dañada o no se puede leer.",
+      PAYMENT_PROOF_MALFORMED_PNG:
+        "La constancia PNG está dañada o no se puede leer.",
+      DOCUMENT_FILE_TOO_LARGE:
+        "La constancia supera el máximo permitido de 10 MB.",
+      INSTITUTIONAL_ISSUER_EXCLUDED:
+        "El RUC institucional no puede registrarse como emisor de este comprobante. Corrige el proveedor antes de confirmar.",
+      OCR_RETRY_IN_PROGRESS:
+        "Ya hay una lectura OCR en curso para este comprobante. Espera su resultado antes de reintentar.",
     };
     if (code && paymentErrorMessages[code]) return [paymentErrorMessages[code]];
     if (error.status === 403)
       return [
         "No tienes permiso para realizar esta acción o tu asignación ya no está vigente.",
       ];
-    if (
-      error.status === 409 &&
-      /(?:request-payments|\/payments(?:\/|$))/i.test(error.body.path ?? "")
-    ) {
-      return [
-        "El pago cambió mientras lo procesabas. Actualiza la cola y verifica si ya fue registrado.",
-      ];
-    }
     const message = error.body.message;
     if (Array.isArray(message))
       return message

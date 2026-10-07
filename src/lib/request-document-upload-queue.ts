@@ -20,7 +20,8 @@ export const REQUEST_DOCUMENT_UPLOAD_FILE_STATE = {
   ERROR: "error",
 } as const;
 
-export type RequestDocumentUploadFileState = (typeof REQUEST_DOCUMENT_UPLOAD_FILE_STATE)[keyof typeof REQUEST_DOCUMENT_UPLOAD_FILE_STATE];
+export type RequestDocumentUploadFileState =
+  (typeof REQUEST_DOCUMENT_UPLOAD_FILE_STATE)[keyof typeof REQUEST_DOCUMENT_UPLOAD_FILE_STATE];
 
 export const REQUEST_DOCUMENT_UPLOAD_BATCH_STATE = {
   IDLE: "idle",
@@ -30,7 +31,8 @@ export const REQUEST_DOCUMENT_UPLOAD_BATCH_STATE = {
   SETTLED: "settled",
 } as const;
 
-export type RequestDocumentUploadBatchState = (typeof REQUEST_DOCUMENT_UPLOAD_BATCH_STATE)[keyof typeof REQUEST_DOCUMENT_UPLOAD_BATCH_STATE];
+export type RequestDocumentUploadBatchState =
+  (typeof REQUEST_DOCUMENT_UPLOAD_BATCH_STATE)[keyof typeof REQUEST_DOCUMENT_UPLOAD_BATCH_STATE];
 
 export interface RequestDocumentUploadQueueItem {
   id: string;
@@ -80,23 +82,68 @@ export interface EnqueueRequestDocumentFilesOptions {
 
 export type RequestDocumentUploadQueueIdFactory = (index: number) => string;
 
-interface StartAction { type: "start" }
-interface UploadStartedAction { type: "upload-started"; itemId: string }
-interface UploadSavedAction { type: "upload-saved"; itemId: string; document: RequestDocument }
-interface ProcessingAction { type: "processing"; itemId: string }
-interface NeedsReviewAction { type: "needs-review"; itemId: string }
-interface UploadFailedAction { type: "upload-failed"; itemId: string; message: string; retryable: boolean }
-interface PauseRequestedAction { type: "pause-requested" }
-interface PauseReachedAction { type: "pause-reached" }
-interface ResumeAction { type: "resume" }
-interface SettledAction { type: "settled" }
-interface RetryItemAction { type: "retry-item"; itemId: string }
-interface RetryFailedAction { type: "retry-failed" }
-interface RemoveItemAction { type: "remove-item"; itemId: string }
-interface MinimizeAction { type: "minimize" }
-interface RestoreAction { type: "restore" }
-interface ResetAction { type: "reset" }
-interface EnqueueAction { type: "enqueue"; state: RequestDocumentUploadQueueState }
+interface StartAction {
+  type: "start";
+}
+interface UploadStartedAction {
+  type: "upload-started";
+  itemId: string;
+}
+interface UploadSavedAction {
+  type: "upload-saved";
+  itemId: string;
+  document: RequestDocument;
+}
+interface ProcessingAction {
+  type: "processing";
+  itemId: string;
+}
+interface NeedsReviewAction {
+  type: "needs-review";
+  itemId: string;
+}
+interface UploadFailedAction {
+  type: "upload-failed";
+  itemId: string;
+  message: string;
+  retryable: boolean;
+}
+interface PauseRequestedAction {
+  type: "pause-requested";
+}
+interface PauseReachedAction {
+  type: "pause-reached";
+}
+interface ResumeAction {
+  type: "resume";
+}
+interface SettledAction {
+  type: "settled";
+}
+interface RetryItemAction {
+  type: "retry-item";
+  itemId: string;
+}
+interface RetryFailedAction {
+  type: "retry-failed";
+}
+interface RemoveItemAction {
+  type: "remove-item";
+  itemId: string;
+}
+interface MinimizeAction {
+  type: "minimize";
+}
+interface RestoreAction {
+  type: "restore";
+}
+interface ResetAction {
+  type: "reset";
+}
+interface EnqueueAction {
+  type: "enqueue";
+  state: RequestDocumentUploadQueueState;
+}
 
 export type RequestDocumentUploadQueueAction =
   | StartAction
@@ -124,16 +171,23 @@ function defaultIdFactory(): string {
 function updateItem(
   state: RequestDocumentUploadQueueState,
   itemId: string,
-  update: (item: RequestDocumentUploadQueueItem) => RequestDocumentUploadQueueItem,
+  update: (
+    item: RequestDocumentUploadQueueItem,
+  ) => RequestDocumentUploadQueueItem,
 ): RequestDocumentUploadQueueState {
   return {
     ...state,
-    items: state.items.map((item) => item.id === itemId ? update(item) : item),
+    items: state.items.map((item) =>
+      item.id === itemId ? update(item) : item,
+    ),
   };
 }
 
-function settlePauseAfterCurrent(state: RequestDocumentUploadQueueState): RequestDocumentUploadBatchState {
-  return state.batchState === REQUEST_DOCUMENT_UPLOAD_BATCH_STATE.PAUSE_REQUESTED
+function settlePauseAfterCurrent(
+  state: RequestDocumentUploadQueueState,
+): RequestDocumentUploadBatchState {
+  return state.batchState ===
+    REQUEST_DOCUMENT_UPLOAD_BATCH_STATE.PAUSE_REQUESTED
     ? REQUEST_DOCUMENT_UPLOAD_BATCH_STATE.PAUSED
     : state.batchState;
 }
@@ -153,7 +207,10 @@ export function enqueueRequestDocumentFiles(
   options: EnqueueRequestDocumentFilesOptions,
   idFactory: RequestDocumentUploadQueueIdFactory = defaultIdFactory,
 ): RequestDocumentUploadQueueState {
-  const availableSlots = Math.max(REQUEST_DOCUMENT_MAX_BATCH_FILES - currentState.items.length, 0);
+  const availableSlots = Math.max(
+    REQUEST_DOCUMENT_MAX_BATCH_FILES - currentState.items.length,
+    0,
+  );
   const retainedFiles = files.slice(0, availableSlots);
   const omittedCount = Math.max(files.length - retainedFiles.length, 0);
   const requiresAllocation = options.requiresAllocation === true;
@@ -209,7 +266,9 @@ export function enqueueRequestDocumentFiles(
   };
 }
 
-export function getRequestDocumentUploadQueueSummary(state: RequestDocumentUploadQueueState): RequestDocumentUploadQueueSummary {
+export function getRequestDocumentUploadQueueSummary(
+  state: RequestDocumentUploadQueueState,
+): RequestDocumentUploadQueueSummary {
   const savedStates = new Set<RequestDocumentUploadFileState>([
     REQUEST_DOCUMENT_UPLOAD_FILE_STATE.SAVED,
     REQUEST_DOCUMENT_UPLOAD_FILE_STATE.PROCESSING,
@@ -220,19 +279,36 @@ export function getRequestDocumentUploadQueueSummary(state: RequestDocumentUploa
     REQUEST_DOCUMENT_UPLOAD_FILE_STATE.ERROR,
   ]);
   const total = state.items.length;
-  const processed = state.items.filter((item) => processedStates.has(item.state)).length;
+  const processed = state.items.filter((item) =>
+    processedStates.has(item.state),
+  ).length;
 
   return {
     total,
     processed,
     saved: state.items.filter((item) => savedStates.has(item.state)).length,
-    queued: state.items.filter((item) => item.state === REQUEST_DOCUMENT_UPLOAD_FILE_STATE.QUEUED).length,
-    uploading: state.items.filter((item) => item.state === REQUEST_DOCUMENT_UPLOAD_FILE_STATE.UPLOADING).length,
-    processing: state.items.filter((item) => item.state === REQUEST_DOCUMENT_UPLOAD_FILE_STATE.PROCESSING).length,
-    needsReview: state.items.filter((item) => item.state === REQUEST_DOCUMENT_UPLOAD_FILE_STATE.NEEDS_REVIEW).length,
-    errors: state.items.filter((item) => item.state === REQUEST_DOCUMENT_UPLOAD_FILE_STATE.ERROR).length,
-    retryableErrors: state.items.filter((item) => item.state === REQUEST_DOCUMENT_UPLOAD_FILE_STATE.ERROR && item.retryable).length,
-    persistentWarnings: state.items.filter((item) => item.hasPersistentWarning).length,
+    queued: state.items.filter(
+      (item) => item.state === REQUEST_DOCUMENT_UPLOAD_FILE_STATE.QUEUED,
+    ).length,
+    uploading: state.items.filter(
+      (item) => item.state === REQUEST_DOCUMENT_UPLOAD_FILE_STATE.UPLOADING,
+    ).length,
+    processing: state.items.filter(
+      (item) => item.state === REQUEST_DOCUMENT_UPLOAD_FILE_STATE.PROCESSING,
+    ).length,
+    needsReview: state.items.filter(
+      (item) => item.state === REQUEST_DOCUMENT_UPLOAD_FILE_STATE.NEEDS_REVIEW,
+    ).length,
+    errors: state.items.filter(
+      (item) => item.state === REQUEST_DOCUMENT_UPLOAD_FILE_STATE.ERROR,
+    ).length,
+    retryableErrors: state.items.filter(
+      (item) =>
+        item.state === REQUEST_DOCUMENT_UPLOAD_FILE_STATE.ERROR &&
+        item.retryable,
+    ).length,
+    persistentWarnings: state.items.filter((item) => item.hasPersistentWarning)
+      .length,
     progressPercent: total === 0 ? 0 : Math.round((processed / total) * 100),
   };
 }
@@ -242,16 +318,25 @@ export function requestDocumentUploadQueueReducer(
   action: RequestDocumentUploadQueueAction,
 ): RequestDocumentUploadQueueState {
   if (action.type === "enqueue") return action.state;
-  if (action.type === "start") return { ...state, batchState: REQUEST_DOCUMENT_UPLOAD_BATCH_STATE.RUNNING };
+  if (action.type === "start")
+    return {
+      ...state,
+      batchState: REQUEST_DOCUMENT_UPLOAD_BATCH_STATE.RUNNING,
+    };
   if (action.type === "upload-started") {
-    return updateItem({ ...state, batchState: REQUEST_DOCUMENT_UPLOAD_BATCH_STATE.RUNNING }, action.itemId, (item) => ({
-      ...item,
-      state: REQUEST_DOCUMENT_UPLOAD_FILE_STATE.UPLOADING,
-      errorMessage: undefined,
-    }));
+    return updateItem(
+      { ...state, batchState: REQUEST_DOCUMENT_UPLOAD_BATCH_STATE.RUNNING },
+      action.itemId,
+      (item) => ({
+        ...item,
+        state: REQUEST_DOCUMENT_UPLOAD_FILE_STATE.UPLOADING,
+        errorMessage: undefined,
+      }),
+    );
   }
   if (action.type === "upload-saved") {
-    const hasPersistentWarning = action.document.upload_status === REQUEST_DOCUMENT_UPLOAD_STATUS.FAILED;
+    const hasPersistentWarning =
+      action.document.upload_status === REQUEST_DOCUMENT_UPLOAD_STATUS.FAILED;
     const nextState = updateItem(state, action.itemId, (item) => ({
       ...item,
       state: REQUEST_DOCUMENT_UPLOAD_FILE_STATE.SAVED,
@@ -266,10 +351,16 @@ export function requestDocumentUploadQueueReducer(
     return { ...nextState, batchState: settlePauseAfterCurrent(state) };
   }
   if (action.type === "processing") {
-    return updateItem(state, action.itemId, (item) => ({ ...item, state: REQUEST_DOCUMENT_UPLOAD_FILE_STATE.PROCESSING }));
+    return updateItem(state, action.itemId, (item) => ({
+      ...item,
+      state: REQUEST_DOCUMENT_UPLOAD_FILE_STATE.PROCESSING,
+    }));
   }
   if (action.type === "needs-review") {
-    return updateItem(state, action.itemId, (item) => ({ ...item, state: REQUEST_DOCUMENT_UPLOAD_FILE_STATE.NEEDS_REVIEW }));
+    return updateItem(state, action.itemId, (item) => ({
+      ...item,
+      state: REQUEST_DOCUMENT_UPLOAD_FILE_STATE.NEEDS_REVIEW,
+    }));
   }
   if (action.type === "upload-failed") {
     const nextState = updateItem(state, action.itemId, (item) => ({
@@ -283,7 +374,9 @@ export function requestDocumentUploadQueueReducer(
     return { ...nextState, batchState: settlePauseAfterCurrent(state) };
   }
   if (action.type === "pause-requested") {
-    const hasActiveUpload = state.items.some((item) => item.state === REQUEST_DOCUMENT_UPLOAD_FILE_STATE.UPLOADING);
+    const hasActiveUpload = state.items.some(
+      (item) => item.state === REQUEST_DOCUMENT_UPLOAD_FILE_STATE.UPLOADING,
+    );
     return {
       ...state,
       batchState: hasActiveUpload
@@ -291,33 +384,53 @@ export function requestDocumentUploadQueueReducer(
         : REQUEST_DOCUMENT_UPLOAD_BATCH_STATE.PAUSED,
     };
   }
-  if (action.type === "pause-reached") return { ...state, batchState: REQUEST_DOCUMENT_UPLOAD_BATCH_STATE.PAUSED };
-  if (action.type === "resume") return { ...state, batchState: REQUEST_DOCUMENT_UPLOAD_BATCH_STATE.RUNNING };
-  if (action.type === "settled") return { ...state, batchState: REQUEST_DOCUMENT_UPLOAD_BATCH_STATE.SETTLED };
+  if (action.type === "pause-reached")
+    return { ...state, batchState: REQUEST_DOCUMENT_UPLOAD_BATCH_STATE.PAUSED };
+  if (action.type === "resume")
+    return {
+      ...state,
+      batchState: REQUEST_DOCUMENT_UPLOAD_BATCH_STATE.RUNNING,
+    };
+  if (action.type === "settled")
+    return {
+      ...state,
+      batchState: REQUEST_DOCUMENT_UPLOAD_BATCH_STATE.SETTLED,
+    };
   if (action.type === "retry-item") {
-    return updateItem(state, action.itemId, (item) => (
+    return updateItem(state, action.itemId, (item) =>
       item.state === REQUEST_DOCUMENT_UPLOAD_FILE_STATE.ERROR && item.retryable
-        ? { ...item, state: REQUEST_DOCUMENT_UPLOAD_FILE_STATE.QUEUED, errorMessage: undefined }
-        : item
-    ));
+        ? {
+            ...item,
+            state: REQUEST_DOCUMENT_UPLOAD_FILE_STATE.QUEUED,
+            errorMessage: undefined,
+          }
+        : item,
+    );
   }
   if (action.type === "retry-failed") {
     return {
       ...state,
-      items: state.items.map((item) => (
-        item.state === REQUEST_DOCUMENT_UPLOAD_FILE_STATE.ERROR && item.retryable
-          ? { ...item, state: REQUEST_DOCUMENT_UPLOAD_FILE_STATE.QUEUED, errorMessage: undefined }
-          : item
-      )),
+      items: state.items.map((item) =>
+        item.state === REQUEST_DOCUMENT_UPLOAD_FILE_STATE.ERROR &&
+        item.retryable
+          ? {
+              ...item,
+              state: REQUEST_DOCUMENT_UPLOAD_FILE_STATE.QUEUED,
+              errorMessage: undefined,
+            }
+          : item,
+      ),
     };
   }
   if (action.type === "remove-item") {
     return {
       ...state,
-      items: state.items.filter((item) => (
-        item.id !== action.itemId
-        || (item.state !== REQUEST_DOCUMENT_UPLOAD_FILE_STATE.QUEUED && item.state !== REQUEST_DOCUMENT_UPLOAD_FILE_STATE.ERROR)
-      )),
+      items: state.items.filter(
+        (item) =>
+          item.id !== action.itemId ||
+          (item.state !== REQUEST_DOCUMENT_UPLOAD_FILE_STATE.QUEUED &&
+            item.state !== REQUEST_DOCUMENT_UPLOAD_FILE_STATE.ERROR),
+      ),
     };
   }
   if (action.type === "minimize") return { ...state, minimized: true };

@@ -502,8 +502,12 @@ function isActiveReturnProofDocument(document: RequestDocument): boolean {
 
 export function StructuredRenditionReportCard({ request, guidanceAllocations = [], refreshSignal = 0, readOnly = false, hideBudgetClassification = false, reportResource, documentsResource, receiptsResource, onChanged, onReadinessChange, onLockChange }: StructuredRenditionReportCardProps) {
   const internalReportState = useRequestRenditionReport(request.id);
-  const internalDocumentsState = useRequestDocuments(request.id);
-  const internalReceiptState = useRequestReceiptReviews(request.id);
+  const internalDocumentsState = useRequestDocuments(request.id, {
+    enabled: !documentsResource,
+  });
+  const internalReceiptState = useRequestReceiptReviews(request.id, {
+    enabled: !receiptsResource,
+  });
   const reportState = reportResource ?? internalReportState;
   const documentsState = documentsResource ?? internalDocumentsState;
   const receiptState = receiptsResource ?? internalReceiptState;

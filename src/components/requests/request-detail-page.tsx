@@ -16,7 +16,7 @@ import { useApproveRequest, useObserveRequest, useRejectRequest, useRequest, use
 import { useAutoAcquireGiofWorkLease } from "@/hooks/use-giof-work";
 import { useDriveProjectionPolling } from "@/hooks/use-drive-projection-polling";
 import { GiofWorkStatus } from "@/components/giof-work/giof-work-controls";
-import { canEditAssignedGiofWork, canOperateAssignedGiofWork, canRetryGiofWork, isGiofManagerRole, isGiofOperationalRole } from "@/lib/role-capabilities";
+import { canEditAssignedGiofWork, canManageGiofAssignments, canOperateAssignedGiofWork, canRetryGiofWork, isGiofOperationalRole } from "@/lib/role-capabilities";
 import { ROUTES } from "@/lib/constants";
 import {
   canCorrectObservedRequest,
@@ -61,6 +61,7 @@ import { StatusBadge } from "./status-badge";
 import { DriveProjectionState } from "./drive-projection-state";
 import { RequestStatusHistory } from "./request-status-history";
 import { REQUEST_STATUS_SURFACE } from "@/lib/request-status-vocabulary";
+import { ApiRequestError } from "@/lib/api-client";
 
 function getStructuredReportTotal(report: RequestRenditionReport | null): number | null {
   return normalizeMoneyAmount(report?.totals.total_amount ?? report?.total_amount);
@@ -223,7 +224,7 @@ export function RequestDetailPage() {
   const user = useAuthStore((state) => state.user);
   const roleCode = user?.role?.code;
   const isGiofOperational = isGiofOperationalRole(roleCode);
-  const isGiofManager = isGiofManagerRole(roleCode);
+  const canManageAssignments = canManageGiofAssignments(roleCode);
   const shouldProcess = searchParams.get("mode") === "process";
   const leaseSession = useAutoAcquireGiofWorkLease({
     requestId: request?.id,
@@ -259,6 +260,31 @@ export function RequestDetailPage() {
   }
 
   if (error || !request) {
+    const terminalStatus = error instanceof ApiRequestError && (error.status === 403 || error.status === 404)
+      ? error.status
+      : null;
+
+    if (terminalStatus) {
+      const message = terminalStatus === 403
+        ? "No tienes acceso a esta solicitud."
+        : "La solicitud no existe o ya no está disponible.";
+      const guidance = terminalStatus === 403
+        ? "Verifica que estés usando la cuenta y el rol correspondientes."
+        : "Puede haber sido eliminada o el enlace ya no ser válido.";
+
+      return (
+        <div className="space-y-4 rounded-md border p-6" role="alert">
+          <div className="space-y-1">
+            <p className="font-medium">{message}</p>
+            <p className="text-sm text-muted-foreground">{guidance}</p>
+          </div>
+          <Button variant="outline" onClick={() => router.push(ROUTES.REQUESTS)}>
+            Volver a solicitudes
+          </Button>
+        </div>
+      );
+    }
+
     return (
       <div className="space-y-4 rounded-md border border-destructive/40 p-6">
         <p className="text-sm text-destructive">{error?.message ?? "No se encontró la solicitud."}</p>
@@ -458,7 +484,7 @@ export function RequestDetailPage() {
         </div>
         <div className="flex items-center gap-2">
           <StatusBadge status={request.status} context={request} surface={REQUEST_STATUS_SURFACE.DETAIL} />
-          <GiofWorkStatus requestId={request.id} work={request.giof_work} currentUserId={user?.id} isManager={isGiofManager} />
+          <GiofWorkStatus requestId={request.id} work={request.giof_work} currentUserId={user?.id} isManager={canManageAssignments} />
           {driveFolderUrl && (
             <Button variant="outline" asChild>
               <a href={driveFolderUrl} target="_blank" rel="noopener noreferrer" data-testid="request-detail-drive-folder-link">

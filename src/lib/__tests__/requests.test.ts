@@ -5,6 +5,8 @@ import {
   ACTIVE_REVIEW_STATUSES,
   PAYMENT_PROOF_ACCEPT,
   PAYMENT_PROOF_ACCEPTED_FORMATS_LABEL,
+  REQUEST_DOCUMENT_PRESENTATION,
+  getPlannedRequestDocumentCategories,
   REQUEST_TYPE_LABELS,
   REQUEST_TYPE_OPTIONS,
   REQUEST_LIST_SORT,
@@ -182,8 +184,8 @@ describe("request review URL contract", () => {
         "page",
         "submitted_from",
         "submitted_to",
-      "assigned_from",
-      "assigned_to",
+        "assigned_from",
+        "assigned_to",
         "amount_min",
         "amount_max",
         "assignee_id",
@@ -498,6 +500,82 @@ function makeDocument(
 }
 
 describe("requests helpers", () => {
+  it("conserva las 15 opciones actuales y planifica solo dos adicionales para anticipo/reembolso", () => {
+    const oldCodes = [
+      REQUEST_DOCUMENT_CATEGORY.PXQ,
+      REQUEST_DOCUMENT_CATEGORY.REQUEST_SUPPORT,
+      REQUEST_DOCUMENT_CATEGORY.RECEIPT,
+      REQUEST_DOCUMENT_CATEGORY.INVOICE,
+      REQUEST_DOCUMENT_CATEGORY.PROFESSIONAL_FEE_RECEIPT,
+      REQUEST_DOCUMENT_CATEGORY.SALES_RECEIPT,
+      REQUEST_DOCUMENT_CATEGORY.CASH_RECEIPT,
+      REQUEST_DOCUMENT_CATEGORY.QUOTATION,
+      REQUEST_DOCUMENT_CATEGORY.EVIDENCE,
+      REQUEST_DOCUMENT_CATEGORY.FOURTH_CATEGORY_SUSPENSION,
+      REQUEST_DOCUMENT_CATEGORY.CONTRACT,
+      REQUEST_DOCUMENT_CATEGORY.SETTLEMENT_REPORT,
+      REQUEST_DOCUMENT_CATEGORY.RETURN_PROOF,
+      REQUEST_DOCUMENT_CATEGORY.PAYMENT_PROOF,
+      REQUEST_DOCUMENT_CATEGORY.OTHER,
+    ];
+    for (const requestType of [REQUEST_TYPE.ADVANCE, REQUEST_TYPE.REIMBURSEMENT]) {
+      const planned = getPlannedRequestDocumentCategories(requestType);
+      expect(planned.map((entry) => entry.category)).toEqual([
+        ...oldCodes,
+        REQUEST_DOCUMENT_CATEGORY.MOBILITY_SHEET,
+        REQUEST_DOCUMENT_CATEGORY.SWORN_DECLARATION,
+      ]);
+      expect(planned.every((entry) => entry.label && entry.formats && entry.scope)).toBe(true);
+    }
+    expect(getPlannedRequestDocumentCategories(REQUEST_TYPE.SUPPLIER_PAYMENT)).toEqual([]);
+    expect(getPlannedRequestDocumentCategories(REQUEST_TYPE.ADVANCE_SETTLEMENT).map((entry) => entry.category)).toEqual(
+      oldCodes.filter((code) => code !== REQUEST_DOCUMENT_CATEGORY.SETTLEMENT_REPORT && code !== REQUEST_DOCUMENT_CATEGORY.RETURN_PROOF),
+    );
+  });
+
+  it("anota formatos reales, controles operativos y el PXQ/comprobante pendiente sin prometer carga libre", () => {
+    expect(REQUEST_DOCUMENT_PRESENTATION[REQUEST_DOCUMENT_CATEGORY.MOBILITY_SHEET]).toMatchObject({
+      formats: "PDF, XLSX", scope: "REQUEST_OR_ALLOCATION", uploadMode: "generic",
+    });
+    expect(REQUEST_DOCUMENT_PRESENTATION[REQUEST_DOCUMENT_CATEGORY.SWORN_DECLARATION].formats).toBe("PDF, XLSX, DOCX");
+    expect(REQUEST_DOCUMENT_PRESENTATION[REQUEST_DOCUMENT_CATEGORY.PXQ]).toMatchObject({
+      formats: "XLS o XLSX", uploadMode: "required-or-generic",
+    });
+    expect(REQUEST_DOCUMENT_PRESENTATION[REQUEST_DOCUMENT_CATEGORY.RECEIPT].formats).toBe("PDF, JPG o PNG");
+    expect(REQUEST_DOCUMENT_PRESENTATION[REQUEST_DOCUMENT_CATEGORY.EVIDENCE].formats).toBe("PDF, JPG, JPEG, PNG, XLSX, DOCX, RAR, ZIP");
+    expect(REQUEST_DOCUMENT_PRESENTATION[REQUEST_DOCUMENT_CATEGORY.CONTRACT].formats).toBe("PDF");
+    for (const category of Object.values(REQUEST_DOCUMENT_CATEGORY)) {
+      expect(REQUEST_DOCUMENT_PRESENTATION[category].formats).toBe(
+        getRequestDocumentAcceptedFormatsLabel(category),
+      );
+      expect(REQUEST_DOCUMENT_PRESENTATION[category].label).toBe(
+        getRequestDocumentCategoryLabel(category),
+      );
+    }
+    expect(validateRequestDocumentFile(new File(["x"], "hoja.xlsx", {
+      type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    }), REQUEST_DOCUMENT_CATEGORY.MOBILITY_SHEET)).toBeNull();
+    expect(validateRequestDocumentFile(new File(["x"], "declaracion.docx", {
+      type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    }), REQUEST_DOCUMENT_CATEGORY.SWORN_DECLARATION)).toBeNull();
+    expect(validateRequestDocumentFile(new File(["x"], "declaracion.zip", {
+      type: "application/zip",
+    }), REQUEST_DOCUMENT_CATEGORY.SWORN_DECLARATION)).toContain("Formato no permitido");
+    expect(REQUEST_DOCUMENT_PRESENTATION[REQUEST_DOCUMENT_CATEGORY.SETTLEMENT_REPORT]).toMatchObject({
+      formats: "XLS o XLSX", uploadMode: "operational", operation: "structured-report-export",
+    });
+    expect(REQUEST_DOCUMENT_PRESENTATION[REQUEST_DOCUMENT_CATEGORY.RETURN_PROOF]).toMatchObject({
+      formats: "PDF, JPG o PNG", uploadMode: "operational", operation: "rexan-allocation-return",
+    });
+    expect(REQUEST_DOCUMENT_PRESENTATION[REQUEST_DOCUMENT_CATEGORY.PAYMENT_PROOF]).toMatchObject({
+      formats: "PDF, JPG o PNG", scope: "REQUEST", uploadMode: "operational", operation: "payment-execution",
+      statuses: [REQUEST_STATUS.APPROVED, REQUEST_STATUS.PAID],
+      roles: [ROLE_CODE.GIOF_GESTOR, ROLE_CODE.GIOF_MANAGER, ROLE_CODE.ADMIN_SISTEMA],
+    });
+    expect(getPlannedRequestDocumentCategories(REQUEST_TYPE.ADVANCE, [REQUEST_DOCUMENT_CATEGORY.PXQ]).find((entry) => entry.category === REQUEST_DOCUMENT_CATEGORY.PXQ)?.placement).toBe("required");
+    expect(getPlannedRequestDocumentCategories(REQUEST_TYPE.REIMBURSEMENT, [REQUEST_DOCUMENT_CATEGORY.RECEIPT]).find((entry) => entry.category === REQUEST_DOCUMENT_CATEGORY.RECEIPT)?.placement).toBe("required");
+    expect(getPlannedRequestDocumentCategories(REQUEST_TYPE.ADVANCE, [REQUEST_DOCUMENT_CATEGORY.RECEIPT]).find((entry) => entry.category === REQUEST_DOCUMENT_CATEGORY.RECEIPT)?.placement).toBe("grouped");
+  });
   it("etiqueta todos los tipos del contrato y mantiene Rexan fuera de opciones iniciales", () => {
     expect(Object.keys(REQUEST_TYPE_LABELS)).toEqual([
       REQUEST_TYPE.ADVANCE,
@@ -542,8 +620,8 @@ describe("requests helpers", () => {
     ["SUPPLIER_IDENTITY_REQUIRED", "data", "proveedor"],
     ["SUPPLIER_IDENTITY_INVALID", "data", "proveedor"],
     ["SUPPLIER_IDENTITY_CONFLICT", "data", "proveedor"],
-    ["SUPPLIER_PRIMARY_DOCUMENT_REQUIRED", "documents", "primario"],
-    ["SUPPLIER_DOCUMENT_INELIGIBLE", "documents", "RUS"],
+    ["SUPPLIER_PRIMARY_DOCUMENT_REQUIRED", "documents", "principal"],
+    ["SUPPLIER_DOCUMENT_INELIGIBLE", "documents", "servidor"],
     ["UIT_NOT_CONFIGURED", "review", "validación anterior"],
     ["CONTRACT_REQUIRED_BY_UIT", "review", "validación anterior"],
     ["POA_CURRENCY_MISMATCH", "data", "moneda"],
@@ -638,6 +716,12 @@ describe("requests helpers", () => {
     expect(getApiErrorMessage(makeApiError("PAYMENT_ALREADY_EXISTS"))).toBe(
       "Esta solicitud ya tiene un pago registrado. Actualiza la cola para ver su estado.",
     );
+    expect(
+      getApiErrorMessage(makeApiError("INSTITUTIONAL_ISSUER_EXCLUDED")),
+    ).toContain("RUC institucional");
+    expect(getApiErrorMessage(makeApiError("OCR_RETRY_IN_PROGRESS"))).toContain(
+      "lectura OCR en curso",
+    );
   });
 
   it.each([
@@ -665,6 +749,38 @@ describe("requests helpers", () => {
     expect(message).toMatch(/trabajo|asignación|sesión/);
     expect(message).not.toMatch(/pago/i);
   });
+
+  it.each([
+    [
+      "PAYMENT_COMPLETION_COMMAND_CONFLICT",
+      "La finalización del pago ya fue aceptada con otro comando o contenido.",
+    ],
+    [
+      "PAYMENT_ALREADY_COMPLETED",
+      "La finalización del pago ya fue aceptada con otro comando o contenido.",
+    ],
+    [
+      "PAYMENT_COMPLETION_CAS_CONFLICT",
+      "La finalización cambió concurrentemente; vuelve a consultar el pago.",
+    ],
+    [
+      "DOCUMENT_FILE_TOO_LARGE",
+      "La constancia supera el máximo permitido de 10 MB.",
+    ],
+  ])(
+    "mapea el código de finalización %s sin colapsar el 409",
+    (code, expected) => {
+      const error = new ApiRequestError(409, {
+        statusCode: 409,
+        code,
+        message: "Backend fallback",
+        error: "Conflict",
+        timestamp: "2026-09-18T00:00:00.000Z",
+        path: "/request-payments/payment-1/details",
+      });
+      expect(getApiErrorMessage(error)).toBe(expected);
+    },
+  );
 
   it("habilita inicio de rendición solo para anticipos pagados y usuarios autorizados", () => {
     const paidAdvance = makeRequest({
@@ -1573,8 +1689,8 @@ describe("requests helpers", () => {
         budget_planning_line_id: "line-1",
         beneficiary_name: "Ana Solicitante",
         beneficiary_document_type: BENEFICIARY_DOCUMENT_TYPE.DNI,
-      beneficiary_document_number: "12345678",
-      account_type: ACCOUNT_TYPE.SAVINGS,
+        beneficiary_document_number: "12345678",
+        account_type: ACCOUNT_TYPE.SAVINGS,
         bank_account: "1234567890",
         bank_code: null,
         bank_cci: "stale-invalid-cci",
@@ -1590,10 +1706,10 @@ describe("requests helpers", () => {
         budget_planning_line_id: null,
         requested_amount: 0,
         concept: "   ",
-      beneficiary_name: " ",
-      beneficiary_document_type: null,
-      beneficiary_document_number: null,
-      bank_code: null,
+        beneficiary_name: " ",
+        beneficiary_document_type: null,
+        beneficiary_document_number: null,
+        bank_code: null,
         account_type: null,
         bank_account: null,
         bank_cci: "123",
@@ -1629,7 +1745,7 @@ describe("requests helpers", () => {
         budget_planning_line_id: null,
         beneficiary_name: " ",
         beneficiary_document_type: null,
-      beneficiary_document_number: null,
+        beneficiary_document_number: null,
         bank_code: null,
         account_type: null,
         bank_account: null,
@@ -1658,10 +1774,10 @@ describe("requests helpers", () => {
         request_type: REQUEST_TYPE.REIMBURSEMENT,
         budget_planning_line_id: "line-1",
         requested_amount: 100,
-      concept: "Solicitud completa",
-      beneficiary_name: "Ana Solicitante",
-      beneficiary_document_type: BENEFICIARY_DOCUMENT_TYPE.DNI,
-      beneficiary_document_number: "12345678",
+        concept: "Solicitud completa",
+        beneficiary_name: "Ana Solicitante",
+        beneficiary_document_type: BENEFICIARY_DOCUMENT_TYPE.DNI,
+        beneficiary_document_number: "12345678",
         bank_code: BANK_CODE.BCP,
         account_type: ACCOUNT_TYPE.SAVINGS,
         bank_account: "1234567890",
@@ -1684,6 +1800,9 @@ describe("requests helpers", () => {
         request_type: REQUEST_TYPE.SUPPLIER_PAYMENT,
         currency: REQUEST_CURRENCY.USD,
       }),
+      [],
+      undefined,
+      { primary_satisfied: true },
     );
     const result = getRequestReviewNavigationIssues(
       makeRequest({
@@ -1693,9 +1812,9 @@ describe("requests helpers", () => {
         budget_planning_line_id: "line-1",
         requested_amount: 100,
         concept: "Solicitud completa",
-      beneficiary_name: "Ana Solicitante",
-      beneficiary_document_type: BENEFICIARY_DOCUMENT_TYPE.DNI,
-      beneficiary_document_number: "12345678",
+        beneficiary_name: "Ana Solicitante",
+        beneficiary_document_type: BENEFICIARY_DOCUMENT_TYPE.DNI,
+        beneficiary_document_number: "12345678",
         bank_code: BANK_CODE.BCP,
         account_type: ACCOUNT_TYPE.SAVINGS,
         bank_account: "1234567890",
@@ -1717,8 +1836,8 @@ describe("requests helpers", () => {
           budget_planning_line_id: "line-1",
           beneficiary_name: "Ana Solicitante",
           beneficiary_document_type: BENEFICIARY_DOCUMENT_TYPE.DNI,
-      beneficiary_document_number: "12345678",
-      bank_code: BANK_CODE.BBVA,
+          beneficiary_document_number: "12345678",
+          bank_code: BANK_CODE.BBVA,
           account_type: ACCOUNT_TYPE.SAVINGS,
           bank_account: "1234567890",
           bank_cci: "123",
@@ -1732,8 +1851,8 @@ describe("requests helpers", () => {
           budget_planning_line_id: "line-1",
           beneficiary_name: "Ana Solicitante",
           beneficiary_document_type: BENEFICIARY_DOCUMENT_TYPE.DNI,
-      beneficiary_document_number: "12345678",
-      bank_code: BANK_CODE.BBVA,
+          beneficiary_document_number: "12345678",
+          bank_code: BANK_CODE.BBVA,
           account_type: ACCOUNT_TYPE.SAVINGS,
           bank_account: "1234567890",
           bank_cci: null,
@@ -1756,15 +1875,15 @@ describe("requests helpers", () => {
         {
           field: REQUEST_SUBMIT_FIELD.BUDGET_PLANNING_LINE_ID,
           step: "data",
-        message: "Selecciona una línea POA.",
-      },
-      {
-        field: REQUEST_SUBMIT_FIELD.BANK_CODE,
-        step: "data",
-        message: "Selecciona el banco del beneficiario.",
-      },
-      {
-        field: REQUEST_SUBMIT_FIELD.BANK_ACCOUNT,
+          message: "Selecciona una línea POA.",
+        },
+        {
+          field: REQUEST_SUBMIT_FIELD.BANK_CODE,
+          step: "data",
+          message: "Selecciona el banco del beneficiario.",
+        },
+        {
+          field: REQUEST_SUBMIT_FIELD.BANK_ACCOUNT,
           step: "data",
           message: "Ingresa una cuenta bancaria de 6 a 30 dígitos.",
         },
@@ -1783,9 +1902,9 @@ describe("requests helpers", () => {
             budget_planning_line_id: "line-1",
             requested_amount: 100,
             concept: "Solicitud completa",
-        beneficiary_name: "Ana Solicitante",
-        beneficiary_document_type: BENEFICIARY_DOCUMENT_TYPE.DNI,
-        beneficiary_document_number: "12345678",
+            beneficiary_name: "Ana Solicitante",
+            beneficiary_document_type: BENEFICIARY_DOCUMENT_TYPE.DNI,
+            beneficiary_document_number: "12345678",
             bank_code: BANK_CODE.BCP,
             account_type: ACCOUNT_TYPE.SAVINGS,
             bank_account: "1234567890",
@@ -1802,8 +1921,8 @@ describe("requests helpers", () => {
           budget_planning_line_id: "line-1",
           beneficiary_name: "Ana Solicitante",
           beneficiary_document_type: BENEFICIARY_DOCUMENT_TYPE.DNI,
-      beneficiary_document_number: "12345678",
-      bank_code: BANK_CODE.BCP,
+          beneficiary_document_number: "12345678",
+          bank_code: BANK_CODE.BCP,
           account_type: ACCOUNT_TYPE.SAVINGS,
           bank_account: "1234567890",
           bank_cci: null,
@@ -1817,8 +1936,8 @@ describe("requests helpers", () => {
           budget_planning_line_id: "line-1",
           beneficiary_name: "Ana Solicitante",
           beneficiary_document_type: BENEFICIARY_DOCUMENT_TYPE.DNI,
-      beneficiary_document_number: "12345678",
-      bank_code: BANK_CODE.BBVA,
+          beneficiary_document_number: "12345678",
+          bank_code: BANK_CODE.BBVA,
           account_type: ACCOUNT_TYPE.SAVINGS,
           bank_account: "1234567890",
           bank_cci: null,
@@ -1842,7 +1961,7 @@ describe("requests helpers", () => {
           budget_planning_line_id: "line-1",
           beneficiary_name: "Ana Solicitante",
           beneficiary_document_type: BENEFICIARY_DOCUMENT_TYPE.RUC,
-      beneficiary_document_number: "12345678",
+          beneficiary_document_number: "12345678",
           bank_code: BANK_CODE.BCP,
           account_type: ACCOUNT_TYPE.SAVINGS,
           bank_account: "1234567890",
@@ -1856,7 +1975,7 @@ describe("requests helpers", () => {
           budget_planning_line_id: "line-1",
           beneficiary_name: "Ana Solicitante",
           beneficiary_document_type: BENEFICIARY_DOCUMENT_TYPE.CE,
-      beneficiary_document_number: "ABC",
+          beneficiary_document_number: "ABC",
           bank_code: BANK_CODE.BCP,
           account_type: ACCOUNT_TYPE.SAVINGS,
           bank_account: "1234567890",
@@ -1976,9 +2095,7 @@ describe("requests helpers", () => {
         currency: REQUEST_CURRENCY.USD,
       }),
     );
-    expect(supplier.missingMessages).toEqual([
-      "Falta un documento primario elegible del proveedor.",
-    ]);
+    expect(supplier.missingMessages).toEqual(["Debes adjuntar al menos uno."]);
     expect(supplier.conditionalNotes).toEqual([]);
 
     const supplierAtHalfUit = getRequiredDocumentChecklist(
@@ -1991,8 +2108,15 @@ describe("requests helpers", () => {
         uit_year_applied: 2026,
         uit_amount_applied: "5000.00",
       }),
+      [],
+      undefined,
+      { primary_satisfied: true },
     );
-    expect(supplierAtHalfUit.items.find((item) => item.category === REQUEST_DOCUMENT_CATEGORY.CONTRACT)).toEqual(expect.objectContaining({ required: false, satisfied: false }));
+    expect(
+      supplierAtHalfUit.items.find(
+        (item) => item.category === REQUEST_DOCUMENT_CATEGORY.CONTRACT,
+      ),
+    ).toEqual(expect.objectContaining({ required: false, satisfied: false }));
     expect(supplierAtHalfUit.missingMessages).toEqual([]);
     expect(supplierAtHalfUit.isComplete).toBe(true);
 

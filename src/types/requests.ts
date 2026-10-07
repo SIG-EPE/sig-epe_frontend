@@ -147,6 +147,8 @@ export const REQUEST_DOCUMENT_CATEGORY = {
   QUOTATION: "QUOTATION",
   EVIDENCE: "EVIDENCE",
   FOURTH_CATEGORY_SUSPENSION: "FOURTH_CATEGORY_SUSPENSION",
+  MOBILITY_SHEET: "MOBILITY_SHEET",
+  SWORN_DECLARATION: "SWORN_DECLARATION",
   CONTRACT: "CONTRACT",
   SETTLEMENT_REPORT: "SETTLEMENT_REPORT",
   RETURN_PROOF: "RETURN_PROOF",
@@ -156,6 +158,78 @@ export const REQUEST_DOCUMENT_CATEGORY = {
 
 export type RequestDocumentCategory =
   (typeof REQUEST_DOCUMENT_CATEGORY)[keyof typeof REQUEST_DOCUMENT_CATEGORY];
+
+export const SUPPLIER_DOCUMENT_ALLOWED_CATEGORIES = [
+  REQUEST_DOCUMENT_CATEGORY.INVOICE,
+  REQUEST_DOCUMENT_CATEGORY.PROFESSIONAL_FEE_RECEIPT,
+  REQUEST_DOCUMENT_CATEGORY.SALES_RECEIPT,
+  REQUEST_DOCUMENT_CATEGORY.CASH_RECEIPT,
+  REQUEST_DOCUMENT_CATEGORY.QUOTATION,
+  REQUEST_DOCUMENT_CATEGORY.CONTRACT,
+  REQUEST_DOCUMENT_CATEGORY.EVIDENCE,
+  REQUEST_DOCUMENT_CATEGORY.OTHER,
+  REQUEST_DOCUMENT_CATEGORY.FOURTH_CATEGORY_SUSPENSION,
+  REQUEST_DOCUMENT_CATEGORY.MOBILITY_SHEET,
+  REQUEST_DOCUMENT_CATEGORY.SWORN_DECLARATION,
+] as const;
+
+export type SupplierDocumentAllowedCategory =
+  (typeof SUPPLIER_DOCUMENT_ALLOWED_CATEGORIES)[number];
+
+export const SUPPLIER_DOCUMENT_PROJECTION_STATE = {
+  READY: "READY",
+  BLOCKED: "BLOCKED",
+} as const;
+
+export type SupplierDocumentProjectionState =
+  (typeof SUPPLIER_DOCUMENT_PROJECTION_STATE)[keyof typeof SUPPLIER_DOCUMENT_PROJECTION_STATE];
+
+export const SUPPLIER_DOCUMENT_ACTIVITY_STATE = {
+  ACTIVE: "ACTIVE",
+  INACTIVE: "INACTIVE",
+} as const;
+
+export type SupplierDocumentActivityState =
+  (typeof SUPPLIER_DOCUMENT_ACTIVITY_STATE)[keyof typeof SUPPLIER_DOCUMENT_ACTIVITY_STATE];
+
+export const SUPPLIER_DOCUMENT_ELIGIBILITY_STATE = {
+  ELIGIBLE: "ELIGIBLE",
+  INELIGIBLE: "INELIGIBLE",
+} as const;
+
+export type SupplierDocumentEligibilityState =
+  (typeof SUPPLIER_DOCUMENT_ELIGIBILITY_STATE)[keyof typeof SUPPLIER_DOCUMENT_ELIGIBILITY_STATE];
+
+export const SUPPLIER_DOCUMENT_PROJECTION_REASON = {
+  PRIMARY_DOCUMENT_REQUIRED: "SUPPLIER_PRIMARY_DOCUMENT_REQUIRED",
+  DOCUMENT_INELIGIBLE: "SUPPLIER_DOCUMENT_INELIGIBLE",
+  REQUEST_OWNERSHIP_MISMATCH: "SUPPLIER_DOCUMENT_REQUEST_OWNERSHIP_MISMATCH",
+  DOCUMENT_DELETED: "SUPPLIER_DOCUMENT_DELETED",
+  DOCUMENT_NOT_PERMANENT: "SUPPLIER_DOCUMENT_NOT_PERMANENT",
+  CATEGORY_NOT_PRIMARY: "SUPPLIER_DOCUMENT_CATEGORY_NOT_PRIMARY",
+} as const;
+
+export type SupplierDocumentProjectionReason =
+  (typeof SUPPLIER_DOCUMENT_PROJECTION_REASON)[keyof typeof SUPPLIER_DOCUMENT_PROJECTION_REASON];
+
+export interface SupplierProjectedDocument {
+  id: string;
+  stored_category: RequestDocumentCategory;
+  effective_category: RequestDocumentCategory;
+  activity_state: SupplierDocumentActivityState;
+  eligibility_state: SupplierDocumentEligibilityState;
+  eligible: boolean;
+  reason_code: SupplierDocumentProjectionReason | null;
+}
+
+export interface SupplierDocumentEvidenceProjection {
+  state: SupplierDocumentProjectionState;
+  eligible: boolean;
+  primary_satisfied: boolean;
+  reason_code: SupplierDocumentProjectionReason | null;
+  allowed_categories: readonly SupplierDocumentAllowedCategory[];
+  documents: readonly SupplierProjectedDocument[];
+}
 
 export const REQUEST_DOCUMENT_STORAGE_PROVIDER = {
   LOCAL: "LOCAL",
@@ -1034,8 +1108,9 @@ export interface RequestDocument {
   created_at: string;
 }
 
-// Contrato mínimo de carga compartido; la proyección de proveedor se integra aparte.
-export type RequestDocumentUploadResponse = RequestDocument;
+export interface RequestDocumentUploadResponse extends RequestDocument {
+  supplier_document_evidence?: SupplierDocumentEvidenceProjection;
+}
 
 export interface RequestReceipt {
   id: string;
@@ -1666,6 +1741,7 @@ export interface MarkPaidItemResult {
 
 export interface CompletePaymentDetailsInput {
   command_id?: string;
+  browser_hash_duration_ms?: number;
   final_fx_rate?: string;
   final_fx_confirmed?: boolean;
   proof?: File;
@@ -1673,6 +1749,18 @@ export interface CompletePaymentDetailsInput {
   bank_commission?: number;
   notes?: string;
   proof_document_id?: string;
+}
+
+export interface CompletePaymentDetailsResponse {
+  committed: true;
+  request_id: string;
+  payment_id: string;
+  proof_pending: boolean;
+  details_pending: boolean;
+  completeness: PaymentCompletenessState;
+  missing_fields: PaymentMissingField[];
+  completed_at: string | null;
+  proof_document_id: string | null;
 }
 
 export interface AttachPaymentProofInput {
@@ -1789,8 +1877,6 @@ export interface CreateRequestDto {
   supplier_ruc?: string;
   supplier_document_type?: BeneficiaryDocumentType;
   supplier_document_number?: string;
-  declares_rus?: boolean;
-  declares_casa_de_retiro?: boolean;
   supplier_name?: string;
   document_type?: string;
   has_associated_contract?: boolean;

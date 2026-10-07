@@ -30,19 +30,28 @@ import {
   REQUEST_DOCUMENT_UPLOAD_STATUS,
   type RequestDocument,
   type RequestDocumentUploadResponse,
-  type RequestType,
   type RequestReceiptReview,
+  type RequestType,
   type UploadRequestDocumentInput,
 } from "@/types/requests";
 
 interface UseRequestDocumentUploadQueueOptions {
   requestId?: string;
   requestType?: RequestType;
-  uploadDocument?: (requestId: string, input: UploadRequestDocumentInput) => Promise<RequestDocumentUploadResponse>;
+  uploadDocument?: (
+    requestId: string,
+    input: UploadRequestDocumentInput,
+  ) => Promise<RequestDocumentUploadResponse>;
   documents?: RequestDocument[];
   receipts?: RequestReceiptReview[];
   upsertDocument?: (document: RequestDocument) => void;
+  commitSupplierEvidence?: (
+    evidence: NonNullable<
+      RequestDocumentUploadResponse["supplier_document_evidence"]
+    >,
+  ) => void;
   refreshDocuments?: () => Promise<void> | void;
+  refreshSupplierEvidence?: () => Promise<void> | void;
   refreshReceipts?: () => Promise<void> | void;
   interFileDelayMs?: number;
 }
@@ -77,20 +86,31 @@ export function useRequestDocumentUploadQueue({
   documents = [],
   receipts = [],
   upsertDocument,
+  commitSupplierEvidence,
   refreshDocuments,
+  refreshSupplierEvidence,
   refreshReceipts,
   interFileDelayMs = REQUEST_DOCUMENT_UPLOAD_QUEUE_DELAY_MS,
 }: UseRequestDocumentUploadQueueOptions): RequestDocumentUploadQueueController {
   const uploadMutation = useUploadRequestDocument();
-  const uploadDocument = injectedUploadDocument
-    ?? ((id: string, input: UploadRequestDocumentInput) => uploadMutation.uploadDocument(id, input));
-  const [state, dispatch] = useReducer(requestDocumentUploadQueueReducer, undefined, createRequestDocumentUploadQueueState);
+  const uploadDocument =
+    injectedUploadDocument ??
+    ((id: string, input: UploadRequestDocumentInput) =>
+      uploadMutation.uploadDocument(id, input));
+  const [state, dispatch] = useReducer(
+    requestDocumentUploadQueueReducer,
+    undefined,
+    createRequestDocumentUploadQueueState,
+  );
   const stateRef = useRef(state);
   const runningRef = useRef(false);
   const pauseRequestedRef = useRef(false);
 
   function commit(action: RequestDocumentUploadQueueAction): void {
-    stateRef.current = requestDocumentUploadQueueReducer(stateRef.current, action);
+    stateRef.current = requestDocumentUploadQueueReducer(
+      stateRef.current,
+      action,
+    );
     dispatch(action);
   }
 
@@ -100,15 +120,24 @@ export function useRequestDocumentUploadQueue({
 
   useEffect(() => {
     state.items.forEach((item) => {
-      const reconciledState = getReconciledRequestDocumentUploadFileState(item, documents, receipts);
+      const reconciledState = getReconciledRequestDocumentUploadFileState(
+        item,
+        documents,
+        receipts,
+      );
       if (!reconciledState || reconciledState === item.state) return;
       if (reconciledState === REQUEST_DOCUMENT_UPLOAD_FILE_STATE.PROCESSING) {
         commit({ type: "processing", itemId: item.id });
-      } else if (reconciledState === REQUEST_DOCUMENT_UPLOAD_FILE_STATE.NEEDS_REVIEW) {
+      } else if (
+        reconciledState === REQUEST_DOCUMENT_UPLOAD_FILE_STATE.NEEDS_REVIEW
+      ) {
         commit({ type: "needs-review", itemId: item.id });
       } else {
-        const document = documents.find((candidate) => candidate.id === item.persistedDocumentId);
-        if (document) commit({ type: "upload-saved", itemId: item.id, document });
+        const document = documents.find(
+          (candidate) => candidate.id === item.persistedDocumentId,
+        );
+        if (document)
+          commit({ type: "upload-saved", itemId: item.id, document });
       }
     });
   }, [documents, receipts, state.items]);
@@ -116,6 +145,7 @@ export function useRequestDocumentUploadQueue({
   async function refreshAuthoritativeResources(): Promise<void> {
     await Promise.all([
       Promise.resolve(refreshDocuments?.()),
+      Promise.resolve(refreshSupplierEvidence?.()),
       Promise.resolve(refreshReceipts?.()),
     ]);
   }
@@ -135,9 +165,13 @@ export function useRequestDocumentUploadQueue({
           commit({ type: "pause-reached" });
           break;
         }
-        const item = stateRef.current.items.find((candidate) => candidate.id === itemId);
-        const canUpload = item?.state === REQUEST_DOCUMENT_UPLOAD_FILE_STATE.QUEUED
-          || (item?.state === REQUEST_DOCUMENT_UPLOAD_FILE_STATE.ERROR && item.retryable);
+        const item = stateRef.current.items.find(
+          (candidate) => candidate.id === itemId,
+        );
+        const canUpload =
+          item?.state === REQUEST_DOCUMENT_UPLOAD_FILE_STATE.QUEUED ||
+          (item?.state === REQUEST_DOCUMENT_UPLOAD_FILE_STATE.ERROR &&
+            item.retryable);
         if (!item || !canUpload) continue;
 
         commit({ type: "upload-started", itemId });
@@ -153,12 +187,19 @@ export function useRequestDocumentUploadQueue({
             idempotency_key: item.idempotencyKey ?? item.id,
           });
           upsertDocument?.(uploaded);
+          if (uploaded.supplier_document_evidence) {
+            commitSupplierEvidence?.(uploaded.supplier_document_evidence);
+          }
           commit({ type: "upload-saved", itemId, document: uploaded });
           savedCount += 1;
-          if (uploaded.upload_status === REQUEST_DOCUMENT_UPLOAD_STATUS.FAILED) warningCount += 1;
+          if (uploaded.upload_status === REQUEST_DOCUMENT_UPLOAD_STATUS.FAILED)
+            warningCount += 1;
         } catch (uploadError) {
           failedCount += 1;
-          nextDelayMs = Math.max(getRequestDocumentUploadRetryDelayMs(uploadError), interFileDelayMs);
+          nextDelayMs = Math.max(
+            getRequestDocumentUploadRetryDelayMs(uploadError),
+            interFileDelayMs,
+          );
           commit({
             type: "upload-failed",
             itemId,
@@ -178,39 +219,56 @@ export function useRequestDocumentUploadQueue({
       if (!pauseRequestedRef.current) commit({ type: "settled" });
 
       if (failedCount > 0) {
-        toast.error(`${failedCount} archivo${failedCount === 1 ? "" : "s"} no se pudieron adjuntar.`);
+        toast.error(
+          `${failedCount} archivo${failedCount === 1 ? "" : "s"} no se pudieron adjuntar.`,
+        );
       } else if (warningCount > 0) {
-        toast.error(`${warningCount} documento${warningCount === 1 ? " quedó" : "s quedaron"} guardado${warningCount === 1 ? "" : "s"} con una incidencia de almacenamiento.`);
+        toast.error(
+          `${warningCount} documento${warningCount === 1 ? " quedó" : "s quedaron"} guardado${warningCount === 1 ? "" : "s"} con una incidencia de almacenamiento.`,
+        );
       } else if (savedCount > 0) {
-        toast.success(`${savedCount} documento${savedCount === 1 ? " adjuntado" : "s adjuntados"} correctamente.`);
+        toast.success(
+          `${savedCount} documento${savedCount === 1 ? " adjuntado" : "s adjuntados"} correctamente.`,
+        );
       }
     } finally {
       runningRef.current = false;
     }
   }
 
-  function enqueue(files: File[], options: EnqueueRequestDocumentFilesOptions): void {
-    const currentState = stateRef.current.batchState === REQUEST_DOCUMENT_UPLOAD_BATCH_STATE.SETTLED
-      ? {
-        ...stateRef.current,
-        items: stateRef.current.items.filter((item) => (
-          item.state === REQUEST_DOCUMENT_UPLOAD_FILE_STATE.ERROR || item.hasPersistentWarning
-        )),
-        omittedCount: 0,
-      }
-      : stateRef.current;
+  function enqueue(
+    files: File[],
+    options: EnqueueRequestDocumentFilesOptions,
+  ): void {
+    const currentState =
+      stateRef.current.batchState ===
+      REQUEST_DOCUMENT_UPLOAD_BATCH_STATE.SETTLED
+        ? {
+            ...stateRef.current,
+            items: stateRef.current.items.filter(
+              (item) =>
+                item.state === REQUEST_DOCUMENT_UPLOAD_FILE_STATE.ERROR ||
+                item.hasPersistentWarning,
+            ),
+            omittedCount: 0,
+          }
+        : stateRef.current;
     const previousOmittedCount = currentState.omittedCount;
     const nextState = enqueueRequestDocumentFiles(currentState, files, options);
     commit({ type: "enqueue", state: nextState });
     const newlyOmittedCount = nextState.omittedCount - previousOmittedCount;
     if (newlyOmittedCount > 0) {
-      toast.error(`${newlyOmittedCount} archivo${newlyOmittedCount === 1 ? " fue omitido" : "s fueron omitidos"}. Solo se conservan 20 archivos por tanda.`);
+      toast.error(
+        `${newlyOmittedCount} archivo${newlyOmittedCount === 1 ? " fue omitido" : "s fueron omitidos"}. Solo se conservan 20 archivos por tanda.`,
+      );
     }
   }
 
   function start(): void {
     const itemIds = stateRef.current.items
-      .filter((item) => item.state === REQUEST_DOCUMENT_UPLOAD_FILE_STATE.QUEUED)
+      .filter(
+        (item) => item.state === REQUEST_DOCUMENT_UPLOAD_FILE_STATE.QUEUED,
+      )
       .map((item) => item.id);
     void processItems(itemIds);
   }
@@ -227,15 +285,26 @@ export function useRequestDocumentUploadQueue({
   }
 
   function retry(itemId: string): void {
-    const item = stateRef.current.items.find((candidate) => candidate.id === itemId);
-    if (!item || item.state !== REQUEST_DOCUMENT_UPLOAD_FILE_STATE.ERROR || !item.retryable) return;
+    const item = stateRef.current.items.find(
+      (candidate) => candidate.id === itemId,
+    );
+    if (
+      !item ||
+      item.state !== REQUEST_DOCUMENT_UPLOAD_FILE_STATE.ERROR ||
+      !item.retryable
+    )
+      return;
     commit({ type: "retry-item", itemId });
     void processItems([itemId]);
   }
 
   function retryFailed(): void {
     const itemIds = stateRef.current.items
-      .filter((item) => item.state === REQUEST_DOCUMENT_UPLOAD_FILE_STATE.ERROR && item.retryable)
+      .filter(
+        (item) =>
+          item.state === REQUEST_DOCUMENT_UPLOAD_FILE_STATE.ERROR &&
+          item.retryable,
+      )
       .map((item) => item.id);
     if (itemIds.length === 0) return;
     commit({ type: "retry-failed" });
@@ -260,14 +329,16 @@ export function useRequestDocumentUploadQueue({
   }
 
   const summary = getRequestDocumentUploadQueueSummary(state);
-  const isRunning = state.batchState === REQUEST_DOCUMENT_UPLOAD_BATCH_STATE.RUNNING
-    || state.batchState === REQUEST_DOCUMENT_UPLOAD_BATCH_STATE.PAUSE_REQUESTED;
-  const isNavigationBlocked = state.items.some((item) => (
-    item.state === REQUEST_DOCUMENT_UPLOAD_FILE_STATE.QUEUED
-    || item.state === REQUEST_DOCUMENT_UPLOAD_FILE_STATE.UPLOADING
-    || item.state === REQUEST_DOCUMENT_UPLOAD_FILE_STATE.ERROR
-    || item.hasPersistentWarning
-  ));
+  const isRunning =
+    state.batchState === REQUEST_DOCUMENT_UPLOAD_BATCH_STATE.RUNNING ||
+    state.batchState === REQUEST_DOCUMENT_UPLOAD_BATCH_STATE.PAUSE_REQUESTED;
+  const isNavigationBlocked = state.items.some(
+    (item) =>
+      item.state === REQUEST_DOCUMENT_UPLOAD_FILE_STATE.QUEUED ||
+      item.state === REQUEST_DOCUMENT_UPLOAD_FILE_STATE.UPLOADING ||
+      item.state === REQUEST_DOCUMENT_UPLOAD_FILE_STATE.ERROR ||
+      item.hasPersistentWarning,
+  );
 
   return {
     state,

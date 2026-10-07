@@ -23,6 +23,7 @@ import {
   useRequestPlanningLineFacets,
   useRequestPlanningLineSearch,
   useRequestReceiptReviews,
+  useRetryRequestReceiptOcr,
   useRequestRenditionReport,
   useRequestRenditionReportActions,
   useUploadRequestDocument,
@@ -123,6 +124,51 @@ beforeEach(() => {
   vi.clearAllMocks();
   clearQueryCache();
   vi.useRealTimers();
+});
+
+describe("receipt OCR retry", () => {
+  it("performs exactly one synchronous retry and exposes the terminal response", async () => {
+    const terminal = {
+      receipt: { id: "receipt-1", ocr_status: "REQUIRES_REVIEW" },
+    };
+    vi.mocked(api.post).mockResolvedValueOnce(terminal);
+    const { result } = renderHook(() => useRetryRequestReceiptOcr());
+
+    let response: unknown;
+    await act(async () => {
+      response = await result.current.retryReceiptOcr(
+        "request-1",
+        "receipt-1",
+        "scan_too_blurry",
+      );
+    });
+
+    expect(api.post).toHaveBeenCalledOnce();
+    expect(api.post).toHaveBeenCalledWith(
+      "/requests/request-1/receipts/receipt-1/retry-ocr",
+      { reason: "scan_too_blurry" },
+    );
+    expect(response).toBe(terminal);
+    expect(result.current.isLoading).toBe(false);
+  });
+
+  it("prevents duplicate submission while the synchronous retry is running", async () => {
+    const request = deferred<never>();
+    vi.mocked(api.post).mockReturnValueOnce(request.promise);
+    const { result } = renderHook(() => useRetryRequestReceiptOcr());
+
+    let first!: Promise<unknown>;
+    act(() => {
+      first = result.current.retryReceiptOcr("request-1", "receipt-1");
+    });
+    await waitFor(() => expect(result.current.isLoading).toBe(true));
+    await expect(
+      result.current.retryReceiptOcr("request-1", "receipt-1"),
+    ).rejects.toThrow("OCR_RETRY_IN_PROGRESS");
+    expect(api.post).toHaveBeenCalledOnce();
+    request.reject(new Error("timeout"));
+    await expect(first).rejects.toThrow("timeout");
+  });
 });
 
 function makePlanningLineSearchResponse(
@@ -517,18 +563,18 @@ describe("request hook URL helpers", () => {
         page: 3,
         limit: 20,
         status: REQUEST_STATUS.PAID,
-      search: "REXAN 2026",
-      work_scope: "assignee",
-      assignee_id: "123e4567-e89b-12d3-a456-426614174001",
-      approved_from: "2026-08-01",
-      approved_to: "2026-08-10",
-      paid_from: "2026-08-11",
-      paid_to: "2026-08-28",
-      source_account_key: "BCP_PEN",
-      completeness: "complete",
-      drive_status: "SUCCEEDED",
-      rexan_status: "CREATED",
-      currency: REQUEST_CURRENCY.PEN,
+        search: "REXAN 2026",
+        work_scope: "assignee",
+        assignee_id: "123e4567-e89b-12d3-a456-426614174001",
+        approved_from: "2026-08-01",
+        approved_to: "2026-08-10",
+        paid_from: "2026-08-11",
+        paid_to: "2026-08-28",
+        source_account_key: "BCP_PEN",
+        completeness: "complete",
+        drive_status: "SUCCEEDED",
+        rexan_status: "CREATED",
+        currency: REQUEST_CURRENCY.PEN,
         amount_min: "10.00",
         amount_max: "2500.50",
         sort: "payable_amount_desc",
@@ -1044,30 +1090,56 @@ describe("request hook URL helpers", () => {
     expect(invalidate).not.toHaveBeenCalled();
   });
 
-  it("ejecuta PATCH de detalles con referencia/constancia pre-subida sin monto ni fecha", async () => {
-    vi.mocked(api.patchForm).mockResolvedValueOnce({ id: "payment-1" });
+  it("ejecuta un único PATCH multipart con referencia, comando y constancia directa", async () => {
+    const invalidate = vi.spyOn(queryTags, "invalidateRequestDomain");
+    const acknowledgement = {
+      committed: true as const,
+      request_id: "request-1",
+      payment_id: "payment-1",
+      proof_pending: false,
+      details_pending: false,
+      completeness: "COMPLETE" as const,
+      missing_fields: [],
+      completed_at: "2026-09-20T12:00:00.000Z",
+      proof_document_id: "proof-1",
+    };
+    vi.mocked(api.patchForm).mockResolvedValueOnce(acknowledgement);
     const { result } = renderHook(() => useCompletePaymentDetails());
+    const proof = new File(["proof"], "proof.pdf", {
+      type: "application/pdf",
+    });
 
+    let response;
     await act(async () => {
-      await result.current.completePaymentDetails("payment-1", {
-        proof_document_id: "proof-document-1",
+      response = await result.current.completePaymentDetails("payment-1", {
+        command_id: "command-1",
+        proof,
         operation_reference: " OP-2 ",
+        browser_hash_duration_ms: 12.7,
       });
     });
 
     expect(api.patchForm).toHaveBeenCalledWith(
       "/request-payments/payment-1/details",
       expect.any(FormData),
+      {
+        headers: {
+          "x-payment-proof-hash-duration-ms": "13",
+        },
+      },
     );
     const formData = vi
       .mocked(api.patchForm)
       .mock.calls.at(-1)?.[1] as FormData;
     expect(formData.get("operation_reference")).toBe("OP-2");
-    expect(formData.get("proof_document_id")).toBe("proof-document-1");
-    expect(formData.has("proof")).toBe(false);
+    expect(formData.get("command_id")).toBe("command-1");
+    expect(formData.get("proof")).toBe(proof);
+    expect(formData.has("proof_document_id")).toBe(false);
     expect(formData.has("source_account_key")).toBe(false);
     expect(formData.has("amount_paid")).toBe(false);
     expect(formData.has("paid_at")).toBe(false);
+    expect(response).toEqual(acknowledgement);
+    expect(invalidate).not.toHaveBeenCalled();
   });
 
   it("mantiene la solicitud visible durante un refetch en segundo plano", async () => {
@@ -1151,6 +1223,58 @@ describe("request hook URL helpers", () => {
       expect.any(FormData),
       { headers: { "Idempotency-Key": "stable-upload-key-1" } },
     );
+  });
+
+  it("envía display_name solo para OTHER de SUPPLIER_PAYMENT y conserva títulos Unicode", async () => {
+    vi.mocked(api.postForm).mockResolvedValue({ id: "doc-other" });
+    const { result } = renderHook(() => useUploadRequestDocument());
+    const otherFile = new File(["other"], "anexo.xlsx", {
+      type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    });
+
+    await act(async () => {
+      await result.current.uploadDocument("request-1", {
+        file: otherFile,
+        document_category: REQUEST_DOCUMENT_CATEGORY.OTHER,
+        request_type: REQUEST_TYPE.SUPPLIER_PAYMENT,
+        display_name: "Informe técnico - Área Ñandú",
+      });
+      await result.current.uploadDocument("request-1", {
+        file: new File(["invoice"], "factura.pdf", {
+          type: "application/pdf",
+        }),
+        document_category: REQUEST_DOCUMENT_CATEGORY.INVOICE,
+        request_type: REQUEST_TYPE.SUPPLIER_PAYMENT,
+        display_name: "No debe enviarse",
+      });
+      await result.current.uploadDocument("request-2", {
+        file: new File(["other"], "otro.pdf", {
+          type: "application/pdf",
+        }),
+        document_category: REQUEST_DOCUMENT_CATEGORY.OTHER,
+        request_type: REQUEST_TYPE.ADVANCE,
+        display_name: "Tampoco debe enviarse",
+      });
+    });
+
+    const otherFormData = vi.mocked(api.postForm).mock
+      .calls[0]?.[1] as FormData;
+    const invoiceFormData = vi.mocked(api.postForm).mock
+      .calls[1]?.[1] as FormData;
+    const nonSupplierOtherFormData = vi.mocked(api.postForm).mock
+      .calls[2]?.[1] as FormData;
+    expect(otherFormData.get("file")).toBe(otherFile);
+    expect(otherFormData.get("document_category")).toBe(
+      REQUEST_DOCUMENT_CATEGORY.OTHER,
+    );
+    expect(otherFormData.get("display_name")).toBe(
+      "Informe técnico - Área Ñandú",
+    );
+    expect(invoiceFormData.has("display_name")).toBe(false);
+    expect(nonSupplierOtherFormData.get("document_category")).toBe(
+      REQUEST_DOCUMENT_CATEGORY.OTHER,
+    );
+    expect(nonSupplierOtherFormData.get("display_name")).toBe("Tampoco debe enviarse");
   });
 
   it("actualiza filas del informe localmente y conserva el informe montado", async () => {
