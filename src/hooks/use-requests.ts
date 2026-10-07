@@ -62,6 +62,7 @@ import type {
   RequestDocumentUploadResponse,
   ExtraRequestDocumentMutationContext,
   RequestReceiptReview,
+  ResolveRequestReceiptDuplicateInput,
   RequestRenditionReport,
   RequestRenditionGenerateResponse,
   RequestRenditionRow,
@@ -1389,6 +1390,33 @@ export function useUpdateRequestReceiptReview() {
   return { updateReceiptReview, isLoading, error };
 }
 
+export function useResolveRequestReceiptDuplicate() {
+  const resolveReceiptDuplicate = async (
+    requestId: string,
+    receiptId: string,
+    input: ResolveRequestReceiptDuplicateInput,
+    signal: AbortSignal,
+  ): Promise<RequestReceiptReview> => {
+    const reason = input.reason.trim();
+    if (
+      reason.length < 10 ||
+      reason.length > 1000 ||
+      !/^[a-f0-9]{64}$/.test(input.snapshot)
+    ) {
+      throw new Error("Revisa el motivo y actualiza la revisión del comprobante.");
+    }
+    const result = await api.post<RequestReceiptReview>(
+      `/requests/${encodeURIComponent(requestId)}/receipts/${encodeURIComponent(receiptId)}/duplicate-review`,
+      { action: input.action, reason, snapshot: input.snapshot },
+      { signal, retryUnauthorized: false },
+    );
+    signal.throwIfAborted();
+    invalidateRequestCaches();
+    return result;
+  };
+  return { resolveReceiptDuplicate };
+}
+
 export function useConfirmRequestReceiptReview() {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<Error | null>(null);
@@ -1418,6 +1446,43 @@ export function useConfirmRequestReceiptReview() {
   };
 
   return { confirmReceiptReview, isLoading, error };
+}
+
+export function useRetryRequestReceiptOcr() {
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<Error | null>(null);
+  const inFlightRef = useRef(false);
+
+  const retryReceiptOcr = async (
+    requestId: string,
+    receiptId: string,
+    reason?: string,
+  ): Promise<RequestReceiptReview> => {
+    if (inFlightRef.current) throw new Error("OCR_RETRY_IN_PROGRESS");
+    inFlightRef.current = true;
+    setIsLoading(true);
+    setError(null);
+    try {
+      const result = await api.post<RequestReceiptReview>(
+        `/requests/${requestId}/receipts/${receiptId}/retry-ocr`,
+        reason ? { reason } : {},
+      );
+      invalidateRequestCaches();
+      return result;
+    } catch (cause) {
+      const nextError =
+        cause instanceof Error
+          ? cause
+          : new Error("No se pudo completar el reintento de lectura");
+      setError(nextError);
+      throw cause;
+    } finally {
+      inFlightRef.current = false;
+      setIsLoading(false);
+    }
+  };
+
+  return { retryReceiptOcr, isLoading, error };
 }
 
 export function useUploadExtraRequestDocument(

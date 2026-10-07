@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor ,
+  within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 import { RequestDocumentsCard } from "@/components/requests/request-documents-card";
@@ -7,7 +9,8 @@ import { api, ApiRequestError } from "@/lib/api-client";
 import { ROLE_CODE } from "@/lib/constants";
 import { clearQueryCache, setQueryCacheAuthNamespace } from "@/lib/query-cache";
 import { useAuthStore } from "@/stores/auth-store";
-import { REQUEST_CURRENCY, REQUEST_DOCUMENT_CATEGORY, REQUEST_DOCUMENT_SCOPE_TYPE, REQUEST_RECEIPT_DUPLICATE_STATUS, REQUEST_RECEIPT_OCR_STATUS, REQUEST_STATUS, REQUEST_TYPE, REXAN_OUTCOME, type PaymentRequest, type RequestAllocation, type RequestDocument, type RequestReceiptReview } from "@/types/requests";
+import { REQUEST_CURRENCY, REQUEST_DOCUMENT_CATEGORY, REQUEST_DOCUMENT_SCOPE_TYPE,
+  REQUEST_RECEIPT_TYPE, REQUEST_RECEIPT_DUPLICATE_STATUS, REQUEST_RECEIPT_OCR_STATUS, REQUEST_STATUS, REQUEST_TYPE, REXAN_OUTCOME, type PaymentRequest, type RequestAllocation, type RequestDocument, type RequestReceiptReview } from "@/types/requests";
 
 vi.mock("@/lib/api-client", () => ({
   api: {
@@ -16,6 +19,7 @@ vi.mock("@/lib/api-client", () => ({
     postForm: vi.fn(),
     patch: vi.fn(),
     delete: vi.fn(),
+    documentBlob: vi.fn(),
   },
   ApiRequestError: class ApiRequestError extends Error {
     constructor(
@@ -188,6 +192,64 @@ function makeUploadError(status: number, message: string, code?: string): ApiReq
 }
 
 describe("RequestDocumentsCard", () => {
+  it("keeps ordinary source View separate from the authorized candidate action", async () => {
+    const currentUser = useAuthStore.getState().user!;
+    useAuthStore.setState({
+      user: {
+        ...currentUser,
+        role: { code: ROLE_CODE.GIOF_GESTOR, name: "GIOF" },
+      },
+    });
+    const candidateReview = makeReceiptReview({
+      candidate_open_snapshot: "a".repeat(64),
+      duplicate_candidates: [
+        {
+          receipt_id: "prior-receipt",
+          request_id: "prior-request",
+          document_id: "prior-document",
+          issuer_document_number: null,
+          series: null,
+          number: null,
+          issue_date: null,
+          amount: null,
+        },
+      ],
+    });
+    vi.mocked(api.get).mockImplementation(async (path) =>
+      path === "/requests/req-1/receipts" ? [candidateReview] : [],
+    );
+    render(
+      <RequestDocumentsCard
+        request={makeRequest({ request_type: REQUEST_TYPE.REIMBURSEMENT })}
+        readOnly
+        documents={[
+          makeDocument({
+            document_category: REQUEST_DOCUMENT_CATEGORY.RECEIPT,
+            drive_web_url: "https://drive.google.com/file/d/source/view",
+          }),
+        ]}
+      />,
+    );
+    expect(
+      await screen.findByRole("button", {
+        name: "Ver comprobante candidato",
+      }),
+    ).toBeInTheDocument();
+    const ordinaryView = screen.getByRole("link", {
+      name: /Ver documento Sustento.pdf/,
+    });
+    expect(ordinaryView).toHaveAttribute(
+      "href",
+      "https://drive.google.com/file/d/source/view",
+    );
+    expect(
+      screen
+        .getAllByRole("link")
+        .some((link) => link.getAttribute("href")?.includes("prior-document")),
+    ).toBe(false);
+    expect(api.documentBlob).not.toHaveBeenCalled();
+  });
+
   it.each([false, true])(
     "shows stable backend provenance without changing actions in readOnly=%s",
     async (readOnly) => {
@@ -207,7 +269,7 @@ describe("RequestDocumentsCard", () => {
       );
       expect(await screen.findByText("Agregado por GIOF")).toBeInTheDocument();
       expect(
-        screen.getByRole("link", { name: /^Ver documento$/ }),
+        screen.getByRole("link", { name: /Ver documento Sustento.pdf/ }),
       ).toBeInTheDocument();
       expect(
         screen.queryByRole("button", { name: "Eliminar" }) !==
@@ -371,6 +433,117 @@ describe("RequestDocumentsCard", () => {
       accessToken: "token",
       isLoading: false,
     });
+  });
+
+  it("ejecuta un reintento OCR real una sola vez y muestra el resultado terminal", async () => {
+    const failed = makeReceiptReview();
+    failed.receipt.ocr_status = REQUEST_RECEIPT_OCR_STATUS.FAILED;
+    failed.latest_extraction = failed.latest_extraction
+      ? {
+          ...failed.latest_extraction,
+          status: REQUEST_RECEIPT_OCR_STATUS.FAILED,
+          error_message: "TIMEOUT: OCR command timed out",
+        }
+      : null;
+    const reviewed = makeReceiptReview();
+    reviewed.receipt.ocr_status = REQUEST_RECEIPT_OCR_STATUS.REQUIRES_REVIEW;
+    reviewed.retry_execution = "SYNCHRONOUS";
+    reviewed.retry_outcome = "REQUIRES_REVIEW";
+    useAuthStore.setState({
+      user: {
+        id: "admin-1",
+        firstName: "Ada",
+        lastName: "Admin",
+        email: "admin@example.com",
+        documentNumber: "00000000",
+        onboardingCompleted: true,
+        authSource: "LOCAL",
+        role: { code: ROLE_CODE.ADMIN_SISTEMA, name: "Admin" },
+      },
+      accessToken: "token",
+      isLoading: false,
+    });
+    vi.mocked(api.get).mockImplementation(async (path) =>
+      path === "/requests/req-1/receipts" ? [failed] : [],
+    );
+    vi.mocked(api.post).mockResolvedValueOnce(reviewed);
+
+    render(
+      <RequestDocumentsCard
+        request={makeRequest()}
+        documents={[
+          makeDocument({
+            document_category: REQUEST_DOCUMENT_CATEGORY.INVOICE,
+          }),
+        ]}
+      />,
+    );
+    const retry = await screen.findByRole("button", {
+      name: "Reintentar lectura",
+    });
+    await userEvent.click(retry);
+
+    await waitFor(() => expect(api.post).toHaveBeenCalledTimes(1));
+    expect(api.post).toHaveBeenCalledWith(
+      "/requests/req-1/receipts/receipt-1/retry-ocr",
+      {},
+    );
+    expect(await screen.findByText("Requiere revisión")).toBeInTheDocument();
+  });
+
+  it("distingue recargar estado de reintentar OCR", async () => {
+    vi.mocked(api.get).mockRejectedValue(new Error("network"));
+    render(<RequestDocumentsCard request={makeRequest()} documents={[]} />);
+
+    expect(
+      await screen.findByRole("button", { name: "Volver a cargar estado" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Reintentar lectura" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("muestra el timeout terminal devuelto por el contrato de reintento", async () => {
+    const failed = makeReceiptReview();
+    failed.receipt.ocr_status = REQUEST_RECEIPT_OCR_STATUS.FAILED;
+    const timedOut = makeReceiptReview();
+    timedOut.receipt.ocr_status = REQUEST_RECEIPT_OCR_STATUS.FAILED;
+    timedOut.retry_execution = "SYNCHRONOUS";
+    timedOut.retry_outcome = "FAILED";
+    timedOut.retry_reason = "OCR_TIMEOUT";
+    useAuthStore.setState({
+      user: {
+        id: "admin-1",
+        firstName: "Ada",
+        lastName: "Admin",
+        email: "admin@example.com",
+        documentNumber: "00000000",
+        onboardingCompleted: true,
+        authSource: "LOCAL",
+        role: { code: ROLE_CODE.ADMIN_SISTEMA, name: "Admin" },
+      },
+      accessToken: "token",
+      isLoading: false,
+    });
+    vi.mocked(api.get).mockImplementation(async (path) =>
+      path === "/requests/req-1/receipts" ? [failed] : [],
+    );
+    vi.mocked(api.post).mockResolvedValueOnce(timedOut);
+
+    render(
+      <RequestDocumentsCard
+        request={makeRequest()}
+        documents={[
+          makeDocument({
+            document_category: REQUEST_DOCUMENT_CATEGORY.INVOICE,
+          }),
+        ]}
+      />,
+    );
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Reintentar lectura" }),
+    );
+    expect(await screen.findByText(/tiempo límite/i)).toBeInTheDocument();
   });
 
   it("renderiza documentos existentes y permite eliminarlos cuando la solicitud es editable", async () => {
@@ -1149,7 +1322,7 @@ describe("RequestDocumentsCard", () => {
     }));
 
     const user = userEvent.setup();
-    render(<RequestDocumentsCard request={makeRequest({ request_type: REQUEST_TYPE.SUPPLIER_PAYMENT })} />);
+    render(<RequestDocumentsCard request={makeRequest({ request_type: REQUEST_TYPE.ADVANCE_SETTLEMENT })} />);
 
     expect(await screen.findByText("Factura.pdf")).toBeInTheDocument();
     expect(screen.getByText("Pendiente de confirmación")).toBeInTheDocument();
@@ -1186,7 +1359,7 @@ describe("RequestDocumentsCard", () => {
     });
 
     const user = userEvent.setup();
-    render(<RequestDocumentsCard request={makeRequest({ request_type: REQUEST_TYPE.SUPPLIER_PAYMENT })} />);
+    render(<RequestDocumentsCard request={makeRequest({ request_type: REQUEST_TYPE.ADVANCE_SETTLEMENT })} />);
 
     expect(await screen.findByText(/150.5 · Moneda pendiente de resolución/)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /confirmar datos/i })).not.toBeInTheDocument();
@@ -1215,7 +1388,7 @@ describe("RequestDocumentsCard", () => {
     }));
 
     const user = userEvent.setup();
-    render(<RequestDocumentsCard request={makeRequest({ request_type: REQUEST_TYPE.SUPPLIER_PAYMENT })} />);
+    render(<RequestDocumentsCard request={makeRequest({ request_type: REQUEST_TYPE.ADVANCE_SETTLEMENT })} />);
 
     expect(await screen.findByText("Factura.pdf")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /reintentar lectura/i })).not.toBeInTheDocument();
@@ -1238,6 +1411,221 @@ describe("RequestDocumentsCard", () => {
     });
   });
 
+  it.each([
+    [
+      REQUEST_TYPE.SUPPLIER_PAYMENT,
+      REQUEST_DOCUMENT_CATEGORY.INVOICE,
+      REQUEST_RECEIPT_TYPE.INVOICE,
+      "Confirmar Factura",
+    ],
+    [
+      REQUEST_TYPE.SUPPLIER_PAYMENT,
+      REQUEST_DOCUMENT_CATEGORY.SALES_RECEIPT,
+      REQUEST_RECEIPT_TYPE.SALES_RECEIPT,
+      "Confirmar Boleta",
+    ],
+    [
+      REQUEST_TYPE.SUPPLIER_PAYMENT,
+      REQUEST_DOCUMENT_CATEGORY.INVOICE,
+      REQUEST_RECEIPT_TYPE.SALES_RECEIPT,
+      "Confirmar Factura",
+    ],
+    [
+      REQUEST_TYPE.REIMBURSEMENT,
+      REQUEST_DOCUMENT_CATEGORY.RECEIPT,
+      REQUEST_RECEIPT_TYPE.SALES_RECEIPT,
+      "Confirmar comprobante",
+    ],
+    [
+      REQUEST_TYPE.REIMBURSEMENT,
+      REQUEST_DOCUMENT_CATEGORY.RECEIPT,
+      "UNKNOWN",
+      "Confirmar comprobante",
+    ],
+  ])(
+    "uses persisted category for %s %s and receipt type %s for %s, retaining confirmation API",
+    async (requestType, category, receiptType, label) => {
+      vi.mocked(api.get).mockImplementation(async (path) =>
+        path === "/requests/req-1/receipts"
+          ? [
+              makeReceiptReview({
+                receipt: {
+                  ...makeReceiptReview().receipt,
+                  receipt_type: receiptType,
+                },
+              }),
+            ]
+          : [],
+      );
+      vi.mocked(api.post).mockResolvedValue(makeReceiptReview());
+      render(
+        <RequestDocumentsCard
+          request={makeRequest({ request_type: requestType })}
+          documents={[makeDocument({ document_category: category })]}
+        />,
+      );
+      await userEvent.click(
+        await screen.findByRole("button", { name: "Confirmar datos" }),
+      );
+      const dialog = screen.getByRole("dialog", {
+        name: "Confirmar datos del comprobante",
+      });
+      expect(within(dialog).getByRole("button", { name: label })).toBeEnabled();
+      expect(dialog).not.toHaveTextContent("Informe de rendición");
+      await userEvent.click(
+        within(dialog).getByRole("button", { name: label }),
+      );
+      await waitFor(() =>
+        expect(api.post).toHaveBeenCalledWith(
+          "/requests/req-1/receipts/receipt-1/confirm",
+        ),
+      );
+    },
+  );
+
+  it("keeps the REXAN report confirmation copy and makes the populated OCR panel flexible", async () => {
+    vi.mocked(api.get).mockImplementation(async (path) =>
+      path === "/requests/req-1/receipts" ? [makeReceiptReview()] : [],
+    );
+    const { container } = render(
+      <RequestDocumentsCard
+        request={makeRequest({ request_type: REQUEST_TYPE.ADVANCE_SETTLEMENT })}
+        documents={[
+          makeDocument({
+            document_category: REQUEST_DOCUMENT_CATEGORY.RECEIPT,
+          }),
+        ]}
+      />,
+    );
+    const summary = await screen.findByText(
+      /Proveedor SAC · F001-123 · PEN 150.5/,
+    );
+    expect(summary.closest('[role="status"]')).toHaveClass("w-full");
+    expect(container.querySelector('[role="status"]')).toHaveTextContent(
+      "RUC: 20123456789",
+    );
+    await userEvent.click(
+      screen.getByRole("button", { name: "Confirmar datos" }),
+    );
+    expect(
+      screen.getByRole("button", { name: "Confirmar para informe" }),
+    ).toBeInTheDocument();
+  });
+
+  it("keeps loading OCR status compact and never offers OCR review for supplier RHE/CASH", async () => {
+    const { rerender } = render(
+      <RequestDocumentsCard
+        request={makeRequest({ request_type: REQUEST_TYPE.SUPPLIER_PAYMENT })}
+        documents={[
+          makeDocument({
+            document_category: REQUEST_DOCUMENT_CATEGORY.INVOICE,
+          }),
+        ]}
+      />,
+    );
+    expect(
+      screen.getByText("Procesando comprobante").closest('[role="status"]'),
+    ).toHaveClass("w-full");
+    rerender(
+      <RequestDocumentsCard
+        request={makeRequest({ request_type: REQUEST_TYPE.SUPPLIER_PAYMENT })}
+        documents={[
+          makeDocument({
+            document_category:
+              REQUEST_DOCUMENT_CATEGORY.PROFESSIONAL_FEE_RECEIPT,
+          }),
+        ]}
+      />,
+    );
+    expect(
+      screen.queryByText("Procesando comprobante"),
+    ).not.toBeInTheDocument();
+    rerender(
+      <RequestDocumentsCard
+        request={makeRequest({ request_type: REQUEST_TYPE.SUPPLIER_PAYMENT })}
+        documents={[
+          makeDocument({
+            document_category: REQUEST_DOCUMENT_CATEGORY.CASH_RECEIPT,
+          }),
+        ]}
+      />,
+    );
+    expect(
+      screen.queryByRole("button", { name: "Confirmar datos" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("reviews a supplier boleta through the existing PATCH without removing duplicate warnings", async () => {
+    const duplicate = makeReceiptReview();
+    duplicate.receipt.receipt_type = REQUEST_RECEIPT_TYPE.SALES_RECEIPT;
+    duplicate.duplicate_candidates = [
+      {
+        receipt_id: "other-receipt",
+        request_id: "other-request",
+        document_id: null,
+        issuer_document_number: "20123456789",
+        series: "B001",
+        number: "123",
+        issue_date: "2026-05-01",
+        amount: 150.5,
+      },
+    ];
+    vi.mocked(api.get).mockImplementation(async (path) =>
+      path === "/requests/req-1/receipts" ? [duplicate] : [],
+    );
+    vi.mocked(api.patch).mockResolvedValue(duplicate);
+    render(
+      <RequestDocumentsCard
+        request={makeRequest({ request_type: REQUEST_TYPE.SUPPLIER_PAYMENT })}
+        documents={[
+          makeDocument({
+            document_category: REQUEST_DOCUMENT_CATEGORY.SALES_RECEIPT,
+          }),
+        ]}
+      />,
+    );
+    expect(
+      await screen.findByText(/Ya existe un comprobante con la misma serie/),
+    ).toBeInTheDocument();
+    await userEvent.click(
+      screen.getByRole("button", { name: "Revisar datos del comprobante" }),
+    );
+    await userEvent.click(
+      screen.getByRole("button", { name: "Guardar corrección" }),
+    );
+    await waitFor(() =>
+      expect(api.patch).toHaveBeenCalledWith(
+        "/requests/req-1/receipts/receipt-1",
+        expect.objectContaining({ series: "F001", currency: "PEN" }),
+      ),
+    );
+    expect(api.post).not.toHaveBeenCalled();
+  });
+
+  it("uses a neutral supplier label when the persisted normalized category is unknown", async () => {
+    vi.mocked(api.get).mockImplementation(async (path) =>
+      path === "/requests/req-1/receipts" ? [makeReceiptReview()] : [],
+    );
+    render(
+      <RequestDocumentsCard
+        request={makeRequest({ request_type: REQUEST_TYPE.SUPPLIER_PAYMENT })}
+        documents={[
+          makeDocument({
+            document_category: REQUEST_DOCUMENT_CATEGORY.INVOICE,
+            document_category_normalized:
+              "LEGACY_UNKNOWN" as RequestDocument["document_category_normalized"],
+          }),
+        ]}
+      />,
+    );
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Confirmar datos" }),
+    );
+    expect(
+      screen.getByRole("button", { name: "Confirmar comprobante" }),
+    ).toBeInTheDocument();
+  });
+
   it("mantiene el diálogo y enfoca el error cuando la confirmación del comprobante queda bloqueada", async () => {
     vi.mocked(api.get).mockImplementation(async (path) => {
       if (path === "/requests/req-1/receipts") return [makeReceiptReview()];
@@ -1246,7 +1634,7 @@ describe("RequestDocumentsCard", () => {
     vi.mocked(api.post).mockRejectedValue(makeUploadError(409, "Completa los datos del comprobante antes de confirmar."));
 
     const user = userEvent.setup();
-    render(<RequestDocumentsCard request={makeRequest({ request_type: REQUEST_TYPE.SUPPLIER_PAYMENT })} />);
+    render(<RequestDocumentsCard request={makeRequest({ request_type: REQUEST_TYPE.ADVANCE_SETTLEMENT })} />);
 
     expect(await screen.findByText("Factura.pdf")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: /confirmar datos/i }));

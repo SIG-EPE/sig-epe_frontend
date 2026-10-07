@@ -4,6 +4,7 @@ import { clearClientAuthSession } from "@/lib/auth/session-sync";
 import { refreshSession } from "@/lib/auth/refresh-session";
 import { getGiofMutationHeaders } from "@/lib/giof-work-lease-session";
 import { buildLoginPathForCurrentLocation } from "@/lib/auth/return-to";
+import { getQueryCacheAuthNamespace } from "@/lib/query-cache";
 
 // -------------------------------------------------------
 // API Client — SIG-EPE
@@ -54,8 +55,18 @@ export class ApiRequestError extends Error {
 async function apiFetch<T>(
   path: string,
   options: RequestInit = {},
+  readResponse?: (response: Response) => Promise<T>,
+  retryUnauthorized = true,
 ): Promise<T> {
   const { accessToken } = useAuthStore.getState();
+  const authNamespace = getQueryCacheAuthNamespace();
+  function checkActiveRequest(): void {
+    options.signal?.throwIfAborted();
+    // El lector binario no debe entregar bytes ni reintentar tras logout/cambio de sesión.
+    if (readResponse && getQueryCacheAuthNamespace() !== authNamespace) {
+      throw new DOMException("Session changed", "AbortError");
+    }
+  }
 
   const headers = new Headers(options.headers);
   const giofHeaders = getGiofMutationHeaders(path, options.method);
@@ -81,14 +92,14 @@ async function apiFetch<T>(
     credentials: "include", // always send cookies (for refresh)
   });
   // Un 401 puede terminar después de que el consumidor ya canceló el detalle.
-  options.signal?.throwIfAborted();
+  checkActiveRequest();
 
   // --- 401: attempt token refresh + retry ---
-  if (res.status === 401 && shouldAttachAuthHeader(path)) {
+  if (res.status === 401 && retryUnauthorized && shouldAttachAuthHeader(path)) {
     const refreshResult = await refreshSession({ reason: "api-401" }).catch(
       () => null,
     );
-    options.signal?.throwIfAborted();
+    checkActiveRequest();
     const newToken = refreshResult?.accessToken ?? null;
 
     if (newToken) {
@@ -99,6 +110,7 @@ async function apiFetch<T>(
         headers,
         credentials: "include",
       });
+      checkActiveRequest();
 
       if (!retryRes.ok) {
         const errorBody = (await retryRes.json().catch(() => ({
@@ -111,6 +123,11 @@ async function apiFetch<T>(
         throw new ApiRequestError(retryRes.status, errorBody, retryRes.headers);
       }
 
+      if (readResponse) {
+        const result = await readResponse(retryRes);
+        checkActiveRequest();
+        return result;
+      }
       if (retryRes.status === 204) return undefined as T;
 
       const retryJson = (await retryRes.json()) as ApiResponse<T>;
@@ -143,6 +160,12 @@ async function apiFetch<T>(
     throw new ApiRequestError(res.status, errorBody, res.headers);
   }
 
+  if (readResponse) {
+    const result = await readResponse(res);
+    checkActiveRequest();
+    return result;
+  }
+
   // 204 No Content
   if (res.status === 204) {
     return undefined as T;
@@ -161,7 +184,11 @@ function getFilenameFromContentDisposition(
 
   const utf8Match = /filename\*=UTF-8''([^;]+)/i.exec(value);
   if (utf8Match?.[1]) {
-    return decodeURIComponent(utf8Match[1].replace(/"/g, ""));
+    try {
+      return decodeURIComponent(utf8Match[1].replace(/"/g, ""));
+    } catch {
+      return null;
+    }
   }
 
   const filenameMatch = /filename="?([^";]+)"?/i.exec(value);
@@ -270,6 +297,47 @@ async function apiDownload(
 // -------------------------------------------------------
 
 export const api = {
+  documentBlob(path: string, options?: RequestInit): Promise<ApiDownloadResult> {
+    return apiFetch(
+      path,
+      { ...options, method: "GET", body: undefined, cache: "no-store" },
+      async (res) => {
+        const mime = res.headers
+          .get("Content-Type")
+          ?.split(";", 1)[0]
+          .trim()
+          .toLowerCase();
+        if (!mime || !["application/pdf", "image/jpeg", "image/png"].includes(mime)) {
+          throw new ApiRequestError(
+            res.status,
+            {
+              statusCode: res.status,
+              code: "INVALID_DOCUMENT_RESPONSE",
+              message: "Formato de comprobante no válido. Solo PDF, JPEG o PNG.",
+              error: "Invalid Document Response",
+              timestamp: new Date().toISOString(),
+              path,
+            },
+            res.headers,
+          );
+        }
+        const blob = await res.blob();
+        const filename = getFilenameFromContentDisposition(
+          res.headers.get("Content-Disposition"),
+        );
+        const safeFilename =
+          filename &&
+          filename.length <= 255 &&
+          !/[\\/\x00-\x1f\x7f]/.test(filename) &&
+          filename !== "." &&
+          filename !== ".."
+            ? filename
+            : null;
+        return { blob: blob.slice(0, blob.size, mime), filename: safeFilename };
+      },
+    );
+  },
+
   get<T>(path: string, options?: RequestInit): Promise<T> {
     return apiFetch<T>(path, { ...options, method: "GET" });
   },
@@ -299,12 +367,22 @@ export const api = {
     );
   },
 
-  post<T>(path: string, body?: unknown, options?: RequestInit): Promise<T> {
-    return apiFetch<T>(path, {
-      ...options,
-      method: "POST",
-      body: body !== undefined ? JSON.stringify(body) : undefined,
-    });
+  post<T>(
+    path: string,
+    body?: unknown,
+    options?: RequestInit & { retryUnauthorized?: boolean },
+  ): Promise<T> {
+    const { retryUnauthorized, ...requestOptions } = options ?? {};
+    return apiFetch<T>(
+      path,
+      {
+        ...requestOptions,
+        method: "POST",
+        body: body !== undefined ? JSON.stringify(body) : undefined,
+      },
+      undefined,
+      retryUnauthorized,
+    );
   },
 
   postForm<T>(path: string, body: FormData, options?: RequestInit): Promise<T> {

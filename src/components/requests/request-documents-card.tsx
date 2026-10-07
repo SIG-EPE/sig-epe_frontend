@@ -14,7 +14,12 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useRequestDocumentUploadQueue, type RequestDocumentUploadQueueController } from "@/hooks/use-request-document-upload-queue";
-import { useConfirmRequestReceiptReview, useDeleteRequestDocument, useRequestDocuments, useRequestReceiptReviews, useUpdateRequestReceiptReview, useUploadRequestDocument } from "@/hooks/use-requests";
+import { useConfirmRequestReceiptReview, useDeleteRequestDocument, useRequestDocuments, useRequestReceiptReviews, useRetryRequestReceiptOcr,
+  useResolveRequestReceiptDuplicate,
+  useUpdateRequestReceiptReview, useUploadRequestDocument } from "@/hooks/use-requests";
+import { ROLE_CODE } from "@/lib/constants";
+import { api, ApiRequestError } from "@/lib/api-client";
+import { getQueryCacheAuthNamespace } from "@/lib/query-cache";
 import { useUploadNavigationGuard } from "@/hooks/use-upload-navigation-guard";
 import { REQUEST_DOCUMENT_UPLOAD_BATCH_STATE, REQUEST_DOCUMENT_UPLOAD_FILE_STATE } from "@/lib/request-document-upload-queue";
 import { getSafeDocumentUrl } from "@/lib/safe-url";
@@ -45,6 +50,8 @@ import {
   REQUEST_DOCUMENT_SCOPE_TYPE,
   REQUEST_DOCUMENT_UPLOAD_STATUS,
   REQUEST_RECEIPT_DUPLICATE_STATUS,
+  REQUEST_RECEIPT_DUPLICATE_REVIEW_ACTION,
+  type RequestReceiptDuplicateReviewAction,
   REQUEST_RECEIPT_OCR_STATUS,
   REQUEST_STATUS,
   REQUEST_TYPE,
@@ -57,6 +64,7 @@ import {
   type UpdateRequestReceiptReviewInput,
 } from "@/types/requests";
 import { SettlementUploadFileRow } from "./settlement-preparation/settlement-upload-file-row";
+
 import { RequestDocumentProvenanceBadge } from "./request-document-provenance-badge";
 
 interface RequestDocumentsCardProps {
@@ -84,6 +92,437 @@ interface ReceiptReviewFormState {
   issue_date: string;
   amount: string;
   currency: string;
+}
+
+interface ReceiptCandidateViewerProps {
+  review: RequestReceiptReview;
+  onRefresh: () => Promise<unknown> | void;
+}
+
+interface CandidatePreview {
+  url: string;
+  mime: string;
+  filename: string | null;
+}
+
+interface CandidatePreviewResource {
+  controller: AbortController;
+  url: string | null;
+}
+
+// Solo affordance de UX: el servidor vuelve a autorizar ambos comprobantes en cada lectura.
+export function ReceiptCandidateViewer(props: ReceiptCandidateViewerProps) {
+  const user = useAuthStore((state) => state.user);
+  const role = user?.role?.code;
+  const { review } = props;
+  if (
+    (role !== ROLE_CODE.GIOF_GESTOR && role !== ROLE_CODE.GIOF_MANAGER) ||
+    !review.candidate_open_snapshot ||
+    !/^[a-f0-9]{64}$/.test(review.candidate_open_snapshot) ||
+    review.duplicate_candidates.length === 0
+  ) {
+    return null;
+  }
+
+  const identity = [
+    getQueryCacheAuthNamespace(),
+    user?.id,
+    role,
+    review.receipt.request_id,
+    review.receipt.id,
+    review.candidate_open_snapshot,
+    ...review.duplicate_candidates.map((candidate) => candidate.receipt_id),
+  ].join(":");
+  return <ActiveReceiptCandidateViewer key={identity} {...props} />;
+}
+
+function ActiveReceiptCandidateViewer({
+  review,
+  onRefresh,
+}: ReceiptCandidateViewerProps) {
+  const [open, setOpen] = useState(false);
+  const [preview, setPreview] = useState<CandidatePreview | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const resource = useRef<CandidatePreviewResource | null>(null);
+
+  function release(): void {
+    resource.current?.controller.abort();
+    if (resource.current?.url) URL.revokeObjectURL(resource.current.url);
+    resource.current = null;
+  }
+
+  function close(): void {
+    release();
+    setOpen(false);
+    setPreview(null);
+    setError(null);
+  }
+
+  useEffect(() => {
+    const namespace = getQueryCacheAuthNamespace();
+    const actor = useAuthStore.getState().user;
+    const unsubscribe = useAuthStore.subscribe(() => {
+      const currentActor = useAuthStore.getState().user;
+      if (
+        getQueryCacheAuthNamespace() !== namespace ||
+        !currentActor ||
+        currentActor.id !== actor?.id ||
+        currentActor.role?.code !== actor?.role?.code
+      ) {
+        close();
+      }
+    });
+    return () => {
+      unsubscribe();
+      release();
+    };
+  }, []);
+
+  async function showCandidate(candidateReceiptId: string): Promise<void> {
+    release();
+    setPreview(null);
+    setError(null);
+    setOpen(true);
+    const controller = new AbortController();
+    const current: CandidatePreviewResource = { controller, url: null };
+    resource.current = current;
+    const namespace = getQueryCacheAuthNamespace();
+    const path = `/requests/${encodeURIComponent(review.receipt.request_id)}/receipts/${encodeURIComponent(review.receipt.id)}/candidates/${encodeURIComponent(candidateReceiptId)}/document?snapshot=${encodeURIComponent(review.candidate_open_snapshot!)}`;
+    try {
+      const result = await api.documentBlob(path, {
+        signal: controller.signal,
+      });
+      if (
+        controller.signal.aborted ||
+        resource.current !== current ||
+        getQueryCacheAuthNamespace() !== namespace
+      ) {
+        return;
+      }
+      current.url = URL.createObjectURL(result.blob);
+      setPreview({
+        url: current.url,
+        mime: result.blob.type,
+        filename: result.filename,
+      });
+    } catch (caught) {
+      if (
+        controller.signal.aborted ||
+        resource.current !== current ||
+        getQueryCacheAuthNamespace() !== namespace
+      ) {
+        return;
+      }
+      release();
+      const unavailable =
+        caught instanceof ApiRequestError &&
+        (caught.status === 403 || caught.status === 404);
+      const message = unavailable
+        ? "El comprobante candidato ya no está disponible o la revisión cambió. Actualiza la revisión e intenta nuevamente."
+        : "No se pudo abrir el comprobante candidato. Solo se admiten PDF, JPEG o PNG. Intenta nuevamente.";
+      setError(message);
+      toast.error(message);
+      if (unavailable) {
+        void Promise.resolve()
+          .then(onRefresh)
+          .catch(() => undefined);
+      }
+    }
+  }
+
+  return (
+    <>
+      {review.duplicate_candidates.map((candidate, index) => (
+        <div key={candidate.receipt_id} className="mt-2">
+          {review.duplicate_candidates.length > 1 && (
+            <p>Candidato {index + 1}</p>
+          )}
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => void showCandidate(candidate.receipt_id)}
+          >
+            Ver comprobante candidato
+          </Button>
+        </div>
+      ))}
+      <Dialog
+        open={open}
+        onOpenChange={(value) => {
+          if (!value) close();
+        }}
+      >
+        <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-3xl">
+          <DialogHeader>
+            <DialogTitle>Comprobante candidato</DialogTitle>
+            <DialogDescription>
+              Consulta del comprobante relacionado. Esta vista no confirma ni
+              adjudica un duplicado.
+            </DialogDescription>
+          </DialogHeader>
+          {error ? (
+            <p role="alert">{error}</p>
+          ) : preview ? (
+            <>
+              {preview.filename && (
+                <p className="break-words">{preview.filename}</p>
+              )}
+              {preview.mime === "application/pdf" ? (
+                <iframe
+                  title="Vista del comprobante candidato"
+                  src={preview.url}
+                  className="h-[60vh] w-full"
+                  referrerPolicy="no-referrer"
+                />
+              ) : (
+                <img
+                  alt="Comprobante candidato"
+                  src={preview.url}
+                  className="max-h-[60vh] w-full object-contain"
+                />
+              )}
+            </>
+          ) : (
+            <p role="status">Cargando comprobante candidato…</p>
+          )}
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={close}>
+              Cerrar comprobante candidato
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
+  );
+}
+
+function ReceiptDuplicateSummary({ review }: { review: RequestReceiptReview }) {
+  const decision = review.duplicate_resolution;
+  if (!decision) {
+    return review.receipt.duplicate_status ===
+      REQUEST_RECEIPT_DUPLICATE_STATUS.DUPLICATE_CONFIRMED ? (
+      <p>
+        Duplicado confirmado. El archivo se conserva y no es evidencia
+        financiera. Detalle de decisión no disponible.
+      </p>
+    ) : null;
+  }
+  return (
+    <div className="space-y-1 text-sm">
+      <p>
+        {decision.action ===
+        REQUEST_RECEIPT_DUPLICATE_REVIEW_ACTION.NOT_DUPLICATE
+          ? "No es duplicado"
+          : "Duplicado confirmado"}{" "}
+        · {formatRequestDateTime(decision.decided_at)}
+      </p>
+      <p className="break-words">
+        {decision.actor_role} · {decision.actor_id}
+      </p>
+      <p className="break-words">{decision.reason}</p>
+      <p>
+        {decision.fresh
+          ? decision.action ===
+            REQUEST_RECEIPT_DUPLICATE_REVIEW_ACTION.NOT_DUPLICATE
+            ? review.receipt.confirmed_at
+              ? "Decisión vigente. Datos del comprobante confirmados."
+              : "La decisión no aprueba el comprobante. Revisa los datos y realiza una nueva confirmación separada."
+            : "El archivo se conserva y no es evidencia financiera."
+          : "La revisión cambió. La decisión anterior ya no está vigente; actualiza y revisa nuevamente."}
+      </p>
+    </div>
+  );
+}
+
+interface ReceiptDuplicateDecisionProps {
+  review: RequestReceiptReview;
+  onUpdated: (review: RequestReceiptReview) => void;
+  onBusyChange: (busy: boolean) => void;
+  disabled: boolean;
+}
+
+// Se monta dentro de la revisión existente. Roles y flags son UX, nunca autoridad.
+function ReceiptDuplicateDecision({
+  review,
+  onUpdated,
+  onBusyChange,
+  disabled,
+}: ReceiptDuplicateDecisionProps) {
+  const [current, setCurrent] = useState<RequestReceiptReview | null>(null);
+  const [reason, setReason] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const controller = useRef<AbortController | null>(null);
+  const rejectedSnapshot = useRef<string | undefined>(undefined);
+  const onUpdatedRef = useRef(onUpdated);
+  onUpdatedRef.current = onUpdated;
+  const { resolveReceiptDuplicate } = useResolveRequestReceiptDuplicate();
+  const requestId = review.receipt.request_id;
+  const receiptId = review.receipt.id;
+
+  useEffect(() => {
+    onBusyChange(busy);
+  }, [busy, onBusyChange]);
+
+  async function refresh(previousSnapshot?: string): Promise<void> {
+    if (previousSnapshot) rejectedSnapshot.current = previousSnapshot;
+    controller.current?.abort();
+    const next = new AbortController();
+    controller.current = next;
+    setCurrent(null);
+    setBusy(true);
+    try {
+      const fresh = await api.get<RequestReceiptReview>(
+        `/requests/${encodeURIComponent(requestId)}/receipts/${encodeURIComponent(receiptId)}`,
+        { signal: next.signal, cache: "no-store" },
+      );
+      if (next.signal.aborted) return;
+      if (fresh.can_resolve_duplicate !== true) setReason("");
+      // A failed mutation cannot reuse the rejected token, even if a cached server response repeats it.
+      setCurrent(
+        rejectedSnapshot.current &&
+          fresh.duplicate_review_snapshot === rejectedSnapshot.current
+          ? { ...fresh, can_resolve_duplicate: false }
+          : fresh,
+      );
+      onUpdatedRef.current(fresh);
+    } catch (cause) {
+      if (!next.signal.aborted) setError(getApiErrorMessage(cause));
+    } finally {
+      if (!next.signal.aborted) setBusy(false);
+    }
+  }
+
+  useEffect(() => {
+    void refresh();
+    const actor = useAuthStore.getState().user;
+    const namespace = getQueryCacheAuthNamespace();
+    const unsubscribe = useAuthStore.subscribe(() => {
+      const next = useAuthStore.getState().user;
+      if (
+        next?.id !== actor?.id ||
+        next?.role?.code !== actor?.role?.code ||
+        getQueryCacheAuthNamespace() !== namespace
+      ) {
+        controller.current?.abort();
+        setCurrent(null);
+        setReason("");
+      }
+    });
+    return () => {
+      unsubscribe();
+      controller.current?.abort();
+    };
+    // Identity is also keyed by the parent; changing a snapshot must not reset the reason.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [requestId, receiptId]);
+
+  const validReason =
+    reason.trim().length >= 10 && reason.trim().length <= 1000;
+  const canResolve =
+    current?.can_resolve_duplicate === true &&
+    /^[a-f0-9]{64}$/.test(current.duplicate_review_snapshot ?? "");
+
+  async function resolve(
+    action: RequestReceiptDuplicateReviewAction,
+  ): Promise<void> {
+    if (!current || !canResolve || !validReason || busy || disabled) return;
+    const next = new AbortController();
+    controller.current?.abort();
+    controller.current = next;
+    setBusy(true);
+    setError(null);
+    const snapshot = current.duplicate_review_snapshot!;
+    try {
+      const result = await resolveReceiptDuplicate(
+        requestId,
+        receiptId,
+        { action, reason, snapshot },
+        next.signal,
+      );
+      if (next.signal.aborted) return;
+      setCurrent(result);
+      onUpdatedRef.current(result);
+    } catch (cause) {
+      if (next.signal.aborted) return;
+      setCurrent(null);
+      setError(getApiErrorMessage(cause));
+      // Only GET refresh. Never silently retry or accept the decision.
+      await refresh(snapshot);
+    } finally {
+      if (!next.signal.aborted) setBusy(false);
+    }
+  }
+
+  return (
+    <section
+      className="space-y-3 rounded-md border p-3"
+      aria-label="Revisión de duplicado"
+    >
+      <ReceiptDuplicateSummary review={current ?? review} />
+      {current && (
+        <ReceiptCandidateViewer review={current} onRefresh={() => refresh()} />
+      )}
+      {busy && <p role="status">Actualizando revisión…</p>}
+      {error && (
+        <p role="alert">
+          {error}. Actualiza la revisión antes de decidir nuevamente.
+        </p>
+      )}
+      {canResolve && (
+        <>
+          <label htmlFor="receipt-duplicate-reason">
+            Motivo de la decisión
+          </label>
+          <Input
+            id="receipt-duplicate-reason"
+            value={reason}
+            onChange={(event) => setReason(event.target.value)}
+            aria-describedby="receipt-duplicate-reason-help"
+            disabled={busy || disabled}
+          />
+          <p id="receipt-duplicate-reason-help" className="text-sm">
+            Obligatorio: entre 10 y 1000 caracteres, sin espacios al inicio o
+            final.
+          </p>
+          <div className="flex flex-wrap gap-2">
+            <Button
+              type="button"
+              disabled={!validReason || busy || disabled}
+              onClick={() =>
+                void resolve(
+                  REQUEST_RECEIPT_DUPLICATE_REVIEW_ACTION.NOT_DUPLICATE,
+                )
+              }
+            >
+              No es duplicado
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={!validReason || busy || disabled}
+              onClick={() =>
+                void resolve(
+                  REQUEST_RECEIPT_DUPLICATE_REVIEW_ACTION.DUPLICATE_CONFIRMED,
+                )
+              }
+            >
+              Duplicado confirmado
+            </Button>
+          </div>
+        </>
+      )}
+      {!busy && !canResolve && (
+        <p>Sin autorización vigente para resolver el duplicado.</p>
+      )}
+      {!busy && (
+        <Button type="button" variant="outline" onClick={() => void refresh()}>
+          Actualizar revisión de duplicado
+        </Button>
+      )}
+    </section>
+  );
 }
 
 interface ChecklistAttachButtonProps {
@@ -227,7 +666,21 @@ function getAllocationChecklist(): ReturnType<typeof getRequiredDocumentChecklis
 
 function getReceiptStatusLabel(receiptReview?: RequestReceiptReview): string {
   if (!receiptReview) return "Procesando comprobante";
-  if (receiptReview.receipt.duplicate_status === REQUEST_RECEIPT_DUPLICATE_STATUS.POSSIBLE_DUPLICATE) return "Comprobante duplicado por revisar";
+  if (receiptReview.receipt.duplicate_status === REQUEST_RECEIPT_DUPLICATE_STATUS.DUPLICATE_CONFIRMED
+  )
+    return "Duplicado confirmado · no financiero";
+  if (
+    receiptReview.receipt.duplicate_status ===
+    REQUEST_RECEIPT_DUPLICATE_STATUS.NOT_DUPLICATE_REVIEWED
+  )
+    return receiptReview.duplicate_resolution?.fresh === true
+      ? receiptReview.receipt.confirmed_at
+        ? "Comprobante registrado"
+        : "No es duplicado · pendiente de nueva confirmación"
+      : "Decisión de duplicado no vigente";
+  if (
+    receiptReview.receipt.duplicate_status ===
+    REQUEST_RECEIPT_DUPLICATE_STATUS.POSSIBLE_DUPLICATE) return "Comprobante duplicado por revisar";
   if (receiptReview.duplicate_candidates.length > 0) return "Comprobante duplicado por revisar";
   if (receiptReview.receipt.confirmed_at) return "Comprobante registrado";
 
@@ -240,7 +693,19 @@ function getReceiptStatusLabel(receiptReview?: RequestReceiptReview): string {
 
 function getReceiptStatusVariant(receiptReview?: RequestReceiptReview): "default" | "secondary" | "destructive" | "outline" {
   if (!receiptReview) return "outline";
-  if (receiptReview.receipt.duplicate_status === REQUEST_RECEIPT_DUPLICATE_STATUS.POSSIBLE_DUPLICATE || receiptReview.duplicate_candidates.length > 0) return "destructive";
+  if (receiptReview.receipt.duplicate_status === REQUEST_RECEIPT_DUPLICATE_STATUS.DUPLICATE_CONFIRMED
+  )
+    return "destructive";
+  if (
+    receiptReview.receipt.duplicate_status ===
+    REQUEST_RECEIPT_DUPLICATE_STATUS.NOT_DUPLICATE_REVIEWED
+  )
+    return receiptReview.duplicate_resolution?.fresh === true
+      ? "secondary"
+      : "destructive";
+  if (
+    receiptReview.receipt.duplicate_status ===
+      REQUEST_RECEIPT_DUPLICATE_STATUS.POSSIBLE_DUPLICATE || receiptReview.duplicate_candidates.length > 0) return "destructive";
   if (receiptReview.receipt.ocr_status === REQUEST_RECEIPT_OCR_STATUS.REQUIRES_REVIEW || receiptReview.receipt.ocr_status === REQUEST_RECEIPT_OCR_STATUS.FAILED) return "secondary";
   if (receiptReview.receipt.confirmed_at || receiptReview.receipt.ocr_status === REQUEST_RECEIPT_OCR_STATUS.SUCCESS) return "default";
   return "outline";
@@ -248,6 +713,21 @@ function getReceiptStatusVariant(receiptReview?: RequestReceiptReview): "default
 
 function canConfirmReceiptReview(receiptReview: RequestReceiptReview): boolean {
   const receipt = receiptReview.receipt;
+  if (
+    receipt.duplicate_status ===
+      REQUEST_RECEIPT_DUPLICATE_STATUS.DUPLICATE_CONFIRMED ||
+    receipt.duplicate_status ===
+      REQUEST_RECEIPT_DUPLICATE_STATUS.POSSIBLE_DUPLICATE ||
+    (receiptReview.duplicate_candidates.length > 0 &&
+      receipt.duplicate_status !==
+        REQUEST_RECEIPT_DUPLICATE_STATUS.NOT_DUPLICATE_REVIEWED) ||
+    (receipt.duplicate_status ===
+      REQUEST_RECEIPT_DUPLICATE_STATUS.NOT_DUPLICATE_REVIEWED &&
+      (receiptReview.duplicate_resolution?.action !==
+        REQUEST_RECEIPT_DUPLICATE_REVIEW_ACTION.NOT_DUPLICATE ||
+        receiptReview.duplicate_resolution.fresh !== true))
+  )
+    return false;
   return Boolean(
     !receipt.confirmed_at &&
     receipt.issuer_document_number &&
@@ -296,6 +776,23 @@ function getReceiptValueSummary(receiptReview: RequestReceiptReview): string {
   return `${provider} · ${serieNumber} · ${amount}`;
 }
 
+function getReceiptConfirmationLabel(
+  requestType: PaymentRequest["request_type"],
+  document: RequestDocument | undefined,
+): string {
+  if (requestType === REQUEST_TYPE.ADVANCE_SETTLEMENT)
+    return "Confirmar para informe";
+  if (requestType !== REQUEST_TYPE.SUPPLIER_PAYMENT)
+    return "Confirmar comprobante";
+  const category =
+    document?.document_category_normalized ?? document?.document_category;
+  if (category === REQUEST_DOCUMENT_CATEGORY.INVOICE)
+    return "Confirmar Factura";
+  if (category === REQUEST_DOCUMENT_CATEGORY.SALES_RECEIPT)
+    return "Confirmar Boleta";
+  return "Confirmar comprobante";
+}
+
 export function RequestDocumentsCard({
   request,
   guidanceAllocations = [],
@@ -333,6 +830,8 @@ export function RequestDocumentsCard({
   const { deleteDocument, isLoading: deleting } = useDeleteRequestDocument();
   const { updateReceiptReview, isLoading: updatingReceipt } = useUpdateRequestReceiptReview();
   const { confirmReceiptReview, isLoading: confirmingReceipt } = useConfirmRequestReceiptReview();
+  const { retryReceiptOcr, isLoading: retryingReceiptOcr } =
+    useRetryRequestReceiptOcr();
   const [category, setCategory] = useState<RequestDocumentCategory | "">(REQUEST_DOCUMENT_CATEGORY.REQUEST_SUPPORT);
   const [file, setFile] = useState<File | null>(null);
   const [validationError, setValidationError] = useState<string | null>(null);
@@ -340,6 +839,7 @@ export function RequestDocumentsCard({
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [documentToDelete, setDocumentToDelete] = useState<string | null>(null);
   const [receiptToReview, setReceiptToReview] = useState<RequestReceiptReview | null>(null);
+  const [resolvingDuplicate, setResolvingDuplicate] = useState(false);
   const [receiptToConfirm, setReceiptToConfirm] = useState<RequestReceiptReview | null>(null);
   const [receiptForm, setReceiptForm] = useState<ReceiptReviewFormState | null>(null);
   const [activeUploadAction, setActiveUploadAction] = useState<DocumentUploadAction | null>(null);
@@ -423,7 +923,7 @@ export function RequestDocumentsCard({
 
   useEffect(() => {
     if (!operationError) return;
-    operationErrorRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+    operationErrorRef.current?.scrollIntoView?.({ behavior: "smooth", block: "center" });
     operationErrorRef.current?.focus({ preventScroll: true });
   }, [operationError]);
 
@@ -575,10 +1075,13 @@ export function RequestDocumentsCard({
   function closeReceiptReview(): void {
     setReceiptToReview(null);
     setReceiptForm(null);
+  setResolvingDuplicate(false);
   }
 
   function openReceiptConfirm(receiptReview: RequestReceiptReview): void {
-    if (effectiveStructuredReportLocked) return;
+    if (effectiveStructuredReportLocked||
+      !canConfirmReceiptReview(receiptReview)
+    ) return;
     setReceiptToConfirm(receiptReview);
     setOperationError(null);
   }
@@ -599,7 +1102,9 @@ export function RequestDocumentsCard({
   }
 
   async function handleSaveReceiptReview(): Promise<void> {
-    if (!receiptToReview || !receiptForm || effectiveStructuredReportLocked) return;
+    if (!receiptToReview || !receiptForm || !canManageActions ||
+      resolvingDuplicate ||
+      effectiveStructuredReportLocked) return;
     try {
       setOperationError(null);
       const updatedReceipt = await updateReceiptReview(request.id, receiptToReview.receipt.id, getReceiptReviewPayload(receiptForm));
@@ -615,7 +1120,9 @@ export function RequestDocumentsCard({
   }
 
   async function handleConfirmReceiptReview(): Promise<void> {
-    if (!receiptToConfirm || effectiveStructuredReportLocked) return;
+    if (!receiptToConfirm || effectiveStructuredReportLocked||
+      !canConfirmReceiptReview(receiptToConfirm)
+    ) return;
     try {
       setOperationError(null);
       const confirmedReceipt = await confirmReceiptReview(request.id, receiptToConfirm.receipt.id);
@@ -630,6 +1137,39 @@ export function RequestDocumentsCard({
     }
   }
 
+  async function handleRetryReceiptOcr(
+    receiptReview: RequestReceiptReview,
+  ): Promise<void> {
+    if (effectiveStructuredReportLocked || retryingReceiptOcr) return;
+    try {
+      setOperationError(null);
+      const terminal = await retryReceiptOcr(
+        request.id,
+        receiptReview.receipt.id,
+      );
+      upsertReceipt?.(terminal);
+      if (terminal.receipt.ocr_status === REQUEST_RECEIPT_OCR_STATUS.SUCCESS) {
+        toast.success("Lectura completada. Revisa y confirma los datos.");
+      } else if (
+        terminal.receipt.ocr_status ===
+        REQUEST_RECEIPT_OCR_STATUS.REQUIRES_REVIEW
+      ) {
+        toast.success("Lectura completada con datos pendientes de revisión.");
+      } else {
+        const message =
+          terminal.retry_reason === "OCR_TIMEOUT"
+            ? "La lectura superó el tiempo límite. Revisa los datos manualmente o vuelve a intentar."
+            : "La lectura no pudo completarse. Revisa los datos manualmente o vuelve a intentar.";
+        setOperationError(message);
+        toast.error(message);
+      }
+    } catch (retryError) {
+      const message = getApiErrorMessage(retryError);
+      setOperationError(message);
+      toast.error(message);
+    }
+  }
+
   function renderDocumentRows(rows: RequestDocument[]): ReactNode {
     if (rows.length === 0) return <p className="text-sm text-muted-foreground">Sin documentos adjuntos.</p>;
 
@@ -638,13 +1178,18 @@ export function RequestDocumentsCard({
         {rows.map((document) => {
           const documentWebUrl = getRequestDocumentWebUrl(document);
           const receiptReview = receipts.find((item) => item.receipt?.document_id === document.id);
-          const shouldShowReceiptReview = RECEIPT_DOCUMENT_CATEGORIES.has(document.document_category) && (receiptsLoading || receiptReview);
+          const shouldShowReceiptReview = RECEIPT_DOCUMENT_CATEGORIES.has(document.document_category) && (request.request_type !== REQUEST_TYPE.SUPPLIER_PAYMENT ||
+              document.document_category ===
+                REQUEST_DOCUMENT_CATEGORY.INVOICE ||
+              document.document_category ===
+                REQUEST_DOCUMENT_CATEGORY.SALES_RECEIPT) &&
+            (receiptsLoading || receiptReview);
 
           return (
             <div key={document.id} className="flex flex-col gap-3 rounded-md border p-3 sm:flex-row sm:items-center sm:justify-between">
-              <div className="flex min-w-0 gap-3">
+              <div className="flex min-w-0 flex-1 gap-3 overflow-hidden">
                 <FileText className="mt-0.5 size-5 shrink-0 text-muted-foreground" />
-                <div className="min-w-0 space-y-1">
+                <div className="min-w-0 flex-1 space-y-1">
                   <p className="truncate text-sm font-medium">{getRequestDocumentDisplayName(document)}</p>
                   <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
                     <Badge variant="secondary">{getRequestDocumentCategoryLabel(document.document_category)}</Badge>
@@ -656,19 +1201,25 @@ export function RequestDocumentsCard({
                     <span>Estado: {getRequestDocumentUploadStatusLabel(document.upload_status)}</span>
                   </div>
                   {shouldShowReceiptReview && (
-                    <div className="mt-2 rounded-md bg-muted p-3 text-xs">
+                    <div className="mt-2 w-full min-w-0 rounded-md bg-muted p-2 text-xs sm:p-3"
+                      role="status"
+                      aria-live="polite"
+                      aria-atomic="true">
                       <div className="flex flex-wrap items-center gap-2">
                         <Badge variant={getReceiptStatusVariant(receiptReview)}>{getReceiptStatusLabel(receiptReview)}</Badge>
                         <span className="text-muted-foreground">Lectura automática del comprobante</span>
                       </div>
                       {receiptReview ? (
-                        <div className="mt-2 space-y-1 text-muted-foreground">
+                        <div className="mt-2 space-y-1 break-words text-muted-foreground">
                           <p>{getReceiptValueSummary(receiptReview)}</p>
                           {receiptReview.receipt.issuer_document_number && <p>RUC: {receiptReview.receipt.issuer_document_number}</p>}
                           {receiptReview.receipt.issue_date && <p>Fecha: {receiptReview.receipt.issue_date}</p>}
                           {!receiptReview.receipt.confirmed_at && (
                             <div className="space-y-2 rounded-md border border-primary/30 bg-background p-2">
-                              <p className="font-medium text-foreground">Confirma los datos para usar este comprobante en el Informe de rendición. Si algún valor no coincide, selecciona Revisar datos antes de confirmar.</p>
+                              <p className="font-medium text-foreground">{isAdvanceSettlement
+                                  ? "Confirma los datos para usar este comprobante en el Informe de rendición. "
+                                  : "Confirma los datos de este comprobante. "}
+                                Si algún valor no coincide, selecciona Revisar datos antes de confirmar.</p>
                               {canManageActions && (
                                 <Button type="button" variant="secondary" size="sm" className="w-full sm:w-auto" onClick={() => openReceiptReview(receiptReview)} autoFocus>
                                   Revisar datos del comprobante
@@ -678,6 +1229,13 @@ export function RequestDocumentsCard({
                           )}
                           {receiptReview.latest_extraction?.error_message && <p>Necesita revisión manual para completar la información.</p>}
                           {receiptReview.duplicate_candidates.length > 0 && <p>Ya existe un comprobante con la misma serie y número en otra solicitud activa.</p>}
+                        <ReceiptCandidateViewer
+                            review={receiptReview}
+                            onRefresh={() =>
+                              effectiveReceiptsResource.refetch()
+                            }
+                          />
+                          <ReceiptDuplicateSummary review={receiptReview} />
                         </div>
                       ) : (
                         <p className="mt-2 text-muted-foreground">Estamos leyendo el comprobante para ayudarte a validar sus datos.</p>
@@ -687,9 +1245,25 @@ export function RequestDocumentsCard({
                 </div>
               </div>
               <div className="flex shrink-0 flex-col gap-2 sm:items-end">
+                {receiptReview &&
+                  !readOnly &&
+                  !effectiveStructuredReportLocked &&
+                  (roleCode === ROLE_CODE.GIOF_GESTOR ||
+                    roleCode === ROLE_CODE.GIOF_MANAGER) &&
+                  receiptReview.receipt.duplicate_status !==
+                    REQUEST_RECEIPT_DUPLICATE_STATUS.UNIQUE && (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => openReceiptReview(receiptReview)}
+                    >
+                      Revisar duplicado
+                    </Button>
+                  )}
                 {documentWebUrl ? (
                   <Button asChild variant="outline" size="sm">
-                    <a href={documentWebUrl} target="_blank" rel="noopener noreferrer">
+                    <a href={documentWebUrl} target="_blank" rel="noopener noreferrer"aria-label={`Ver documento ${getRequestDocumentDisplayName(document)}`}
+                    >
                       <ExternalLink className="size-4" />
                       Ver documento
                     </a>
@@ -705,6 +1279,27 @@ export function RequestDocumentsCard({
                 {receiptReview && canManageActions && canConfirmReceiptReview(receiptReview) && (
                   <Button type="button" size="sm" onClick={() => openReceiptConfirm(receiptReview)} disabled={confirmingReceipt}>
                     {confirmingReceipt ? "Confirmando..." : "Confirmar datos"}
+                    </Button>
+                  )}
+                {receiptReview &&
+                  canManageActions &&
+                  (roleCode === ROLE_CODE.GIOF_GESTOR ||
+                    roleCode === ROLE_CODE.ADMIN_SISTEMA) &&
+                  (receiptReview.receipt.ocr_status ===
+                    REQUEST_RECEIPT_OCR_STATUS.FAILED ||
+                    receiptReview.receipt.ocr_status ===
+                      REQUEST_RECEIPT_OCR_STATUS.REQUIRES_REVIEW) && (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="min-h-11 min-w-11 max-w-full w-full sm:w-auto"
+                      onClick={() => void handleRetryReceiptOcr(receiptReview)}
+                      disabled={retryingReceiptOcr}
+                    >
+                      {retryingReceiptOcr
+                        ? "Reintentando lectura..."
+                        : "Reintentar lectura"}
                   </Button>
                 )}
                 {(canManageActions || (canManageReturnProofWhileLocked && document.document_category === REQUEST_DOCUMENT_CATEGORY.RETURN_PROOF)) && (
@@ -1127,7 +1722,7 @@ export function RequestDocumentsCard({
           <Alert variant="destructive">
             <AlertDescription className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
               <span>No se pudo cargar la lectura automática de comprobantes. Puedes reintentar sin afectar los documentos adjuntos.</span>
-              {!effectiveStructuredReportLocked ? <Button type="button" variant="outline" size="sm" onClick={() => void refetchReceipts()}>Reintentar lectura</Button> : null}
+              {!effectiveStructuredReportLocked ? <Button type="button" variant="outline" size="sm" onClick={() => void refetchReceipts()}>Volver a cargar estado</Button> : null}
             </AlertDescription>
           </Alert>
         )}
@@ -1201,6 +1796,38 @@ export function RequestDocumentsCard({
                 </div>
               </div>
             )}
+            {receiptToReview &&
+              (roleCode === ROLE_CODE.GIOF_GESTOR ||
+                roleCode === ROLE_CODE.GIOF_MANAGER) && (
+                <ReceiptDuplicateDecision
+                  key={[
+                    getQueryCacheAuthNamespace(),
+                    user?.id,
+                    roleCode,
+                    receiptToReview.receipt.request_id,
+                    receiptToReview.receipt.id,
+                  ].join(":")}
+                  review={receiptToReview}
+                  disabled={
+                    effectiveStructuredReportLocked ||
+                    readOnly ||
+                    updatingReceipt ||
+                    JSON.stringify(receiptForm) !==
+                      JSON.stringify(getReceiptReviewFormState(receiptToReview))
+                  }
+                  onBusyChange={setResolvingDuplicate}
+                  onUpdated={(fresh) => {
+                    if (
+                      JSON.stringify(receiptForm) ===
+                      JSON.stringify(getReceiptReviewFormState(receiptToReview))
+                    ) {
+                      setReceiptForm(getReceiptReviewFormState(fresh));
+                    }
+                    setReceiptToReview(fresh);
+                    upsertReceipt?.(fresh);
+                  }}
+                />
+              )}
             {operationError && receiptToReview ? (
               <div ref={operationErrorRef} tabIndex={-1} className="rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2">
                 <Alert variant="destructive">
@@ -1210,7 +1837,9 @@ export function RequestDocumentsCard({
             ) : null}
             <DialogFooter>
               <Button type="button" variant="outline" onClick={closeReceiptReview} disabled={updatingReceipt}>Cancelar</Button>
-              <Button type="button" onClick={() => void handleSaveReceiptReview()} disabled={updatingReceipt || !receiptForm || !["PEN", "USD"].includes(receiptForm.currency)}>
+              <Button type="button" onClick={() => void handleSaveReceiptReview()} disabled={updatingReceipt || resolvingDuplicate ||
+                  !canManageActions ||
+                  !receiptForm || !["PEN", "USD"].includes(receiptForm.currency)}>
                 {updatingReceipt ? "Guardando..." : "Guardar corrección"}
               </Button>
             </DialogFooter>
@@ -1221,7 +1850,10 @@ export function RequestDocumentsCard({
             <DialogHeader>
               <DialogTitle>Confirmar datos del comprobante</DialogTitle>
               <DialogDescription>
-                Esta confirmación es necesaria para que el comprobante pueda agregarse al Informe de rendición. Revisa el resumen y, si algo no coincide con el documento, usa Revisar datos antes de continuar.
+                {isAdvanceSettlement
+                  ? "Esta confirmación es necesaria para que el comprobante pueda agregarse al Informe de rendición. "
+                  : "Confirma que los datos coincidan con el documento adjunto. "}
+                Revisa el resumen y, si algo no coincide con el documento, usa Revisar datos antes de continuar.
               </DialogDescription>
             </DialogHeader>
             {receiptToConfirm && (
@@ -1237,7 +1869,9 @@ export function RequestDocumentsCard({
                   <div><dt className="text-xs text-muted-foreground">Fecha</dt><dd className="font-medium">{receiptToConfirm.receipt.issue_date || "Fecha no detectada"}</dd></div>
                   <div><dt className="text-xs text-muted-foreground">Monto</dt><dd className="font-medium">{receiptToConfirm.receipt.amount === null ? "Monto no detectado" : formatRequestCurrency(receiptToConfirm.receipt.amount, receiptToConfirm.receipt.currency ?? null)}</dd></div>
                 </dl>
-                <p className="text-xs text-muted-foreground">Después de confirmar, podrás seleccionar la línea POA y agregar este comprobante al Informe de rendición.</p>
+                {isAdvanceSettlement && (
+                  <p className="text-xs text-muted-foreground">Después de confirmar, podrás seleccionar la línea POA y agregar este comprobante al Informe de rendición.</p>
+              )}
               </div>
             )}
             {operationError && receiptToConfirm ? (
@@ -1251,7 +1885,13 @@ export function RequestDocumentsCard({
               <Button type="button" variant="outline" onClick={closeReceiptConfirm} disabled={confirmingReceipt}>Cancelar</Button>
               <Button type="button" variant="outline" onClick={moveReceiptConfirmToReview} disabled={confirmingReceipt}>Revisar datos</Button>
               <Button type="button" onClick={() => void handleConfirmReceiptReview()} disabled={confirmingReceipt || !receiptToConfirm}>
-                {confirmingReceipt ? "Confirmando..." : "Confirmar para informe"}
+                {confirmingReceipt ? "Confirmando..." : getReceiptConfirmationLabel(
+                      request.request_type,
+                      documents.find(
+                        (document) =>
+                          document.id === receiptToConfirm?.receipt.document_id,
+                      ),
+                    )}
               </Button>
             </DialogFooter>
           </DialogContent>

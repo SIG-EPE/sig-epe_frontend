@@ -202,6 +202,7 @@ export const REQUEST_RECEIPT_DUPLICATE_STATUS = {
   UNIQUE: "UNIQUE",
   POSSIBLE_DUPLICATE: "POSSIBLE_DUPLICATE",
   DUPLICATE_CONFIRMED: "DUPLICATE_CONFIRMED",
+  NOT_DUPLICATE_REVIEWED: "NOT_DUPLICATE_REVIEWED",
   IGNORED: "IGNORED",
 } as const;
 
@@ -1079,10 +1080,41 @@ export interface RequestReceiptDuplicateCandidate {
   amount: number | null;
 }
 
+export const REQUEST_RECEIPT_DUPLICATE_REVIEW_ACTION = {
+  NOT_DUPLICATE: "NOT_DUPLICATE",
+  DUPLICATE_CONFIRMED: "DUPLICATE_CONFIRMED",
+} as const;
+
+export type RequestReceiptDuplicateReviewAction =
+  (typeof REQUEST_RECEIPT_DUPLICATE_REVIEW_ACTION)[keyof typeof REQUEST_RECEIPT_DUPLICATE_REVIEW_ACTION];
+
+export interface ResolveRequestReceiptDuplicateInput {
+  action: RequestReceiptDuplicateReviewAction;
+  reason: string;
+  snapshot: string;
+}
+
+export interface RequestReceiptDuplicateResolution {
+  action: RequestReceiptDuplicateReviewAction;
+  reason: string;
+  actor_id: string;
+  actor_role: string;
+  decided_at: string;
+  fresh: boolean;
+}
+
 export interface RequestReceiptReview {
   receipt: RequestReceipt;
   latest_extraction: RequestReceiptExtractionSummary | null;
   duplicate_candidates: RequestReceiptDuplicateCandidate[];
+  candidate_open_snapshot?: string;
+  duplicate_review_snapshot?: string;
+  can_resolve_duplicate?: boolean;
+  duplicate_resolution?: RequestReceiptDuplicateResolution;
+  retry_execution?: "SYNCHRONOUS";
+  retry_outcome?: "SUCCESS" | "REQUIRES_REVIEW" | "FAILED";
+  retry_reason?:
+    "OCR_COMPLETED" | "OCR_REQUIRES_REVIEW" | "OCR_TIMEOUT" | "OCR_FAILED";
 }
 
 export interface RequestRenditionAllocationCoverage {
