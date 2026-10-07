@@ -2288,6 +2288,7 @@ export function RequestForm({
           documentsError={reviewDocuments.error}
           documentsResource={reviewDocuments}
           receiptsResource={reviewReceipts}
+          reportResource={renditionReport}
           supplierEvidenceResource={supplierEvidence}
           onDocumentsChanged={refreshDocumentsAndStructuredReport}
           uploadQueue={documentUploadQueue}
@@ -2679,6 +2680,7 @@ export function RequestForm({
               documentsError={reviewDocuments.error}
               documentsResource={reviewDocuments}
               receiptsResource={reviewReceipts}
+              reportResource={renditionReport}
               supplierEvidenceResource={supplierEvidence}
               onDocumentsChanged={refreshDocumentsAndStructuredReport}
               uploadQueue={documentUploadQueue}

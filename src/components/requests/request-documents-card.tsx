@@ -2,6 +2,7 @@
 
 import {
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   type ChangeEvent,
@@ -55,6 +56,7 @@ import {
   useDeleteRequestDocument,
   useRequestDocuments,
   useRequestReceiptReviews,
+  type useRequestRenditionReport,
   useRetryRequestReceiptOcr,
   useResolveRequestReceiptDuplicate,
   useSupplierDocumentEvidence,
@@ -99,12 +101,14 @@ import { useAuthStore } from "@/stores/auth-store";
 import {
   REQUEST_CURRENCY,
   REQUEST_DOCUMENT_CATEGORY,
+  REQUEST_DOCUMENT_PURPOSE,
   REQUEST_DOCUMENT_SCOPE_TYPE,
   REQUEST_DOCUMENT_UPLOAD_STATUS,
   REQUEST_RECEIPT_DUPLICATE_STATUS,
   REQUEST_RECEIPT_DUPLICATE_REVIEW_ACTION,
   type RequestReceiptDuplicateReviewAction,
   REQUEST_RECEIPT_OCR_STATUS,
+  REQUEST_RENDITION_REPORT_STATUS,
   REQUEST_STATUS,
   REQUEST_TYPE,
   SUPPLIER_DOCUMENT_ACTIVITY_STATE,
@@ -134,6 +138,7 @@ interface RequestDocumentsCardProps {
   documentsError?: Error | null;
   documentsResource?: ReturnType<typeof useRequestDocuments>;
   receiptsResource?: ReturnType<typeof useRequestReceiptReviews>;
+  reportResource?: ReturnType<typeof useRequestRenditionReport>;
   supplierEvidenceResource?: ReturnType<typeof useSupplierDocumentEvidence>;
   onDocumentsChanged?: () => Promise<void> | void;
   hideOptionalUploader?: boolean;
@@ -570,7 +575,6 @@ type DocumentUploadAction = string;
 
 const UPLOAD_CONTEXT_CHANGE_KIND = {
   CATEGORY: "category",
-  ALLOCATION: "allocation",
 } as const;
 
 type UploadContextChangeKind =
@@ -848,18 +852,6 @@ function getPlanningLineDisplay(allocation: RequestAllocation): string {
   );
 }
 
-function getPlanningLineCode(allocation: RequestAllocation): string {
-  const line = allocation.planning_line ?? allocation.budgetPlanningLine;
-  return line?.line_code?.trim() || "Sin código";
-}
-
-function getCompactPlanningLineLabel(
-  allocation: RequestAllocation,
-  index: number,
-): string {
-  return `Línea ${index + 1} · ${getPlanningLineCode(allocation)}`;
-}
-
 function getAllocationSummary(allocation: RequestAllocation): string {
   const line = allocation.planning_line ?? allocation.budgetPlanningLine;
   const orgUnit = allocation.org_unit ?? line?.org_unit ?? null;
@@ -1051,6 +1043,7 @@ export function RequestDocumentsCard({
   documentsError,
   documentsResource,
   receiptsResource,
+  reportResource,
   supplierEvidenceResource,
   onDocumentsChanged,
   hideOptionalUploader = false,
@@ -1141,6 +1134,20 @@ export function RequestDocumentsCard({
   const [receiptToReview, setReceiptToReview] =
     useState<RequestReceiptReview | null>(null);
   const [resolvingDuplicate, setResolvingDuplicate] = useState(false);
+  const [poaDrafts, setPoaDrafts] = useState<Record<string, string>>({});
+  const [poaErrors, setPoaErrors] = useState<Record<string, string>>({});
+  const [selectedReceiptIds, setSelectedReceiptIds] = useState<Set<string>>(
+    new Set(),
+  );
+  const [batchPoaId, setBatchPoaId] = useState("");
+  const [pendingTagTargets, setPendingTagTargets] = useState<
+    Record<string, string>
+  >({});
+  const [poaSuccesses, setPoaSuccesses] = useState<Record<string, boolean>>({});
+  const [taggingReceiptId, setTaggingReceiptId] = useState<string | null>(null);
+  const [reconcilingTags, setReconcilingTags] = useState(Boolean(reportResource));
+  const tagOperationRef = useRef<AbortController | null>(null);
+  const tagMountedRef = useRef(true);
   const [receiptToConfirm, setReceiptToConfirm] =
     useState<RequestReceiptReview | null>(null);
   const [receiptForm, setReceiptForm] = useState<ReceiptReviewFormState | null>(
@@ -1148,7 +1155,6 @@ export function RequestDocumentsCard({
   );
   const [activeUploadAction, setActiveUploadAction] =
     useState<DocumentUploadAction | null>(null);
-  const [uploadAllocationId, setUploadAllocationId] = useState("");
   const [pendingUploadContextChange, setPendingUploadContextChange] =
     useState<PendingUploadContextChange | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -1200,14 +1206,50 @@ export function RequestDocumentsCard({
     guidanceAllocations.length > 0;
   const hasAllocationDocumentGroups =
     hasAllocationGroups && !isAdvanceSettlement;
-  const requiresReceiptAllocation =
-    isAdvanceSettlement &&
-    hasAllocationGroups &&
-    category === REQUEST_DOCUMENT_CATEGORY.RECEIPT;
+  const settlementReceiptDocumentsById = new Map<string, RequestDocument>();
+  const legacyReceiptAllocationById = new Map<string, string>();
+  for (const allocation of allocationGroups) {
+    for (const document of allocation.documents ?? []) {
+      if (allocation.id)
+        legacyReceiptAllocationById.set(document.id, allocation.id);
+      settlementReceiptDocumentsById.set(document.id, document);
+    }
+  }
+  // El recurso actual prevalece sobre las copias históricas incluidas en la POA.
+  for (const document of documents)
+    settlementReceiptDocumentsById.set(document.id, document);
+  const settlementReceiptDocuments = isAdvanceSettlement
+    ? Array.from(settlementReceiptDocumentsById.values()).filter(
+        (document) =>
+          document.document_category === REQUEST_DOCUMENT_CATEGORY.RECEIPT &&
+          document.document_purpose !== REQUEST_DOCUMENT_PURPOSE.EXTRA,
+      )
+    : [];
+  const settlementReceiptDocumentIds = new Set(
+    settlementReceiptDocuments.map((document) => document.id),
+  );
+  const receiptByDocumentId = new Map(
+    receipts
+      .filter((review) => review.receipt?.document_id)
+      .map((review) => [review.receipt.document_id, review.receipt]),
+  );
+  function getSettlementReceiptAllocationId(
+    document: RequestDocument,
+  ): string | null {
+    const receipt = receiptByDocumentId.get(document.id);
+    // null también es autoritativo: no debe reaparecer una asignación antigua.
+    if (receipt) return receipt.request_allocation_id ?? null;
+    return (
+      document.request_allocation_id ??
+      legacyReceiptAllocationById.get(document.id) ??
+      null
+    );
+  }
   const requestLevelDocuments = getRequestLevelDocuments(documents);
   const requestLevelGeneralDocuments = requestLevelDocuments.filter(
     (document) =>
-      document.document_category !== REQUEST_DOCUMENT_CATEGORY.RETURN_PROOF,
+      document.document_category !== REQUEST_DOCUMENT_CATEGORY.RETURN_PROOF &&
+      !settlementReceiptDocumentIds.has(document.id),
   );
   const legacyUnscopedReturnProofs = requestLevelDocuments.filter(
     (document) =>
@@ -1298,20 +1340,13 @@ export function RequestDocumentsCard({
     : "selecciona una categoría";
   const uploadActionsDisabled =
     uploading || activeUploadAction !== null || uploadQueue.isRunning;
-  const uploadRequiresAllocationSelection =
-    requiresReceiptAllocation && !uploadAllocationId;
   const queuedPendingItems = uploadQueue.items.filter(
     (item) => item.state === REQUEST_DOCUMENT_UPLOAD_FILE_STATE.QUEUED,
   );
   const uploadButtonDisabled =
     uploadActionsDisabled ||
     Boolean(validationError) ||
-    queuedPendingItems.length === 0 ||
-    uploadRequiresAllocationSelection;
-  const selectedUploadAllocation =
-    allocationGroups.find(
-      (allocation) => allocation.id === uploadAllocationId,
-    ) ?? null;
+    queuedPendingItems.length === 0;
   const hasUploadInProgress =
     uploadQueue.isRunning || activeUploadAction !== null;
   const queueSuccessMessage =
@@ -1329,6 +1364,241 @@ export function RequestDocumentsCard({
       effectiveSupplierEvidence.isRefreshing ||
       effectiveSupplierEvidence.error !== null ||
       effectiveSupplierEvidence.evidence === null);
+
+  function tagIdentity(): string {
+    const auth = useAuthStore.getState();
+    return JSON.stringify([
+      request.id, auth.user?.id, auth.user?.role?.code,
+      auth.accessToken, auth.isLoading, getQueryCacheAuthNamespace(),
+    ]);
+  }
+
+  const currentTagIdentity = tagIdentity();
+  useLayoutEffect(() => {
+    tagMountedRef.current = true;
+    tagOperationRef.current?.abort();
+    tagOperationRef.current = null;
+    setTaggingReceiptId(null);
+    setPoaDrafts({});
+    setPoaErrors({});
+    setSelectedReceiptIds(new Set());
+    setBatchPoaId("");
+    setPendingTagTargets({});
+    setPoaSuccesses({});
+    // Volver a abrir no revierte un PATCH aceptado: releer antes de editar.
+    let active = true;
+    if (isAdvanceSettlement && reportResource) {
+      setReconcilingTags(true);
+      void Promise.all([
+        refetchReceipts({ background: true }),
+        effectiveDocumentsResource.refetch({ background: true }),
+        reportResource.refetchOrThrow({ background: true }),
+      ]).catch(() => {
+        if (active) setPoaErrors({ refresh: "No se pudo actualizar el informe. Actualiza antes de continuar." });
+      }).finally(() => { if (active) setReconcilingTags(false); });
+    } else {
+      setReconcilingTags(false);
+    }
+    const unsubscribe = useAuthStore.subscribe(() => {
+      if (tagIdentity() !== currentTagIdentity) tagOperationRef.current?.abort();
+    });
+    return () => {
+      active = false;
+      tagMountedRef.current = false;
+      unsubscribe();
+      tagOperationRef.current?.abort();
+      tagOperationRef.current = null;
+    };
+    // Los recursos existentes mantienen la autoridad; no crear otro fetcher.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentTagIdentity]);
+
+  useLayoutEffect(() => {
+    if (!canManageActions) tagOperationRef.current?.abort();
+  }, [canManageActions]);
+
+  function getPoaTagBlockReason(
+    document: RequestDocument,
+    review?: RequestReceiptReview,
+  ): string | null {
+    const auth = useAuthStore.getState();
+    if (!isAdvanceSettlement || !canManageActions || !auth.accessToken || auth.isLoading)
+      return "No tienes permiso para cambiar la POA.";
+    if (document.payment_request_id !== request.id || document.deleted_at ||
+      document.upload_status !== REQUEST_DOCUMENT_UPLOAD_STATUS.PERMANENT ||
+      document.document_category !== REQUEST_DOCUMENT_CATEGORY.RECEIPT ||
+      document.document_purpose === REQUEST_DOCUMENT_PURPOSE.EXTRA)
+      return "El documento no está disponible para asignar una POA.";
+    if (document.scope_type !== REQUEST_DOCUMENT_SCOPE_TYPE.REQUEST ||
+      document.request_allocation_id || legacyReceiptAllocationById.has(document.id))
+      return "Documento histórico asociado a una POA; no se puede reasignar.";
+    if (!review || receiptsLoading || receiptsRefreshing || receiptsError)
+      return "Comprobante pendiente de lectura; espera antes de asignar la POA.";
+    if (review.receipt.request_id !== request.id) return "Comprobante no disponible.";
+    const terminalStatuses: string[] = [
+      REQUEST_RECEIPT_OCR_STATUS.SUCCESS, REQUEST_RECEIPT_OCR_STATUS.FAILED,
+      REQUEST_RECEIPT_OCR_STATUS.REQUIRES_REVIEW,
+    ];
+    if (!terminalStatuses.includes(review.receipt.ocr_status) ||
+      (review.latest_extraction && !terminalStatuses.includes(review.latest_extraction.status)))
+      return "Lectura del comprobante en curso; espera antes de asignar la POA.";
+    const report = reportResource?.report;
+    if (!report || report.request_id !== request.id || reportResource?.isLoading ||
+      reportResource?.isRefreshing || reportResource?.error || isLoading ||
+      isRefreshingDocuments || error || reconcilingTags || poaErrors.refresh)
+      return "Espera a que se actualice el informe para asignar la POA.";
+    if ([REQUEST_RENDITION_REPORT_STATUS.EXPORT_PENDING,
+      REQUEST_RENDITION_REPORT_STATUS.EXPORTED, REQUEST_RENDITION_REPORT_STATUS.SUBMITTED]
+      .some((status) => status === report.status) && request.status !== REQUEST_STATUS.OBSERVED)
+      return "El informe está bloqueado; no se puede cambiar la POA.";
+    if (report.rows.some((row) => row.request_receipt_id === review.receipt.id ||
+      row.request_document_id === document.id))
+      return "Comprobante incluido en el informe; no se puede cambiar la POA.";
+    if (!request.currency || review.receipt.currency !== request.currency)
+      return "Revisa la moneda del comprobante antes de asignar la POA.";
+    return null;
+  }
+
+  const receiptMutationBusy = Boolean(taggingReceiptId) || reconcilingTags || updatingReceipt ||
+    confirmingReceipt || retryingReceiptOcr || resolvingDuplicate || deleting;
+
+  // Cada await vuelve a consultar el render comprometido, nunca el cierre inicial del lote.
+  const tagAuthorityRef = useRef({
+    receipts,
+    settlementReceiptDocumentsById,
+    allocationGroups,
+    request,
+    getPoaTagBlockReason,
+  });
+  useLayoutEffect(() => {
+    tagAuthorityRef.current = {
+      receipts,
+      settlementReceiptDocumentsById,
+      allocationGroups,
+      request,
+      getPoaTagBlockReason,
+    };
+  });
+
+  // Solo el GET posterior confirma los éxitos, incluso si el transporte falló tras aceptar PATCH.
+  useEffect(() => {
+    if (taggingReceiptId || reconcilingTags || receiptsLoading || receiptsRefreshing ||
+      receiptsError || isLoading || isRefreshingDocuments || error ||
+      !reportResource?.report || reportResource.isLoading || reportResource.isRefreshing ||
+      reportResource.error || poaErrors.refresh) return;
+    const resolved = receipts.filter((item) => item.receipt && pendingTagTargets[item.receipt.id] &&
+      item.receipt.request_allocation_id === pendingTagTargets[item.receipt.id]);
+    if (!resolved.length) return;
+    setSelectedReceiptIds((current) => {
+      const next = new Set(current);
+      for (const item of resolved) next.delete(item.receipt.id);
+      return next;
+    });
+    setPendingTagTargets((current) => {
+      const next = { ...current };
+      for (const item of resolved) delete next[item.receipt.id];
+      return next;
+    });
+    setPoaErrors((current) => {
+      const next = { ...current };
+      for (const item of resolved) {
+        if (item.receipt.document_id) delete next[item.receipt.document_id];
+      }
+      return next;
+    });
+    setPoaDrafts((current) => {
+      const next = { ...current };
+      for (const item of resolved) {
+        if (item.receipt.document_id) delete next[item.receipt.document_id];
+      }
+      return next;
+    });
+    setPoaSuccesses((current) => ({ ...current,
+      ...Object.fromEntries(resolved.filter((item) => item.receipt.document_id)
+        .map((item) => [item.receipt.document_id, true])) }));
+  }, [receipts, pendingTagTargets, taggingReceiptId, reconcilingTags, receiptsLoading,
+    receiptsRefreshing, receiptsError, isLoading, isRefreshingDocuments, error, reportResource, poaErrors.refresh]);
+
+  async function reconcilePoaTags(): Promise<void> {
+    const identity = tagIdentity();
+    const isCurrent = () => tagMountedRef.current && tagIdentity() === identity;
+    setReconcilingTags(true);
+    setPoaErrors((current) => ({ ...current, refresh: "" }));
+    try {
+      await Promise.all([refetchReceipts({ background: true }),
+        effectiveDocumentsResource.refetch({ background: true }),
+        reportResource?.refetchOrThrow({ background: true })]);
+    } catch {
+      if (isCurrent()) setPoaErrors((current) => ({ ...current, refresh: "No se pudo verificar el resultado. Actualiza antes de reintentar." }));
+    } finally {
+      if (isCurrent()) setReconcilingTags(false);
+    }
+  }
+
+  async function handleTagReceipts(targets: Record<string, string>): Promise<void> {
+    if (tagOperationRef.current || receiptMutationBusy || receiptToReview || receiptToConfirm || reconcilingTags) return;
+    if (!Object.keys(targets).length) return;
+    const controller = new AbortController();
+    const identity = tagIdentity();
+    const isCurrent = () => !controller.signal.aborted &&
+      tagOperationRef.current === controller && tagIdentity() === identity;
+    tagOperationRef.current = controller;
+    setPendingTagTargets((current) => ({ ...current, ...targets }));
+    try {
+      for (const [receiptId, allocationId] of Object.entries(targets)) {
+        if (!isCurrent()) break;
+        const current = tagAuthorityRef.current;
+        const review = current.receipts.find((item) => item.receipt?.id === receiptId);
+        const document = review?.receipt.document_id
+          ? current.settlementReceiptDocumentsById.get(review.receipt.document_id) : undefined;
+        const allocation = current.allocationGroups.find((item) => item.id === allocationId);
+        const reason = document && review ? current.getPoaTagBlockReason(document, review) : "Comprobante no disponible.";
+        if (!document || !review || reason || !allocation || allocation.currency !== current.request.currency ||
+          (allocation.payment_request_id && allocation.payment_request_id !== current.request.id)) {
+          setPoaErrors((previous) => ({ ...previous, batch: reason || "La POA no pertenece a esta rendición." }));
+          break;
+        }
+        if (review.receipt.request_allocation_id === allocationId) continue;
+        setTaggingReceiptId(receiptId);
+        setPoaErrors((previous) => ({ ...previous, batch: "", [document.id]: "" }));
+        setPoaSuccesses((previous) => ({ ...previous, [document.id]: false }));
+        try {
+          controller.signal.throwIfAborted();
+          await updateReceiptReview(request.id, receiptId,
+            { request_allocation_id: allocationId }, controller.signal);
+          // No fabricar confirmaciones ni grupos; la lectura final resuelve el resultado.
+        } catch (tagError) {
+          if (!isCurrent()) break;
+          setPoaErrors((previous) => ({ ...previous, [document.id]: getApiErrorMessage(tagError) }));
+        }
+      }
+    } finally {
+      // Cancelar no deshace PATCH: reconciliar aun con signal abortado si sigue abierto.
+      if (tagOperationRef.current === controller && tagIdentity() === identity) {
+        await reconcilePoaTags();
+        if (tagOperationRef.current === controller) {
+          tagOperationRef.current = null;
+          setTaggingReceiptId(null);
+        }
+      }
+    }
+  }
+
+  async function handleTagReceipt(documentId: string): Promise<void> {
+    const review = receipts.find((item) => item.receipt.document_id === documentId);
+    if (review && poaDrafts[documentId])
+      await handleTagReceipts({ [review.receipt.id]: poaDrafts[documentId] });
+  }
+
+  const selectedEligibleReceipts = receipts.filter((review) => {
+    if (!isAdvanceSettlement || !review.receipt || !selectedReceiptIds.has(review.receipt.id)) return false;
+    const document = review.receipt.document_id
+      ? settlementReceiptDocumentsById.get(review.receipt.document_id) : undefined;
+    return document && !getPoaTagBlockReason(document, review);
+  });
+  const failedTagTargets = Object.fromEntries(selectedEligibleReceipts
+    .filter((review) => pendingTagTargets[review.receipt.id])
+    .map((review) => [review.receipt.id, pendingTagTargets[review.receipt.id]]));
 
   useEffect(() => {
     if (uploadQueue.isRunning) {
@@ -1399,13 +1669,6 @@ export function RequestDocumentsCard({
       setValidationError("Selecciona una categoría para adjuntar documentos.");
       return;
     }
-    if (requiresReceiptAllocation && !uploadAllocationId) {
-      setFile(null);
-      setValidationError(
-        "Selecciona la línea POA a la que corresponde el comprobante.",
-      );
-      return;
-    }
     if (category === REQUEST_DOCUMENT_CATEGORY.OTHER) {
       setOtherQueueDrafts((drafts) => [
         ...drafts,
@@ -1420,8 +1683,7 @@ export function RequestDocumentsCard({
     }
     uploadQueue.enqueue(selectedFiles, {
       category,
-      requiresAllocation: requiresReceiptAllocation,
-      requestAllocationId: uploadAllocationId,
+      requiresAllocation: false,
     });
     setValidationError(null);
   }
@@ -1432,12 +1694,7 @@ export function RequestDocumentsCard({
     if (change.kind === UPLOAD_CONTEXT_CHANGE_KIND.CATEGORY) {
       const nextCategory = change.value as RequestDocumentCategory;
       setCategory(nextCategory);
-      if (nextCategory !== REQUEST_DOCUMENT_CATEGORY.RECEIPT)
-        setUploadAllocationId("");
       setValidationError(validateRequestDocumentFile(file, nextCategory));
-    } else {
-      setUploadAllocationId(change.value);
-      setValidationError(null);
     }
     setPendingUploadContextChange(null);
   }
@@ -1636,13 +1893,6 @@ export function RequestDocumentsCard({
       return;
     }
 
-    if (requiresReceiptAllocation && !uploadAllocationId) {
-      setValidationError(
-        "Selecciona la línea POA a la que corresponde el comprobante.",
-      );
-      return;
-    }
-
     setOperationError(null);
     uploadQueue.start();
     setFile(null);
@@ -1719,7 +1969,7 @@ export function RequestDocumentsCard({
   }
 
   function openReceiptReview(receiptReview: RequestReceiptReview): void {
-    if (effectiveStructuredReportLocked) return;
+    if (effectiveStructuredReportLocked || tagOperationRef.current || reconcilingTags) return;
     setReceiptToReview(receiptReview);
     setReceiptForm(getReceiptReviewFormState(receiptReview));
     setOperationError(null);
@@ -1732,7 +1982,7 @@ export function RequestDocumentsCard({
   }
 
   function openReceiptConfirm(receiptReview: RequestReceiptReview): void {
-    if (effectiveStructuredReportLocked || !canConfirmReceiptReview(receiptReview)) return;
+    if (effectiveStructuredReportLocked || tagOperationRef.current || reconcilingTags || !canConfirmReceiptReview(receiptReview)) return;
     setReceiptToConfirm(receiptReview);
     setOperationError(null);
   }
@@ -1758,7 +2008,7 @@ export function RequestDocumentsCard({
   }
 
   async function handleSaveReceiptReview(): Promise<void> {
-    if (!receiptToReview || !receiptForm || !canManageActions || resolvingDuplicate || effectiveStructuredReportLocked)
+    if (!receiptToReview || !receiptForm || !canManageActions || resolvingDuplicate || effectiveStructuredReportLocked || tagOperationRef.current)
       return;
     try {
       setOperationError(null);
@@ -1779,7 +2029,7 @@ export function RequestDocumentsCard({
   }
 
   async function handleConfirmReceiptReview(): Promise<void> {
-    if (!receiptToConfirm || effectiveStructuredReportLocked || !canConfirmReceiptReview(receiptToConfirm)) return;
+    if (!receiptToConfirm || effectiveStructuredReportLocked || tagOperationRef.current || !canConfirmReceiptReview(receiptToConfirm)) return;
     try {
       setOperationError(null);
       const confirmedReceipt = await confirmReceiptReview(
@@ -1800,7 +2050,7 @@ export function RequestDocumentsCard({
   async function handleRetryReceiptOcr(
     receiptReview: RequestReceiptReview,
   ): Promise<void> {
-    if (effectiveStructuredReportLocked || retryingReceiptOcr) return;
+    if (effectiveStructuredReportLocked || retryingReceiptOcr || tagOperationRef.current) return;
     try {
       setOperationError(null);
       const terminal = await retryReceiptOcr(
@@ -1860,6 +2110,12 @@ export function RequestDocumentsCard({
           const otherMetadata = document.document_category === REQUEST_DOCUMENT_CATEGORY.OTHER
             ? getOtherDocumentBusinessMetadata(document) : null;
           const documentDisplayName = getDocumentBusinessName(document);
+          const showPoaTag = isAdvanceSettlement && !options.readOnly &&
+            document.document_category === REQUEST_DOCUMENT_CATEGORY.RECEIPT &&
+            document.document_purpose !== REQUEST_DOCUMENT_PURPOSE.EXTRA;
+          const poaTagBlockReason = showPoaTag
+            ? getPoaTagBlockReason(document, receiptReview) : null;
+          const poaValue = poaDrafts[document.id] ?? receiptReview?.receipt.request_allocation_id ?? "";
           const supplierProjectedDocument = isSupplierPayment
             ? effectiveSupplierEvidence.evidence?.documents.find(
                 (projectedDocument) => projectedDocument.id === document.id,
@@ -1921,6 +2177,60 @@ export function RequestDocumentsCard({
                       {getSupplierDocumentStatusText(supplierProjectedDocument)}
                     </p>
                   ) : null}
+                  {showPoaTag && (
+                    <div className="space-y-2 rounded-md border p-2">
+                      {poaTagBlockReason ? (
+                        <p className="text-xs text-muted-foreground">{poaTagBlockReason}</p>
+                      ) : (
+                        <>
+                          <label className="flex items-center gap-2 text-xs">
+                            <input type="checkbox"
+                              aria-label={`Seleccionar ${documentDisplayName} para asignar POA`}
+                              checked={Boolean(receiptReview && selectedReceiptIds.has(receiptReview.receipt.id))}
+                              disabled={receiptMutationBusy || Boolean(receiptToReview || receiptToConfirm)}
+                              onChange={(event) => {
+                                const checked = event.target.checked;
+                                if (!receiptReview || getPoaTagBlockReason(document, receiptReview)) return;
+                                setSelectedReceiptIds((current) => {
+                                  const next = new Set(current);
+                                  if (checked) next.add(receiptReview.receipt.id);
+                                  else next.delete(receiptReview.receipt.id);
+                                  return next;
+                                });
+                              }} />
+                            Seleccionar para asignar POA
+                          </label>
+                          <p className="text-xs text-muted-foreground">
+                            Asigna la POA antes de revisar y confirmar. No incluye el comprobante en el informe.
+                          </p>
+                          <Select value={poaValue} disabled={receiptMutationBusy || Boolean(receiptToReview || receiptToConfirm)}
+                            onValueChange={(value) => setPoaDrafts((current) => ({ ...current, [document.id]: value }))}>
+                            <SelectTrigger aria-label={`POA de ${documentDisplayName}`}>
+                              <SelectValue placeholder="Sin POA asignado" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {allocationGroups.map((allocation, index) => allocation.id &&
+                                (!allocation.payment_request_id || allocation.payment_request_id === request.id) ? (
+                                <SelectItem key={allocation.id} value={allocation.id} disabled={allocation.currency !== request.currency}>
+                                  Línea {index + 1}: {getPlanningLineDisplay(allocation)} · {getAllocationSummary(allocation)} · Mes: {allocation.budget_month ?? "—"}
+                                </SelectItem>
+                              ) : null)}
+                            </SelectContent>
+                          </Select>
+                          <Button type="button" size="sm" variant="outline"
+                            aria-label={`Guardar POA de ${documentDisplayName}`}
+                            disabled={receiptMutationBusy || Boolean(receiptToReview || receiptToConfirm) || !poaValue || poaValue === receiptReview?.receipt.request_allocation_id}
+                            onClick={() => void handleTagReceipt(document.id)}>
+                            {taggingReceiptId === receiptReview?.receipt.id ? "Guardando POA..." : "Guardar POA"}
+                          </Button>
+                        </>
+                      )}
+                      {poaErrors[document.id] && <p role="alert" className="text-xs text-destructive">{poaErrors[document.id]}</p>}
+                      {poaSuccesses[document.id] && <p role="status" className="text-xs">POA asignada. Revisa y confirma nuevamente los datos antes de incluirlos en el informe.</p>}
+                      {receiptReview && pendingTagTargets[receiptReview.receipt.id] && !poaErrors[document.id] &&
+                        <p role="status" className="text-xs">Asignación pendiente de verificar o reintentar.</p>}
+                    </div>
+                  )}
                   {shouldShowReceiptReview && (
                     <div
                       className="mt-2 w-full min-w-0 rounded-md bg-muted p-2 text-xs sm:p-3"
@@ -2586,7 +2896,7 @@ export function RequestDocumentsCard({
   }
 
   function renderSettlementReceiptGroups(): ReactNode {
-    if (!isAdvanceSettlement || !hasDisplayAllocationGroups) return null;
+    if (!isAdvanceSettlement) return null;
 
     return (
       <section className="space-y-3" data-testid="settlement-receipt-groups">
@@ -2598,15 +2908,56 @@ export function RequestDocumentsCard({
               : "Cada comprobante de la rendición debe pertenecer a una sola línea POA. Una línea puede tener uno o más comprobantes."}
           </p>
         </div>
+        {canManageActions && allocationGroups.length > 0 && (
+          <div className="space-y-2 rounded-md border p-3">
+            <p className="text-sm">{selectedReceiptIds.size} comprobantes seleccionados</p>
+            <Select value={batchPoaId} onValueChange={setBatchPoaId}
+              disabled={receiptMutationBusy || reconcilingTags || Boolean(receiptToReview || receiptToConfirm) || selectedEligibleReceipts.length === 0}>
+              <SelectTrigger aria-label="POA para seleccionados"><SelectValue placeholder="Selecciona una línea POA" /></SelectTrigger>
+              <SelectContent>
+                {allocationGroups.map((allocation, index) => allocation.id &&
+                  (!allocation.payment_request_id || allocation.payment_request_id === request.id) ? (
+                  <SelectItem key={allocation.id} value={allocation.id} disabled={allocation.currency !== request.currency}>
+                    Línea {index + 1}: {getPlanningLineDisplay(allocation)} · {getAllocationSummary(allocation)} · Mes: {allocation.budget_month ?? "—"}
+                  </SelectItem>
+                ) : null)}
+              </SelectContent>
+            </Select>
+            <Button type="button" size="sm" variant="outline"
+              disabled={receiptMutationBusy || reconcilingTags || Boolean(receiptToReview || receiptToConfirm) || !batchPoaId || selectedEligibleReceipts.length === 0}
+              onClick={() => void handleTagReceipts(Object.fromEntries(selectedEligibleReceipts.map((review) => [review.receipt.id, batchPoaId])))}>
+              Asignar POA a seleccionados
+            </Button>
+            {Object.keys(pendingTagTargets).length > 0 && (
+              <Button type="button" size="sm" variant="outline"
+                disabled={receiptMutationBusy || reconcilingTags || Boolean(receiptToReview || receiptToConfirm) || Object.keys(failedTagTargets).length === 0}
+                onClick={() => void handleTagReceipts(failedTagTargets)}>
+                Reintentar POA fallidos
+              </Button>
+            )}
+            {(poaErrors.refresh || receiptsError || error || reportResource?.error) && (
+              <Button type="button" size="sm" variant="outline" disabled={receiptMutationBusy || reconcilingTags}
+                onClick={() => void reconcilePoaTags()}>Actualizar asignaciones POA</Button>
+            )}
+            {poaErrors.refresh && <p role="alert" className="text-xs text-destructive">{poaErrors.refresh}</p>}
+            {poaErrors.batch && <p role="alert" className="text-xs text-destructive">{poaErrors.batch}</p>}
+          </div>
+        )}
         {displayAllocationGroups.map((allocation, index) => {
-          const allocationDocuments =
+          const receiptDocuments =
             !isUsingGuidanceAllocations && allocation.id
-              ? getAllocationDocuments(allocation, documents)
+              ? [
+                  ...settlementReceiptDocuments.filter(
+                    (document) =>
+                      getSettlementReceiptAllocationId(document) === allocation.id,
+                  ),
+                  ...getAllocationDocuments(allocation, documents).filter(
+                    (document) =>
+                      document.document_category === REQUEST_DOCUMENT_CATEGORY.RECEIPT &&
+                      document.document_purpose === REQUEST_DOCUMENT_PURPOSE.EXTRA,
+                  ),
+                ]
               : [];
-          const receiptDocuments = allocationDocuments.filter(
-            (document) =>
-              document.document_category === REQUEST_DOCUMENT_CATEGORY.RECEIPT,
-          );
           const hasReceipts = receiptDocuments.length > 0;
 
           return (
@@ -2637,8 +2988,9 @@ export function RequestDocumentsCard({
               </div>
               {isUsingGuidanceAllocations ? (
                 <p className="text-sm text-muted-foreground">
-                  Cuando termine la actualización, adjunta el comprobante
-                  seleccionando esta línea POA en el cargador.
+                  Puedes adjuntar los comprobantes sin seleccionar una línea POA.
+                  La asignación debe usar las líneas de la rendición, no las del
+                  anticipo.
                 </p>
               ) : (
                 renderDocumentRows(receiptDocuments)
@@ -2646,6 +2998,44 @@ export function RequestDocumentsCard({
             </div>
           );
         })}
+        {settlementReceiptDocuments.some(
+          (document) => !getSettlementReceiptAllocationId(document),
+        ) && (
+          <div
+            className="space-y-3 rounded-md border p-4"
+            data-testid="settlement-unassigned-receipts"
+          >
+            <h4 className="text-sm font-semibold">Sin POA asignado</h4>
+            <p className="text-xs text-muted-foreground">
+              Pendientes de asignación a una línea POA de la rendición.
+            </p>
+            {renderDocumentRows(
+              settlementReceiptDocuments.filter(
+                (document) => !getSettlementReceiptAllocationId(document),
+              ),
+            )}
+          </div>
+        )}
+        {settlementReceiptDocuments.some((document) => {
+          const id = getSettlementReceiptAllocationId(document);
+          return id && !allocationGroups.some((allocation) => allocation.id === id);
+        }) && (
+          <div
+            className="space-y-3 rounded-md border p-4"
+            data-testid="settlement-unresolved-receipts"
+          >
+            <h4 className="text-sm font-semibold">POA asignado no disponible</h4>
+            <p className="text-xs text-muted-foreground">
+              Actualiza las líneas de la rendición para consultar esta asignación.
+            </p>
+            {renderDocumentRows(
+              settlementReceiptDocuments.filter((document) => {
+                const id = getSettlementReceiptAllocationId(document);
+                return id && !allocationGroups.some((allocation) => allocation.id === id);
+              }),
+            )}
+          </div>
+        )}
       </section>
     );
   }
@@ -2780,7 +3170,7 @@ export function RequestDocumentsCard({
             <AlertDescription>
               {isUsingGuidanceAllocations
                 ? "En esta rendición no debes volver a adjuntar los Excel PxQ del anticipo. Estamos actualizando las líneas de la rendición antes de asociar comprobantes."
-                : "En esta rendición no debes volver a adjuntar los Excel PxQ del anticipo. Cada línea POA debe tener al menos un comprobante agregado al Informe de rendición; adjunta cada comprobante seleccionando su línea POA."}
+                : "En esta rendición no debes volver a adjuntar los Excel PxQ del anticipo. Cada línea POA debe tener al menos un comprobante agregado al Informe de rendición; puedes adjuntar los comprobantes antes de asignar su línea POA."}
             </AlertDescription>
           </Alert>
         )}
@@ -3082,58 +3472,6 @@ export function RequestDocumentsCard({
                        <Button type="button" variant="outline" className="min-h-11" onClick={addOtherDraftsToQueue}>Agregar a la cola</Button>
                     </div>
                   ) : null}
-                  {requiresReceiptAllocation && (
-                    <div className="min-w-0 space-y-2">
-                      <label
-                        className="text-sm font-medium"
-                        htmlFor="receipt-allocation"
-                      >
-                        Línea POA
-                      </label>
-                      <Select
-                        value={uploadAllocationId}
-                        onValueChange={(value) =>
-                          requestUploadContextChange({
-                            kind: UPLOAD_CONTEXT_CHANGE_KIND.ALLOCATION,
-                            value,
-                          })
-                        }
-                      >
-                        <SelectTrigger
-                          id="receipt-allocation"
-                          className="max-w-full"
-                          disabled={uploadActionsDisabled}
-                        >
-                          <SelectValue placeholder="Selecciona línea POA" />
-                        </SelectTrigger>
-                        <SelectContent className="max-w-[min(92vw,28rem)]">
-                          {allocationGroups.map((allocation, index) =>
-                            allocation.id ? (
-                              <SelectItem
-                                key={allocation.id}
-                                value={allocation.id}
-                                title={`Línea ${index + 1}: ${getPlanningLineDisplay(allocation)}`}
-                              >
-                                {getCompactPlanningLineLabel(allocation, index)}
-                              </SelectItem>
-                            ) : null,
-                          )}
-                        </SelectContent>
-                      </Select>
-                      <p
-                        className="truncate text-xs text-muted-foreground"
-                        title={
-                          selectedUploadAllocation
-                            ? getPlanningLineDisplay(selectedUploadAllocation)
-                            : undefined
-                        }
-                      >
-                        {selectedUploadAllocation
-                          ? getPlanningLineDisplay(selectedUploadAllocation)
-                          : "Selecciona la línea POA antes de adjuntar el comprobante."}
-                      </p>
-                    </div>
-                  )}
                   <Button
                     type="button"
                     className="md:self-end"
@@ -3212,11 +3550,6 @@ export function RequestDocumentsCard({
               {validationError && (
                 <p className="mt-2 text-sm text-destructive">
                   {validationError}
-                </p>
-              )}
-              {uploadRequiresAllocationSelection && !validationError && (
-                <p className="mt-2 text-sm text-muted-foreground">
-                  Selecciona la línea POA antes de adjuntar el comprobante.
                 </p>
               )}
             </div>

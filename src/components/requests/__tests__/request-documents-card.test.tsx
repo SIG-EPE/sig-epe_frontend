@@ -10,6 +10,7 @@ import {
 import userEvent from "@testing-library/user-event";
 
 import { RequestDocumentsCard } from "@/components/requests/request-documents-card";
+import type { useRequestRenditionReport } from "@/hooks/use-requests";
 import { api, ApiRequestError } from "@/lib/api-client";
 import { ROLE_CODE } from "@/lib/constants";
 import { clearQueryCache, setQueryCacheAuthNamespace } from "@/lib/query-cache";
@@ -17,6 +18,7 @@ import { useAuthStore } from "@/stores/auth-store";
 import {
   REQUEST_CURRENCY,
   REQUEST_DOCUMENT_CATEGORY,
+  REQUEST_DOCUMENT_PURPOSE,
   REQUEST_DOCUMENT_SCOPE_TYPE,
   REQUEST_RECEIPT_TYPE,
   REQUEST_RECEIPT_DUPLICATE_STATUS,
@@ -32,6 +34,7 @@ import {
   type RequestAllocation,
   type RequestDocument,
   type RequestReceiptReview,
+  type RequestRenditionReport,
 } from "@/types/requests";
 
 vi.mock("@/lib/api-client", () => ({
@@ -212,6 +215,24 @@ function createDeferred<T>() {
   });
 
   return { promise, resolve, reject };
+}
+
+function makeTagReportResource(
+  overrides: Partial<ReturnType<typeof useRequestRenditionReport>> = {},
+): ReturnType<typeof useRequestRenditionReport> {
+  const report: RequestRenditionReport = {
+    id: "report-1", request_id: "req-1", status: "DRAFT", currency: "PEN",
+    total_amount: 0, settlement_report_document_id: null,
+    drive_sync_status: "PENDING", drive_sync_error: null,
+    submitted_at: null, exported_at: null, rows: [], allocation_coverage: [],
+    totals: { total_amount: 0, by_allocation: [], missing_allocations: [] },
+  };
+  return {
+    report, data: report, isInitialLoading: false, isLoading: false,
+    isRefreshing: false, error: null, refetch: vi.fn().mockResolvedValue(undefined),
+    refetchOrThrow: vi.fn().mockResolvedValue(undefined), replaceReport: vi.fn(),
+    upsertReportRow: vi.fn(), removeReportRow: vi.fn(), ...overrides,
+  };
 }
 
 function makeUploadError(
@@ -832,6 +853,89 @@ describe("RequestDocumentsCard", () => {
       isLoading: false,
     });
   });
+
+  it("individual POA tagging uses all settlement UUID options and reconciles the real PATCH without uploading", async () => {
+    const user = userEvent.setup();
+    const document = makeDocument({ document_category: "RECEIPT", scope_type: "REQUEST" });
+    let review = makeReceiptReview();
+    const allocations = Array.from({ length: 9 }, (_, index) => makeAllocation({
+      id: `00000000-0000-4000-8000-00000000000${index}`, budget_month: index + 1,
+    }));
+    vi.mocked(api.get).mockImplementation(async (path) =>
+      path === "/requests/req-1/receipts" ? [review] : [document],
+    );
+    vi.mocked(api.patch).mockImplementation(async () => {
+      review = { ...review, receipt: { ...review.receipt, request_allocation_id: allocations[8].id! } };
+      return review;
+    });
+    render(<RequestDocumentsCard request={makeRequest({ request_type: REQUEST_TYPE.ADVANCE_SETTLEMENT, allocations })}
+      guidanceAllocations={[makeAllocation({ id: "advance-guidance-id" })]} reportResource={makeTagReportResource()} />);
+    const selector = await screen.findByRole("combobox", { name: "POA de Sustento.pdf" });
+    await waitFor(() => expect(selector).toBeEnabled());
+    await user.click(selector);
+    expect(screen.getAllByRole("option")).toHaveLength(9);
+    expect(screen.getByRole("option", { name: /Línea 9: POA-1.*Mes: 9/ })).toBeInTheDocument();
+    expect(screen.queryByText(/advance-guidance-id/)).not.toBeInTheDocument();
+    await user.click(screen.getByRole("option", { name: /Línea 9:/ }));
+    await user.click(screen.getByRole("button", { name: "Guardar POA de Sustento.pdf" }));
+    await waitFor(() => expect(api.patch).toHaveBeenCalledWith(
+      "/requests/req-1/receipts/receipt-1", { request_allocation_id: allocations[8].id },
+      { signal: expect.any(AbortSignal) },
+    ));
+    await waitFor(() => expect(screen.getAllByTestId("settlement-receipt-group")[8]).toHaveTextContent("Sustento.pdf"));
+    expect(api.post).not.toHaveBeenCalled();
+    expect(api.postForm).not.toHaveBeenCalled();
+  });
+
+  it.each([403, 409, 500])("individual POA tagging retains the upload and old group on PATCH %s", async (status) => {
+    const user = userEvent.setup();
+    const review = makeReceiptReview();
+    review.receipt.request_allocation_id = "alloc-1";
+    const document = makeDocument({ document_category: "RECEIPT", scope_type: "REQUEST" });
+    vi.mocked(api.get).mockImplementation(async (path) => path.endsWith("/receipts") ? [review] : [document]);
+    vi.mocked(api.patch).mockRejectedValue(makeUploadError(status, "La POA no pertenece a esta rendición"));
+    render(<RequestDocumentsCard request={makeRequest({ request_type: REQUEST_TYPE.ADVANCE_SETTLEMENT, allocations: [makeAllocation(), makeAllocation({ id: "alloc-2" })] })}
+      reportResource={makeTagReportResource()} />);
+    const selector = await screen.findByRole("combobox", { name: "POA de Sustento.pdf" });
+    await waitFor(() => expect(selector).toBeEnabled());
+    await user.click(selector);
+    await user.click(screen.getByRole("option", { name: /Línea 2:/ }));
+    await user.click(screen.getByRole("button", { name: "Guardar POA de Sustento.pdf" }));
+    expect(await screen.findByText(status === 403
+      ? "No tienes permiso para realizar esta acción o tu asignación ya no está vigente."
+      : "La POA no pertenece a esta rendición")).toBeInTheDocument();
+    expect(screen.getAllByTestId("settlement-receipt-group")[0]).toHaveTextContent("Sustento.pdf");
+    expect(screen.getAllByTestId("settlement-receipt-group")[1]).not.toHaveTextContent("Sustento.pdf");
+    expect(api.postForm).not.toHaveBeenCalled();
+    expect(api.post).not.toHaveBeenCalled();
+  });
+
+  it.each(["missing", "pending", "processing-extraction", "included-receipt", "included-document", "legacy", "readonly", "unknown-report", "report-error", "paid", "exported", "currency", "unauthorized"])(
+    "individual POA tagging blocks %s without a mutation", async (guard) => {
+      const review = makeReceiptReview();
+      const document = makeDocument({ document_category: "RECEIPT", scope_type: "REQUEST" });
+      const resource = makeTagReportResource();
+      if (guard === "pending") review.receipt.ocr_status = "PENDING";
+      if (guard === "processing-extraction") review.latest_extraction!.status = "PROCESSING";
+      if (guard === "legacy") document.request_allocation_id = "alloc-1";
+      if (guard === "currency") review.receipt.currency = "USD";
+      if (guard === "unknown-report") resource.report = null;
+      if (guard === "report-error") resource.error = new Error("Informe no disponible");
+      if (guard === "exported") resource.report!.status = "EXPORTED";
+      if (guard.startsWith("included")) resource.report!.rows = [{
+        request_document_id: guard === "included-document" ? document.id : "other-document",
+        request_receipt_id: guard === "included-receipt" ? review.receipt.id : null,
+      } as RequestRenditionReport["rows"][number]];
+      if (guard === "unauthorized") useAuthStore.setState({ user: null });
+      vi.mocked(api.get).mockImplementation(async (path) => path.endsWith("/receipts") ? guard === "missing" ? [] : [review] : [document]);
+      render(<RequestDocumentsCard request={makeRequest({ request_type: REQUEST_TYPE.ADVANCE_SETTLEMENT, status: guard === "paid" ? REQUEST_STATUS.PAID : REQUEST_STATUS.DRAFT, allocations: [makeAllocation()] })}
+        readOnly={guard === "readonly"} reportResource={resource} />);
+      await screen.findByText("Sustento.pdf");
+      await waitFor(() => expect(screen.queryByRole("combobox", { name: "POA de Sustento.pdf" })).not.toBeInTheDocument());
+      expect(api.patch).not.toHaveBeenCalled();
+      expect(api.postForm).not.toHaveBeenCalled();
+    },
+  );
 
   it("ejecuta un reintento OCR real una sola vez y muestra el resultado terminal", async () => {
     const failed = makeReceiptReview();
@@ -2083,7 +2187,7 @@ describe("RequestDocumentsCard", () => {
     ).toBeInTheDocument();
   });
 
-  it("sube un comprobante de rendición asociado a una línea POA", async () => {
+  it("uploads a REXAN receipt at REQUEST scope without a POA", async () => {
     vi.mocked(api.get).mockResolvedValue([]);
     vi.mocked(api.postForm).mockResolvedValue(
       makeDocument({
@@ -2112,11 +2216,7 @@ describe("RequestDocumentsCard", () => {
     await user.click(
       await screen.findByRole("option", { name: /^comprobante$/i }),
     );
-    const allocationTrigger = screen.getByRole("combobox", {
-      name: /línea poa/i,
-    });
-    await user.click(allocationTrigger);
-    await user.click(await screen.findByRole("option", { name: /línea 1/i }));
+    expect(screen.queryByRole("combobox", { name: /línea poa/i })).not.toBeInTheDocument();
     const file = new File(["contenido"], "factura.pdf", {
       type: "application/pdf",
     });
@@ -2140,13 +2240,13 @@ describe("RequestDocumentsCard", () => {
     expect(formData.get("document_category")).toBe(
       REQUEST_DOCUMENT_CATEGORY.RECEIPT,
     );
-    expect(formData.get("scope_type")).toBe(
-      REQUEST_DOCUMENT_SCOPE_TYPE.ALLOCATION,
-    );
-    expect(formData.get("request_allocation_id")).toBe("alloc-1");
+    // REQUEST es el valor por defecto; el uploader solo envía ALLOCATION explícito.
+    expect(formData.has("scope_type")).toBe(false);
+    expect(formData.has("request_allocation_id")).toBe(false);
+    expect(formData.has("document_purpose")).toBe(false);
   });
 
-  it("mantiene Adjuntar deshabilitado para comprobantes hasta seleccionar línea POA", async () => {
+  it("accepts seven REXAN files once without POA metadata or financial mutations", async () => {
     vi.mocked(api.get).mockResolvedValue([]);
     vi.mocked(api.postForm).mockResolvedValue(
       makeDocument({
@@ -2175,25 +2275,11 @@ describe("RequestDocumentsCard", () => {
     await user.click(
       await screen.findByRole("option", { name: /^comprobante$/i }),
     );
-    const file = new File(["contenido"], "factura.pdf", {
-      type: "application/pdf",
-    });
+    const files = Array.from({ length: 7 }, (_, index) => new File(
+      [`contenido-${index}`], `factura-${index}.pdf`, { type: "application/pdf" },
+    ));
     fireEvent.change(screen.getByLabelText(/archivo/i), {
-      target: { files: [file] },
-    });
-
-    expect(
-      screen.getAllByText(
-        "Selecciona la línea POA antes de adjuntar el comprobante.",
-      ).length,
-    ).toBeGreaterThan(0);
-    expect(screen.getByRole("button", { name: /^adjuntar$/i })).toBeDisabled();
-
-    await user.click(screen.getByRole("combobox", { name: /línea poa/i }));
-    await user.click(await screen.findByRole("option", { name: /línea 1/i }));
-
-    fireEvent.change(screen.getByLabelText(/archivo/i), {
-      target: { files: [file] },
+      target: { files },
     });
 
     expect(screen.getByRole("button", { name: /^adjuntar$/i })).toBeEnabled();
@@ -2210,11 +2296,23 @@ describe("RequestDocumentsCard", () => {
         }),
       );
     });
-    const formData = vi.mocked(api.postForm).mock.calls[0][1] as FormData;
-    expect(formData.get("request_allocation_id")).toBe("alloc-1");
-  });
+    await waitFor(() => expect(api.postForm).toHaveBeenCalledTimes(7), { timeout: 12_000 });
+    const calls = vi.mocked(api.postForm).mock.calls;
+    expect(calls.map((call) => (call[1] as FormData).get("file"))).toEqual(files);
+    for (const [, body, options] of calls) {
+      const data = body as FormData;
+      expect(data.has("scope_type")).toBe(false);
+      expect(data.get("document_category")).toBe(REQUEST_DOCUMENT_CATEGORY.RECEIPT);
+      expect(data.has("request_allocation_id")).toBe(false);
+      expect(data.has("document_purpose")).toBe(false);
+      expect(options?.headers).toEqual(expect.objectContaining({ "Idempotency-Key": expect.any(String) }));
+    }
+    expect(new Set(calls.map((call) => (call[2]?.headers as Record<string, string>)["Idempotency-Key"])).size).toBe(7);
+    expect(api.patch).not.toHaveBeenCalled();
+    expect(api.post).not.toHaveBeenCalled();
+  }, 15_000);
 
-  it("usa etiquetas compactas para seleccionar líneas POA largas al adjuntar comprobantes", async () => {
+  it("keeps long POA guidance visible without a pre-upload selector", async () => {
     vi.mocked(api.get).mockResolvedValue([]);
     const user = userEvent.setup();
     render(
@@ -2242,11 +2340,169 @@ describe("RequestDocumentsCard", () => {
     await user.click(
       await screen.findByRole("option", { name: /^comprobante$/i }),
     );
-    await user.click(screen.getByRole("combobox", { name: /línea poa/i }));
+    expect(screen.queryByRole("combobox", { name: /línea poa/i })).not.toBeInTheDocument();
+    expect(screen.getAllByText(/POA-LARGA-2026/).length).toBeGreaterThan(0);
+  });
 
-    expect(
-      await screen.findByRole("option", { name: "Línea 1 · POA-LARGA-2026" }),
-    ).toBeInTheDocument();
+  it("groups seven saved REXAN receipts by authoritative settlement UUIDs, not document scopes", async () => {
+    const first = makeAllocation({ id: "11111111-1111-4111-8111-111111111111" });
+    const second = makeAllocation({ id: "22222222-2222-4222-8222-222222222222", planning_line: {
+      ...makeAllocation().planning_line!, line_code: "POA-2", resource_description: "Servicios",
+    } });
+    const documents = Array.from({ length: 7 }, (_, index) => makeDocument({
+      id: `saved-${index}`, original_filename: `saved-${index}.pdf`,
+      document_category: REQUEST_DOCUMENT_CATEGORY.RECEIPT,
+      scope_type: REQUEST_DOCUMENT_SCOPE_TYPE.REQUEST,
+      request_allocation_id: index === 0 ? second.id : null,
+    }));
+    first.documents = [documents[0], documents[1]];
+    const reviews = documents.map((document, index) => makeReceiptReview({ receipt: {
+      ...makeReceiptReview().receipt, id: `review-${index}`, document_id: document.id,
+      request_allocation_id: index < 3 ? first.id! : second.id!,
+    } }));
+    vi.mocked(api.get).mockImplementation(async (path) => path === "/requests/req-1/receipts" ? reviews : []);
+    render(<RequestDocumentsCard request={makeRequest({ request_type: REQUEST_TYPE.ADVANCE_SETTLEMENT, allocations: [first, second] })} documents={documents} readOnly />);
+    await waitFor(() => expect(within(screen.getAllByTestId("settlement-receipt-group")[0]).getByText("saved-0.pdf")).toBeInTheDocument());
+    const groups = screen.getAllByTestId("settlement-receipt-group");
+    for (const [index, document] of documents.entries()) {
+      expect(screen.getAllByText(document.original_filename)).toHaveLength(1);
+      expect(within(groups[index < 3 ? 0 : 1]).getByText(document.original_filename)).toBeInTheDocument();
+    }
+    expect(documents[0].request_allocation_id).toBe(second.id);
+    expect(documents[0].scope_type).toBe(REQUEST_DOCUMENT_SCOPE_TYPE.REQUEST);
+    expect(api.patch).not.toHaveBeenCalled();
+    expect(api.post).not.toHaveBeenCalled();
+  });
+
+  it("keeps null/pending receipts unassigned, falls back only without a receipt, and exposes unresolved IDs", async () => {
+    const allocation = makeAllocation();
+    const sourceAdvanceId = "33333333-3333-4333-8333-333333333333";
+    const documents = ["null", "pending", "legacy", "unresolved"].map((name) => makeDocument({
+      id: name, original_filename: `${name}.pdf`, document_category: REQUEST_DOCUMENT_CATEGORY.RECEIPT,
+      scope_type: name === "pending" ? REQUEST_DOCUMENT_SCOPE_TYPE.REQUEST : REQUEST_DOCUMENT_SCOPE_TYPE.ALLOCATION,
+      request_allocation_id: name === "pending" ? null : allocation.id,
+    }));
+    allocation.documents = [documents[0], documents[2]];
+    const reviews = ["null", "unresolved"].map((name) => makeReceiptReview({ receipt: {
+      ...makeReceiptReview().receipt, id: `receipt-${name}`, document_id: name,
+      request_allocation_id: name === "null" ? null : sourceAdvanceId,
+      ocr_status: REQUEST_RECEIPT_OCR_STATUS.PENDING,
+    } }));
+    vi.mocked(api.get).mockImplementation(async (path) => path === "/requests/req-1/receipts" ? reviews : []);
+    render(<RequestDocumentsCard request={makeRequest({ request_type: REQUEST_TYPE.ADVANCE_SETTLEMENT, allocations: [allocation] })} documents={documents} guidanceAllocations={[makeAllocation({
+      id: sourceAdvanceId, planning_line: { ...makeAllocation().planning_line!, line_code: "SOURCE-ADVANCE-POA" },
+    })]} readOnly />);
+    const pending = await screen.findByTestId("settlement-unassigned-receipts");
+    await waitFor(() => expect(within(pending).getByText("null.pdf")).toBeInTheDocument());
+    expect(pending).toHaveTextContent("Sin POA asignado");
+    expect(within(pending).getByText("pending.pdf")).toBeInTheDocument();
+    const group = screen.getByTestId("settlement-receipt-group");
+    expect(within(group).getByText("legacy.pdf")).toBeInTheDocument();
+    expect(within(group).queryByText("null.pdf")).not.toBeInTheDocument();
+    expect(within(group).queryByText("unresolved.pdf")).not.toBeInTheDocument();
+    expect(screen.getByTestId("settlement-unresolved-receipts")).toHaveTextContent("unresolved.pdf");
+    expect(screen.queryByText(/SOURCE-ADVANCE-POA/)).not.toBeInTheDocument();
+    for (const document of documents) expect(screen.getAllByText(document.original_filename)).toHaveLength(1);
+  });
+
+  it.each([false, true])("keeps a receipt visible without settlement allocations, source guidance=%s", async (withGuidance) => {
+    vi.mocked(api.get).mockResolvedValue([]);
+    render(<RequestDocumentsCard
+      request={makeRequest({ request_type: REQUEST_TYPE.ADVANCE_SETTLEMENT, allocations: [] })}
+      guidanceAllocations={withGuidance ? [makeAllocation({ id: "source-advance-id" })] : []}
+      documents={[makeDocument({ document_category: REQUEST_DOCUMENT_CATEGORY.RECEIPT })]}
+      readOnly
+    />);
+    expect(within(screen.getByTestId("settlement-unassigned-receipts")).getByText("Sustento.pdf")).toBeInTheDocument();
+    if (withGuidance)
+      expect(screen.getByTestId("settlement-receipt-group")).not.toHaveTextContent("Sustento.pdf");
+    expect(screen.queryByText(/seleccionando esta línea POA en el cargador/i)).not.toBeInTheDocument();
+  });
+
+  it("moves only presentation after authoritative receipt refresh and retains the original REQUEST document", () => {
+    vi.mocked(api.get).mockResolvedValue([]);
+    const document = makeDocument({ document_category: REQUEST_DOCUMENT_CATEGORY.RECEIPT,
+      scope_type: REQUEST_DOCUMENT_SCOPE_TYPE.REQUEST, request_allocation_id: null });
+    const request = makeRequest({ request_type: REQUEST_TYPE.ADVANCE_SETTLEMENT,
+      allocations: [makeAllocation()] });
+    const resource = {
+      receipts: [makeReceiptReview()], data: [makeReceiptReview()],
+      isInitialLoading: false, isRefreshing: false, isLoading: false, error: null,
+      refetch: vi.fn().mockResolvedValue(undefined), upsertReceipt: vi.fn(),
+    };
+    const { rerender } = render(<RequestDocumentsCard request={request}
+      documents={[document]} receiptsResource={resource} readOnly />);
+    expect(screen.getByTestId("settlement-unassigned-receipts")).toHaveTextContent("Sustento.pdf");
+    const assigned = makeReceiptReview({ receipt: { ...makeReceiptReview().receipt,
+      request_allocation_id: "alloc-1" } });
+    rerender(<RequestDocumentsCard request={request} documents={[document]}
+      receiptsResource={{ ...resource, receipts: [assigned], data: [assigned] }} readOnly />);
+    expect(screen.getByTestId("settlement-receipt-group")).toHaveTextContent("Sustento.pdf");
+    expect(screen.queryByTestId("settlement-unassigned-receipts")).not.toBeInTheDocument();
+    expect(screen.getAllByText("Sustento.pdf")).toHaveLength(1);
+    expect(document.scope_type).toBe(REQUEST_DOCUMENT_SCOPE_TYPE.REQUEST);
+    expect(document.request_allocation_id).toBeNull();
+    expect(api.postForm).not.toHaveBeenCalled();
+    expect(api.patch).not.toHaveBeenCalled();
+    expect(api.post).not.toHaveBeenCalled();
+  });
+
+  it("retains the REXAN queue cap and OCR formats without a POA", async () => {
+    vi.mocked(api.get).mockResolvedValue([]);
+    const user = userEvent.setup();
+    render(<RequestDocumentsCard request={makeRequest({ request_type: REQUEST_TYPE.ADVANCE_SETTLEMENT })} />);
+    await user.click(screen.getByRole("combobox", { name: /categoría/i }));
+    await user.click(screen.getByRole("option", { name: /^comprobante$/i }));
+    const input = screen.getByLabelText(/^archivo$/i);
+    expect(input.getAttribute("accept")).toMatch(/pdf/);
+    expect(input.getAttribute("accept")).toMatch(/png/);
+    expect(input.getAttribute("accept")).toMatch(/jpeg|jpg/);
+    fireEvent.change(input, { target: { files: Array.from({ length: 21 }, (_, index) =>
+      new File([`${index}`], `cap-${index}.pdf`, { type: "application/pdf" }),
+    ) } });
+    expect(screen.getByText(/1 archivo fue omitido/)).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: /^Retirar cap-/ })).toHaveLength(20);
+    expect(screen.getByRole("button", { name: /^adjuntar$/i })).toBeEnabled();
+    expect(api.postForm).not.toHaveBeenCalled();
+  });
+
+  it("retries a REXAN receipt with the same file and immutable upload key without allocation", async () => {
+    vi.mocked(api.get).mockResolvedValue([]);
+    vi.mocked(api.postForm).mockReset();
+    vi.mocked(api.postForm).mockRejectedValueOnce(makeUploadError(500, "Temporary failure"))
+      .mockResolvedValueOnce(makeDocument({ document_category: REQUEST_DOCUMENT_CATEGORY.RECEIPT }));
+    const user = userEvent.setup();
+    render(<RequestDocumentsCard request={makeRequest({ request_type: REQUEST_TYPE.ADVANCE_SETTLEMENT, allocations: [makeAllocation()] })} />);
+    await user.click(screen.getByRole("combobox", { name: /categoría/i }));
+    await user.click(screen.getByRole("option", { name: /^comprobante$/i }));
+    const file = new File(["receipt"], "retry-rexan.pdf", { type: "application/pdf" });
+    fireEvent.change(screen.getByLabelText(/^archivo$/i), { target: { files: [file] } });
+    await user.click(screen.getByRole("button", { name: /^adjuntar$/i }));
+    const retry = await screen.findByRole("button", { name: /Reintentar retry-rexan.pdf/ });
+    await waitFor(() => expect(retry).toBeEnabled());
+    await user.click(retry);
+    await waitFor(() => expect(api.postForm).toHaveBeenCalledTimes(2));
+    const [first, second] = vi.mocked(api.postForm).mock.calls;
+    expect(first[2]?.headers).toEqual(second[2]?.headers);
+    for (const call of [first, second]) {
+      const body = call[1] as FormData;
+      expect(body.get("file")).toBe(file);
+      expect(body.has("request_allocation_id")).toBe(false);
+      expect(body.has("scope_type")).toBe(false);
+      expect(body.has("document_purpose")).toBe(false);
+    }
+  });
+
+  it("leaves EXTRA receipt presentation document-scoped rather than retagging it", async () => {
+    const extra = makeDocument({ document_category: REQUEST_DOCUMENT_CATEGORY.RECEIPT,
+      document_purpose: REQUEST_DOCUMENT_PURPOSE.EXTRA, scope_type: REQUEST_DOCUMENT_SCOPE_TYPE.REQUEST });
+    const review = makeReceiptReview({ receipt: { ...makeReceiptReview().receipt, request_allocation_id: "alloc-1" } });
+    vi.mocked(api.get).mockImplementation(async (path) => path === "/requests/req-1/receipts" ? [review] : []);
+    render(<RequestDocumentsCard request={makeRequest({ request_type: REQUEST_TYPE.ADVANCE_SETTLEMENT, allocations: [makeAllocation()] })} documents={[extra]} readOnly />);
+    await waitFor(() => expect(screen.getByText("Pendiente de confirmación")).toBeInTheDocument());
+    expect(screen.getAllByText("Sustento.pdf")).toHaveLength(1);
+    expect(screen.getByTestId("settlement-receipt-group")).not.toHaveTextContent("Sustento.pdf");
+    expect(screen.queryByTestId("settlement-unassigned-receipts")).not.toBeInTheDocument();
   });
 
   it("treats one PxQ from any linked POA as request-level completion", async () => {

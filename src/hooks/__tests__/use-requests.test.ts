@@ -23,6 +23,7 @@ import {
   useRequestPlanningLineFacets,
   useRequestPlanningLineSearch,
   useRequestReceiptReviews,
+  useUpdateRequestReceiptReview,
   useRetryRequestReceiptOcr,
   useRequestRenditionReport,
   useRequestRenditionReportActions,
@@ -56,6 +57,8 @@ import {
   type RenditionsInboxResponse,
   type RenditionStatus,
   type RequestStatus,
+  type RequestReceiptReview,
+  type UpdateRequestReceiptReviewInput,
 } from "@/types/requests";
 
 vi.mock("@/lib/api-client", () => ({
@@ -124,6 +127,167 @@ beforeEach(() => {
   vi.clearAllMocks();
   clearQueryCache();
   vi.useRealTimers();
+});
+
+describe("receipt allocation PATCH", () => {
+  beforeEach(() => {
+    vi.mocked(api.patch).mockReset();
+  });
+  const review = {
+    receipt: { id: "receipt-1", request_allocation_id: "settlement-poa" },
+  } as RequestReceiptReview;
+
+  it("forwards the settlement allocation and optional signal, invalidating request queries", async () => {
+    const invalidate = vi.spyOn(queryTags, "invalidateRequestDomain");
+    const controller = new AbortController();
+    const input: UpdateRequestReceiptReviewInput = {
+      request_allocation_id: "settlement-poa",
+    };
+    vi.mocked(api.patch).mockResolvedValueOnce(review);
+    const { result } = renderHook(() => useUpdateRequestReceiptReview());
+    await act(async () => {
+      expect(
+        await result.current.updateReceiptReview(
+          "request-1", "receipt-1", input, controller.signal,
+        ),
+      ).toBe(review);
+    });
+    expect(api.patch).toHaveBeenCalledWith(
+      "/requests/request-1/receipts/receipt-1", input,
+      { signal: controller.signal },
+    );
+    expect(invalidate).toHaveBeenCalledOnce();
+    expect(result.current.isLoading).toBe(false);
+    expect(result.current.error).toBeNull();
+  });
+
+  it("preserves existing three-argument callers", async () => {
+    vi.mocked(api.patch).mockResolvedValueOnce(review);
+    const { result } = renderHook(() => useUpdateRequestReceiptReview());
+    await act(async () => {
+      await result.current.updateReceiptReview("request-1", "receipt-1", {
+        amount: 42,
+      });
+    });
+    expect(api.patch).toHaveBeenCalledWith(
+      "/requests/request-1/receipts/receipt-1", { amount: 42 },
+    );
+  });
+
+  it("does not dispatch an already aborted operation", async () => {
+    const invalidate = vi.spyOn(queryTags, "invalidateRequestDomain");
+    const { result } = renderHook(() => useUpdateRequestReceiptReview());
+    await act(async () => {
+      await expect(
+        result.current.updateReceiptReview(
+          "request-1", "receipt-1", {}, AbortSignal.abort(),
+        ),
+      ).rejects.toMatchObject({ name: "AbortError" });
+    });
+    expect(api.patch).not.toHaveBeenCalled();
+    expect(invalidate).not.toHaveBeenCalled();
+    expect(result.current.isLoading).toBe(false);
+    expect(result.current.error).toBeNull();
+  });
+
+  it.each(["success", "failure"])("suppresses late canceled %s without touching newer loading state or cache", async (outcome) => {
+    const invalidate = vi.spyOn(queryTags, "invalidateRequestDomain");
+    const old = deferred<RequestReceiptReview>();
+    const current = deferred<RequestReceiptReview>();
+    vi.mocked(api.patch)
+      .mockReturnValueOnce(old.promise)
+      .mockReturnValueOnce(current.promise);
+    const controller = new AbortController();
+    const { result } = renderHook(() => useUpdateRequestReceiptReview());
+    let first!: Promise<unknown>;
+    act(() => {
+      first = result.current
+        .updateReceiptReview("request-1", "receipt-1", {}, controller.signal)
+        .catch((error: unknown) => error);
+    });
+    act(() => controller.abort());
+    expect(result.current.isLoading).toBe(false);
+    let second!: Promise<RequestReceiptReview>;
+    act(() => {
+      second = result.current.updateReceiptReview("request-1", "receipt-2", {});
+    });
+    await act(async () => {
+      if (outcome === "success") old.resolve(review);
+      else old.reject(new Error("late failure"));
+      expect(await first).toMatchObject({ name: "AbortError" });
+    });
+    expect(result.current.isLoading).toBe(true);
+    expect(result.current.error).toBeNull();
+    expect(invalidate).not.toHaveBeenCalled();
+    await act(async () => {
+      current.resolve(review);
+      await second;
+    });
+    expect(invalidate).toHaveBeenCalledOnce();
+    expect(result.current.isLoading).toBe(false);
+  });
+
+  it("suppresses stale success after unmount", async () => {
+    const invalidate = vi.spyOn(queryTags, "invalidateRequestDomain");
+    const pending = deferred<RequestReceiptReview>();
+    vi.mocked(api.patch).mockReturnValueOnce(pending.promise);
+    const { result, unmount } = renderHook(() => useUpdateRequestReceiptReview());
+    let operation!: Promise<unknown>;
+    act(() => {
+      operation = result.current
+        .updateReceiptReview("request-1", "receipt-1", {})
+        .catch((error: unknown) => error);
+    });
+    unmount();
+    pending.resolve(review);
+    expect(await operation).toMatchObject({ name: "AbortError" });
+    expect(invalidate).not.toHaveBeenCalled();
+  });
+
+  it("does not let a superseded operation publish success or clear newer loading", async () => {
+    const invalidate = vi.spyOn(queryTags, "invalidateRequestDomain");
+    const old = deferred<RequestReceiptReview>();
+    const current = deferred<RequestReceiptReview>();
+    vi.mocked(api.patch)
+      .mockReturnValueOnce(old.promise)
+      .mockReturnValueOnce(current.promise);
+    const { result } = renderHook(() => useUpdateRequestReceiptReview());
+    let first!: Promise<unknown>;
+    let second!: Promise<RequestReceiptReview>;
+    act(() => {
+      first = result.current
+        .updateReceiptReview("request-1", "receipt-1", {})
+        .catch((error: unknown) => error);
+      second = result.current.updateReceiptReview("request-2", "receipt-2", {});
+    });
+    await act(async () => {
+      old.resolve(review);
+      expect(await first).toMatchObject({ name: "AbortError" });
+    });
+    expect(invalidate).not.toHaveBeenCalled();
+    expect(result.current.isLoading).toBe(true);
+    await act(async () => {
+      current.resolve(review);
+      await second;
+    });
+    expect(invalidate).toHaveBeenCalledOnce();
+    expect(result.current.isLoading).toBe(false);
+  });
+
+  it("retains active failure reporting without refreshing successful queries", async () => {
+    const invalidate = vi.spyOn(queryTags, "invalidateRequestDomain");
+    const failure = new Error("allocation rejected");
+    vi.mocked(api.patch).mockRejectedValueOnce(failure);
+    const { result } = renderHook(() => useUpdateRequestReceiptReview());
+    await act(async () => {
+      await expect(
+        result.current.updateReceiptReview("request-1", "receipt-1", {}),
+      ).rejects.toBe(failure);
+    });
+    expect(result.current.error).toBe(failure);
+    expect(result.current.isLoading).toBe(false);
+    expect(invalidate).not.toHaveBeenCalled();
+  });
 });
 
 describe("receipt OCR retry", () => {

@@ -1356,6 +1356,7 @@ export interface UpsertRenditionLineReturnInput {
 }
 
 export interface UpdateRequestReceiptReviewInput {
+  request_allocation_id?: string;
   issuer_document_number?: string;
   issuer_name?: string;
   series?: string;

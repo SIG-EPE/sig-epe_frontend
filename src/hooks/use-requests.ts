@@ -1540,22 +1540,56 @@ export function useRequestRenditionReportActions() {
 export function useUpdateRequestReceiptReview() {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<Error | null>(null);
+  const operationRef = useRef(0);
+  const mountedRef = useRef(true);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      operationRef.current += 1;
+    };
+  }, []);
 
   const updateReceiptReview = async (
     requestId: string,
     receiptId: string,
     input: UpdateRequestReceiptReviewInput,
+    signal?: AbortSignal,
   ): Promise<RequestReceiptReview> => {
+    signal?.throwIfAborted();
+    if (!mountedRef.current) {
+      throw new DOMException("Review no longer active", "AbortError");
+    }
+    const operation = ++operationRef.current;
+    const isCurrent = () =>
+      mountedRef.current && operation === operationRef.current;
+    const assertCurrent = () => {
+      signal?.throwIfAborted();
+      if (!isCurrent()) {
+        throw new DOMException("Review no longer active", "AbortError");
+      }
+    };
+    const onAbort = () => {
+      if (isCurrent()) setIsLoading(false);
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
     setIsLoading(true);
     setError(null);
     try {
+      assertCurrent();
       const result = await api.patch<RequestReceiptReview>(
         `/requests/${requestId}/receipts/${receiptId}`,
         input,
+        ...(signal ? [{ signal }] : []),
       );
+      // Aborting cannot undo an accepted PATCH. Reconcile on reopen, never
+      // publish its late result or refresh caches for an obsolete operation.
+      assertCurrent();
       invalidateRequestCaches();
       return result;
     } catch (e) {
+      assertCurrent();
       const nextError =
         e instanceof Error
           ? e
@@ -1563,7 +1597,8 @@ export function useUpdateRequestReceiptReview() {
       setError(nextError);
       throw e;
     } finally {
-      setIsLoading(false);
+      signal?.removeEventListener("abort", onAbort);
+      if (isCurrent() && !signal?.aborted) setIsLoading(false);
     }
   };
 
