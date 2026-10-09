@@ -378,6 +378,8 @@ export function PaymentQueueTable({
                         Principal original de solicitud
                       </span>
                       <PaymentValuation
+                        request={request}
+                        monthlyReference={request.payment?.monthly_fx_reference}
                         valuation={
                           request.payment?.valuation ?? request.valuation
                         }

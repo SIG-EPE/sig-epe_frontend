@@ -98,8 +98,10 @@ vi.mock("@/hooks/use-giof-work", () => ({
   useGiofWorkLeaseSet: () => ({
     leases: [],
     acquire: vi.fn().mockResolvedValue({ token: "lease-token" }),
+    renew: vi.fn().mockResolvedValue({ token: "lease-token" }),
     release: vi.fn().mockResolvedValue(undefined),
     releaseAll: vi.fn().mockResolvedValue(undefined),
+    clearLocal: vi.fn(),
   }),
   fetchGiofAssignees: vi.fn().mockResolvedValue([]),
   useGiofAssignees: vi.fn(() => ({

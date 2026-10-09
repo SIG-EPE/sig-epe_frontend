@@ -6,7 +6,6 @@ import type {
   GiofWorkAssignmentState,
   GiofWorkLeaseState,
 } from "@/types/giof-work";
-
 // Request types — SIG-EPE
 // Tipos del frontend alineados a respuestas del backend
 // -------------------------------------------------------
@@ -693,7 +692,15 @@ export const PAYMENT_COMPLETENESS_STATE = {
 export type PaymentCompletenessState =
   (typeof PAYMENT_COMPLETENESS_STATE)[keyof typeof PAYMENT_COMPLETENESS_STATE];
 
+export interface MonthlyPaymentReference {
+  year: number;
+  month: number;
+  reference_rate: string;
+}
+
 export interface RequestPayment {
+  /** Opcional para respuestas anteriores; nunca derivar de la referencia de aprobación. */
+  monthly_fx_reference?: MonthlyPaymentReference | null;
   original?: OriginalPaymentMoney | null;
   valuation?: FxValuation | null;
   fx_pending?: boolean;
@@ -913,7 +920,15 @@ export interface RelatedRequestSummary {
   created_at: string;
 }
 
+export const FX_POLICY_VERSION = { MONTHLY_V1: "MONTHLY_V1" } as const;
+export type FxPolicyVersion = (typeof FX_POLICY_VERSION)[keyof typeof FX_POLICY_VERSION];
+
 export interface PaymentRequest {
+  /** Cohort comes from the server; absence remains legacy, never inferred from FX data. */
+  fx_policy_version?: FxPolicyVersion | null;
+  /** Marcadores persistidos de cierre; ausentes en APIs anteriores. */
+  monthly_fx_applied_close_month?: string | null;
+  monthly_fx_applied_close_rate?: string | null;
   original?: OriginalPaymentMoney | null;
   valuation?: FxValuation | null;
   id: string;
@@ -1909,6 +1924,10 @@ export interface ApproveRequestDto {
   comment?: string;
   validated_spent_amount?: number;
   return_proof_document_id?: string;
+  reference_fx_rate?: string;
+  reference_effective_date?: string;
+  reference_manual_source?: string;
+  reference_reason?: string;
 }
 
 export interface RejectRequestDto {

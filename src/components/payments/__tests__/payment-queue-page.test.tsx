@@ -43,7 +43,11 @@ const mocks = vi.hoisted(() => ({
   completePaymentDetails: vi.fn(),
   uploadDocument: vi.fn(),
   acquireLease: vi.fn(),
+  renewLease: vi.fn(),
   releaseLease: vi.fn(),
+  captureAndFenceLease: vi.fn(),
+  releaseCapturedLease: vi.fn(),
+  clearLocalLeases: vi.fn(),
   usePaymentQueue: vi.fn(),
   useGiofClaimableWork: vi.fn(),
   useGiofSelfClaim: vi.fn(),
@@ -56,6 +60,8 @@ const mocks = vi.hoisted(() => ({
 const exportGate = vi.hoisted(() => ({ paymentReady: false, renditionReady: false }));
 let currentQuery = "";
 let roleCode = "GIOF_GESTOR";
+let authUserId = "user-1";
+let authSessionExpiresAt: string | null = null;
 const replaceMock = vi.fn((href: string) => {
   currentQuery = href.includes("?") ? href.slice(href.indexOf("?") + 1) : "";
 });
@@ -102,8 +108,8 @@ vi.mock("@/stores/auth-store", () => ({
     }) => unknown,
   ) =>
     selector({
-      user: { id: "user-1", role: { code: roleCode } },
-      sessionExpiresAt: null,
+      user: { id: authUserId, role: { code: roleCode } },
+      sessionExpiresAt: authSessionExpiresAt,
     }),
 }));
 
@@ -150,8 +156,12 @@ vi.mock("@/hooks/use-giof-work", () => ({
   useGiofWorkLeaseSet: () => ({
     leases: [],
     acquire: mocks.acquireLease,
+    renew: mocks.renewLease,
     release: mocks.releaseLease,
+    captureAndFence: mocks.captureAndFenceLease,
+    releaseCaptured: mocks.releaseCapturedLease,
     releaseAll: vi.fn(),
+    clearLocal: mocks.clearLocalLeases,
   }),
   fetchGiofAssignees: vi.fn().mockResolvedValue([]),
   useGiofAssignees: vi.fn(() => ({
@@ -280,8 +290,16 @@ describe("payment pending queue action", () => {
     vi.clearAllMocks();
     currentQuery = "";
     roleCode = "GIOF_GESTOR";
+    authUserId = "user-1";
+    authSessionExpiresAt = null;
     sessionStorage.clear();
     mocks.apiGet.mockReset();
+    mocks.renewLease.mockReset();
+    mocks.releaseLease.mockReset();
+    mocks.releaseLease.mockResolvedValue(undefined);
+    mocks.clearLocalLeases.mockReset();
+    mocks.toastError.mockReset();
+    mocks.toastSuccess.mockReset();
     mocks.bulkSelfAssign.mockReset();
     mocks.bulkSelfAssign.mockResolvedValue({
       pool: "PAYMENT",
@@ -578,9 +596,33 @@ describe("payment pending queue action", () => {
       error: null,
       refetch,
     });
-    mocks.acquireLease.mockResolvedValue({ requestId: incomplete.id });
+    const lease = {
+      requestId: incomplete.id,
+      pool: "PAYMENT",
+      ownerId: "user-1",
+      token: "lease-token",
+      assignmentVersion: "1",
+      heartbeatAt: "2026-09-18T10:00:00.000Z",
+      expiresAt: "2099-09-18T10:05:00.000Z",
+      ttlSeconds: 300,
+      heartbeatIntervalSeconds: 60,
+    };
+    mocks.acquireLease.mockResolvedValue(lease);
+    mocks.renewLease.mockResolvedValue(lease);
     mocks.releaseLease.mockResolvedValue(undefined);
-    mocks.completePaymentDetails.mockResolvedValue(incomplete);
+    mocks.captureAndFenceLease.mockReturnValue(lease);
+    mocks.releaseCapturedLease.mockResolvedValue(undefined);
+    mocks.completePaymentDetails.mockResolvedValue({
+      committed: true,
+      request_id: incomplete.id,
+      payment_id: "payment-1",
+      proof_pending: false,
+      details_pending: false,
+      completeness: "COMPLETE",
+      missing_fields: [],
+      completed_at: "2026-09-20T12:00:00.000Z",
+      proof_document_id: "proof-1",
+    });
     const user = userEvent.setup();
     render(<PaymentQueuePage />);
 
@@ -596,12 +638,408 @@ describe("payment pending queue action", () => {
       within(dialog).getByRole("button", { name: "Completar pago" }),
     );
 
-    expect(mocks.completePaymentDetails).toHaveBeenCalledWith("payment-1", {
-      command_id: expect.any(String),
-      operation_reference: "OP-REFRESH",
-      proof_document_id: undefined,
-    });
+    expect(mocks.completePaymentDetails).toHaveBeenCalledWith(
+      "payment-1",
+      expect.objectContaining({
+        browser_hash_duration_ms: expect.any(Number),
+        command_id: expect.any(String),
+        operation_reference: "OP-REFRESH",
+        proof: undefined,
+      }),
+    );
+    expect(mocks.renewLease).toHaveBeenCalledWith("request-1");
+    expect(mocks.apiGet).not.toHaveBeenCalled();
+    expect(mocks.captureAndFenceLease).toHaveBeenCalledWith("request-1");
+    expect(mocks.releaseCapturedLease).toHaveBeenCalledWith(lease);
     expect(refetch).toHaveBeenCalledWith({ force: true });
+    expect(refetch).toHaveBeenCalledTimes(1);
+    expect(mocks.toastSuccess).toHaveBeenCalledWith("Pago completado.");
+    expect(mocks.toastSuccess.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.releaseCapturedLease.mock.invocationCallOrder[0],
+    );
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("dialog", { name: "Completar pago" }),
+      ).not.toBeInTheDocument(),
+    );
+  });
+
+  it("acepta detalle REXAN para un anticipo cuando el contexto operativo PAYMENT renovado sigue vigente", async () => {
+    currentQuery = "tab=pending-data";
+    const row = pendingSourceRequest();
+    row.request_type = REQUEST_TYPE.ADVANCE_SETTLEMENT;
+    row.payment = {
+      ...row.payment!,
+      operation_reference: null,
+      details_pending: true,
+      missing_fields: ["operation_reference"],
+      completeness: "REFERENCE_PENDING",
+    };
+    const detail = {
+      ...row,
+      giof_work: {
+        ...row.giof_work!,
+        pool: "REXAN" as const,
+        assigneeId: "rexan-owner",
+        assignmentVersion: "44",
+      },
+    };
+    const refetch = vi.fn().mockResolvedValue(undefined);
+    mocks.usePaymentQueue.mockReturnValue({
+      requests: [row],
+      total: 1,
+      page: 1,
+      limit: 20,
+      summary: {
+        count: 1,
+        payable_amount_by_currency: { PEN: "100.00" },
+        status_counts: { PAID: 1 },
+      },
+      isLoading: false,
+      isRefreshing: false,
+      error: null,
+      refetch,
+    });
+    const lease = {
+      requestId: row.id,
+      pool: "PAYMENT" as const,
+      ownerId: "user-1",
+      token: "payment-lease",
+      assignmentVersion: "1",
+      heartbeatAt: "2026-09-19T10:00:00.000Z",
+      expiresAt: "2099-09-19T10:05:00.000Z",
+      ttlSeconds: 300,
+      heartbeatIntervalSeconds: 60,
+    };
+    mocks.acquireLease.mockResolvedValue(lease);
+    mocks.renewLease.mockResolvedValue({
+      ...lease,
+      token: "renewed-payment-lease",
+    });
+    mocks.apiGet.mockResolvedValue(detail);
+    mocks.completePaymentDetails.mockResolvedValue(detail);
+    mocks.releaseLease.mockResolvedValue(undefined);
+    const user = userEvent.setup();
+    render(<PaymentQueuePage />);
+
+    await user.click(screen.getByRole("button", { name: "Completar pago" }));
+    const dialog = await screen.findByRole("dialog", {
+      name: "Completar pago",
+    });
+    await user.type(
+      within(dialog).getByLabelText(/Referencia de operación/),
+      "OP-ADVANCE",
+    );
+    await user.click(
+      within(dialog).getByRole("button", { name: "Completar pago" }),
+    );
+
+    await waitFor(() =>
+      expect(mocks.completePaymentDetails).toHaveBeenCalledOnce(),
+    );
+    expect(mocks.renewLease).toHaveBeenCalledWith(row.id);
+    expect(mocks.completePaymentDetails).toHaveBeenCalledWith(
+      "payment-1",
+      expect.objectContaining({
+        operation_reference: "OP-ADVANCE",
+      }),
+    );
+    expect(mocks.uploadDocument).not.toHaveBeenCalled();
+    expect(mocks.toastError).not.toHaveBeenCalled();
+  });
+
+  it("no consulta el detalle genérico y deja la deriva a los guards del PATCH", async () => {
+    currentQuery = "tab=pending-data";
+    const row = pendingSourceRequest();
+    row.payment = {
+      ...row.payment!,
+      operation_reference: null,
+      details_pending: true,
+      missing_fields: ["operation_reference"],
+    };
+    const refetch = vi.fn().mockRejectedValue(new Error("refresh failed"));
+    mocks.usePaymentQueue.mockReturnValue({
+      requests: [row],
+      total: 1,
+      page: 1,
+      limit: 20,
+      summary: { count: 1, payable_amount_by_currency: {}, status_counts: {} },
+      isLoading: false,
+      isRefreshing: false,
+      error: null,
+      refetch,
+    });
+    const lease = {
+      requestId: row.id,
+      pool: "PAYMENT" as const,
+      ownerId: "user-1",
+      token: "lease",
+      assignmentVersion: "1",
+      expiresAt: "2099-01-01T00:00:00.000Z",
+    };
+    mocks.acquireLease.mockResolvedValue(lease);
+    mocks.renewLease.mockResolvedValue(lease);
+    mocks.completePaymentDetails.mockRejectedValueOnce(
+      new Error("El contexto del pago cambió."),
+    );
+    mocks.releaseLease.mockResolvedValue(undefined);
+    const user = userEvent.setup();
+    render(<PaymentQueuePage />);
+
+    await user.click(screen.getByRole("button", { name: "Completar pago" }));
+    const dialog = await screen.findByRole("dialog", {
+      name: "Completar pago",
+    });
+    await user.type(
+      within(dialog).getByLabelText(/Referencia de operación/),
+      "OP-DRIFT",
+    );
+    await user.click(
+      within(dialog).getByRole("button", { name: "Completar pago" }),
+    );
+
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent(
+      "El contexto del pago cambió.",
+    );
+    expect(mocks.apiGet).not.toHaveBeenCalled();
+    expect(mocks.completePaymentDetails).toHaveBeenCalledOnce();
+    expect(mocks.captureAndFenceLease).not.toHaveBeenCalled();
+  });
+
+  it("hace visible un fallo de renovación y no envía PATCH", async () => {
+    currentQuery = "tab=pending-data";
+    const row = pendingSourceRequest();
+    row.payment = {
+      ...row.payment!,
+      operation_reference: null,
+      details_pending: true,
+      missing_fields: ["operation_reference"],
+    };
+    mocks.usePaymentQueue.mockReturnValue({
+      requests: [row],
+      total: 1,
+      page: 1,
+      limit: 20,
+      summary: { count: 1, payable_amount_by_currency: {}, status_counts: {} },
+      isLoading: false,
+      isRefreshing: false,
+      error: null,
+      refetch: vi.fn().mockResolvedValue(undefined),
+    });
+    mocks.acquireLease.mockResolvedValue({
+      requestId: row.id,
+      pool: "PAYMENT",
+      ownerId: "user-1",
+      token: "lease",
+      assignmentVersion: "1",
+      expiresAt: "2099-01-01T00:00:00.000Z",
+    });
+    mocks.renewLease.mockRejectedValue(
+      new Error("La sesión operativa venció."),
+    );
+    const user = userEvent.setup();
+    render(<PaymentQueuePage />);
+
+    await user.click(screen.getByRole("button", { name: "Completar pago" }));
+    const dialog = await screen.findByRole("dialog", {
+      name: "Completar pago",
+    });
+    await user.type(
+      within(dialog).getByLabelText(/Referencia de operación/),
+      "OP-RENEW",
+    );
+    await user.click(
+      within(dialog).getByRole("button", { name: "Completar pago" }),
+    );
+
+    await waitFor(() =>
+      expect(mocks.toastError).toHaveBeenCalledWith(
+        "La sesión operativa venció.",
+      ),
+    );
+    expect(mocks.completePaymentDetails).not.toHaveBeenCalled();
+  });
+
+  it("anuncia el commit aunque fallen liberación y refetch posteriores", async () => {
+    currentQuery = "tab=pending-data";
+    const row = pendingSourceRequest();
+    row.payment = {
+      ...row.payment!,
+      operation_reference: null,
+      details_pending: true,
+      missing_fields: ["operation_reference"],
+    };
+    const refetch = vi.fn().mockRejectedValue(new Error("refresh failed"));
+    mocks.usePaymentQueue.mockReturnValue({
+      requests: [row],
+      total: 1,
+      page: 1,
+      limit: 20,
+      summary: { count: 1, payable_amount_by_currency: {}, status_counts: {} },
+      isLoading: false,
+      isRefreshing: false,
+      error: null,
+      refetch,
+    });
+    const lease = {
+      requestId: row.id,
+      pool: "PAYMENT" as const,
+      ownerId: "user-1",
+      token: "lease",
+      assignmentVersion: "1",
+      expiresAt: "2099-01-01T00:00:00.000Z",
+    };
+    mocks.acquireLease.mockResolvedValue(lease);
+    mocks.renewLease.mockResolvedValue(lease);
+    mocks.captureAndFenceLease.mockReturnValue(lease);
+    mocks.releaseCapturedLease.mockRejectedValue(new Error("release failed"));
+    mocks.completePaymentDetails.mockResolvedValue({
+      committed: true,
+      request_id: row.id,
+      payment_id: "payment-1",
+      proof_pending: false,
+      details_pending: false,
+      completeness: "COMPLETE",
+      missing_fields: [],
+      completed_at: "2026-09-20T12:00:00.000Z",
+      proof_document_id: "proof-1",
+    });
+    const user = userEvent.setup();
+    render(<PaymentQueuePage />);
+
+    await user.click(screen.getByRole("button", { name: "Completar pago" }));
+    const dialog = await screen.findByRole("dialog", {
+      name: "Completar pago",
+    });
+    await user.type(
+      within(dialog).getByLabelText(/Referencia de operación/),
+      "OP-COMMIT",
+    );
+    await user.click(
+      within(dialog).getByRole("button", { name: "Completar pago" }),
+    );
+
+    await waitFor(() =>
+      expect(mocks.toastSuccess).toHaveBeenCalledWith("Pago completado."),
+    );
+    expect(mocks.completePaymentDetails).toHaveBeenCalledOnce();
+    expect(refetch).toHaveBeenCalledTimes(1);
+    expect(
+      screen.queryByRole("dialog", { name: "Completar pago" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("cierra la finalización cuando cambia la versión de la fila viva", async () => {
+    currentQuery = "tab=pending-data";
+    const row = pendingSourceRequest();
+    row.payment = {
+      ...row.payment!,
+      operation_reference: null,
+      details_pending: true,
+      missing_fields: ["operation_reference"],
+      completeness: "REFERENCE_PENDING",
+    };
+    const refetch = vi.fn().mockResolvedValue(undefined);
+    const queue = (requests: PaymentRequest[]) => ({
+      requests,
+      total: requests.length,
+      page: 1,
+      limit: 20,
+      summary: {
+        count: requests.length,
+        payable_amount_by_currency: { PEN: "100.00" },
+        status_counts: { PAID: requests.length },
+      },
+      isLoading: false,
+      isRefreshing: false,
+      error: null,
+      refetch,
+    });
+    mocks.usePaymentQueue.mockReturnValue(queue([row]));
+    mocks.acquireLease.mockResolvedValue({
+      requestId: row.id,
+      pool: "PAYMENT",
+      ownerId: "user-1",
+      token: "lease-token",
+      assignmentVersion: "1",
+      expiresAt: "2099-09-18T10:05:00.000Z",
+    });
+    const user = userEvent.setup();
+    const view = render(<PaymentQueuePage />);
+    await user.click(screen.getByRole("button", { name: "Completar pago" }));
+    expect(
+      await screen.findByRole("dialog", { name: "Completar pago" }),
+    ).toBeInTheDocument();
+
+    const stale = {
+      ...row,
+      giof_work: { ...row.giof_work!, assignmentVersion: "2" },
+    };
+    mocks.usePaymentQueue.mockReturnValue(queue([stale]));
+    view.rerender(<PaymentQueuePage />);
+
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("dialog", { name: "Completar pago" }),
+      ).not.toBeInTheDocument(),
+    );
+    expect(mocks.clearLocalLeases).toHaveBeenCalled();
+    expect(refetch).toHaveBeenCalledWith({ force: true });
+    expect(mocks.completePaymentDetails).not.toHaveBeenCalled();
+  });
+
+  it("invalida la finalización y credenciales cuando cambia la identidad autenticada", async () => {
+    currentQuery = "tab=pending-data";
+    const row = pendingSourceRequest();
+    row.payment = {
+      ...row.payment!,
+      operation_reference: null,
+      details_pending: true,
+      missing_fields: ["operation_reference"],
+      completeness: "REFERENCE_PENDING",
+    };
+    const refetch = vi.fn().mockResolvedValue(undefined);
+    mocks.usePaymentQueue.mockReturnValue({
+      requests: [row],
+      total: 1,
+      page: 1,
+      limit: 20,
+      summary: {
+        count: 1,
+        payable_amount_by_currency: { PEN: "100.00" },
+        status_counts: { PAID: 1 },
+      },
+      isLoading: false,
+      isRefreshing: false,
+      error: null,
+      refetch,
+    });
+    mocks.acquireLease.mockResolvedValue({
+      requestId: row.id,
+      pool: "PAYMENT",
+      ownerId: "user-1",
+      token: "lease-token",
+      assignmentVersion: "1",
+      expiresAt: "2099-09-18T10:05:00.000Z",
+    });
+    const user = userEvent.setup();
+    const view = render(<PaymentQueuePage />);
+    await user.click(screen.getByRole("button", { name: "Completar pago" }));
+    expect(
+      await screen.findByRole("dialog", { name: "Completar pago" }),
+    ).toBeInTheDocument();
+
+    authUserId = "user-2";
+    authSessionExpiresAt = "2026-09-19T00:00:00.000Z";
+    view.rerender(<PaymentQueuePage />);
+
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("dialog", { name: "Completar pago" }),
+      ).not.toBeInTheDocument(),
+    );
+    expect(mocks.clearLocalLeases).toHaveBeenCalled();
+    expect(mocks.completePaymentDetails).not.toHaveBeenCalled();
   });
 
   it("no retiene selección de pago ni asignación al cambiar página o identidad de vista", async () => {
@@ -725,6 +1163,34 @@ describe("payment pending queue action", () => {
       screen.getByRole("button", { name: "Restablecer filtros" }),
     );
     expect(replaceMock).toHaveBeenLastCalledWith("/payments?work_scope=all");
+  });
+
+  it("muestra USD original y PEN almacenado mensual, incluso cierre tardío y lista sin pago", () => {
+    const row = pendingSourceRequest();
+    row.currency = "USD";
+    row.fx_policy_version = "MONTHLY_V1";
+    row.requested_amount = 100;
+    row.original = { amount: "100.00", currency: "USD" };
+    row.valuation = { amount_pen: "375.00", accounting_currency: "PEN", state: "PROVISIONAL", reference: null, final_rate: null, final_confirmed_at: null, final_confirmed_by: null, origin_execution_id: null };
+    row.payment!.valuation = row.valuation;
+    row.payment!.monthly_fx_reference = { year: 2026, month: 9, reference_rate: "3.75" };
+    const props = { isLoading: false, onRegisterPayment: vi.fn(), currentUserId: "user-1" };
+    const { rerender } = render(<PaymentQueueTable {...props} requests={[row]} />);
+    expect(screen.getByText("USD 100.00")).toBeInTheDocument();
+    expect(screen.getByText(/PEN 375.00.*Provisional/)).toBeInTheDocument();
+    expect(screen.getByText(/Referencia bancaria mensual: 3.75/)).toBeInTheDocument();
+    row.monthly_fx_applied_close_month = "2026-09-01";
+    row.monthly_fx_applied_close_rate = "3.78";
+    row.valuation = { ...row.valuation, amount_pen: "378.00", state: "FINAL", final_rate: "3.78" };
+    row.payment!.valuation = row.valuation;
+    row.payment!.paid_at = "2026-10-02T12:00:00Z";
+    rerender(<PaymentQueueTable {...props} requests={[row]} />);
+    expect(screen.getByText("USD 100.00")).toBeInTheDocument();
+    expect(screen.getByText(/PEN 378.00.*Cerrado/)).toBeInTheDocument();
+    expect(screen.getByText(/TC de cierre mensual: 3.78.*2026-09/)).toBeInTheDocument();
+    rerender(<PaymentQueueTable {...props} requests={[{ ...row, payment: null }]} />);
+    expect(screen.getByText(/PEN 378.00.*Cerrado/)).toBeInTheDocument();
+    expect(screen.queryByText(/Referencia bancaria/)).not.toBeInTheDocument();
   });
 
   it("muestra lifecycle Payment y completitud backend sin SOURCE_REQUIRED", () => {
@@ -964,9 +1430,11 @@ describe("payment pending queue action", () => {
     await waitFor(() => expect(refetch).toHaveBeenCalledWith({ force: true }));
     expect(mocks.releaseLease).toHaveBeenCalledWith(request.id);
     expect(mocks.invalidateRequestDomain).toHaveBeenCalledWith(request.id);
-    expect(
-      screen.getByRole("button", { name: "Marcar pagos seleccionados" }),
-    ).toBeDisabled();
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Marcar pagos seleccionados" }),
+      ).toBeDisabled(),
+    );
     expect(loadBulkMarkPaidRun(scope, { recover: false })).toBeNull();
   });
 
@@ -1628,6 +2096,7 @@ describe("payment-only Excel action", () => {
     vi.clearAllMocks();
     currentQuery = "";
     roleCode = "GIOF_GESTOR";
+    authUserId = "user-1";
     mocks.usePaymentQueue.mockReturnValue({
       requests: [],
       total: 0,

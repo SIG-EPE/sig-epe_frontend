@@ -1,6 +1,6 @@
 import { Badge } from "@/components/ui/badge";
 import { getPaymentCompletenessPresentation } from "@/lib/payment-completeness";
-import type { PaymentRequest } from "@/types/requests";
+import { FX_POLICY_VERSION, PAYMENT_MISSING_FIELD, type PaymentRequest } from "@/types/requests";
 
 interface PaymentCompletenessStatusProps {
   request: PaymentRequest;
@@ -21,10 +21,18 @@ export function PaymentCompletenessStatus({
       ?? request.payment_details_pending
       ?? request.details_pending,
   });
+  const monthlyUsd = request.currency === "USD" && request.fx_policy_version === FX_POLICY_VERSION.MONTHLY_V1;
+  const labels = monthlyUsd
+    ? [
+        ...(presentation.missingFields.includes(PAYMENT_MISSING_FIELD.OPERATION_REFERENCE) ? ["Falta referencia"] : []),
+        ...(presentation.missingFields.includes(PAYMENT_MISSING_FIELD.PROOF) ? ["Falta constancia"] : []),
+      ]
+    : presentation.labels;
+  if (monthlyUsd && labels.length === 0) return null;
   if (!showComplete && !presentation.hasPendingDetails) return null;
   return (
     <div className="flex flex-wrap gap-1" data-testid="payment-completeness-status">
-      {presentation.labels.map((label) => (
+      {labels.map((label) => (
         <Badge key={label} variant="outline">{label}</Badge>
       ))}
     </div>

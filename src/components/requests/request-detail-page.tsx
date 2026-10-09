@@ -1,8 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { toast } from "sonner";
+import { PaymentValuation } from "@/components/payments/payment-valuation";
 
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -52,7 +53,7 @@ import {
 } from "@/lib/requests";
 import { getSafeDocumentUrl } from "@/lib/safe-url";
 import { useAuthStore } from "@/stores/auth-store";
-import { RENDITION_NEXT_STEP_ACTION, REQUEST_DOCUMENT_CATEGORY, REQUEST_DOCUMENT_SCOPE_TYPE, REQUEST_DOCUMENT_UPLOAD_STATUS, REQUEST_RENDITION_REPORT_STATUS, REQUEST_TYPE, REXAN_OUTCOME, type ApproveRequestDto, type RequestDocument, type RequestRenditionAllocationCoverage, type RequestRenditionReport, type RexanOutcome } from "@/types/requests";
+import { FX_POLICY_VERSION, RENDITION_NEXT_STEP_ACTION, REQUEST_CURRENCY, REQUEST_DOCUMENT_CATEGORY, REQUEST_DOCUMENT_SCOPE_TYPE, REQUEST_DOCUMENT_UPLOAD_STATUS, REQUEST_RENDITION_REPORT_STATUS, REQUEST_TYPE, REXAN_OUTCOME, type ApproveRequestDto, type RequestDocument, type RequestRenditionAllocationCoverage, type RequestRenditionReport, type RexanOutcome } from "@/types/requests";
 import { RequestStatusStepper } from "./request-status-stepper";
 import { RequestDocumentsCard } from "./request-documents-card";
 import { RequestExtraDocumentsModal } from "./request-extra-documents-modal";
@@ -205,6 +206,60 @@ function PaymentProofCard({ items, currency }: { items: PaymentProofDisplayItem[
   );
 }
 
+const MANUAL_SOURCE = {
+  bcrp: "BCRP/SBS (consulta verificada)",
+  bank: "Banco/entidad financiera (documento consultado)",
+  institution: "Documento institucional",
+  other: "Otra fuente",
+} as const;
+
+function limaToday(): string {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/Lima",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date());
+  const part = (type: string) =>
+    parts.find((item) => item.type === type)?.value ?? "";
+  return `${part("year")}-${part("month")}-${part("day")}`;
+}
+
+function validateManualReference(
+  rate: string,
+  date: string,
+  source: string,
+  sourceDetail: string,
+  reason: string,
+): string | null {
+  if (![rate, date, source, reason].every((value) => value.trim())) {
+    return "Ingresa tasa, fecha de la tasa, fuente y justificación de la referencia manual.";
+  }
+  if (!Object.hasOwn(MANUAL_SOURCE, source))
+    return "Selecciona una fuente consultada.";
+  if (source === "other" && !sourceDetail.trim()) {
+    return "Describe brevemente la otra fuente consultada.";
+  }
+  const normalizedRate = rate.trim().replace(",", ".");
+  if (
+    !/^\d{1,12}(?:\.\d{1,12})?$/.test(normalizedRate) ||
+    !/[1-9]/.test(normalizedRate)
+  ) {
+    return "Ingresa una tasa positiva en soles por 1 dólar (hasta 12 decimales, con coma o punto).";
+  }
+  const day = date.trim();
+  const parsed = /^\d{4}-\d{2}-\d{2}$/.test(day) ? new Date(`${day}T00:00:00Z`) : null;
+  if (
+    !parsed ||
+    !Number.isFinite(parsed.getTime()) ||
+    parsed.toISOString().slice(0, 10) !== day ||
+    day > limaToday()
+  ) {
+    return "Ingresa una fecha de la tasa válida, no posterior a hoy en Lima.";
+  }
+  return null;
+}
+
 export function RequestDetailPage() {
   const params = useParams<{ id: string }>();
   const router = useRouter();
@@ -244,6 +299,13 @@ export function RequestDetailPage() {
   const [observeComment, setObserveComment] = useState("");
   const [fieldReference, setFieldReference] = useState("");
   const [approveComment, setApproveComment] = useState("");
+  const [referenceRate, setReferenceRate] = useState("");
+  const [referenceDate, setReferenceDate] = useState("");
+  const [referenceSource, setReferenceSource] = useState("");
+  const [referenceSourceDetail, setReferenceSourceDetail] = useState("");
+  const [referenceReason, setReferenceReason] = useState("");
+  const [approveError, setApproveError] = useState("");
+  const approvalInFlight = useRef(false);
   const [validatedSpentAmount, setValidatedSpentAmount] = useState("");
   const [returnProofDocumentId, setReturnProofDocumentId] = useState("");
   const [rejectReason, setRejectReason] = useState("");
@@ -311,6 +373,9 @@ export function RequestDetailPage() {
   const renditionStatus = getPaymentRequestRenditionStatus(request);
   const editHref = `${ROUTES.REQUESTS}/${request.id}/edit`;
   const isAdvanceSettlement = request.request_type === REQUEST_TYPE.ADVANCE_SETTLEMENT;
+  const canUseManualReference =
+    request.currency === REQUEST_CURRENCY.USD && request.fx_policy_version !== FX_POLICY_VERSION.MONTHLY_V1 && !isAdvanceSettlement;
+  const maxReferenceDate = limaToday();
   const structuredReport = structuredReportState.report;
   const structuredReportTotal = getStructuredReportTotal(structuredReport);
   const hasStructuredGeneratedReport = isAdvanceSettlement && isStructuredGeneratedReportReady(structuredReport);
@@ -365,6 +430,12 @@ export function RequestDetailPage() {
   function openApproveDialog(): void {
     if (!request) return;
     setApproveComment("");
+    setReferenceRate("");
+    setReferenceDate("");
+    setReferenceSource("");
+    setReferenceSourceDetail("");
+    setReferenceReason("");
+    setApproveError("");
     setValidatedSpentAmount(request.rexan_spent_amount === null || request.rexan_spent_amount === undefined ? "" : String(request.rexan_spent_amount));
     setReturnProofDocumentId(request.rexan_return_proof_document_id ?? returnProofDocuments[0]?.id ?? "");
     setApproveOpen(true);
@@ -402,8 +473,29 @@ export function RequestDetailPage() {
   }
 
   async function handleApprove(): Promise<void> {
-    if (!request) return;
+    if (!request || !canReview || approvalInFlight.current) return;
+    setApproveError("");
     const payload: ApproveRequestDto = { comment: approveComment.trim() || undefined };
+    if (canUseManualReference) {
+      const validationError = validateManualReference(
+        referenceRate,
+        referenceDate,
+        referenceSource,
+        referenceSourceDetail,
+        referenceReason,
+      );
+      if (validationError) {
+        setApproveError(validationError);
+        return;
+      }
+      payload.reference_fx_rate = referenceRate.trim().replace(",", ".");
+      payload.reference_effective_date = referenceDate.trim();
+      payload.reference_manual_source =
+        referenceSource === "other"
+          ? `Otra fuente: ${referenceSourceDetail.trim()}`
+          : MANUAL_SOURCE[referenceSource as keyof typeof MANUAL_SOURCE];
+      payload.reference_reason = referenceReason.trim();
+    }
     if (isAdvanceSettlement) {
       if (hasStructuredGeneratedReport && (effectiveSpentAmount === null || !Number.isFinite(effectiveSpentAmount))) {
         toast.error("El informe generado todavía no tiene un total disponible.");
@@ -427,6 +519,7 @@ export function RequestDetailPage() {
         payload.return_proof_document_id = returnProofDocumentId;
       }
     }
+    approvalInFlight.current = true;
     try {
       const approved = await approveRequest(request.id, payload);
       patchRequest(approved);
@@ -439,7 +532,25 @@ export function RequestDetailPage() {
       await refetch({ background: true });
       await requestDocuments.refetch({ background: true });
     } catch (reviewError) {
-      toast.error(getApiErrorMessage(reviewError));
+      if (request.fx_policy_version === FX_POLICY_VERSION.MONTHLY_V1 &&
+        reviewError instanceof ApiRequestError &&
+        reviewError.body.code === "MONTHLY_FX_REFERENCE_REQUIRED") {
+        setApproveError("Manager configure TC referencial del mes. No se puede aprobar esta solicitud hasta entonces.");
+      } else if (
+        reviewError instanceof ApiRequestError &&
+        reviewError.status === 400 &&
+        reviewError.body.code === "INVALID_MANUAL_REFERENCE"
+      ) {
+        setApproveError(
+          "La tasa, fecha efectiva, fuente o justificación no son válidas. Revisa la referencia manual antes de reintentar.",
+        );
+      } else {
+        const message = getApiErrorMessage(reviewError);
+        setApproveError(message);
+        toast.error(message);
+      }
+    } finally {
+      approvalInFlight.current = false;
     }
   }
 
@@ -747,6 +858,13 @@ export function RequestDetailPage() {
         <CardContent className="grid gap-4 md:grid-cols-2">
           <div><p className="text-xs text-muted-foreground">Tipo</p><p className="font-medium">{REQUEST_TYPE_LABELS[request.request_type]}</p></div>
           <div><p className="text-xs text-muted-foreground">Monto</p><p className="font-medium">{formatRequestCurrency(Number(request.requested_amount), request.currency)}</p></div>
+          <div className="md:col-span-2">
+            <PaymentValuation
+              valuation={request.payment?.valuation ?? request.valuation}
+              request={request}
+              monthlyReference={request.payment?.monthly_fx_reference}
+            />
+          </div>
           <div><p className="text-xs text-muted-foreground">Mes</p><p className="font-medium">{getRequestMonthLabel(request.budget_month)}</p></div>
           <div><p className="text-xs text-muted-foreground">Fecha de creación</p><p className="font-medium">{formatRequestDate(request.created_at)}</p></div>
           <div><p className="text-xs text-muted-foreground">Registrado por</p><p className="font-medium">{createdByDisplayName}</p></div>
@@ -856,6 +974,96 @@ export function RequestDetailPage() {
             <DialogDescription>{reviewCopy.approveDescription}</DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
+            {canUseManualReference && (
+              <div className="space-y-3 rounded-md border p-3">
+                <p className="text-sm text-muted-foreground">
+                  Referencia provisional para aprobación; TC final en Cola de Pagos. Ingresa la tasa, fecha, fuente consultada y justificación para registrar una referencia manual auditada. La aprobación sigue sujeta a validación de presupuesto y techo en PEN.
+                </p>
+                <div className="space-y-2">
+                  <label htmlFor="reference-rate" className="text-sm font-medium">
+                    Tasa de referencia (soles por 1 dólar) *
+                  </label>
+                  <Input
+                    id="reference-rate"
+                    required
+                    inputMode="decimal"
+                    value={referenceRate}
+                    onChange={(event) => setReferenceRate(event.target.value)}
+                    placeholder="Si 1 dólar equivale a S/ 3,75, escribe 3,75"
+                    aria-describedby="reference-rate-help"
+                  />
+                  <p id="reference-rate-help" className="text-sm text-muted-foreground">
+                    Si 1 dólar equivale a S/ 3,75, escribe 3,75. Es solo un ejemplo; consulta la tasa real.
+                  </p>
+                </div>
+                <div className="space-y-2">
+                  <label htmlFor="reference-date" className="text-sm font-medium">
+                    Fecha de la tasa *
+                  </label>
+                  <Input
+                    id="reference-date"
+                    required
+                    type="date"
+                    max={maxReferenceDate}
+                    value={referenceDate}
+                    onChange={(event) => setReferenceDate(event.target.value)}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <label htmlFor="reference-source" className="text-sm font-medium">
+                    Fuente manual *
+                  </label>
+                  <select
+                    id="reference-source"
+                    required
+                    className="border-input bg-background h-9 w-full rounded-md border px-3 py-1 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    value={referenceSource}
+                    onChange={(event) => {
+                      setReferenceSource(event.target.value);
+                      setReferenceSourceDetail("");
+                    }}
+                    aria-describedby="reference-source-help"
+                  >
+                    <option value="">Selecciona la fuente consultada</option>
+                    {Object.entries(MANUAL_SOURCE).map(([value, label]) => (
+                      <option key={value} value={value}>
+                        {label}
+                      </option>
+                    ))}
+                  </select>
+                  <p id="reference-source-help" className="text-sm text-muted-foreground">
+                    Elige lo que consultaste realmente; la fuente es tu declaración de la consulta, no una verificación del sistema.
+                  </p>
+                  {referenceSource === "other" && (
+                    <div className="space-y-2">
+                      <label htmlFor="reference-source-detail" className="text-sm font-medium">
+                        Detalle de la fuente *
+                      </label>
+                      <Input
+                        id="reference-source-detail"
+                        required
+                        value={referenceSourceDetail}
+                        onChange={(event) => setReferenceSourceDetail(event.target.value)}
+                        placeholder="Nombre del documento o entidad consultada"
+                      />
+                    </div>
+                  )}
+                </div>
+                <div className="space-y-2">
+                  <label htmlFor="reference-reason" className="text-sm font-medium">
+                    Justificación *
+                  </label>
+                  <Textarea
+                    id="reference-reason"
+                    required
+                    value={referenceReason}
+                    onChange={(event) => setReferenceReason(event.target.value)}
+                    rows={2}
+                    placeholder="Motivo de uso de referencia manual"
+                  />
+                </div>
+              </div>
+            )}
             {isAdvanceSettlement && (
               <div className="space-y-4 rounded-md border p-4">
                 {hasStructuredGeneratedReport ? (
@@ -1003,6 +1211,11 @@ export function RequestDetailPage() {
               </div>
             )}
             <Textarea value={approveComment} onChange={(event) => setApproveComment(event.target.value)} rows={3} placeholder="Comentario opcional" />
+            {approveError && (
+              <p role="alert" className="text-sm text-destructive">
+                {approveError}
+              </p>
+            )}
           </div>
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => setApproveOpen(false)} disabled={approving}>Cancelar</Button>

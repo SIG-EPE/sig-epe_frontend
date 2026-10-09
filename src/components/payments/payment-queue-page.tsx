@@ -27,6 +27,7 @@ import {
   REQUEST_STATUS,
   type PaymentRequest,
   type PaymentQueueRequest,
+  type CompletePaymentDetailsResponse,
   type RejectApprovedPaymentResponse,
   type RegisterPaymentResponse,
 } from "@/types/requests";
@@ -99,6 +100,71 @@ export function getPaymentRegisteredToast(result: RegisterPaymentResponse): {
   };
 }
 
+interface PaymentCompletionOperationalContext {
+  requestId: string;
+  paymentId: string;
+  userId: string;
+  sessionId: string | null;
+  ownerId: string;
+  assignmentVersion: string;
+  pool: typeof GIOF_WORK_POOL.PAYMENT;
+}
+
+function getCanonicalCompletionSnapshot(request: PaymentRequest): string {
+  const payment = request.payment;
+  return JSON.stringify({
+    requestId: request.id,
+    requestType: request.request_type,
+    status: request.status,
+    currency: request.currency,
+    requestedAmount: request.requested_amount,
+    rexanOutcome: request.rexan_outcome ?? null,
+    rexanBalanceAmount: request.rexan_balance_amount ?? null,
+    paymentId: payment?.id ?? request.payment_id ?? null,
+    paidAt: payment?.paid_at ?? request.paid_at ?? null,
+    amountPaid: payment?.amount_paid ?? request.amount_disbursed ?? null,
+    sourceAccountKey: payment?.source_account_key ?? null,
+    operationReference: payment?.operation_reference ?? null,
+    proofDocumentId: payment?.proof_document_id ?? null,
+    proofPending:
+      payment?.proof_pending ??
+      request.payment_proof_pending ??
+      request.proof_pending,
+    detailsPending:
+      payment?.details_pending ??
+      request.payment_details_pending ??
+      request.details_pending,
+    missingFields: [...(payment?.missing_fields ?? [])].sort(),
+    valuation: payment?.valuation ?? request.valuation ?? null,
+  });
+}
+
+function getPaymentCompletionOperationalContext(
+  request: PaymentRequest,
+  userId: string | undefined,
+  sessionId: string | null,
+): PaymentCompletionOperationalContext | null {
+  const paymentId = request.payment?.id ?? request.payment_id;
+  const work = request.giof_work;
+  if (
+    !userId ||
+    !paymentId ||
+    !work ||
+    work.pool !== GIOF_WORK_POOL.PAYMENT ||
+    !work.assigneeId
+  )
+    return null;
+  return {
+    userId,
+    sessionId,
+    requestId: request.id,
+    paymentId,
+    ownerId: work.assigneeId,
+    assignmentVersion: work.assignmentVersion,
+    pool: GIOF_WORK_POOL.PAYMENT,
+  };
+}
+
 export function PaymentQueuePage() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -109,7 +175,15 @@ export function PaymentQueuePage() {
   const canManageAssignments = canManageGiofAssignments(roleCode);
   const canManagePayments = isGiofOperationalRole(roleCode);
   const canRetryRexan = canRetryGiofWork(roleCode);
-  const leaseSet = useGiofWorkLeaseSet();
+  const leaseSet = useGiofWorkLeaseSet((requestId, error) => {
+    if (completionRequest?.id !== requestId) return;
+    toast.error(error.message);
+    setIsCompletionModalOpen(false);
+    setCompletionRequest(null);
+    setCompletionSnapshot(null);
+    setCompletionOperationalContext(null);
+    void activeQueue.refetch({ force: true });
+  });
   const { retryRexanActivation, isLoading: isRetryingRexan } =
     useRetryRexanActivation();
   const [selectedRequest, setSelectedRequest] = useState<PaymentRequest | null>(
@@ -119,6 +193,11 @@ export function PaymentQueuePage() {
     useState<GiofWorkLease | null>(null);
   const [completionRequest, setCompletionRequest] =
     useState<PaymentRequest | null>(null);
+  const [completionSnapshot, setCompletionSnapshot] = useState<string | null>(
+    null,
+  );
+  const [completionOperationalContext, setCompletionOperationalContext] =
+    useState<PaymentCompletionOperationalContext | null>(null);
   const [selectedAssignmentIds, setSelectedAssignmentIds] = useState<string[]>(
     [],
   );
@@ -127,6 +206,7 @@ export function PaymentQueuePage() {
   const [bulkOpen, setBulkOpen] = useState(false);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isCompletionModalOpen, setIsCompletionModalOpen] = useState(false);
+  const completionCleanupRef = useRef(new Set<string>());
   const [rejectionRequest, setRejectionRequest] =
     useState<PaymentRequest | null>(null);
   const [rejectionLease, setRejectionLease] = useState<GiofWorkLease | null>(
@@ -251,6 +331,49 @@ export function PaymentQueuePage() {
       }
     }
   }
+
+  useEffect(() => {
+    if (
+      !isCompletionModalOpen ||
+      !completionRequest ||
+      !completionSnapshot ||
+      !completionOperationalContext
+    )
+      return;
+    const live = displayedRequests.find(
+      (request) => request.id === completionRequest.id,
+    );
+    const currentSnapshot = live ? getCanonicalCompletionSnapshot(live) : null;
+    const currentOperationalContext = live
+      ? getPaymentCompletionOperationalContext(live, user?.id, sessionExpiresAt)
+      : null;
+    if (
+      currentSnapshot === completionSnapshot &&
+      JSON.stringify(currentOperationalContext) ===
+        JSON.stringify(completionOperationalContext)
+    )
+      return;
+    toast.error(
+      "El contexto del pago cambió. Actualiza la bandeja y vuelve a abrir este trabajo.",
+    );
+    setIsCompletionModalOpen(false);
+    setCompletionRequest(null);
+    setCompletionSnapshot(null);
+    setCompletionOperationalContext(null);
+    void leaseSet
+      .release(completionRequest.id)
+      .catch(() => undefined)
+      .finally(() => leaseSet.clearLocal());
+    void activeQueue.refetch({ force: true });
+  }, [
+    completionRequest,
+    completionSnapshot,
+    completionOperationalContext,
+    displayedRequests,
+    isCompletionModalOpen,
+    sessionExpiresAt,
+    user?.id,
+  ]);
 
   useEffect(() => {
     if (!hasInvalidUrl && rawQuery !== canonicalQuery) {
@@ -541,10 +664,24 @@ export function PaymentQueuePage() {
     toast.success(notice.title, { description: notice.description });
   }
 
-  async function refreshAfterCompletion() {
-    if (completionRequest) await leaseSet.release(completionRequest.id);
-    await activeQueue.refetch({ force: true });
+  function refreshAfterCompletion(
+    acknowledgement: CompletePaymentDetailsResponse,
+  ): void {
+    const cleanupIdentity = `${acknowledgement.request_id}:${acknowledgement.payment_id}:${acknowledgement.completed_at ?? "pending"}`;
+    if (completionCleanupRef.current.has(cleanupIdentity)) return;
+    completionCleanupRef.current.add(cleanupIdentity);
+    const capturedLease = leaseSet.captureAndFence(acknowledgement.request_id);
+    setCompletionSnapshot(null);
+    setCompletionOperationalContext(null);
+    setCompletionRequest(null);
+    setIsCompletionModalOpen(false);
     toast.success("Pago completado.");
+    void Promise.allSettled([
+      capturedLease
+        ? leaseSet.releaseCaptured(capturedLease)
+        : Promise.resolve(),
+      activeQueue.refetch({ force: true }),
+    ]);
   }
 
   function setTab(nextStatus: PaymentQueueTab) {
@@ -552,12 +689,35 @@ export function PaymentQueuePage() {
   }
 
   async function openCompletePaymentDetails(request: PaymentRequest) {
+    const operationalContext = getPaymentCompletionOperationalContext(
+      request,
+      user?.id,
+      sessionExpiresAt,
+    );
+    if (!operationalContext) {
+      toast.error(
+        "Este pago no tiene un contexto PAYMENT vigente. Actualiza la cola.",
+      );
+      return;
+    }
     if (request.giof_work) {
       if (!canOperateAssignedGiofWork(request.giof_work, user?.id)) return;
       try {
-        await leaseSet.acquire(request.id, request.giof_work, [
+        const lease = await leaseSet.acquire(request.id, request.giof_work, [
           request.payment?.id ?? request.payment_id ?? "",
         ]);
+        if (
+          !isGiofLeaseCurrent(lease, {
+            requestId: request.id,
+            pool: GIOF_WORK_POOL.PAYMENT,
+            assignmentVersion: request.giof_work.assignmentVersion,
+            ownerId: user?.id,
+          })
+        ) {
+          throw new Error(
+            "No se pudo establecer una sesión PAYMENT vigente. Actualiza la cola.",
+          );
+        }
       } catch (error) {
         toast.error(
           error instanceof Error ? error.message : "Actualiza la cola.",
@@ -566,7 +726,54 @@ export function PaymentQueuePage() {
       }
     }
     setCompletionRequest(request);
+    setCompletionSnapshot(getCanonicalCompletionSnapshot(request));
+    setCompletionOperationalContext(operationalContext);
     setIsCompletionModalOpen(true);
+  }
+
+  async function prepareCompletionSubmit(): Promise<void> {
+    const current = completionRequest;
+    const expectedSnapshot = completionSnapshot;
+    const expectedOperationalContext = completionOperationalContext;
+    if (!current || !expectedSnapshot || !expectedOperationalContext) {
+      throw new Error(
+        "El contexto del pago ya no está vigente. Vuelve a abrirlo desde la bandeja.",
+      );
+    }
+    try {
+      const renewed = await leaseSet.renew(current.id);
+      if (
+        getCanonicalCompletionSnapshot(current) !== expectedSnapshot ||
+        renewed.requestId !== expectedOperationalContext.requestId ||
+        renewed.ownerId !== expectedOperationalContext.ownerId ||
+        renewed.ownerId !== user?.id ||
+        renewed.assignmentVersion !==
+          expectedOperationalContext.assignmentVersion ||
+        renewed.pool !== expectedOperationalContext.pool ||
+        expectedOperationalContext.paymentId !==
+          (current.payment?.id ?? current.payment_id) ||
+        expectedOperationalContext.userId !== user?.id ||
+        expectedOperationalContext.sessionId !== sessionExpiresAt
+      ) {
+        throw new Error(
+          "El contexto del pago cambió. Actualiza la bandeja y vuelve a abrir este trabajo.",
+        );
+      }
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : "El contexto del pago cambió. Actualiza la bandeja y vuelve a abrir este trabajo.";
+      toast.error(message);
+      await leaseSet.release(current.id).catch(() => undefined);
+      leaseSet.clearLocal();
+      setIsCompletionModalOpen(false);
+      setCompletionRequest(null);
+      setCompletionSnapshot(null);
+      setCompletionOperationalContext(null);
+      await activeQueue.refetch({ force: true }).catch(() => undefined);
+      throw error;
+    }
   }
 
   async function retryRexan(request: PaymentRequest) {
@@ -1042,9 +1249,13 @@ export function PaymentQueuePage() {
         open={isCompletionModalOpen}
         onOpenChange={(open) => {
           setIsCompletionModalOpen(open);
-          if (!open && completionRequest)
+          if (!open && completionRequest) {
+            setCompletionSnapshot(null);
+            setCompletionOperationalContext(null);
             void leaseSet.release(completionRequest.id);
+          }
         }}
+        beforeSubmit={prepareCompletionSubmit}
         onSuccess={refreshAfterCompletion}
       />
       <RejectApprovedPaymentModal

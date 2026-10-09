@@ -452,10 +452,9 @@ describe("bulk payment modals", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("sube constancia y completa por PATCH sin exponer monto ni fecha", async () => {
+  it("envía constancia directamente por PATCH sin exponer monto ni fecha", async () => {
     const user = userEvent.setup();
     mocks.completePaymentDetails.mockResolvedValueOnce({ id: "payment-1" });
-    mocks.uploadDocument.mockResolvedValueOnce({ id: "proof-document-1" });
 
     render(
       <CompletePaymentDetailsModal
@@ -488,13 +487,12 @@ describe("bulk payment modals", () => {
         "payment-1",
         expect.objectContaining({
           operation_reference: "OP-456",
-          proof_document_id: "proof-document-1",
+          proof: expect.any(File),
+          command_id: expect.any(String),
         }),
       ),
     );
-    expect(mocks.uploadDocument).toHaveBeenCalledBefore(
-      mocks.completePaymentDetails,
-    );
+    expect(mocks.uploadDocument).not.toHaveBeenCalled();
     expect(
       mocks.completePaymentDetails.mock.calls[0][1].bank_commission,
     ).toBeUndefined();

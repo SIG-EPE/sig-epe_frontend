@@ -18,6 +18,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { ROUTES } from "@/lib/constants";
+import { MonthlyFxCatalogEntry } from "@/components/catalogs/monthly-fx/monthly-fx-catalog-entry";
 
 // -------------------------------------------------------
 // Catalogs index page — 6 catálogos navegables
@@ -111,6 +112,7 @@ export default function CatalogsPage() {
           </Link>
         ))}
       </div>
+      <MonthlyFxCatalogEntry />
     </div>
   );
 }

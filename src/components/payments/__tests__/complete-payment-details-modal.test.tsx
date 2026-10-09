@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -6,17 +6,14 @@ import { CompletePaymentDetailsModal } from "@/components/payments/complete-paym
 import {
   PAYMENT_COMPLETENESS_STATE,
   REQUEST_CURRENCY,
-  REQUEST_DOCUMENT_CATEGORY,
-  REQUEST_DOCUMENT_STORAGE_PROVIDER,
-  REQUEST_DOCUMENT_UPLOAD_STATUS,
   REQUEST_STATUS,
   REQUEST_TYPE,
   type PaymentCompletenessState,
   type PaymentRequest,
-  type RequestDocument,
 } from "@/types/requests";
+import { ApiRequestError } from "@/lib/api-client";
 
-const mocks = vi.hoisted(() => ({ complete: vi.fn(), upload: vi.fn() }));
+const mocks = vi.hoisted(() => ({ complete: vi.fn() }));
 
 vi.mock("@/hooks/use-requests", () => ({
   useCompletePaymentDetails: () => ({
@@ -24,33 +21,15 @@ vi.mock("@/hooks/use-requests", () => ({
     isLoading: false,
     error: null,
   }),
-  useUploadRequestDocument: () => ({
-    uploadDocument: mocks.upload,
-    isLoading: false,
-    error: null,
-  }),
 }));
 
-function uploadedDocument(): RequestDocument {
-  return {
-    id: "proof-document-1",
-    payment_request_id: "request-1",
-    document_category: REQUEST_DOCUMENT_CATEGORY.PAYMENT_PROOF,
-    safe_filename: "constancia.pdf",
-    original_filename: "constancia.pdf",
-    mime_type: "application/pdf",
-    size_bytes: 5,
-    storage_provider: REQUEST_DOCUMENT_STORAGE_PROVIDER.DRIVE,
-    upload_status: REQUEST_DOCUMENT_UPLOAD_STATUS.PERMANENT,
-    created_at: "2026-08-28T10:00:00.000Z",
-  };
-}
-
 function request(completeness: PaymentCompletenessState): PaymentRequest {
-  const referenceMissing = completeness === PAYMENT_COMPLETENESS_STATE.REFERENCE_PENDING
-    || completeness === PAYMENT_COMPLETENESS_STATE.BOTH_PENDING;
-  const proofMissing = completeness === PAYMENT_COMPLETENESS_STATE.PROOF_PENDING
-    || completeness === PAYMENT_COMPLETENESS_STATE.BOTH_PENDING;
+  const referenceMissing =
+    completeness === PAYMENT_COMPLETENESS_STATE.REFERENCE_PENDING ||
+    completeness === PAYMENT_COMPLETENESS_STATE.BOTH_PENDING;
+  const proofMissing =
+    completeness === PAYMENT_COMPLETENESS_STATE.PROOF_PENDING ||
+    completeness === PAYMENT_COMPLETENESS_STATE.BOTH_PENDING;
   return {
     id: "request-1",
     request_code: "SOL-1",
@@ -118,85 +97,206 @@ function request(completeness: PaymentCompletenessState): PaymentRequest {
 describe("CompletePaymentDetailsModal", () => {
   beforeEach(() => {
     mocks.complete.mockReset();
-    mocks.upload.mockReset();
+  });
+
+  it("monthly USD asks only for missing bank evidence and never validates individual FX", async () => {
+    const user = userEvent.setup();
+    const row = request(PAYMENT_COMPLETENESS_STATE.BOTH_PENDING);
+    row.currency = REQUEST_CURRENCY.USD;
+    row.fx_policy_version = "MONTHLY_V1";
+    row.payment!.missing_fields = ["operation_reference", "proof", "final_fx_rate"];
+    mocks.complete.mockResolvedValue({ committed: true });
+    render(<CompletePaymentDetailsModal request={row} open onOpenChange={vi.fn()} onSuccess={vi.fn()} />);
+    expect(screen.queryByLabelText(/^TC final/)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/Confirmo el TC/)).not.toBeInTheDocument();
+    expect(screen.queryByText("Falta TC final confirmado")).not.toBeInTheDocument();
+    expect(screen.getByText(/Pendiente \/ sin valoración/)).toBeInTheDocument();
+    await user.type(screen.getByLabelText(/Referencia de operación/), "BANK-42");
+    await user.click(screen.getByRole("button", { name: "Completar pago" }));
+    expect(mocks.complete).not.toHaveBeenCalled();
+    expect(screen.getByText("Adjunta la constancia de pago.")).toBeInTheDocument();
+    await user.upload(screen.getByLabelText(/Constancia de pago/), new File(["proof"], "proof.pdf", { type: "application/pdf" }));
+    await user.click(screen.getByRole("button", { name: "Completar pago" }));
+    await waitFor(() => expect(mocks.complete).toHaveBeenCalledOnce());
+    expect(mocks.complete.mock.calls[0][1]).toMatchObject({ operation_reference: "BANK-42", proof: expect.any(File) });
+    expect(mocks.complete.mock.calls[0][1]).not.toHaveProperty("final_fx_rate");
+    expect(mocks.complete.mock.calls[0][1]).not.toHaveProperty("final_fx_confirmed");
+  });
+
+  it("monthly USD with only legacy FX missing fields does not submit an empty completion", () => {
+    const row = request(PAYMENT_COMPLETENESS_STATE.REFERENCE_PENDING);
+    row.currency = REQUEST_CURRENCY.USD;
+    row.fx_policy_version = "MONTHLY_V1";
+    row.payment!.missing_fields = ["final_fx_rate", "final_fx_confirmed"];
+    render(<CompletePaymentDetailsModal request={row} open onOpenChange={vi.fn()} onSuccess={vi.fn()} />);
+    expect(screen.queryByLabelText(/^TC final/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Completar pago" })).not.toBeInTheDocument();
+    expect(screen.queryByText("Pago completo")).not.toBeInTheDocument();
+  });
+
+  it.each([false, true])("monthly completion displays original USD and server valuation (closed=%s)", (closed) => {
+    const row = request(PAYMENT_COMPLETENESS_STATE.BOTH_PENDING);
+    row.currency = "USD";
+    row.fx_policy_version = "MONTHLY_V1";
+    row.payment!.original = { amount: "100.00", currency: "USD" };
+    row.payment!.monthly_fx_reference = { year: 2026, month: 9, reference_rate: "3.75" };
+    row.payment!.valuation = { amount_pen: closed ? "378.00" : "375.00", accounting_currency: "PEN", state: closed ? "FINAL" : "PROVISIONAL", reference: null, final_rate: closed ? "3.78" : null, final_confirmed_at: null, final_confirmed_by: null, origin_execution_id: null };
+    if (closed) {
+      row.monthly_fx_applied_close_month = "2026-09-01";
+      row.monthly_fx_applied_close_rate = "3.78";
+    }
+    render(<CompletePaymentDetailsModal request={row} open onOpenChange={vi.fn()} onSuccess={vi.fn()} />);
+    expect(screen.getByText(/Principal de solicitud confirmado: USD 100.00/)).toBeInTheDocument();
+    expect(screen.getByText(closed ? /PEN 378.00.*Cerrado/ : /PEN 375.00.*Provisional/)).toBeInTheDocument();
+    expect(screen.getByText(/Referencia bancaria mensual: 3.75/)).toBeInTheDocument();
+    expect(screen.queryByLabelText(/^TC final/)).not.toBeInTheDocument();
+    const form = screen.getByRole("button", { name: "Completar pago" }).closest("form");
+    expect(form).not.toBeNull();
+    expect(within(form!).getAllByRole("button", { name: /^(Cerrar|Completar pago)$/ })).toHaveLength(2);
   });
 
   it.each([
     [PAYMENT_COMPLETENESS_STATE.REFERENCE_PENDING, true, false],
     [PAYMENT_COMPLETENESS_STATE.PROOF_PENDING, false, true],
     [PAYMENT_COMPLETENESS_STATE.BOTH_PENDING, true, true],
-  ])("renders only missing fields for %s", (completeness, referenceMissing, proofMissing) => {
-    render(<CompletePaymentDetailsModal request={request(completeness)} open onOpenChange={vi.fn()} onSuccess={vi.fn()} />);
+  ])(
+    "renders only missing fields for %s",
+    (completeness, referenceMissing, proofMissing) => {
+      render(
+        <CompletePaymentDetailsModal
+          request={request(completeness)}
+          open
+          onOpenChange={vi.fn()}
+          onSuccess={vi.fn()}
+        />,
+      );
 
-    expect(Boolean(screen.queryByLabelText(/Referencia de operación/))).toBe(referenceMissing);
-    expect(Boolean(screen.queryByLabelText(/Constancia de pago/))).toBe(proofMissing);
-    expect(screen.queryByLabelText(/Cuenta de origen/)).not.toBeInTheDocument();
-    expect(screen.queryByLabelText(/Comisión bancaria/)).not.toBeInTheDocument();
-    expect(screen.queryByLabelText(/Notas/)).not.toBeInTheDocument();
-    expect(screen.queryByLabelText(/^TC final/)).not.toBeInTheDocument();
-    const summary = screen.getByRole("region", { name: "Resumen del pago" });
-    expect(summary.querySelector("input, select, textarea")).toBeNull();
-  });
+      expect(Boolean(screen.queryByLabelText(/Referencia de operación/))).toBe(
+        referenceMissing,
+      );
+      expect(Boolean(screen.queryByLabelText(/Constancia de pago/))).toBe(
+        proofMissing,
+      );
+      expect(
+        screen.queryByLabelText(/Cuenta de origen/),
+      ).not.toBeInTheDocument();
+      expect(
+        screen.queryByLabelText(/Comisión bancaria/),
+      ).not.toBeInTheDocument();
+      expect(screen.queryByLabelText(/Notas/)).not.toBeInTheDocument();
+      expect(screen.queryByLabelText(/^TC final/)).not.toBeInTheDocument();
+      const summary = screen.getByRole("region", { name: "Resumen del pago" });
+      expect(summary.querySelector("input, select, textarea")).toBeNull();
+    },
+  );
 
   it("shows COMPLETE as read-only with no pending action", () => {
-    render(<CompletePaymentDetailsModal request={request(PAYMENT_COMPLETENESS_STATE.COMPLETE)} open onOpenChange={vi.fn()} onSuccess={vi.fn()} />);
+    render(
+      <CompletePaymentDetailsModal
+        request={request(PAYMENT_COMPLETENESS_STATE.COMPLETE)}
+        open
+        onOpenChange={vi.fn()}
+        onSuccess={vi.fn()}
+      />,
+    );
 
-    expect(screen.getByText("Este pago ya tiene referencia y constancia.")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Completar pago" })).not.toBeInTheDocument();
+    expect(
+      screen.getByText("Este pago ya tiene referencia y constancia."),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Completar pago" }),
+    ).not.toBeInTheDocument();
   });
 
-  it("uploads the proof first and PATCHes only reference/proof_document_id", async () => {
+  it("sends the proof and details in one direct multipart PATCH intent", async () => {
     const user = userEvent.setup();
-    const calls: string[] = [];
-    mocks.upload.mockImplementation(async () => { calls.push("upload"); return uploadedDocument(); });
-    mocks.complete.mockImplementation(async () => { calls.push("patch"); return request(PAYMENT_COMPLETENESS_STATE.COMPLETE); });
+    mocks.complete.mockResolvedValue(
+      request(PAYMENT_COMPLETENESS_STATE.COMPLETE),
+    );
     const onSuccess = vi.fn();
-    render(<CompletePaymentDetailsModal request={request(PAYMENT_COMPLETENESS_STATE.BOTH_PENDING)} open onOpenChange={vi.fn()} onSuccess={onSuccess} />);
+    render(
+      <CompletePaymentDetailsModal
+        request={request(PAYMENT_COMPLETENESS_STATE.BOTH_PENDING)}
+        open
+        onOpenChange={vi.fn()}
+        onSuccess={onSuccess}
+      />,
+    );
 
-    await user.type(screen.getByLabelText(/Referencia de operación/), " OP-456 ");
-    await user.upload(screen.getByLabelText(/Constancia de pago/), new File(["proof"], "constancia.pdf", { type: "application/pdf" }));
+    await user.type(
+      screen.getByLabelText(/Referencia de operación/),
+      " OP-456 ",
+    );
+    await user.upload(
+      screen.getByLabelText(/Constancia de pago/),
+      new File(["proof"], "constancia.pdf", { type: "application/pdf" }),
+    );
     await user.click(screen.getByRole("button", { name: "Completar pago" }));
 
     await waitFor(() => expect(onSuccess).toHaveBeenCalledTimes(1));
-    expect(calls).toEqual(["upload", "patch"]);
-    expect(mocks.upload).toHaveBeenCalledWith("request-1", {
-      file: expect.any(File),
-      document_category: REQUEST_DOCUMENT_CATEGORY.PAYMENT_PROOF,
-    });
-    expect(mocks.complete).toHaveBeenCalledWith("payment-1", expect.objectContaining({
-      operation_reference: "OP-456",
-      proof_document_id: "proof-document-1",
-    }));
+    expect(mocks.complete).toHaveBeenCalledWith(
+      "payment-1",
+      expect.objectContaining({
+        operation_reference: "OP-456",
+        proof: expect.any(File),
+        command_id: expect.any(String),
+      }),
+    );
     const payload = mocks.complete.mock.calls[0][1];
     expect(payload).not.toHaveProperty("paid_at");
     expect(payload).not.toHaveProperty("amount_paid");
     expect(payload).not.toHaveProperty("source_account_key");
   });
 
-  it("keeps the modal open and shows a sanitized upload or PATCH error", async () => {
+  it("keeps the modal open and shows a sanitized PATCH error", async () => {
     const user = userEvent.setup();
-    mocks.upload.mockRejectedValueOnce(new Error("No se pudo cargar la constancia."));
+    mocks.complete.mockRejectedValueOnce(
+      new Error("No se pudo cargar la constancia."),
+    );
     const onOpenChange = vi.fn();
-    render(<CompletePaymentDetailsModal request={request(PAYMENT_COMPLETENESS_STATE.PROOF_PENDING)} open onOpenChange={onOpenChange} onSuccess={vi.fn()} />);
+    render(
+      <CompletePaymentDetailsModal
+        request={request(PAYMENT_COMPLETENESS_STATE.PROOF_PENDING)}
+        open
+        onOpenChange={onOpenChange}
+        onSuccess={vi.fn()}
+      />,
+    );
 
-    await user.upload(screen.getByLabelText(/Constancia de pago/), new File(["proof"], "constancia.pdf", { type: "application/pdf" }));
+    await user.upload(
+      screen.getByLabelText(/Constancia de pago/),
+      new File(["proof"], "constancia.pdf", { type: "application/pdf" }),
+    );
     await user.click(screen.getByRole("button", { name: "Completar pago" }));
 
-    expect(await screen.findByRole("alert")).toHaveTextContent("No se pudo cargar la constancia.");
-    expect(mocks.complete).not.toHaveBeenCalled();
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "No se pudo cargar la constancia.",
+    );
+    expect(mocks.complete).toHaveBeenCalledOnce();
     expect(onOpenChange).not.toHaveBeenCalledWith(false);
   });
 
   it("keeps the entered reference when PATCH fails", async () => {
     const user = userEvent.setup();
-    mocks.complete.mockRejectedValueOnce(new Error("No se pudieron guardar los datos pendientes."));
-    render(<CompletePaymentDetailsModal request={request(PAYMENT_COMPLETENESS_STATE.REFERENCE_PENDING)} open onOpenChange={vi.fn()} onSuccess={vi.fn()} />);
+    mocks.complete.mockRejectedValueOnce(
+      new Error("No se pudieron guardar los datos pendientes."),
+    );
+    render(
+      <CompletePaymentDetailsModal
+        request={request(PAYMENT_COMPLETENESS_STATE.REFERENCE_PENDING)}
+        open
+        onOpenChange={vi.fn()}
+        onSuccess={vi.fn()}
+      />,
+    );
 
     const reference = screen.getByLabelText(/Referencia de operación/);
     await user.type(reference, "OP-ERROR");
     await user.click(screen.getByRole("button", { name: "Completar pago" }));
 
-    expect(await screen.findByRole("alert")).toHaveTextContent("No se pudieron guardar los datos pendientes.");
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "No se pudieron guardar los datos pendientes.",
+    );
     expect(reference).toHaveValue("OP-ERROR");
   });
 
@@ -207,8 +307,17 @@ describe("CompletePaymentDetailsModal", () => {
     row.payment!.amount_paid = 1;
     row.payment!.completeness = PAYMENT_COMPLETENESS_STATE.REFERENCE_PENDING;
     row.payment!.missing_fields = ["final_fx_rate", "final_fx_confirmed"];
-    render(<CompletePaymentDetailsModal request={row} open onOpenChange={vi.fn()} onSuccess={vi.fn()} />);
-    expect(screen.queryByLabelText(/Referencia de operación/)).not.toBeInTheDocument();
+    render(
+      <CompletePaymentDetailsModal
+        request={row}
+        open
+        onOpenChange={vi.fn()}
+        onSuccess={vi.fn()}
+      />,
+    );
+    expect(
+      screen.queryByLabelText(/Referencia de operación/),
+    ).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Completar pago" }));
     expect(mocks.complete).not.toHaveBeenCalled();
     await user.type(screen.getByLabelText(/^TC final/), "3.805");
@@ -216,47 +325,105 @@ describe("CompletePaymentDetailsModal", () => {
     await user.click(screen.getByLabelText(/Confirmo el TC/));
     await user.click(screen.getByRole("button", { name: "Completar pago" }));
     await waitFor(() => expect(mocks.complete).toHaveBeenCalledOnce());
-    expect(mocks.complete.mock.calls[0][1]).toEqual(expect.objectContaining({ command_id: expect.any(String), final_fx_rate: "3.805", final_fx_confirmed: true }));
+    expect(mocks.complete.mock.calls[0][1]).toEqual(
+      expect.objectContaining({
+        command_id: expect.any(String),
+        final_fx_rate: "3.805",
+        final_fx_confirmed: true,
+      }),
+    );
     expect(mocks.complete.mock.calls[0][1].operation_reference).toBeUndefined();
   });
 
-  it("reuses uploaded proof and command on explicit retry, but blocks conflict replay", async () => {
+  it("reuses identical proof and command on explicit retry, but blocks coded conflict replay", async () => {
     const user = userEvent.setup();
-    mocks.upload.mockResolvedValue(uploadedDocument());
-    mocks.complete.mockRejectedValueOnce(new Error("Respuesta perdida")).mockRejectedValueOnce({ statusCode: 409 });
-    render(<CompletePaymentDetailsModal request={request(PAYMENT_COMPLETENESS_STATE.PROOF_PENDING)} open onOpenChange={vi.fn()} onSuccess={vi.fn()} />);
-    await user.upload(screen.getByLabelText(/Constancia de pago/), new File(["proof"], "constancia.pdf", { type: "application/pdf" }));
+    mocks.complete
+      .mockRejectedValueOnce(new Error("Respuesta perdida"))
+      .mockRejectedValueOnce(
+        new ApiRequestError(409, {
+          statusCode: 409,
+          code: "GIOF_ASSIGNMENT_VERSION_STALE",
+          message: "stale",
+          error: "Conflict",
+          timestamp: "2026-09-18T00:00:00.000Z",
+          path: "/request-payments/payment-1/details",
+        }),
+      );
+    render(
+      <CompletePaymentDetailsModal
+        request={request(PAYMENT_COMPLETENESS_STATE.PROOF_PENDING)}
+        open
+        onOpenChange={vi.fn()}
+        onSuccess={vi.fn()}
+      />,
+    );
+    await user.upload(
+      screen.getByLabelText(/Constancia de pago/),
+      new File(["proof"], "constancia.pdf", { type: "application/pdf" }),
+    );
     await user.click(screen.getByRole("button", { name: "Completar pago" }));
     await screen.findByText("Respuesta perdida");
     await user.click(screen.getByRole("button", { name: "Completar pago" }));
     await waitFor(() => expect(mocks.complete).toHaveBeenCalledTimes(2));
-    expect(mocks.upload).toHaveBeenCalledOnce();
-    expect(mocks.complete.mock.calls[1][1]).toEqual(mocks.complete.mock.calls[0][1]);
-    expect(await screen.findByRole("alert")).toHaveTextContent(/Actualiza la cola/);
-    expect(screen.getByRole("button", { name: "Completar pago" })).toBeDisabled();
+    expect(mocks.complete.mock.calls[1][1]).toEqual(
+      mocks.complete.mock.calls[0][1],
+    );
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      /La asignación cambió/,
+    );
+    expect(
+      screen.getByRole("button", { name: "Completar pago" }),
+    ).toBeDisabled();
   });
 
-  it.each(["0", "-1", "3e2", "3.1234567890123"])("rejects invalid USD TC %s before uploads", async (rate) => {
-    const user = userEvent.setup();
-    const row = request(PAYMENT_COMPLETENESS_STATE.COMPLETE);
-    row.currency = "USD";
-    row.payment!.missing_fields = ["final_fx_rate", "final_fx_confirmed"];
-    render(<CompletePaymentDetailsModal request={row} open onOpenChange={vi.fn()} onSuccess={vi.fn()} />);
-    await user.type(screen.getByLabelText(/^TC final/), rate);
-    await user.click(screen.getByLabelText(/Confirmo el TC/));
-    await user.click(screen.getByRole("button", { name: "Completar pago" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent(/TC positivo/);
-    expect(mocks.complete).not.toHaveBeenCalled();
-    expect(mocks.upload).not.toHaveBeenCalled();
-  });
+  it.each(["0", "-1", "3e2", "3.1234567890123"])(
+    "rejects invalid USD TC %s before uploads",
+    async (rate) => {
+      const user = userEvent.setup();
+      const row = request(PAYMENT_COMPLETENESS_STATE.COMPLETE);
+      row.currency = "USD";
+      row.payment!.missing_fields = ["final_fx_rate", "final_fx_confirmed"];
+      render(
+        <CompletePaymentDetailsModal
+          request={row}
+          open
+          onOpenChange={vi.fn()}
+          onSuccess={vi.fn()}
+        />,
+      );
+      await user.type(screen.getByLabelText(/^TC final/), rate);
+      await user.click(screen.getByLabelText(/Confirmo el TC/));
+      await user.click(screen.getByRole("button", { name: "Completar pago" }));
+      expect(await screen.findByRole("alert")).toHaveTextContent(/TC positivo/);
+      expect(mocks.complete).not.toHaveBeenCalled();
+    },
+  );
 
   it("keeps accepted final USD valuation read-only even if the budget is negative", () => {
     const row = request(PAYMENT_COMPLETENESS_STATE.COMPLETE);
     row.currency = "USD";
-    row.payment!.valuation = { amount_pen: "380.50", accounting_currency: "PEN", state: "FINAL", reference: null, final_rate: "3.805", final_confirmed_at: "2026-09-10T10:00:00Z", final_confirmed_by: "u", origin_execution_id: null };
-    render(<CompletePaymentDetailsModal request={row} open onOpenChange={vi.fn()} onSuccess={vi.fn()} />);
+    row.payment!.valuation = {
+      amount_pen: "380.50",
+      accounting_currency: "PEN",
+      state: "FINAL",
+      reference: null,
+      final_rate: "3.805",
+      final_confirmed_at: "2026-09-10T10:00:00Z",
+      final_confirmed_by: "u",
+      origin_execution_id: null,
+    };
+    render(
+      <CompletePaymentDetailsModal
+        request={row}
+        open
+        onOpenChange={vi.fn()}
+        onSuccess={vi.fn()}
+      />,
+    );
     expect(screen.queryByLabelText(/^TC final/)).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Completar pago" })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Completar pago" }),
+    ).not.toBeInTheDocument();
     expect(screen.getByText(/TC final confirmado: 3.805/)).toBeInTheDocument();
   });
 });

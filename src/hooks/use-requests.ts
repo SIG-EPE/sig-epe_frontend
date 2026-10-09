@@ -3,10 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { api, ApiRequestError } from "@/lib/api-client";
-export {
-  useBudgetPreview,
-  useRequestFxReference,
-} from "@/hooks/use-request-currency";
+export { useBudgetPreview } from "@/hooks/use-request-currency";
 import {
   useCachedResource,
   type CachedResourceCacheMode,

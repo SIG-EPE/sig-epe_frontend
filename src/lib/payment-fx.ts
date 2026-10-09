@@ -1,5 +1,50 @@
 import { isRexanExcessRequest } from "@/lib/requests";
-import type { PaymentRequest } from "@/types/requests";
+import {
+  FX_POLICY_VERSION,
+  FX_VALUATION_STATE,
+  type FxValuation,
+  type PaymentRequest,
+} from "@/types/requests";
+
+export type MonthlyValuationContext = Partial<
+  Pick<PaymentRequest,
+    | "currency"
+    | "original"
+    | "fx_policy_version"
+    | "monthly_fx_applied_close_month"
+    | "monthly_fx_applied_close_rate"
+  >
+>;
+
+export function isMonthlyUsdValuation(
+  request?: MonthlyValuationContext | null,
+): boolean {
+  return (request?.original?.currency ?? request?.currency) === "USD" &&
+    request?.fx_policy_version === FX_POLICY_VERSION.MONTHLY_V1;
+}
+
+export function hasAppliedMonthlyClose(
+  request?: MonthlyValuationContext | null,
+): boolean {
+  const month = request?.monthly_fx_applied_close_month;
+  const rate = request?.monthly_fx_applied_close_rate;
+  return isMonthlyUsdValuation(request) && typeof month === "string" &&
+    /^\d{4}-(0[1-9]|1[0-2])-01$/.test(month) && !month.startsWith("0000-") &&
+    typeof rate === "string" && /^\d{1,12}(?:\.\d{1,12})?$/.test(rate) && /[1-9]/.test(rate);
+}
+
+export function getPaymentValuationState(
+  request: MonthlyValuationContext | null | undefined,
+  valuation?: FxValuation | null,
+): FxValuation["state"] {
+  if (!valuation || valuation.amount_pen == null) return FX_VALUATION_STATE.UNVALUED;
+  // El servidor conserva el importe; los marcadores sólo evitan un cierre visual falso.
+  if (isMonthlyUsdValuation(request) && valuation.state !== FX_VALUATION_STATE.UNVALUED) {
+    return valuation.state === FX_VALUATION_STATE.FINAL && hasAppliedMonthlyClose(request)
+      ? FX_VALUATION_STATE.FINAL : FX_VALUATION_STATE.PROVISIONAL;
+  }
+  return valuation.state;
+}
 
 export function normalizeFinalRate(value: string): string {
   const text = value.trim();
@@ -38,12 +83,3 @@ export function getExactPayablePrincipal(request: PaymentRequest): string {
     ? String(request.rexan_balance_amount)
     : request.original?.amount ?? request.requested_amount);
 }
-
-export function isPaymentConflict(error: unknown): boolean {
-  if (!error || typeof error !== "object") return false;
-  const record = error as Record<string, unknown>;
-  return record.statusCode === 409 || record.status === 409
-    || /CONFLICT|ALREADY_PAID|STALE|LEASE|ASSIGNMENT/.test(String(record.code ?? record.error_code ?? ""));
-}
-
-export const PAYMENT_CONFLICT_MESSAGE = "El pago o la asignación cambió. Actualiza la cola y revisa el resultado antes de volver a operar; no se reenviará automáticamente.";

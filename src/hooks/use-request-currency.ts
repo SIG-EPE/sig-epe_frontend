@@ -7,7 +7,7 @@ import { QUERY_TAGS } from "@/lib/query-tags";
 import { canPreviewPenBudget } from "@/lib/request-currency-policy";
 import { requestMoneyError } from "@/lib/request-form-money";
 import { useAuthStore } from "@/stores/auth-store";
-import type { BudgetPreviewInput, RequestAllocationsBudgetPreview, RequestAnnualUitLookup, RequestBudgetPreview, RequestFxReferenceResult } from "@/types/requests";
+import type { BudgetPreviewInput, RequestAllocationsBudgetPreview, RequestAnnualUitLookup, RequestBudgetPreview } from "@/types/requests";
 
 interface LookupResult<T> {
   key: string;
@@ -57,14 +57,6 @@ function useScopedLookup<T>(key: readonly unknown[], enabled: boolean, delay: nu
     setNonce((value) => value + 1);
   }
   return { data: visible?.data ?? null, error: visible?.error ?? null, isLoading: allowed && (visible?.loading ?? true), refetch };
-}
-
-export function useRequestFxReference(enabled = true) {
-  return useScopedLookup<RequestFxReferenceResult>(["requests", "fx-reference"], enabled, 0, (signal, force) => cachedQuery({
-    key: ["requests", "fx-reference"], ttlMs: QUERY_CACHE_TTL_MS.MUTABLE_LIST, signal,
-    force,
-    queryFn: (requestSignal) => api.get<RequestFxReferenceResult>("/requests/lookups/fx-reference", { signal: requestSignal }),
-  }));
 }
 
 export function useRequestAnnualUit(year: number | null | undefined, enabled: boolean) {

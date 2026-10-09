@@ -1,7 +1,7 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "@/lib/api-client";
-import { useBudgetPreview, useRequestFxReference } from "@/hooks/use-requests";
+import { useBudgetPreview } from "@/hooks/use-requests";
 import { useRequestAnnualUit } from "@/hooks/use-request-currency";
 import { setQueryCacheAuthNamespace, clearQueryCache, invalidateQueryTag } from "@/lib/query-cache";
 import type { BudgetPreviewInput } from "@/types/requests";
@@ -36,11 +36,11 @@ describe("currency scoped lookups", () => {
     await waitFor(() => expect(api.post).toHaveBeenCalledTimes(2));
     expect(vi.mocked(api.post).mock.calls[1][1]).toMatchObject({ allocations: [{ budget_planning_line_id: "b", amount: "200" }] });
   });
-  it("keeps disabled-provider unavailable honest and isolates auth sessions", async () => {
-    const unavailable = { reference: null, direction: "PEN/USD", fallback: "UNAVAILABLE", last_refresh_failure: "PROVIDER_DISABLED" };
-    vi.mocked(api.get).mockResolvedValue(unavailable);
-    const { result, rerender } = renderHook(() => useRequestFxReference());
-    await waitFor(() => expect(result.current.data).toEqual(unavailable));
+  it("isolates annual UIT auth sessions without any FX lookup", async () => {
+    const annualUit = { year: 2026, annual_uit: "5500.00" };
+    vi.mocked(api.get).mockResolvedValue(annualUit);
+    const { result, rerender } = renderHook(() => useRequestAnnualUit(2026, true));
+    await waitFor(() => expect(result.current.data).toEqual(annualUit));
     auth.accessToken = "";
     setQueryCacheAuthNamespace("anonymous");
     rerender();
@@ -52,6 +52,7 @@ describe("currency scoped lookups", () => {
     expect(result.current.data).toBeNull();
     await waitFor(() => expect(result.current.error?.message).toBe("403"));
     expect(api.get).toHaveBeenCalledTimes(2);
+    expect(api.get).not.toHaveBeenCalledWith(expect.stringContaining("fx-reference"), expect.anything());
   });
   it("loads only the requested year from the request-role endpoint and hides stale years", async () => {
     vi.mocked(api.get)
