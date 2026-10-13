@@ -105,6 +105,7 @@ import {
   REQUEST_DOCUMENT_SCOPE_TYPE,
   REQUEST_DOCUMENT_UPLOAD_STATUS,
   REQUEST_RECEIPT_DUPLICATE_STATUS,
+  REQUEST_RECEIPT_CLASSIFICATION_REASON,
   REQUEST_RECEIPT_DUPLICATE_REVIEW_ACTION,
   type RequestReceiptDuplicateReviewAction,
   REQUEST_RECEIPT_OCR_STATUS,
@@ -876,6 +877,13 @@ function getAllocationChecklist(): ReturnType<
   };
 }
 
+function isReceiptOcrPending(receiptReview: RequestReceiptReview): boolean {
+  return [receiptReview.receipt.ocr_status, receiptReview.latest_extraction?.status].some(
+    (status) => status === REQUEST_RECEIPT_OCR_STATUS.PENDING ||
+      status === REQUEST_RECEIPT_OCR_STATUS.PROCESSING,
+  );
+}
+
 function getReceiptStatusLabel(receiptReview?: RequestReceiptReview): string {
   if (!receiptReview) return "Procesando comprobante";
   if (receiptReview.receipt.duplicate_status === REQUEST_RECEIPT_DUPLICATE_STATUS.DUPLICATE_CONFIRMED)
@@ -884,21 +892,20 @@ function getReceiptStatusLabel(receiptReview?: RequestReceiptReview): string {
     return receiptReview.duplicate_resolution?.fresh === true
       ? receiptReview.receipt.confirmed_at ? "Comprobante registrado" : "No es duplicado · pendiente de nueva confirmación"
       : "Decisión de duplicado no vigente";
-  if (
-    receiptReview.receipt.duplicate_status ===
-    REQUEST_RECEIPT_DUPLICATE_STATUS.POSSIBLE_DUPLICATE
-  )
-    return "Comprobante duplicado por revisar";
-  if (receiptReview.duplicate_candidates.length > 0)
-    return "Comprobante duplicado por revisar";
-  if (receiptReview.receipt.confirmed_at) return "Comprobante registrado";
-
   const status = receiptReview.receipt.ocr_status;
-  if (
-    status === REQUEST_RECEIPT_OCR_STATUS.PENDING ||
-    status === REQUEST_RECEIPT_OCR_STATUS.PROCESSING
-  )
+  if (isReceiptOcrPending(receiptReview))
     return "Procesando comprobante";
+  if (status === REQUEST_RECEIPT_OCR_STATUS.FAILED) return "Requiere revisión";
+  if (receiptReview.duplicate_classification_reason === REQUEST_RECEIPT_CLASSIFICATION_REASON.FISCAL_MATCH ||
+      (receiptReview.duplicate_classification_reason === undefined && receiptReview.duplicate_candidates.length > 0))
+    return "Comprobante duplicado por revisar";
+  if (receiptReview.duplicate_classification_reason === REQUEST_RECEIPT_CLASSIFICATION_REASON.UNRECOGNIZED_DOCUMENT)
+    return "No se pudo identificar un comprobante";
+  if (receiptReview.duplicate_classification_reason === REQUEST_RECEIPT_CLASSIFICATION_REASON.INCOMPLETE_EXTRACTION)
+    return "Datos incompletos · requiere revisión";
+  if (receiptReview.receipt.duplicate_status === REQUEST_RECEIPT_DUPLICATE_STATUS.POSSIBLE_DUPLICATE)
+    return "Requiere revisión";
+  if (receiptReview.receipt.confirmed_at) return "Comprobante registrado";
   if (
     status === REQUEST_RECEIPT_OCR_STATUS.REQUIRES_REVIEW ||
     status === REQUEST_RECEIPT_OCR_STATUS.FAILED
@@ -917,12 +924,15 @@ function getReceiptStatusVariant(
     return "destructive";
   if (receiptReview.receipt.duplicate_status === REQUEST_RECEIPT_DUPLICATE_STATUS.NOT_DUPLICATE_REVIEWED)
     return receiptReview.duplicate_resolution?.fresh === true ? "secondary" : "destructive";
+  if (isReceiptOcrPending(receiptReview)) return "outline";
+  if (receiptReview.receipt.ocr_status === REQUEST_RECEIPT_OCR_STATUS.FAILED) return "secondary";
   if (
-    receiptReview.receipt.duplicate_status ===
-      REQUEST_RECEIPT_DUPLICATE_STATUS.POSSIBLE_DUPLICATE ||
-    receiptReview.duplicate_candidates.length > 0
+    receiptReview.duplicate_classification_reason === REQUEST_RECEIPT_CLASSIFICATION_REASON.FISCAL_MATCH ||
+    (receiptReview.duplicate_classification_reason === undefined && receiptReview.duplicate_candidates.length > 0)
   )
     return "destructive";
+  if (receiptReview.receipt.duplicate_status === REQUEST_RECEIPT_DUPLICATE_STATUS.POSSIBLE_DUPLICATE ||
+      receiptReview.duplicate_classification_reason) return "secondary";
   if (
     receiptReview.receipt.ocr_status ===
       REQUEST_RECEIPT_OCR_STATUS.REQUIRES_REVIEW ||
@@ -2320,7 +2330,11 @@ export function RequestDocumentsCard({
                   (roleCode === ROLE_CODE.GIOF_GESTOR || roleCode === ROLE_CODE.GIOF_MANAGER) &&
                   receiptReview.receipt.duplicate_status !== REQUEST_RECEIPT_DUPLICATE_STATUS.UNIQUE && (
                     <Button type="button" variant="outline" onClick={() => openReceiptReview(receiptReview)}>
-                      Revisar duplicado
+                      {receiptReview.duplicate_classification_reason === REQUEST_RECEIPT_CLASSIFICATION_REASON.FISCAL_MATCH ||
+                        receiptReview.receipt.duplicate_status === REQUEST_RECEIPT_DUPLICATE_STATUS.DUPLICATE_CONFIRMED ||
+                        receiptReview.receipt.duplicate_status === REQUEST_RECEIPT_DUPLICATE_STATUS.NOT_DUPLICATE_REVIEWED ||
+                        (receiptReview.duplicate_classification_reason === undefined && receiptReview.duplicate_candidates.length > 0)
+                        ? "Revisar duplicado" : "Revisar clasificación"}
                     </Button>
                   )}
                 {documentWebUrl ? (

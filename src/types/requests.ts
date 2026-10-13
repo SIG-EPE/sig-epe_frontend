@@ -1193,7 +1193,17 @@ export interface RequestReceiptDuplicateResolution {
   fresh: boolean;
 }
 
+export const REQUEST_RECEIPT_CLASSIFICATION_REASON = {
+  UNRECOGNIZED_DOCUMENT: "UNRECOGNIZED_DOCUMENT",
+  INCOMPLETE_EXTRACTION: "INCOMPLETE_EXTRACTION",
+  FISCAL_MATCH: "FISCAL_MATCH",
+} as const;
+
+export type RequestReceiptClassificationReason =
+  (typeof REQUEST_RECEIPT_CLASSIFICATION_REASON)[keyof typeof REQUEST_RECEIPT_CLASSIFICATION_REASON];
+
 export interface RequestReceiptReview {
+  duplicate_classification_reason?: RequestReceiptClassificationReason | null;
   receipt: RequestReceipt;
   latest_extraction: RequestReceiptExtractionSummary | null;
   duplicate_candidates: RequestReceiptDuplicateCandidate[];

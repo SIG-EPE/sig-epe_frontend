@@ -3075,6 +3075,101 @@ describe("RequestDocumentsCard", () => {
     expect(screen.queryByRole("button", { name: "Confirmar datos" })).not.toBeInTheDocument();
   });
 
+  it.each([
+    ["UNRECOGNIZED_DOCUMENT", REQUEST_RECEIPT_OCR_STATUS.REQUIRES_REVIEW, "No se pudo identificar un comprobante"],
+    ["INCOMPLETE_EXTRACTION", REQUEST_RECEIPT_OCR_STATUS.REQUIRES_REVIEW, "Datos incompletos · requiere revisión"],
+    ["FISCAL_MATCH", REQUEST_RECEIPT_OCR_STATUS.REQUIRES_REVIEW, "Comprobante duplicado por revisar"],
+    [undefined, REQUEST_RECEIPT_OCR_STATUS.REQUIRES_REVIEW, "Requiere revisión"],
+    ["UNRECOGNIZED_DOCUMENT", REQUEST_RECEIPT_OCR_STATUS.PROCESSING, "Procesando comprobante"],
+    ["FISCAL_MATCH", REQUEST_RECEIPT_OCR_STATUS.FAILED, "Requiere revisión"],
+  ] as const)("uses authoritative cause %s with OCR %s even with no visible candidates", async (reason, status, label) => {
+    const review = makeReceiptReview();
+    review.receipt.duplicate_status = REQUEST_RECEIPT_DUPLICATE_STATUS.POSSIBLE_DUPLICATE;
+    review.receipt.ocr_status = status;
+    Object.assign(review, { duplicate_classification_reason: reason });
+    vi.mocked(api.get).mockImplementation(async (path) => path === "/requests/req-1/receipts" ? [review] : []);
+    render(<RequestDocumentsCard request={makeRequest({ request_type: REQUEST_TYPE.SUPPLIER_PAYMENT })}
+      documents={[makeDocument({ document_category: REQUEST_DOCUMENT_CATEGORY.INVOICE })]} />);
+    expect(await screen.findByText(label)).toBeInTheDocument();
+    expect(screen.getByText(label)).toHaveClass(label === "Comprobante duplicado por revisar" ? "bg-destructive" : status === REQUEST_RECEIPT_OCR_STATUS.PROCESSING ? "text-foreground" : "bg-secondary");
+    if (label !== "Comprobante duplicado por revisar") expect(screen.queryByText("Comprobante duplicado por revisar")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Abrir candidato" })).not.toBeInTheDocument();
+  });
+
+  it.each([
+    [REQUEST_RECEIPT_OCR_STATUS.SUCCESS, REQUEST_RECEIPT_OCR_STATUS.PENDING],
+    [REQUEST_RECEIPT_OCR_STATUS.SUCCESS, REQUEST_RECEIPT_OCR_STATUS.PROCESSING],
+    [REQUEST_RECEIPT_OCR_STATUS.PENDING, REQUEST_RECEIPT_OCR_STATUS.SUCCESS],
+    [REQUEST_RECEIPT_OCR_STATUS.PROCESSING, REQUEST_RECEIPT_OCR_STATUS.SUCCESS],
+  ] as const)("gives pending precedence to receipt %s or current latest extraction %s", async (receiptStatus, extractionStatus) => {
+    const review = makeReceiptReview();
+    review.receipt.ocr_status = receiptStatus;
+    review.receipt.confirmed_at = "2026-05-01T10:00:00.000Z";
+    review.receipt.duplicate_status = REQUEST_RECEIPT_DUPLICATE_STATUS.POSSIBLE_DUPLICATE;
+    review.duplicate_classification_reason = "FISCAL_MATCH";
+    review.latest_extraction!.status = extractionStatus;
+    vi.mocked(api.get).mockImplementation(async (path) => path === "/requests/req-1/receipts" ? [review] : []);
+    render(<RequestDocumentsCard request={makeRequest({ request_type: REQUEST_TYPE.SUPPLIER_PAYMENT })}
+      documents={[makeDocument({ document_category: REQUEST_DOCUMENT_CATEGORY.INVOICE })]} />);
+    await waitFor(() => expect(api.get).toHaveBeenCalledWith("/requests/req-1/receipts"));
+    await screen.findByText(/Proveedor SAC · F001-123 · PEN 150.5/);
+    expect(screen.getByText("Procesando comprobante")).toHaveClass("text-foreground");
+    expect(screen.getByText("Procesando comprobante")).not.toHaveClass("bg-destructive", "bg-secondary");
+    expect(screen.queryByText("Comprobante registrado")).not.toBeInTheDocument();
+    expect(screen.queryByText("Comprobante duplicado por revisar")).not.toBeInTheDocument();
+  });
+
+  it("keeps a successful latest extraction unblocked by old processing or failed history", async () => {
+    const review = makeReceiptReview();
+    Object.assign(review, { extractions: [
+      { ...review.latest_extraction, id: "old-processing", status: REQUEST_RECEIPT_OCR_STATUS.PROCESSING },
+      { ...review.latest_extraction, id: "old-failed", status: REQUEST_RECEIPT_OCR_STATUS.FAILED },
+    ] });
+    vi.mocked(api.get).mockImplementation(async (path) => path === "/requests/req-1/receipts" ? [review] : []);
+    render(<RequestDocumentsCard request={makeRequest({ request_type: REQUEST_TYPE.SUPPLIER_PAYMENT })}
+      documents={[makeDocument({ document_category: REQUEST_DOCUMENT_CATEGORY.INVOICE })]} />);
+    expect(await screen.findByText("Pendiente de confirmación")).toHaveClass("bg-primary");
+    expect(screen.queryByText("Procesando comprobante")).not.toBeInTheDocument();
+    expect(screen.queryByText("Requiere revisión")).not.toBeInTheDocument();
+  });
+
+  it("keeps authoritative labels bound to each document even with reversed receipt order", async () => {
+    const unidentified = makeReceiptReview();
+    unidentified.receipt.duplicate_status = REQUEST_RECEIPT_DUPLICATE_STATUS.POSSIBLE_DUPLICATE;
+    unidentified.receipt.ocr_status = REQUEST_RECEIPT_OCR_STATUS.REQUIRES_REVIEW;
+    unidentified.duplicate_classification_reason = "UNRECOGNIZED_DOCUMENT";
+    const matched = makeReceiptReview({ receipt: { ...unidentified.receipt, id: "receipt-2", document_id: "doc-2" }, duplicate_classification_reason: "FISCAL_MATCH" });
+    vi.mocked(api.get).mockImplementation(async (path) => path === "/requests/req-1/receipts" ? [matched, unidentified] : []);
+    render(<RequestDocumentsCard request={makeRequest({ request_type: REQUEST_TYPE.SUPPLIER_PAYMENT })}
+      documents={[makeDocument({ original_filename: "Unidentified.pdf", document_category: REQUEST_DOCUMENT_CATEGORY.INVOICE }),
+        makeDocument({ id: "doc-2", original_filename: "Matched.pdf", document_category: REQUEST_DOCUMENT_CATEGORY.INVOICE })]} />);
+    const label = await screen.findByText("No se pudo identificar un comprobante");
+    expect(label.closest(".rounded-md.border.p-3")).toHaveTextContent("Unidentified.pdf");
+    expect(label.closest(".rounded-md.border.p-3")).not.toHaveTextContent("Matched.pdf");
+    const duplicate = screen.getByText("Comprobante duplicado por revisar");
+    expect(duplicate.closest(".rounded-md.border.p-3")).toHaveTextContent("Matched.pdf");
+    expect(duplicate.closest(".rounded-md.border.p-3")).not.toHaveTextContent("Unidentified.pdf");
+    expect(api.get).toHaveBeenCalledWith("/requests/req-1/receipts");
+  });
+
+  it.each([
+    [REQUEST_RECEIPT_DUPLICATE_STATUS.DUPLICATE_CONFIRMED, true, "Duplicado confirmado · no financiero", "bg-destructive"],
+    [REQUEST_RECEIPT_DUPLICATE_STATUS.NOT_DUPLICATE_REVIEWED, true, "No es duplicado · pendiente de nueva confirmación", "bg-secondary"],
+    [REQUEST_RECEIPT_DUPLICATE_STATUS.NOT_DUPLICATE_REVIEWED, false, "Decisión de duplicado no vigente", "bg-destructive"],
+  ] as const)("preserves explicit %s precedence with server freshness %s over pending extraction", async (duplicateStatus, fresh, label, variantClass) => {
+    const review = makeReceiptReview();
+    review.receipt.duplicate_status = duplicateStatus;
+    review.duplicate_classification_reason = "UNRECOGNIZED_DOCUMENT";
+    review.latest_extraction!.status = REQUEST_RECEIPT_OCR_STATUS.PROCESSING;
+    review.duplicate_resolution = { action: "NOT_DUPLICATE", reason: "Reviewed", actor_id: "giof", actor_role: "GIOF_GESTOR", decided_at: "2026-10-01", fresh };
+    vi.mocked(api.get).mockImplementation(async (path) => path === "/requests/req-1/receipts" ? [review] : []);
+    render(<RequestDocumentsCard request={makeRequest({ request_type: REQUEST_TYPE.SUPPLIER_PAYMENT })}
+      documents={[makeDocument({ document_category: REQUEST_DOCUMENT_CATEGORY.INVOICE })]} />);
+    expect(await screen.findByText(label)).toHaveClass(variantClass);
+    expect(screen.queryByText("Procesando comprobante")).not.toBeInTheDocument();
+    expect(screen.queryByText("No se pudo identificar un comprobante")).not.toBeInTheDocument();
+  });
+
   it("reviews a supplier boleta through the existing PATCH without removing duplicate warnings", async () => {
     const duplicate = makeReceiptReview();
     duplicate.receipt.receipt_type = REQUEST_RECEIPT_TYPE.SALES_RECEIPT;
