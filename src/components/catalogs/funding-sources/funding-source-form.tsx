@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { toast } from "sonner";
+import { ApiRequestError } from "@/lib/api-client";
 import { z } from "zod";
 
 import { useCreateFundingSource, useUpdateFundingSource, useFundingSourceTypes } from "@/hooks/use-catalogs";
@@ -29,7 +30,7 @@ type FundingSourceFormData = z.infer<typeof FundingSourceSchema>;
 interface FundingSourceFormProps {
   item?: FundingSource;
   onClose: () => void;
-  onSuccess: () => void;
+  onSuccess: (source: FundingSource) => void;
 }
 
 export function FundingSourceForm({ item, onClose, onSuccess }: FundingSourceFormProps) {
@@ -47,6 +48,7 @@ export function FundingSourceForm({ item, onClose, onSuccess }: FundingSourceFor
   });
 
   const [errors, setErrors] = useState<Partial<Record<keyof FundingSourceFormData, string>>>({});
+  const [submitError, setSubmitError] = useState<string | null>(null);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -63,6 +65,7 @@ export function FundingSourceForm({ item, onClose, onSuccess }: FundingSourceFor
     }
 
     setErrors({});
+    setSubmitError(null);
 
     try {
       const dto = {
@@ -72,31 +75,38 @@ export function FundingSourceForm({ item, onClose, onSuccess }: FundingSourceFor
         fundingSourceTypeId: parsed.data.fundingSourceTypeId,
       };
 
+      let saved: FundingSource;
       if (isEdit) {
-        await update(dto as UpdateFundingSourceDto);
+        saved = await update(dto as UpdateFundingSourceDto);
         toast.success("Fuente de financiamiento actualizada exitosamente");
       } else {
-        await create(dto as CreateFundingSourceDto);
+        saved = await create(dto as CreateFundingSourceDto);
         toast.success("Fuente de financiamiento creada exitosamente");
       }
 
-      onSuccess();
+      onSuccess(saved);
       onClose();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Error al guardar");
+      const message = err instanceof ApiRequestError && err.status === 403
+        ? "No tienes permiso para guardar fuentes de financiamiento."
+        : err instanceof ApiRequestError && err.status === 409
+          ? "La fuente ya existe o cambió. Revisa los datos."
+          : "No se pudo guardar la fuente. Tus cambios siguen aquí.";
+      setSubmitError(message);
+      toast.error(message);
     }
   };
 
   return (
     <form onSubmit={handleSubmit} className="space-y-4">
       <div className="space-y-1">
-        <Label htmlFor="fundingSourceTypeId">Tipo de Fuente *</Label>
+        <Label id="fundingSourceTypeLabel" htmlFor="fundingSourceTypeId">Tipo de Fuente *</Label>
         <Select
           value={form.fundingSourceTypeId}
           onValueChange={(v) => setForm((f) => ({ ...f, fundingSourceTypeId: v }))}
           disabled={typesLoading}
         >
-          <SelectTrigger className={errors.fundingSourceTypeId ? "border-destructive" : ""}>
+          <SelectTrigger id="fundingSourceTypeId" aria-labelledby="fundingSourceTypeLabel" className={errors.fundingSourceTypeId ? "border-destructive" : ""}>
             <SelectValue placeholder="Seleccionar tipo..." />
           </SelectTrigger>
           <SelectContent>
@@ -149,6 +159,7 @@ export function FundingSourceForm({ item, onClose, onSuccess }: FundingSourceFor
       </div>
 
       <div className="flex justify-end gap-2 pt-2">
+        {submitError && <p role="alert" className="text-sm text-destructive">{submitError}</p>}
         <Button type="button" variant="outline" onClick={onClose} disabled={isLoading}>
           Cancelar
         </Button>

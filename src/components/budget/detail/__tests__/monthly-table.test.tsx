@@ -1,10 +1,11 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { MonthlyTable } from "@/components/budget/detail/monthly-table";
 import {
   MONTHLY_EXECUTION_DETAIL_SOURCE,
+  type MonthlyMovement,
   type ManualExecution,
   type MonthlyEntry,
 } from "@/types/budget";
@@ -269,10 +270,224 @@ describe("MonthlyTable", () => {
     expect(screen.getAllByRole("link", { name: /Ver Solicitud/ })).toHaveLength(
       1,
     );
-    expect(screen.getByText("Rendición")).toBeInTheDocument();
+    expect(screen.getAllByText("Rendición")).toHaveLength(2);
+    expect(screen.queryByText("RENDITION")).not.toBeInTheDocument();
+    expect(screen.queryByText("PAID_ALLOCATION")).not.toBeInTheDocument();
     expect(screen.queryByText("Compra de materiales")).not.toBeInTheDocument();
     expect(screen.getAllByText(/95\.00/)).toHaveLength(2);
   });
+
+  it.each<{
+    source: MonthlyMovement["source"];
+    origin: string;
+    concept: string | null;
+    label: string;
+  }>([
+    {
+      source: "REQUEST",
+      origin: "RENDITION",
+      concept: "RENDITION",
+      label: "Rendición",
+    },
+    {
+      source: "REQUEST",
+      origin: "PAID_ALLOCATION",
+      concept: "PAID_ALLOCATION",
+      label: "Solicitud pagada",
+    },
+    {
+      source: "DIRECT_MANUAL",
+      origin: "MANUAL",
+      concept: "MANUAL",
+      label: "Ejecución manual",
+    },
+    {
+      source: "IMPORTED",
+      origin: "IMPORTED",
+      concept: "IMPORTED",
+      label: "Importado",
+    },
+    {
+      source: "IMPORTED",
+      origin: "IMPORTED",
+      concept: "Imported monthly execution",
+      label: "Importado",
+    },
+    {
+      source: "REQUEST",
+      origin: "PAID_LEGACY",
+      concept: "PAID_LEGACY",
+      label: "Pago histórico",
+    },
+    {
+      source: "DIRECT_MANUAL",
+      origin: "MANUAL",
+      concept: null,
+      label: "Ejecución manual",
+    },
+    {
+      source: "LEGACY_UNRESOLVED",
+      origin: "PAID_LEGACY",
+      concept: "PAID_LEGACY",
+      label: "Legado sin resolver",
+    },
+    {
+      source: "REQUEST",
+      origin: "",
+      concept: "REQUEST",
+      label: "Pago histórico",
+    },
+    {
+      source: "DIRECT_MANUAL",
+      origin: "",
+      concept: "DIRECT_MANUAL",
+      label: "Ejecución manual",
+    },
+    {
+      source: "LEGACY_UNRESOLVED",
+      origin: "",
+      concept: "LEGACY_UNRESOLVED",
+      label: "Legado sin resolver",
+    },
+  ])(
+    "renders readable concept fallback for $source/$origin ($concept)",
+    async ({ source, origin, concept, label }) => {
+      await renderExpandedTable([
+        makeMonthlyEntry({
+          movements: [
+            {
+              id: "fallback",
+              source,
+              origin,
+              concept,
+              amount: 40,
+              currency: "PEN",
+            },
+          ],
+        }),
+      ]);
+      const table = screen.getByRole("table", { name: "Movimientos de Mayo" });
+      const cells = within(table).getAllByRole("cell");
+      expect(cells[2]).toHaveTextContent(label);
+      expect(table).not.toHaveTextContent(
+        /RENDITION|PAID_ALLOCATION|MANUAL|IMPORTED|PAID_LEGACY|REQUEST|LEGACY_UNRESOLVED/,
+      );
+      expect(within(table).queryByRole("link")).not.toBeInTheDocument();
+    },
+  );
+
+  it.each([
+    "Movilidad staff",
+    "PAID_ALLOCATION - movilidad",
+    "MANUAL",
+    "RENDITION",
+  ])(
+    "preserves custom concepts without broad code replacement: %s",
+    async (concept) => {
+      await renderExpandedTable([
+        makeMonthlyEntry({
+          movements: [
+            {
+              id: "custom",
+              source: "REQUEST",
+              origin: "PAID_ALLOCATION",
+              concept,
+              amount: 40,
+              currency: "PEN",
+            },
+          ],
+        }),
+      ]);
+      const table = screen.getByRole("table", { name: "Movimientos de Mayo" });
+      expect(within(table).getAllByRole("cell")[2].textContent).toBe(concept);
+    },
+  );
+
+  it("keeps two movements for the same request, amounts, links and monthly total unchanged", async () => {
+    await renderExpandedTable([
+      makeMonthlyEntry({
+        executed_amount: 855.9,
+        executed_amount_decimal: "855.90",
+        movements: [
+          {
+            id: "rendition-same",
+            source: "REQUEST",
+            origin: "RENDITION",
+            concept: "RENDITION",
+            requestId: "same-request",
+            requestCode: "SOL-2026-0001",
+            amount: 90,
+            amountDecimal: "90",
+            currency: "PEN",
+          },
+          {
+            id: "paid-same",
+            source: "REQUEST",
+            origin: "PAID_ALLOCATION",
+            concept: "PAID_ALLOCATION",
+            requestId: "same-request",
+            requestCode: "SOL-2026-0001",
+            amount: 545.9,
+            amountDecimal: "545.90",
+            currency: "PEN",
+          },
+        ],
+      }),
+    ]);
+    const table = screen.getByRole("table", { name: "Movimientos de Mayo" });
+    expect(within(table).getAllByRole("row")).toHaveLength(3);
+    const links = within(table).getAllByRole("link");
+    expect(links).toHaveLength(2);
+    links.forEach((link) =>
+      expect(link).toHaveAttribute("href", "/requests/same-request"),
+    );
+    const rows = within(table).getAllByRole("row");
+    expect(within(rows[1]).getAllByRole("cell")[3]).toHaveTextContent("S/ 90.00");
+    expect(within(rows[2]).getAllByRole("cell")[3]).toHaveTextContent("S/ 545.90");
+    expect(screen.getAllByText(/855\.90/)).toHaveLength(2);
+  });
+
+  it("preserves MANUAL as custom text when no technical origin identifies a placeholder", async () => {
+    await renderExpandedTable([
+      makeMonthlyEntry({
+        movements: [
+          {
+            id: "custom-manual",
+            source: "DIRECT_MANUAL",
+            concept: "MANUAL",
+            amount: 40,
+            currency: "PEN",
+          },
+        ],
+      }),
+    ]);
+    const table = screen.getByRole("table", { name: "Movimientos de Mayo" });
+    expect(within(table).getAllByRole("cell")[2].textContent).toBe("MANUAL");
+  });
+
+  it.each([null, "Concepto futuro"])(
+    "uses a neutral unknown-source fallback without hiding custom text: %s",
+    async (concept) => {
+      await renderExpandedTable([
+        makeMonthlyEntry({
+          movements: [
+            {
+              id: "future",
+              source: "FUTURE_SOURCE" as MonthlyMovement["source"],
+              concept,
+              amount: 40,
+              currency: "PEN",
+            },
+          ],
+        }),
+      ]);
+      const table = screen.getByRole("table", { name: "Movimientos de Mayo" });
+      expect(within(table).getAllByRole("cell")[2].textContent).toBe(
+        concept ?? "Otro movimiento",
+      );
+      expect(table).not.toHaveTextContent("FUTURE_SOURCE");
+    },
+  );
 
   it("renders imported and manual movements without duplicating legacy manual rows or inventing amounts", async () => {
     manualExecutionsMock = [
@@ -369,7 +584,7 @@ describe("MonthlyTable", () => {
       }),
     ]);
     const table = screen.getByRole("table", { name: "Movimientos de Mayo" });
-    expect(table).toHaveTextContent("Pago legado");
+    expect(table).toHaveTextContent("Pago histórico");
     expect(table).toHaveTextContent("12.50");
     expect(table).toHaveTextContent("10/05/26");
     expect(

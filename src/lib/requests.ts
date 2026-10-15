@@ -37,6 +37,8 @@ import {
   BANK_NAME_BY_CODE,
   BENEFICIARY_DOCUMENT_TYPE,
   REQUEST_STATUS,
+  REQUEST_PAYMENT_STATUS,
+  type RejectBankPaymentResponse,
   REQUEST_CURRENCY,
   REQUEST_DOCUMENT_CATEGORY,
   REQUEST_DOCUMENT_SCOPE_TYPE,
@@ -275,6 +277,60 @@ export async function rejectApprovedPayment(
       },
     },
   );
+}
+
+export function canRejectBankPayment(
+  request: PaymentRequest,
+  roleCode?: string | null,
+): boolean {
+  const payment = request.payment;
+  return (roleCode === ROLE_CODE.GIOF_MANAGER || roleCode === ROLE_CODE.GIOF_GESTOR) &&
+    request.status === REQUEST_STATUS.PAID &&
+    payment?.status === REQUEST_PAYMENT_STATUS.REGISTERED &&
+    Boolean(payment.id) && payment.payment_request_id === request.id &&
+    (request.request_type !== REQUEST_TYPE.ADVANCE_SETTLEMENT || isRexanExcessRequest(request)) &&
+    !(request.request_type === REQUEST_TYPE.ADVANCE && request.advanceSettlements?.some(
+      (child) => [REQUEST_STATUS.APPROVED, REQUEST_STATUS.PAID, REQUEST_STATUS.CLOSED].some(
+        (status) => status === child.status),
+    )) &&
+    Number.isFinite(Number(payment.amount_paid)) && Number(payment.amount_paid) > 0;
+}
+
+export function getBankPaymentRejectionErrorMessage(error: unknown): string {
+  if (error instanceof ApiRequestError) {
+    if (error.status === 401) return "Tu sesión expiró.";
+    if (error.status === 403) return "No tienes autorización vigente para rechazar este pago.";
+    if (error.body.code === "BANK_REJECTION_ADVANCE_ADMINISTRATIVE_REVIEW_REQUIRED") {
+      return "El anticipo fue utilizado por una rendición finalizada y requiere revisión administrativa.";
+    }
+    if (error.body.code === "GIOF_LEASE_FOREIGN") return "Otro operador tiene una sesión activa sobre esta solicitud.";
+    if (error.status === 409) return "El estado o la asignación del pago cambió.";
+  }
+  return "No se pudo confirmar el resultado del rechazo bancario.";
+}
+
+export async function rejectBankPayment(
+  requestId: string,
+  input: RejectApprovedPaymentDto,
+  assignmentVersion?: string,
+  signal?: AbortSignal,
+): Promise<RejectBankPaymentResponse> {
+  signal?.throwIfAborted();
+  const reason = input.reason.trim();
+  if (!reason || reason.length > PAYMENT_REJECTION_REASON_MAX_LENGTH) {
+    throw new Error("Ingresa un motivo de 1 a 1000 caracteres.");
+  }
+  const result = await api.post<RejectBankPaymentResponse>(
+    `/requests/${requestId}/reject-bank-payment`,
+    { reason },
+    { ...(signal ? { signal } : {}), retryUnauthorized: false, headers: assignmentVersion && /^\d+$/.test(assignmentVersion)
+      ? { "x-giof-assignment-version": assignmentVersion } : {} },
+  );
+  if (!result || result.request_id !== requestId || !result.payment_id ||
+    result.status !== REQUEST_PAYMENT_STATUS.BANK_REJECTED) {
+    throw new Error("Respuesta de rechazo no válida. Actualiza para verificar el resultado.");
+  }
+  return result;
 }
 
 function getExtraDocumentMutationOptions(

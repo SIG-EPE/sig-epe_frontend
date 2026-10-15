@@ -3,6 +3,7 @@
 // -------------------------------------------------------
 
 import type { PlanningType } from "@/lib/planning-types";
+import type { ApprovedAmendmentWarning } from "@/hooks/use-approved-amendment";
 
 export const TERRITORY_SELECTION_TARGET_KIND = {
   TERRITORY: "TERRITORY",
@@ -130,10 +131,14 @@ export interface BalanceFilters {
 
 /** Planning line interface */
 export interface PlanningLine {
+  /** Advertencias actuales de GET; ausente no significa que se hayan resuelto. */
+  approved_amendment_warnings?: ApprovedAmendmentWarning[];
   id: string;
   fiscal_year_id: string;
   organizational_unit_id: string;
-  program_id: string | null;
+  program_id?: string | null;
+  /** Identificador camelCase devuelto por la entidad del detalle. */
+  programId?: string | null;
   budget_category_id: string;
   planning_type: PlanningType;
   resource_description: string;

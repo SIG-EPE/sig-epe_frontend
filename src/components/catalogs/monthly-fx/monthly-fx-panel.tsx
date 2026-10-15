@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { toast } from "sonner";
+import { Button } from "@/components/ui/button";
 import {
   Dialog,
   DialogContent,
@@ -88,6 +89,16 @@ export function MonthlyFxPanel({
       .map((row) => [row.month, row]),
   );
   const selected = byMonth.get(selectedMonth);
+  const publishedCloseRate = selected?.closeRate;
+  const isClosed = Boolean(
+    publishedCloseRate && isMonthlyFxRate(publishedCloseRate),
+  );
+  const confirmationClosed = Boolean(
+    confirmation && byMonth.get(confirmation.month)?.closeRate,
+  );
+  useEffect(() => {
+    if (confirmationClosed) setConfirmation(null);
+  }, [confirmationClosed]);
   const normalizedRate = normalizeMonthlyFxRate(rate);
   const validRate = isMonthlyFxRate(normalizedRate);
   const sameRate = selected && normalizedRate === selected.referenceRate;
@@ -116,7 +127,13 @@ export function MonthlyFxPanel({
   }
 
   async function confirmClose() {
-    if (!confirmation || !onCloseMonth || submitting.current || !alive.current) {
+    if (
+      !confirmation ||
+      confirmationClosed ||
+      !onCloseMonth ||
+      submitting.current ||
+      !alive.current
+    ) {
       return;
     }
     submitting.current = true;
@@ -329,8 +346,10 @@ export function MonthlyFxPanel({
             type="text"
             inputMode="decimal"
             autoComplete="off"
-            value={closeRate}
+            readOnly={isClosed}
+            value={isClosed ? displayMonthlyFxRate(publishedCloseRate!) : closeRate}
             onChange={(event) => {
+              if (isClosed) return;
               if (isPartialMonthlyFxRate(event.target.value)) {
                 if (event.target.value.length < closeRate.length) {
                   rejectedCloseEdit.current = false;
@@ -341,6 +360,10 @@ export function MonthlyFxPanel({
               }
             }}
             onPaste={(event) => {
+              if (isClosed) {
+                event.preventDefault();
+                return;
+              }
               if (!isPartialMonthlyFxRate(event.clipboardData.getData("text"))) {
                 event.preventDefault();
                 rejectedCloseEdit.current = true;
@@ -355,33 +378,40 @@ export function MonthlyFxPanel({
             Configura primero la referencia del mes para publicar el cierre.
           </p>
         )}
-        {selected?.closeRate && (
+        {isClosed && (
           <p className="text-sm">
-            Cierre inmutable: {displayMonthlyFxRate(selected.closeRate)}. Solo un
-            reintento numéricamente idéntico puede confirmarse sin cambios.
+            Cierre inmutable: {displayMonthlyFxRate(publishedCloseRate!)}. El mes
+            está cerrado; no se puede editar ni volver a publicar el cierre.
           </p>
         )}
-        <button
-          type="button"
-          disabled={busy || !selected || !onCloseMonth}
-          className="h-10 rounded-md border px-3 disabled:opacity-50"
-          onClick={() => {
-            const normalized = normalizeMonthlyFxRate(closeRate);
-            if (!isMonthlyFxRate(normalized) || rejectedCloseEdit.current) {
-              setError(
-                "Ingresa un TC de cierre positivo (punto o coma, máximo 12 enteros y 12 decimales).",
-              );
-              return;
-            }
-            setError(null);
-            setConfirmation({ year, month: selectedMonth, closeRate: normalized });
-          }}
-        >
-          {selected?.closeRate ? "Reintentar cierre" : "Publicar cierre"}
-        </button>
+        {!isClosed && (
+          <button
+            type="button"
+            disabled={busy || !selected || !onCloseMonth}
+            className="h-10 rounded-md border px-3 disabled:opacity-50"
+            onClick={() => {
+              if (isClosed || busy || !selected || !onCloseMonth) return;
+              const normalized = normalizeMonthlyFxRate(closeRate);
+              if (!isMonthlyFxRate(normalized) || rejectedCloseEdit.current) {
+                setError(
+                  "Ingresa un TC de cierre positivo (punto o coma, máximo 12 enteros y 12 decimales).",
+                );
+                return;
+              }
+              setError(null);
+              setConfirmation({
+                year,
+                month: selectedMonth,
+                closeRate: normalized,
+              });
+            }}
+          >
+            Publicar cierre
+          </button>
+        )}
       </div>
       <Dialog
-        open={confirmation !== null}
+        open={confirmation !== null && !confirmationClosed}
         onOpenChange={(open) => {
           if (!open && !busy) setConfirmation(null);
         }}
@@ -403,16 +433,17 @@ export function MonthlyFxPanel({
             PEN por USD
           </p>
           <DialogFooter>
-            <button
+            <Button
               type="button"
+              variant="outline"
               disabled={busy}
               onClick={() => setConfirmation(null)}
             >
               Cancelar
-            </button>
-            <button type="button" disabled={busy} onClick={confirmClose}>
+            </Button>
+            <Button type="button" disabled={busy} onClick={confirmClose}>
               {busy ? "Publicando…" : "Confirmar cierre"}
-            </button>
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

@@ -1,10 +1,9 @@
 "use client";
 
-import { Fragment } from "react";
+import { Fragment, type ComponentProps } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Checkbox } from "@/components/ui/checkbox";
 import {
   Table,
   TableBody,
@@ -34,10 +33,12 @@ import {
   getRegisteredPartyDocumentLabel,
   getRequestPayableAmount,
   isRexanExcessRequest,
+  canRejectBankPayment,
 } from "@/lib/requests";
 import { getPaymentCompletenessPresentation } from "@/lib/payment-completeness";
 import {
   REQUEST_STATUS,
+  REQUEST_PAYMENT_STATUS,
   type PaymentRejectionProjection,
   type PaymentRequest,
 } from "@/types/requests";
@@ -64,6 +65,7 @@ interface PaymentQueueTableProps {
   isLoading: boolean;
   onRegisterPayment: (request: PaymentRequest) => void;
   onRejectPayment?: (request: PaymentRequest) => void;
+  onRejectBankPayment?: (request: PaymentRequest) => void;
   selectedRequestIds?: string[];
   onToggleRequest?: (requestId: string, checked: boolean) => void;
   onToggleAll?: (checked: boolean) => void;
@@ -81,6 +83,33 @@ interface PaymentQueueTableProps {
   maxSelectedRequests?: number;
   roleCode?: string | null;
   refetchPoolQueue?: (options?: { force?: boolean }) => Promise<void>;
+}
+
+interface PaymentSelectionCheckboxProps
+  extends Omit<ComponentProps<"input">, "type" | "checked" | "onChange"> {
+  checked: boolean | "indeterminate";
+  onCheckedChange: (checked: boolean) => void;
+}
+
+// Mismo control nativo que Revisión y Rendiciones, con estado mixto en cabecera.
+function PaymentSelectionCheckbox({
+  checked,
+  onCheckedChange,
+  ...props
+}: PaymentSelectionCheckboxProps) {
+  return (
+    <input
+      {...props}
+      type="checkbox"
+      className="size-4"
+      checked={checked === true}
+      aria-checked={checked === "indeterminate" ? "mixed" : checked}
+      ref={(input) => {
+        if (input) input.indeterminate = checked === "indeterminate";
+      }}
+      onChange={(event) => onCheckedChange(event.target.checked)}
+    />
+  );
 }
 
 export function isBulkPaymentSelectable(
@@ -116,6 +145,7 @@ export function PaymentQueueTable({
   isLoading,
   onRegisterPayment,
   onRejectPayment,
+  onRejectBankPayment,
   selectedRequestIds = [],
   onToggleRequest,
   onToggleAll,
@@ -188,60 +218,69 @@ export function PaymentQueueTable({
 
   return (
     <div className="overflow-x-auto">
+      {(effectiveBulkAssignmentMode && onToggleAllAssignments) || onToggleRequest ? (
+        <p className="mb-2 text-xs text-muted-foreground">
+          Asignar selecciona trabajos; Pagar confirma transferencias realizadas (máx. {maxSelectedRequests})
+        </p>
+      ) : null}
       <Table>
         <TableHeader>
           <TableRow>
+            <TableHead className="sticky left-0 z-20 w-16 min-w-16 border-r bg-background px-1 py-2 text-center whitespace-normal [&:has([role=checkbox])]:pr-1">
+              {effectiveBulkAssignmentMode && onToggleAllAssignments ? (
+                <div className="flex flex-col items-center gap-1">
+                  <span>Asignar</span>
+                  <label className="inline-flex size-8 items-center justify-center">
+                    <PaymentSelectionCheckbox
+                      checked={assignmentSelectAllState}
+                      disabled={assignableRequests.length === 0}
+                      onCheckedChange={(checked) =>
+                        onToggleAllAssignments(checked === true)
+                      }
+                      aria-label="Asignar trabajos: seleccionar esta página"
+                      title="Seleccionar trabajos asignables visibles"
+                      data-testid="assignment-select-all-checkbox"
+                    />
+                  </label>
+                </div>
+              ) : null}
+            </TableHead>
             {onToggleRequest && (
-              <TableHead className="w-28 min-w-28">
-                <div className="flex flex-col items-start gap-1.5 py-1">
-                  <span className="leading-none">Pago masivo</span>
-                  <div className="inline-flex items-center gap-1.5 whitespace-nowrap text-xs font-normal text-muted-foreground">
-                    <Checkbox
+              <TableHead className="w-16 min-w-16 bg-background px-1 py-2 text-center whitespace-normal [&:has([role=checkbox])]:pr-1">
+                <div className="flex flex-col items-center gap-1">
+                  <span>Pagar</span>
+                  <label className="inline-flex size-8 items-center justify-center">
+                    <span className="sr-only">Seleccionar pago</span>
+                    <PaymentSelectionCheckbox
                       checked={paymentSelectAllState}
                       disabled={!onToggleAll || selectableRequests.length === 0}
                       onCheckedChange={(checked) =>
                         onToggleAll?.(checked === true)
                       }
                       aria-label="Seleccionar solicitudes elegibles de esta página para pago masivo"
+                      title={`Seleccionar pagos (máx. ${maxSelectedRequests})`}
                       data-testid="payment-select-all-checkbox"
                     />
-                    <span aria-hidden="true">
-                      Máximo {maxSelectedRequests} de esta página
-                    </span>
-                  </div>
+                  </label>
                 </div>
               </TableHead>
             )}
-            <TableHead>Código</TableHead>
+            <TableHead className="min-w-25">Código</TableHead>
             <TableHead>Tipo</TableHead>
             <TableHead>A nombre de</TableHead>
             <TableHead>Área</TableHead>
             <TableHead className="text-right">Monto</TableHead>
             <TableHead>Fechas / estado</TableHead>
             <TableHead className="min-w-40">
-              <div className="flex flex-col items-start gap-1.5 py-1">
-                <span className="leading-none">Asignación</span>
-                {effectiveBulkAssignmentMode && onToggleAllAssignments ? (
-                  <div className="inline-flex items-center gap-1.5 whitespace-nowrap text-xs font-normal text-muted-foreground">
-                    <Checkbox
-                      checked={assignmentSelectAllState}
-                      disabled={assignableRequests.length === 0}
-                      onCheckedChange={(checked) =>
-                        onToggleAllAssignments(checked === true)
-                      }
-                      aria-label="Seleccionar esta página"
-                      data-testid="assignment-select-all-checkbox"
-                    />
-                    <span aria-hidden="true">Seleccionar esta página</span>
-                  </div>
-                ) : null}
-              </div>
+              Asignación
             </TableHead>
             <TableHead className="text-right">Acciones</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
           {requests.map((request) => {
+            const bankRejected =
+              request.payment?.status === REQUEST_PAYMENT_STATUS.BANK_REJECTED;
             const canOperate = canOperateAssignedGiofWork(
               request.giof_work,
               currentUserId,
@@ -320,27 +359,57 @@ export function PaymentQueueTable({
             return (
               <Fragment key={request.id}>
                 <TableRow data-testid="payment-queue-row">
-                  {onToggleRequest && (
-                    <TableCell>
-                      {isBulkPaymentSelectable(request, currentUserId) ? (
-                        <Checkbox
-                          checked={selectedRequestIds.includes(request.id)}
+                  <TableCell
+                    className="sticky left-0 z-10 w-16 min-w-16 border-r bg-background px-1 text-center [&:has([role=checkbox])]:pr-1"
+                    onClick={(event) => event.stopPropagation()}
+                  >
+                    {effectiveBulkAssignmentMode && request.giof_work ? (
+                      <label className="inline-flex size-8 items-center justify-center">
+                        <PaymentSelectionCheckbox
+                          checked={selectedAssignmentIds.includes(request.id)}
                           disabled={
-                            !selectedRequestIds.includes(request.id) &&
-                            selectedRequestIds.length >= maxSelectedRequests
+                            !isGiofBulkSelectable(request.giof_work, effectiveBulkAssignmentMode)
                           }
                           title={
-                            !selectedRequestIds.includes(request.id) &&
-                            selectedRequestIds.length >= maxSelectedRequests
-                              ? `Puedes seleccionar como máximo ${maxSelectedRequests} solicitudes.`
-                              : undefined
+                            isGiofBulkSelectable(request.giof_work, effectiveBulkAssignmentMode)
+                              ? "Seleccionar para asignar"
+                              : assignmentDisabledReason
                           }
                           onCheckedChange={(checked) =>
-                            onToggleRequest(request.id, checked === true)
+                            onToggleAssignment?.(request.id, checked === true)
                           }
-                          aria-label={`Seleccionar ${request.request_code ?? request.sequential_number ?? request.id} para pago masivo`}
-                          data-testid="payment-row-checkbox"
+                          aria-label={
+                            isGiofBulkSelectable(request.giof_work, effectiveBulkAssignmentMode)
+                              ? `Seleccionar ${request.request_code ?? "pago"} para asignar`
+                              : `${request.request_code ?? "Pago"}: ${request.status === REQUEST_STATUS.PAID ? "trabajo de pago completo" : "no asignable en su estado actual"}`
+                          }
                         />
+                      </label>
+                    ) : null}
+                  </TableCell>
+                  {onToggleRequest && (
+                    <TableCell className="w-16 min-w-16 bg-background px-1 text-center [&:has([role=checkbox])]:pr-1">
+                      {isBulkPaymentSelectable(request, currentUserId) ? (
+                        <label className="inline-flex size-8 items-center justify-center">
+                          <PaymentSelectionCheckbox
+                            checked={selectedRequestIds.includes(request.id)}
+                            disabled={
+                              !selectedRequestIds.includes(request.id) &&
+                              selectedRequestIds.length >= maxSelectedRequests
+                            }
+                            title={
+                              !selectedRequestIds.includes(request.id) &&
+                              selectedRequestIds.length >= maxSelectedRequests
+                                ? `Puedes seleccionar como máximo ${maxSelectedRequests} solicitudes.`
+                                : undefined
+                            }
+                            onCheckedChange={(checked) =>
+                              onToggleRequest(request.id, checked === true)
+                            }
+                            aria-label={`Seleccionar ${request.request_code ?? request.sequential_number ?? request.id} para pago masivo`}
+                            data-testid="payment-row-checkbox"
+                          />
+                        </label>
                       ) : null}
                     </TableCell>
                   )}
@@ -442,11 +511,15 @@ export function PaymentQueueTable({
                           Aprobado: {formatRequestDate(request.approved_at)}
                         </span>
                       )}
-                      <StatusBadge
-                        status={request.status}
-                        context={request}
-                        surface={REQUEST_STATUS_SURFACE.PAYMENT}
-                      />
+                      {bankRejected ? (
+                        <Badge variant="destructive">Rechazado por el banco</Badge>
+                      ) : (
+                        <StatusBadge
+                          status={request.status}
+                          context={request}
+                          surface={REQUEST_STATUS_SURFACE.PAYMENT}
+                        />
+                      )}
                       {request.rexan_activation && (
                         <Badge
                           variant={
@@ -488,38 +561,6 @@ export function PaymentQueueTable({
                   </TableCell>
                   <TableCell>
                     <div className="flex min-w-36 items-start gap-2">
-                      {effectiveBulkAssignmentMode &&
-                      request.giof_work ? (
-                        <Checkbox
-                          className="mt-0.5"
-                          checked={selectedAssignmentIds.includes(request.id)}
-                          disabled={
-                            !isGiofBulkSelectable(
-                              request.giof_work,
-                              effectiveBulkAssignmentMode,
-                            )
-                          }
-                          title={
-                            isGiofBulkSelectable(
-                              request.giof_work,
-                              effectiveBulkAssignmentMode,
-                            )
-                              ? "Seleccionar para asignar"
-                              : assignmentDisabledReason
-                          }
-                          onCheckedChange={(checked) =>
-                            onToggleAssignment?.(request.id, checked === true)
-                          }
-                          aria-label={
-                            isGiofBulkSelectable(
-                              request.giof_work,
-                              effectiveBulkAssignmentMode,
-                            )
-                              ? `Seleccionar ${request.request_code ?? "pago"} para asignar`
-                              : `${request.request_code ?? "Pago"}: ${request.status === REQUEST_STATUS.PAID ? "trabajo de pago completo" : "no asignable en su estado actual"}`
-                          }
-                        />
-                      ) : null}
                       <GiofWorkStatus
                         requestId={request.id}
                         work={request.giof_work}
@@ -530,7 +571,7 @@ export function PaymentQueueTable({
                   </TableCell>
                   <TableCell className="text-right">
                     <div className="flex flex-col items-end gap-2">
-                      {request.giof_work && refetchPoolQueue && (
+                      {!bankRejected && request.giof_work && refetchPoolQueue && (
                         <GiofOwnershipActions
                           requestId={request.id}
                           label={request.request_code ?? "Pago"}
@@ -540,7 +581,16 @@ export function PaymentQueueTable({
                           refetchPoolQueue={refetchPoolQueue}
                         />
                       )}
-                      {canManagePayments &&
+                      {onRejectBankPayment && canRejectBankPayment(request, roleCode) ? (
+                        <Button
+                          size="sm"
+                          variant="destructive"
+                          onClick={() => onRejectBankPayment(request)}
+                        >
+                          Rechazar por el banco
+                        </Button>
+                      ) : null}
+                      {!bankRejected && canManagePayments &&
                       request.status === REQUEST_STATUS.APPROVED &&
                       hasActivePaymentLease ? (
                         <Button
@@ -550,7 +600,7 @@ export function PaymentQueueTable({
                         >
                           Registrar pago
                         </Button>
-                      ) : canManagePayments &&
+                      ) : !bankRejected && canManagePayments &&
                         request.status === REQUEST_STATUS.APPROVED &&
                         canOperate ? (
                         <Button
@@ -560,7 +610,7 @@ export function PaymentQueueTable({
                         >
                           Procesar
                         </Button>
-                      ) : canManagePayments &&
+                      ) : !bankRejected && canManagePayments &&
                         paymentCompleteness.hasPendingDetails &&
                         getPaymentId(request) &&
                         canOperate ? (
@@ -574,10 +624,10 @@ export function PaymentQueueTable({
                         </Button>
                       ) : request.status === REQUEST_STATUS.PAID ? (
                         <span className="text-sm text-muted-foreground">
-                          Registrado
+                          {bankRejected ? "Registro histórico" : "Registrado"}
                         </span>
                       ) : null}
-                      {request.rexan_activation?.status === "FAILED" &&
+                      {!bankRejected && request.rexan_activation?.status === "FAILED" &&
                         onRetryRexanActivation &&
                         (canOperate || isGiofManager) && (
                           <Button
@@ -618,7 +668,7 @@ export function PaymentQueueTable({
                 {hasAllocations && (
                   <TableRow data-testid="payment-allocation-accordion-row">
                     <TableCell
-                      colSpan={(onToggleRequest ? 1 : 0) + 8}
+                      colSpan={(onToggleRequest ? 1 : 0) + 9}
                       className="bg-muted/30 p-0"
                     >
                       <details className="group px-4 py-3">

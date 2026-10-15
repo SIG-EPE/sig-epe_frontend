@@ -9,6 +9,8 @@ import type { PlanningLine, PlanningLineHierarchyInput } from "@/types/budget";
 export interface ApprovedAmendmentRevision {
   line_id: string;
   revision: string;
+  /** Solo true cuando el servidor habilita edición de categoría y fuentes. */
+  category_funding_edit_ready?: boolean;
 }
 export interface ApprovedAmendmentWarning {
   code:

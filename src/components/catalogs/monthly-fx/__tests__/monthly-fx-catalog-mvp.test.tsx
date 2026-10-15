@@ -126,18 +126,18 @@ describe("catálogo real → API real → fetch de cierre", () => {
     expect(toast.success).not.toHaveBeenCalled();
   });
 
-  it("replay cerrado 200 confirma estado almacenado sin atribuir una nueva escritura", async () => {
+  it("GET cerrado muestra tasa inmutable sin acción de replay ni POST", async () => {
     rows[0].closeRate = "3.8";
     const user = await openCatalog();
-    fetchMock.mockImplementationOnce(async () => reply(rows[0]));
     await user.type(screen.getByLabelText("TC de cierre (PEN por USD)"), "3,800000000000");
-    await user.click(screen.getByRole("button", { name: "Reintentar cierre" }));
-    await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Confirmar cierre" }));
-    await waitFor(() => expect(toast.success).toHaveBeenCalledWith(expect.stringMatching(/reintento idéntico no genera cambios/i)));
+    expect(screen.getByLabelText("TC de cierre (PEN por USD)")).toHaveAttribute("readonly");
+    expect(screen.getByLabelText("TC de cierre (PEN por USD)")).toHaveValue("3.80");
+    expect(screen.queryByRole("button", { name: /Publicar cierre|Reintentar cierre/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(screen.getByText("3.80", { selector: "td" })).toBeInTheDocument();
     expect(screen.getByLabelText("TC referencial (PEN por USD)")).toBeDisabled();
     expect(screen.getByText(/Política mensual OFF/i)).toBeInTheDocument();
-    expect(fetchMock.mock.calls.filter(([, o]) => o?.method === "POST")).toHaveLength(1);
+    expect(fetchMock.mock.calls.filter(([, o]) => o?.method === "POST")).toHaveLength(0);
   });
 
   it.each([404, 409, 403, 503])("error de cierre %s conserva entrada y estado real, sin POST automático", async (status) => {
@@ -162,6 +162,9 @@ describe("catálogo real → API real → fetch de cierre", () => {
     await user.click(screen.getByRole("button", { name: "Publicar cierre" }));
     await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Confirmar cierre" }));
     expect(screen.getByRole("button", { name: "Publicando…" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Publicando…" })).toHaveClass("bg-primary", "disabled:opacity-50");
+    expect(screen.getByRole("button", { name: "Cancelar" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Cancelar" })).toHaveClass("border", "bg-background");
     expect(screen.getByLabelText("Año")).toBeDisabled();
     expect(screen.getByLabelText("Mes")).toBeDisabled();
     expect(screen.queryByText("Cerrado")).not.toBeInTheDocument();
@@ -172,17 +175,47 @@ describe("catálogo real → API real → fetch de cierre", () => {
     await screen.findByText("Cerrado");
   });
 
-  it("cierre distinto 409 conserva el cierre publicado y el texto ingresado", async () => {
-    rows[0].closeRate = "3.8";
+  it("conflicto seguido de GET cerrado sustituye entrada por cierre inmutable", async () => {
     denial = 409;
     const user = await openCatalog();
     await user.type(screen.getByLabelText("TC de cierre (PEN por USD)"), "3.9");
-    await user.click(screen.getByRole("button", { name: "Reintentar cierre" }));
+    await user.click(screen.getByRole("button", { name: "Publicar cierre" }));
+    rows[0].closeRate = "3.8";
     await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Confirmar cierre" }));
     expect(await screen.findByRole("alert")).toHaveTextContent(/inmutable/i);
+    await screen.findByText("Cerrado");
     expect(screen.getByText("3.80", { selector: "td" })).toBeInTheDocument();
-    expect(screen.getByLabelText("TC de cierre (PEN por USD)")).toHaveValue("3.9");
+    expect(screen.getByLabelText("TC de cierre (PEN por USD)")).toHaveValue("3.80");
+    expect(screen.getByLabelText("TC de cierre (PEN por USD)")).toHaveAttribute("readonly");
+    expect(screen.queryByRole("button", { name: /Publicar cierre|Reintentar cierre/ })).not.toBeInTheDocument();
     expect(fetchMock.mock.calls.filter(([, o]) => o?.method === "POST")).toHaveLength(1);
+  });
+
+  it("respuesta perdida permite reenvío manual idéntico antes del GET cerrado", async () => {
+    const user = await openCatalog();
+    fetchMock.mockImplementationOnce(async () => {
+      rows[0].closeRate = "3.785";
+      return reply(null, 503);
+    });
+    await user.type(screen.getByLabelText("TC de cierre (PEN por USD)"), "3.785");
+    await user.click(screen.getByRole("button", { name: "Publicar cierre" }));
+    await user.click(screen.getByRole("button", { name: "Confirmar cierre" }));
+    await screen.findByRole("alert");
+    expect(screen.queryByText("Cerrado")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("TC de cierre (PEN por USD)")).toHaveValue("3.785");
+    expect(fetchMock.mock.calls.filter(([, o]) => o?.method === "POST")).toHaveLength(1);
+    fetchMock.mockImplementationOnce(async () => reply(rows[0]));
+    await user.click(screen.getByRole("button", { name: "Publicar cierre" }));
+    await user.click(screen.getByRole("button", { name: "Confirmar cierre" }));
+    await screen.findByText("Cerrado");
+    const posts = fetchMock.mock.calls.filter(([, o]) => o?.method === "POST");
+    expect(posts).toHaveLength(2);
+    for (const [, options] of posts) {
+      expect(JSON.parse(String(options?.body))).toEqual({ year: 2026, month: 1, closeRate: "3.785" });
+    }
+    expect(toast.success).toHaveBeenCalledWith(expect.stringMatching(/reintento idéntico no genera cambios/i));
+    expect(screen.getByLabelText("TC de cierre (PEN por USD)")).toHaveValue("3.79");
+    expect(screen.queryByRole("button", { name: /Publicar cierre|Reintentar cierre/ })).not.toBeInTheDocument();
   });
 
   it.each(["0", "1000000000000", "3.1234567890123", "1e3"])("validación UI rechaza %s sin confirmación ni POST", async (rate) => {

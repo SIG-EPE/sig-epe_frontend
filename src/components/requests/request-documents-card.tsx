@@ -73,6 +73,8 @@ import {
 } from "@/lib/request-document-upload-queue";
 import { getSafeDocumentUrl } from "@/lib/safe-url";
 import { supplierContractRecommendation } from "@/lib/request-supplier-policy";
+import { getRequestDocumentInformation, REQUEST_DOCUMENT_INFORMATION, SUPPLIER_DOCUMENT_SUGGESTIONS } from "@/lib/request-document-information";
+import { cn } from "@/lib/utils";
 import {
   canManageRequestDocuments,
   formatRequestDateTime,
@@ -570,6 +572,7 @@ interface ChecklistAttachButtonProps {
   disabled: boolean;
   isUploading: boolean;
   onAttach: (category: RequestDocumentCategory, file: File) => void;
+  onBeforeSelect?: (category: RequestDocumentCategory, select: () => void) => void;
 }
 
 type DocumentUploadAction = string;
@@ -591,11 +594,20 @@ interface UploadScopeOptions {
   request_allocation_id?: string;
 }
 
+interface PendingDocumentInformation {
+  category: RequestDocumentCategory;
+  information: string;
+  select: () => void;
+  identity: string;
+  uploaderCategory: RequestDocumentCategory | "";
+}
+
 function ChecklistAttachButton({
   item,
   disabled,
   isUploading,
   onAttach,
+  onBeforeSelect,
 }: ChecklistAttachButtonProps) {
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -621,9 +633,15 @@ function ChecklistAttachButton({
         type="button"
         variant="outline"
         size="sm"
-        className="min-h-11 min-w-11 max-w-full self-start sm:self-center"
+        className="min-h-11 min-w-11 max-w-full h-auto whitespace-normal text-left self-start sm:self-center"
         disabled={disabled}
-        onClick={() => inputRef.current?.click()}
+        onClick={() => {
+          const select = () => {
+            if (inputRef.current && !inputRef.current.disabled) inputRef.current.click();
+          };
+          if (onBeforeSelect) onBeforeSelect(item.category, select);
+          else select();
+        }}
       >
         <Upload className="size-4" />
         {isUploading ? "Subiendo..." : `Adjuntar ${item.label}`}
@@ -731,7 +749,7 @@ const SUPPLIER_PRIMARY_DOCUMENT_CARDS: readonly SupplierDocumentCategoryCard[] =
     },
   ];
 
-const SUPPLIER_COMPLEMENTARY_DOCUMENT_CARDS: readonly SupplierDocumentCategoryCard[] =
+const SUPPLIER_OTHER_MAIN_DOCUMENT_CARDS: readonly SupplierDocumentCategoryCard[] =
   [
     {
       category: REQUEST_DOCUMENT_CATEGORY.QUOTATION,
@@ -743,6 +761,10 @@ const SUPPLIER_COMPLEMENTARY_DOCUMENT_CARDS: readonly SupplierDocumentCategoryCa
       label: "Contrato o convenio",
       formats: "PDF",
     },
+  ];
+
+const SUPPLIER_COMPLEMENTARY_DOCUMENT_CARDS: readonly SupplierDocumentCategoryCard[] =
+  [
     {
       category: REQUEST_DOCUMENT_CATEGORY.EVIDENCE,
       label: "Evidencias",
@@ -1168,6 +1190,10 @@ export function RequestDocumentsCard({
   const [pendingUploadContextChange, setPendingUploadContextChange] =
     useState<PendingUploadContextChange | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [documentInformation, setDocumentInformation] = useState<PendingDocumentInformation | null>(null);
+  const [suggestedDocumentConditions, setSuggestedDocumentConditions] = useState<Partial<Record<RequestDocumentCategory, string>>>({});
+  const pendingInformationRef = useRef(documentInformation);
+  const bypassInformationRef = useRef(false);
   const otherDraftsRef = useRef<HTMLDivElement>(null);
   const queueMonitorRef = useRef<HTMLDivElement>(null);
   const queueWasRunningRef = useRef(false);
@@ -1384,6 +1410,56 @@ export function RequestDocumentsCard({
       auth.accessToken, auth.isLoading, getQueryCacheAuthNamespace(),
     ]);
   }
+
+  function documentInformationIdentity(): string {
+    const actor = useAuthStore.getState().user;
+    return JSON.stringify([request.id, request.request_type, request.currency, request.fiscal_year, actor?.id, actor?.role?.code, getQueryCacheAuthNamespace()]);
+  }
+
+  function showDocumentInformation(nextCategory: RequestDocumentCategory, select: () => void): void {
+    if (!canManageActions || uploadActionsDisabled) return;
+    const information = getRequestDocumentInformation(nextCategory, {
+      advisoryUit,
+      currency: request.currency,
+      fiscalYear: request.fiscal_year,
+      uitYear: hasUitSnapshot ? request.uit_year_applied : annualUit.data?.year,
+    });
+    if (!information) {
+      select();
+      return;
+    }
+    const pending = { category: nextCategory, information, select, identity: documentInformationIdentity(), uploaderCategory: category };
+    pendingInformationRef.current = pending;
+    setDocumentInformation(pending);
+  }
+
+  function closeDocumentInformation(): void {
+    pendingInformationRef.current = null;
+    setDocumentInformation(null);
+  }
+
+  function continueDocumentSelection(): void {
+    const pending = pendingInformationRef.current;
+    closeDocumentInformation();
+    if (!pending || !canManageActions || uploadActionsDisabled ||
+      pending.identity !== documentInformationIdentity() || pending.uploaderCategory !== category) return;
+    const suggestion = isSupplierPayment ? SUPPLIER_DOCUMENT_SUGGESTIONS[pending.category] : undefined;
+    if (suggestion) {
+      setSuggestedDocumentConditions((current) => {
+        const next = { ...current };
+        for (const target of suggestion.categories) next[target] = suggestion.condition;
+        return next;
+      });
+    }
+    pending.select();
+  }
+
+  const currentInformationIdentity = documentInformationIdentity();
+  useLayoutEffect(() => {
+    pendingInformationRef.current = null;
+    setDocumentInformation(null);
+    setSuggestedDocumentConditions({});
+  }, [currentInformationIdentity]);
 
   const currentTagIdentity = tagIdentity();
   useLayoutEffect(() => {
@@ -2454,6 +2530,16 @@ export function RequestDocumentsCard({
       (document) => document.document_category === card.category,
     );
     const isOther = card.category === REQUEST_DOCUMENT_CATEGORY.OTHER;
+    const hasAttachedDocument = categoryDocuments.some((document) => {
+      const projection = effectiveSupplierEvidence.evidence?.documents.find((entry) => entry.id === document.id);
+      return document.payment_request_id === request.id && !document.deleted_at &&
+        (document.upload_status === REQUEST_DOCUMENT_UPLOAD_STATUS.PERMANENT ||
+          document.upload_status === REQUEST_DOCUMENT_UPLOAD_STATUS.SYNCED) &&
+        (!projection || projection.activity_state === SUPPLIER_DOCUMENT_ACTIVITY_STATE.ACTIVE);
+    });
+    const suggestedCondition = canManageActions && !hasAttachedDocument
+      ? suggestedDocumentConditions[card.category]
+      : undefined;
     const item: RequiredDocumentChecklistItem = {
       key: `supplier-${card.category}`,
       category: card.category,
@@ -2470,7 +2556,11 @@ export function RequestDocumentsCard({
         key={card.category}
         data-testid={`supplier-category-${card.category}`}
         data-category={card.category}
-        className="space-y-3 rounded-md border p-4"
+        className={cn(
+          "space-y-3 rounded-md border p-4",
+          suggestedCondition &&
+            "border-amber-600 bg-amber-50 dark:border-amber-400 dark:bg-amber-950/20",
+        )}
         id={`supplier-category-${card.category}`}
         aria-label={card.label}
         tabIndex={-1}
@@ -2492,10 +2582,17 @@ export function RequestDocumentsCard({
                 disabled={uploadActionsDisabled}
                 isUploading={activeUploadAction === card.category}
                 onAttach={handleChecklistAttach}
+                onBeforeSelect={showDocumentInformation}
               />
             )
           ) : null}
         </div>
+        {suggestedCondition ? (
+          <div className="space-y-1 text-sm">
+            <p className="font-medium text-amber-950 dark:text-amber-100">Documento sugerido</p>
+            <p className="text-amber-950 dark:text-amber-100">{suggestedCondition}</p>
+          </div>
+        ) : null}
         {isOther ? (
           canManageActions ? (
             <div className="grid grid-cols-1 gap-3 rounded-md bg-muted/40 p-3 sm:grid-cols-2 sm:items-end">
@@ -2685,7 +2782,7 @@ export function RequestDocumentsCard({
                 Documento principal
               </h3>
               <p className="text-xs text-muted-foreground">
-                Debes adjuntar al menos uno.
+                El requisito de comprobante se cumple con Factura, RH, Boleta o Recibo de caja. Cotización y contrato acompañan según el caso.
               </p>
             </div>
             <Badge
@@ -2710,19 +2807,20 @@ export function RequestDocumentsCard({
             className="grid grid-cols-1 gap-3 md:grid-cols-2"
           >
             {SUPPLIER_PRIMARY_DOCUMENT_CARDS.map(renderSupplierCategoryCard)}
+            {SUPPLIER_OTHER_MAIN_DOCUMENT_CARDS.map(renderSupplierCategoryCard)}
           </div>
         </section>
 
         <section
-          aria-labelledby="supplier-complementary-documents-heading"
+          aria-labelledby="supplier-other-main-documents-heading"
           className="space-y-3 rounded-md border p-4"
         >
-          <h3
-            id="supplier-complementary-documents-heading"
-            className="text-sm font-semibold"
-          >
-            Documentos complementarios
+          <h3 id="supplier-other-main-documents-heading" className="text-sm font-semibold">
+            Otros documentos principales
           </h3>
+          <p className="text-xs text-muted-foreground">
+            Adjunta según el caso. Las recomendaciones no crean requisitos nuevos.
+          </p>
           <div
             data-testid="supplier-complementary-grid"
             className="grid grid-cols-1 gap-3 md:grid-cols-2"
@@ -2900,6 +2998,7 @@ export function RequestDocumentsCard({
                             nextFile,
                           )
                         }
+                        onBeforeSelect={showDocumentInformation}
                       />
                     )}
                   </div>
@@ -3297,6 +3396,7 @@ export function RequestDocumentsCard({
                             disabled={uploadActionsDisabled}
                             isUploading={activeUploadAction === receiptCategory}
                             onAttach={handleChecklistAttach}
+                            onBeforeSelect={showDocumentInformation}
                           />
                         ))}
                       </div>
@@ -3310,6 +3410,7 @@ export function RequestDocumentsCard({
                           disabled={uploadActionsDisabled}
                           isUploading={activeUploadAction === item.category}
                           onAttach={handleChecklistAttach}
+                          onBeforeSelect={showDocumentInformation}
                         />
                       )}
                   </div>
@@ -3463,6 +3564,16 @@ export function RequestDocumentsCard({
                       onChange={(event) => {
                         handleQueueFileChange(event.target.files);
                         event.target.value = "";
+                      }}
+                      onClick={(event) => {
+                        if (bypassInformationRef.current || !category || !REQUEST_DOCUMENT_INFORMATION[category]) return;
+                        event.preventDefault();
+                        const input = event.currentTarget;
+                        showDocumentInformation(category, () => {
+                          if (!input.isConnected || input.disabled) return;
+                          bypassInformationRef.current = true;
+                          try { input.click(); } finally { bypassInformationRef.current = false; }
+                        });
                       }}
                     />
                     <p className="text-xs text-muted-foreground">
@@ -3647,6 +3758,32 @@ export function RequestDocumentsCard({
               {renderDocumentRows(requestLevelGeneralDocuments)}
             </section>
           ))}
+        <Dialog open={documentInformation !== null} onOpenChange={(open) => { if (!open) closeDocumentInformation(); }}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>{documentInformation ? getRequestDocumentCategoryLabel(documentInformation.category) : "Documento"}</DialogTitle>
+              <DialogDescription>
+                {documentInformation?.information}
+              </DialogDescription>
+            </DialogHeader>
+            {request.request_type === REQUEST_TYPE.SUPPLIER_PAYMENT && documentInformation &&
+              SUPPLIER_DOCUMENT_SUGGESTIONS[documentInformation.category] ? (
+              <div className="space-y-2 text-sm">
+                <p className="font-medium">{SUPPLIER_DOCUMENT_SUGGESTIONS[documentInformation.category]?.label}</p>
+                <p>{SUPPLIER_DOCUMENT_SUGGESTIONS[documentInformation.category]?.condition}</p>
+                {documentInformation.category === REQUEST_DOCUMENT_CATEGORY.PROFESSIONAL_FEE_RECEIPT ? (
+                  <p className="text-muted-foreground">Puedes adjuntarla luego desde su tarjeta.</p>
+                ) : null}
+                <p className="text-muted-foreground">Adjunta según el caso. Las recomendaciones no crean requisitos nuevos.</p>
+              </div>
+            ) : null}
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={closeDocumentInformation}>Cancelar</Button>
+              <Button type="button" onClick={continueDocumentSelection}>Entendido, seleccionar archivo</Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
         <Dialog
           open={Boolean(pendingUploadContextChange)}
           onOpenChange={(open) => !open && setPendingUploadContextChange(null)}

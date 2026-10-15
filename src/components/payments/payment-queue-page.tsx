@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { Download, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { useRouter, useSearchParams } from "next/navigation";
 
@@ -21,7 +22,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { usePaymentQueue, useRetryRexanActivation } from "@/hooks/use-requests";
-import { getApiErrorMessage, getPaymentRexanStatusLabel } from "@/lib/requests";
+import { canRejectBankPayment, getApiErrorMessage, getPaymentRexanStatusLabel } from "@/lib/requests";
 import { cn } from "@/lib/utils";
 import {
   REQUEST_STATUS,
@@ -213,6 +214,7 @@ export function PaymentQueuePage() {
     null,
   );
   const [isRejectionOpen, setIsRejectionOpen] = useState(false);
+  const [bankRejectionIntent, setBankRejectionIntent] = useState(false);
   const [isExportingPayment, setIsExportingPayment] = useState(false);
   const paymentExportControllerRef = useRef<AbortController | null>(null);
   const paymentExportInFlightRef = useRef(false);
@@ -259,6 +261,20 @@ export function PaymentQueuePage() {
     enabled: !hasInvalidUrl,
   });
   const displayedRequests = activeQueue.requests;
+  const currentBankRequest = bankRejectionIntent
+    ? displayedRequests.find(
+        (row) => row.id === rejectionRequest?.id &&
+          row.payment?.id === rejectionRequest?.payment?.id &&
+          canRejectBankPayment(row, roleCode),
+      ) ?? null
+    : null;
+  useEffect(() => {
+    if (bankRejectionIntent && isRejectionOpen && !currentBankRequest) {
+      setIsRejectionOpen(false);
+      setRejectionRequest(null);
+      setRejectionLease(null);
+    }
+  }, [bankRejectionIntent, isRejectionOpen, currentBankRequest]);
   const displayedError = activeQueue.error;
   const displayedIsLoading = activeQueue.isLoading;
   const displayedIsRefreshing = activeQueue.isRefreshing;
@@ -504,6 +520,7 @@ export function PaymentQueuePage() {
   }
 
   async function openRejectPayment(request: PaymentRequest): Promise<void> {
+    setBankRejectionIntent(false);
     const work = request.giof_work;
     if (
       request.status !== REQUEST_STATUS.APPROVED ||
@@ -933,22 +950,22 @@ export function PaymentQueuePage() {
       )}
 
       <Card>
-        <CardHeader className="gap-4 md:flex-row md:items-center md:justify-between">
-          <div>
-            <CardTitle>Solicitudes para pago</CardTitle>
-            <CardDescription>
-              {tab === PAYMENT_QUEUE_TAB.APPROVED
-                ? "Solicitudes en gestión de transferencia."
-                : tab === PAYMENT_QUEUE_TAB.PENDING_DATA
-                  ? "Pagos con referencia, constancia o TC final pendiente."
-                  : tab === PAYMENT_QUEUE_TAB.REJECTED
-                    ? "Pagos rechazados después de la aprobación, sin incluir rechazos de revisión."
-                    : "Pagos registrados."}
-            </CardDescription>
-          </div>
-          <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+        <CardHeader className="gap-4">
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div className="min-w-0">
+              <CardTitle>Solicitudes para pago</CardTitle>
+              <CardDescription>
+                {tab === PAYMENT_QUEUE_TAB.APPROVED
+                  ? "Solicitudes en gestión de transferencia."
+                  : tab === PAYMENT_QUEUE_TAB.PENDING_DATA
+                    ? "Pagos con referencia, constancia o TC final pendiente."
+                    : tab === PAYMENT_QUEUE_TAB.REJECTED
+                      ? "Pagos rechazados después de la aprobación, sin incluir rechazos de revisión."
+                      : "Pagos registrados."}
+              </CardDescription>
+            </div>
             {isPaymentExportReady() && canExportPayment && !hasInvalidUrl ? (
-              <div className="flex items-center gap-2">
+              <div className="ml-auto flex flex-wrap items-center gap-2">
                 <Button
                   type="button"
                   variant="outline"
@@ -956,6 +973,11 @@ export function PaymentQueuePage() {
                   aria-busy={isExportingPayment}
                   onClick={() => void exportPaymentExcel()}
                 >
+                  {isExportingPayment ? (
+                    <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+                  ) : (
+                    <Download className="h-4 w-4" aria-hidden="true" />
+                  )}
                   {isExportingPayment ? "Exportando Excel..." : "Exportar Excel"}
                 </Button>
                 {isExportingPayment ? (
@@ -970,8 +992,10 @@ export function PaymentQueuePage() {
                 ) : null}
               </div>
             ) : null}
+          </div>
+          <div className="min-w-0">
             <div
-              className="inline-flex rounded-md border p-1"
+              className="inline-flex flex-wrap rounded-md border p-1"
               role="group"
               aria-label="Vista de pagos"
             >
@@ -1130,6 +1154,13 @@ export function PaymentQueuePage() {
                   ? openRejectPayment
                   : undefined
               }
+              onRejectBankPayment={(request) => {
+                if (!user?.id || !canRejectBankPayment(request, roleCode)) return;
+                setBankRejectionIntent(true);
+                setRejectionRequest(request);
+                setRejectionLease(null);
+                setIsRejectionOpen(true);
+              }}
               onCompletePaymentDetails={openCompletePaymentDetails}
               onRetryRexanActivation={canRetryRexan ? retryRexan : undefined}
               currentUserId={user?.id}
@@ -1259,7 +1290,12 @@ export function PaymentQueuePage() {
         onSuccess={refreshAfterCompletion}
       />
       <RejectApprovedPaymentModal
-        request={rejectionRequest}
+        bankIntent={bankRejectionIntent}
+        onBankSuccess={async (result) => {
+          invalidateRequestDomain(result.request_id);
+          await activeQueue.refetch({ force: true });
+        }}
+        request={bankRejectionIntent ? currentBankRequest : rejectionRequest}
         lease={rejectionLease}
         open={isRejectionOpen}
         onOpenChange={(open) => {
@@ -1268,7 +1304,7 @@ export function PaymentQueuePage() {
             const requestId = rejectionRequest?.id;
             setRejectionRequest(null);
             setRejectionLease(null);
-            if (requestId) void leaseSet.release(requestId);
+            if (requestId && !bankRejectionIntent) void leaseSet.release(requestId);
           }
         }}
         onFailureRefresh={refreshAfterPaymentRejectionFailure}

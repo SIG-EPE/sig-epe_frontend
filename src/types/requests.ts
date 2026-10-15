@@ -698,7 +698,22 @@ export interface MonthlyPaymentReference {
   reference_rate: string;
 }
 
+export const REQUEST_PAYMENT_STATUS = {
+  REGISTERED: "REGISTERED",
+  BANK_REJECTED: "BANK_REJECTED",
+} as const;
+export type RequestPaymentStatus =
+  (typeof REQUEST_PAYMENT_STATUS)[keyof typeof REQUEST_PAYMENT_STATUS];
+
+export interface RejectBankPaymentResponse {
+  payment_id: string;
+  request_id: string;
+  status: typeof REQUEST_PAYMENT_STATUS.BANK_REJECTED;
+}
+
 export interface RequestPayment {
+  /** Solo lectura; APIs anteriores pueden omitirlo, sin inferir REGISTERED. */
+  readonly status?: RequestPaymentStatus | null;
   /** Opcional para respuestas anteriores; nunca derivar de la referencia de aprobación. */
   monthly_fx_reference?: MonthlyPaymentReference | null;
   original?: OriginalPaymentMoney | null;
@@ -1299,6 +1314,9 @@ export interface RequestRenditionRow {
 }
 
 export interface RequestRenditionReport {
+  zero_expense_allocation_ids?: string[];
+  zero_expense_declaration_valid?: boolean;
+  zero_expense_declaration_warning?: string;
   id: string;
   request_id: string;
   status: RequestRenditionReportStatus | string;
@@ -1342,6 +1360,7 @@ export interface RequestRenditionValidationBlocker {
 }
 
 export interface RequestRenditionValidationResponse {
+  zero_expense_allocation_ids?: string[];
   ready: boolean;
   report: RequestRenditionReport;
   totals: RequestRenditionTotals;
@@ -1352,6 +1371,10 @@ export interface RequestRenditionValidationResponse {
 export interface RequestRenditionGenerateResponse {
   report: RequestRenditionReport;
   document: RequestDocument;
+}
+
+export interface ValidateRenditionReportInput {
+  zero_expense_allocation_ids?: string[];
 }
 
 export interface CreateManualRenditionRowInput {

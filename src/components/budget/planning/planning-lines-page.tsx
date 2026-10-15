@@ -326,7 +326,9 @@ export function PlanningLinesPage() {
             />
             <Input
               id="planning-line-code-search"
-              type="search"
+              type="text"
+              role="searchbox"
+              inputMode="search"
               value={codeInput}
               maxLength={20}
               placeholder="Ej. POA-001"

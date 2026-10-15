@@ -1073,7 +1073,7 @@ describe("payment pending queue action", () => {
     const { rerender } = render(<PaymentQueuePage />);
 
     const selectPage = screen.getByRole("checkbox", {
-      name: "Seleccionar esta página",
+      name: "Asignar trabajos: seleccionar esta página",
     });
     await user.click(selectPage);
     await user.click(screen.getByTestId("payment-row-checkbox"));
@@ -1994,7 +1994,7 @@ describe("payment pending queue action", () => {
     expect(screen.getByText(/50\/50 para confirmar/)).toBeInTheDocument();
     const selectedPaymentCheckboxes = screen
       .getAllByTestId("payment-row-checkbox")
-      .filter((checkbox) => checkbox.getAttribute("data-state") === "checked");
+      .filter((checkbox) => checkbox instanceof HTMLInputElement && checkbox.checked);
     expect(selectedPaymentCheckboxes).toHaveLength(50);
     expect(
       screen.getByRole("checkbox", {
@@ -2064,7 +2064,7 @@ describe("payment pending queue action", () => {
         name: /SOL-FOREIGN-LEASE para pago masivo/,
       }),
     ).not.toBeInTheDocument();
-    expect(screen.getByText("Máximo 50 de esta página")).toBeInTheDocument();
+    expect(screen.getByText("Asignar selecciona trabajos; Pagar confirma transferencias realizadas (máx. 50)")).toBeInTheDocument();
   });
 
   it.each([
@@ -2121,6 +2121,9 @@ describe("payment-only Excel action", () => {
       vi.mocked(downloadPaymentQueueExport).mockResolvedValue(result);
       const user = userEvent.setup();
       render(<PaymentQueuePage />);
+      const resultsHeader = screen.getByText("Solicitudes para pago").parentElement?.parentElement;
+      expect(resultsHeader).toContainElement(screen.getByRole("button", { name: "Exportar Excel" }));
+      expect(resultsHeader).not.toContainElement(screen.getByRole("group", { name: "Vista de pagos" }));
       await user.click(screen.getByRole("button", { name: "Exportar Excel" }));
       expect(downloadPaymentQueueExport).toHaveBeenCalledOnce();
       expect(downloadPaymentQueueExport).toHaveBeenCalledWith(

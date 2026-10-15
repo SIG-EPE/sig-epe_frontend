@@ -466,7 +466,7 @@ describe("REXAN payment queue and modal", () => {
     expect(paymentSelection).not.toBeChecked();
   });
 
-  it("usa controles del sistema visual y separa los selectores compactos en ambos encabezados", async () => {
+  it("usa checkboxes nativos como Revisión y Rendiciones y separa los selectores compactos", async () => {
     const user = userEvent.setup();
     const onToggleAll = vi.fn();
     const onToggleAllAssignments = vi.fn();
@@ -494,37 +494,40 @@ describe("REXAN payment queue and modal", () => {
       name: "Seleccionar solicitudes elegibles de esta página para pago masivo",
     });
     const assignmentSelectAll = screen.getByRole("checkbox", {
-      name: "Seleccionar esta página",
+      name: "Asignar trabajos: seleccionar esta página",
     });
-    const assignmentHeader = screen.getByText("Asignación").closest("th");
-    const paymentHeader = screen.getByText("Pago masivo").closest("th");
+    const assignmentHeader = assignmentSelectAll.closest("th");
+    const paymentHeader = paymentSelectAll.closest("th");
 
-    expect(paymentSelectAll).toHaveAttribute("data-slot", "checkbox");
-    expect(assignmentSelectAll).toHaveAttribute("data-slot", "checkbox");
-    expect(paymentSelectAll.tagName).toBe("BUTTON");
-    expect(assignmentSelectAll.tagName).toBe("BUTTON");
+    expect(paymentSelectAll.tagName).toBe("INPUT");
+    expect(assignmentSelectAll.tagName).toBe("INPUT");
+    expect(paymentSelectAll).toBePartiallyChecked();
+    expect(assignmentSelectAll).toBePartiallyChecked();
     expect(paymentSelectAll).toHaveAttribute("aria-checked", "mixed");
     expect(assignmentSelectAll).toHaveAttribute("aria-checked", "mixed");
-    expect(paymentHeader).toHaveClass("min-w-28");
-    expect(assignmentHeader).toHaveClass("min-w-40");
-    expect(paymentHeader?.firstElementChild).toHaveClass("flex-col", "gap-1.5");
-    expect(assignmentHeader?.firstElementChild).toHaveClass(
-      "flex-col",
-      "gap-1.5",
-    );
+    expect(paymentHeader).toHaveClass("min-w-16");
+    expect(assignmentHeader).toHaveClass("sticky", "left-0", "min-w-16");
+    expect(assignmentHeader?.parentElement?.firstElementChild).toBe(assignmentHeader);
+    expect(assignmentHeader?.nextElementSibling).toBe(paymentHeader);
+    expect(paymentHeader?.nextElementSibling).toHaveTextContent("Código");
+    expect(paymentSelectAll.closest("label")).toHaveClass("inline-flex", "size-8");
+    const assignmentCell = screen
+      .getByRole("checkbox", { name: "Seleccionar SOL-1 para asignar" })
+      .closest("td");
+    expect(assignmentCell).toHaveClass("sticky", "left-0");
+    expect(assignmentCell?.parentElement?.firstElementChild).toBe(assignmentCell);
+    expect(within(assignmentCell!).getAllByRole("checkbox")).toHaveLength(1);
+    expect(assignmentSelectAll).toHaveClass("size-4");
+    expect(assignmentSelectAll.closest("label")).toHaveClass("size-8");
     expect(
-      screen
-        .getByRole("checkbox", { name: "Seleccionar SOL-1 para asignar" })
-        .closest("td")?.firstElementChild,
-    ).toHaveClass("min-w-36", "items-start", "gap-2");
-    expect(
-      within(paymentHeader!).getByText("Máximo 50 de esta página"),
-    ).toBeInTheDocument();
-    expect(
-      within(assignmentHeader!).getByText("Seleccionar esta página"),
+      screen.getByText("Asignar selecciona trabajos; Pagar confirma transferencias realizadas (máx. 50)"),
     ).toBeInTheDocument();
     for (const control of screen.getAllByRole("checkbox")) {
-      expect(control).toHaveAttribute("data-slot", "checkbox");
+      expect(control.tagName).toBe("INPUT");
+      expect(control).toHaveAttribute("type", "checkbox");
+      expect(control).toHaveClass("size-4");
+      expect(control).not.toHaveClass("rounded");
+      expect(control.closest("label")).toHaveClass("size-8");
     }
     expect(
       screen.queryByText("Seleccionar trabajos asignables visibles"),
@@ -534,6 +537,82 @@ describe("REXAN payment queue and modal", () => {
     await user.keyboard(" ");
     expect(onToggleAllAssignments).toHaveBeenCalledWith(true);
     expect(onToggleAll).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["Asignar", "assignment-select-all-checkbox", "Asignar trabajos: seleccionar esta página"],
+    ["Pagar", "payment-select-all-checkbox", "Seleccionar solicitudes elegibles de esta página para pago masivo"],
+  ])("muestra encabezado visible %s directamente sobre su checkbox nativo", (title, testId, accessibleName) => {
+    render(
+      <PaymentQueueTable
+        requests={[makeRequest()]}
+        isLoading={false}
+        onRegisterPayment={vi.fn()}
+        currentUserId="giof-1"
+        isGiofManager
+        onToggleRequest={vi.fn()}
+        onToggleAll={vi.fn()}
+        onToggleAssignment={vi.fn()}
+        onToggleAllAssignments={vi.fn()}
+      />,
+    );
+
+    const control = screen.getByRole("checkbox", { name: accessibleName });
+    expect(control).toBe(screen.getByTestId(testId));
+    const header = control.closest("th")!;
+    const heading = within(header).getByText(title, { exact: true });
+    expect(heading).toBeVisible();
+    expect(heading).not.toHaveClass("sr-only");
+    expect(heading.nextElementSibling).toBe(control.closest("label"));
+    expect(heading.parentElement).toHaveClass("flex-col", "items-center", "gap-1");
+    expect(header).toHaveClass("min-w-16", "whitespace-normal");
+    expect(header).not.toHaveClass("w-10", "max-w-10", "overflow-hidden");
+    expect(control).toHaveAttribute("type", "checkbox");
+    expect(control.tagName).toBe("INPUT");
+    expect(control).toHaveClass("size-4");
+    expect(control).not.toHaveAttribute("data-state");
+    expect(control.closest("label")).toHaveClass("size-8");
+  });
+
+  it("encabezados visibles conservan handlers independientes y una sola ayuda", async () => {
+    const user = userEvent.setup();
+    const onToggleAll = vi.fn();
+    const onToggleAllAssignments = vi.fn();
+    render(
+      <PaymentQueueTable
+        requests={[makeRequest()]}
+        isLoading={false}
+        onRegisterPayment={vi.fn()}
+        currentUserId="giof-1"
+        isGiofManager
+        onToggleRequest={vi.fn()}
+        onToggleAll={onToggleAll}
+        onToggleAssignment={vi.fn()}
+        onToggleAllAssignments={onToggleAllAssignments}
+      />,
+    );
+
+    const headers = screen.getAllByRole("columnheader");
+    expect(within(headers[0]).getByText("Asignar", { exact: true })).toBeVisible();
+    expect(within(headers[1]).getByText("Pagar", { exact: true })).toBeVisible();
+    expect(headers[2]).toHaveTextContent("Código");
+    expect(headers[0]).toHaveClass("sticky", "left-0");
+    expect(headers[1]).not.toHaveClass("sticky");
+    const cells = within(screen.getByTestId("payment-queue-row")).getAllByRole("cell");
+    expect(cells[0]).toHaveClass("sticky", "left-0", "w-16", "min-w-16", "text-center");
+    expect(cells[1]).toHaveClass("w-16", "min-w-16", "text-center");
+    expect(cells[1]).not.toHaveClass("sticky");
+    expect(screen.getAllByText("Asignar selecciona trabajos; Pagar confirma transferencias realizadas (máx. 50)")).toHaveLength(1);
+    expect(screen.queryByText("Seleccionar pagos (máx. 50)")).not.toBeInTheDocument();
+    expect(screen.queryByText("Seleccionar trabajos asignables visibles")).not.toBeInTheDocument();
+
+    await user.click(within(headers[0]).getByRole("checkbox").closest("label")!);
+    expect(onToggleAllAssignments).toHaveBeenCalledExactlyOnceWith(true);
+    expect(onToggleAll).not.toHaveBeenCalled();
+    onToggleAllAssignments.mockClear();
+    await user.click(within(headers[1]).getByRole("checkbox").closest("label")!);
+    expect(onToggleAll).toHaveBeenCalledExactlyOnceWith(true);
+    expect(onToggleAllAssignments).not.toHaveBeenCalled();
   });
 
   it("muestra badges pendientes y acción para completar datos sin editar monto", () => {

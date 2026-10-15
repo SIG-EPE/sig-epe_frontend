@@ -27,6 +27,7 @@ import { useAuthStore } from "@/stores/auth-store";
 import {
   MONTHLY_EXECUTION_DETAIL_SOURCE,
   MONTHLY_MOVEMENT_SOURCE,
+  POA_EXECUTION_SYSTEM_WINNER,
   type MonthlyEntry,
   type MonthlyExecutionDetail,
   type MonthlyMovement,
@@ -137,14 +138,45 @@ function getMovementSourceLabel(movement: MonthlyMovement): string {
     case MONTHLY_MOVEMENT_SOURCE.REQUEST:
       if (movement.origin === "RENDITION") return "Rendición";
       if (movement.origin === "PAID_ALLOCATION") return "Solicitud pagada";
-      return "Pago legado";
+      return "Pago histórico";
     case MONTHLY_MOVEMENT_SOURCE.DIRECT_MANUAL:
-      return "Directo / manual";
+      return "Ejecución manual";
     case MONTHLY_MOVEMENT_SOURCE.IMPORTED:
       return "Importado";
-    default:
+    case MONTHLY_MOVEMENT_SOURCE.LEGACY_UNRESOLVED:
       return "Legado sin resolver";
+    default:
+      return "Otro movimiento";
   }
+}
+
+function getMovementConceptLabel(movement: MonthlyMovement): string {
+  // El DTO usa el origen como concepto técnico; no sustituir glosas parciales.
+  const isSystemOrigin =
+    ((movement.source === MONTHLY_MOVEMENT_SOURCE.REQUEST ||
+      movement.source === MONTHLY_MOVEMENT_SOURCE.LEGACY_UNRESOLVED) &&
+      Object.values(POA_EXECUTION_SYSTEM_WINNER).some(
+        (origin) => origin === movement.origin,
+      )) ||
+    (movement.source === MONTHLY_MOVEMENT_SOURCE.DIRECT_MANUAL &&
+      movement.origin === "MANUAL") ||
+    (movement.source === MONTHLY_MOVEMENT_SOURCE.IMPORTED &&
+      movement.origin === "IMPORTED");
+  const isImportedPlaceholder =
+    movement.source === MONTHLY_MOVEMENT_SOURCE.IMPORTED &&
+    movement.concept === "Imported monthly execution";
+  const isSourcePlaceholder =
+    movement.concept === movement.source &&
+    Object.values(MONTHLY_MOVEMENT_SOURCE).some(
+      (source) => source === movement.source,
+    );
+
+  return !movement.concept ||
+    (isSystemOrigin && movement.concept === movement.origin) ||
+    isImportedPlaceholder ||
+    isSourcePlaceholder
+    ? getMovementSourceLabel(movement)
+    : movement.concept;
 }
 
 function formatMovementAmount(movement: MonthlyMovement): string {
@@ -510,7 +542,7 @@ export function MonthlyTable({
                                             </Link>
                                           ) : null}
                                           <span className="block">
-                                            {movement.concept || "Sin concepto"}
+                                            {getMovementConceptLabel(movement)}
                                           </span>
                                         </td>
                                         <td className="p-2 text-right font-mono whitespace-nowrap">

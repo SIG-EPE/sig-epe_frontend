@@ -31,6 +31,7 @@ import {
 import { isUnclassifiedLabel } from "@/lib/poa-territory-selection";
 import { ROLE_CAPABILITY, hasRoleCapability } from "@/lib/role-capabilities";
 import { ROLE_CODE } from "@/lib/constants";
+import { api } from "@/lib/api-client";
 
 function formatCurrency(amount: number): string {
   return new Intl.NumberFormat("es-PE", {
@@ -98,6 +99,68 @@ function getLineFundingSources(line: PlanningLine): FundingSourceAllocation[] {
   return line.fundingSources ?? line.partners ?? [];
 }
 
+interface SavedAmendmentWarnings {
+  line: PlanningLine;
+  warnings: ApprovedAmendmentWarning[];
+}
+
+function CompactFinancialWarnings({ warnings }: { warnings: ApprovedAmendmentWarning[] }) {
+  if (!warnings.length) return null;
+  const groups = new Map<string, ApprovedAmendmentWarning[]>();
+  const other: ApprovedAmendmentWarning[] = [];
+  for (const warning of warnings) {
+    const isUnknown = warning.code === "UNKNOWN_VALUATION";
+    const isCeiling = warning.scope === "UNIT_YEAR" &&
+      (warning.code === "CEILING_EXCEEDED" || warning.code === "HISTORICAL_OVERRUN");
+    if (!isUnknown && !isCeiling) {
+      other.push(warning);
+      continue;
+    }
+    // Solo esta línea/UO: no mezclar años, estados ni causas del techo con meses.
+    const scope = isUnknown && (warning.scope === "MONTH" || warning.scope === "TOTAL")
+      ? "LINE_VALUATION" : warning.scope;
+    const key = `${isUnknown ? "UNKNOWN" : "CEILING"}-${scope}-${warning.fiscalYear ?? "unspecified"}-${warning.status}`;
+    const group = groups.get(key) ?? [];
+    group.push(warning);
+    groups.set(key, group);
+  }
+  return (
+    <Alert role="region" aria-label="Avisos financieros (informativos)">
+      <AlertDescription>
+        <strong>Avisos financieros (informativos)</strong>
+        <ul className="mt-2 list-disc space-y-1 pl-5">
+          {Array.from(groups, ([key, group]) => {
+            const warning = group[0];
+            const year = warning.fiscalYear === undefined ? "" : ` para ${warning.fiscalYear}`;
+            const hasMonths = group.some((item) => item.scope === "MONTH");
+            const hasTotal = group.some((item) => item.scope === "TOTAL");
+            const valuationScope = [hasMonths ? "programación mensual" : "", hasTotal ? "total" : ""].filter(Boolean).join(" y ");
+            return (
+              <li key={key}>
+                {warning.code === "UNKNOWN_VALUATION" ? (
+                  <><strong>Valoración incompleta</strong>: {warning.scope === "UNIT_YEAR"
+                    ? `Faltan datos para comprobar el techo anual de la unidad${year}.`
+                    : `Hay datos pendientes de valoración en PEN${year}${valuationScope ? ` (${valuationScope})` : ""}.`} No equivale a un importe cero.</>
+                ) : (
+                  <><strong>Techo UO excedido</strong>: Techo presupuestario de la unidad superado{year}.</>
+                )}
+              </li>
+            );
+          })}
+          {other.length > 0 && <li>Hay otras advertencias financieras</li>}
+        </ul>
+        <details className="mt-3">
+          <summary className="cursor-pointer rounded-sm text-sm font-medium text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">Ver detalle</summary>
+          <div className="mt-2">
+            <ApprovedAmendmentWarnings warnings={warnings} />
+            <p className="mt-2 break-words text-xs">Códigos del servidor: {Array.from(new Set(warnings.map((warning) => warning.code))).join(", ")}</p>
+          </div>
+        </details>
+      </AlertDescription>
+    </Alert>
+  );
+}
+
 export function LineDetailPage() {
   const [manualModalOpen, setManualModalOpen] = useState(false);
   const [manualMonth, setManualMonth] = useState<number | null>(null);
@@ -105,7 +168,7 @@ export function LineDetailPage() {
   const [amendmentOpen, setAmendmentOpen] = useState(false);
   const [draftCostOpen, setDraftCostOpen] = useState(false);
   const [draftHierarchyOpen, setDraftHierarchyOpen] = useState(false);
-  const [amendmentWarnings, setAmendmentWarnings] = useState<ApprovedAmendmentWarning[]>([]);
+  const [savedAmendmentWarnings, setSavedAmendmentWarnings] = useState<SavedAmendmentWarnings | null>(null);
   const params = useParams();
   const router = useRouter();
   const id = params.id as string;
@@ -132,7 +195,7 @@ export function LineDetailPage() {
     setManualModalOpen(true);
   }
 
-  if (isLoading) {
+  if (isLoading && !line) {
     return (
       <div className="flex flex-col gap-6">
         <Skeleton className="h-12 w-2/3" />
@@ -159,6 +222,12 @@ export function LineDetailPage() {
   }
 
   const territoryFeatures = getPoaTerritorySelectionFeatures();
+  // POST cubre el intervalo hasta el nuevo GET. [] vigente sí resuelve alertas;
+  // un API antiguo sin el campo no prueba que se hayan resuelto.
+  const savedWarnings = savedAmendmentWarnings?.line.id === line.id ? savedAmendmentWarnings : null;
+  const amendmentWarnings = savedWarnings?.line === line
+    ? savedWarnings.warnings
+    : line.approved_amendment_warnings ?? savedWarnings?.warnings ?? [];
   const territoryRead = resolvePoaTerritorySelectionRead(
     line.territory_selection,
     line.territory ?? null,
@@ -195,7 +264,7 @@ export function LineDetailPage() {
           />
         </div>
         {canAmendApproved && <Button type="button" className="w-full sm:w-auto sm:self-start" variant="outline" onClick={() => setAmendmentOpen(true)}>Editar presupuesto aprobado</Button>}
-        <ApprovedAmendmentWarnings warnings={amendmentWarnings} />
+        <CompactFinancialWarnings warnings={amendmentWarnings} />
         {canRecordExecution && (
           <div className="flex flex-col items-start gap-2">
             <Button
@@ -299,7 +368,7 @@ export function LineDetailPage() {
         setDraftCostOpen(false);
         await refetch();
       }} />}
-      {canEditDraftCost && draftHierarchyOpen && <Dialog open onOpenChange={(open) => { if (!open) setDraftHierarchyOpen(false); }}><DialogContent className="max-h-[90dvh] max-w-3xl overflow-y-auto"><DialogHeader><DialogTitle>Editar jerarquía del borrador</DialogTitle><DialogDescription>Modifica únicamente la clasificación actual de esta línea POA.</DialogDescription></DialogHeader><PlanningHierarchyEditor line={line} onSaved={async () => { setDraftHierarchyOpen(false); await refetch(); }} /></DialogContent></Dialog>}
+      {canEditDraftCost && draftHierarchyOpen && <Dialog open onOpenChange={(open) => { if (!open) setDraftHierarchyOpen(false); }}><DialogContent className="max-h-[90dvh] max-w-3xl overflow-y-auto"><DialogHeader><DialogTitle>Editar jerarquía del borrador</DialogTitle><DialogDescription>Modifica únicamente la clasificación actual de esta línea POA.</DialogDescription></DialogHeader><PlanningHierarchyEditor line={line} onCatalogRenamed={async () => { try { applyApprovedLine(await api.get<PlanningLine>(`/budget/planning-lines/${line.id}`)); } catch { toast.error("El nombre cambió, pero no se pudo actualizar el detalle. Recarga al cerrar."); } }} onSaved={async () => { setDraftHierarchyOpen(false); await refetch(); }} /></DialogContent></Dialog>}
 
       {canRecordExecution && manualModalOpen && (
         <ManualExecutionModal
@@ -314,8 +383,8 @@ export function LineDetailPage() {
           }}
         />
       )}
-      {canAmendApproved && amendmentOpen && <ApprovedAmendmentModal line={line} onClose={() => setAmendmentOpen(false)} onSuccess={(warnings) => {
-        setAmendmentWarnings(warnings);
+      {canAmendApproved && amendmentOpen && <ApprovedAmendmentModal line={line} onCatalogRenamed={applyApprovedLine} onClose={() => setAmendmentOpen(false)} onSuccess={(warnings) => {
+        setSavedAmendmentWarnings({ line, warnings });
         setAmendmentOpen(false);
         void refetch();
       }} />}

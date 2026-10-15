@@ -242,21 +242,6 @@ export function RenditionsInboxPage() {
             Da seguimiento a anticipos pagados, fechas límite y solicitudes REXAN vinculadas.
           </p>
         </div>
-        {isRenditionExportReady() && canExport && (
-          <div className="flex flex-wrap items-center gap-2">
-            <Button type="button" variant="outline" onClick={() => void exportExcel()}
-              disabled={hasInvalidUrl || isExporting} aria-busy={isExporting}
-              aria-describedby="renditions-export-state">
-              {isExporting ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <Download className="h-4 w-4" aria-hidden="true" />}
-              {isExporting ? "Exportando Excel..." : "Exportar Excel"}
-            </Button>
-            {isExporting && <Button type="button" variant="ghost" onClick={() => exportControllerRef.current?.abort()}>Cancelar descarga</Button>}
-            <span id="renditions-export-state" role={isExporting ? "status" : undefined}
-              aria-live="polite" className={isExporting ? "text-sm text-muted-foreground" : "sr-only"}>
-              {isExporting ? "Preparando el Excel. La cancelación es best-effort." : hasInvalidUrl ? "Restablece los filtros inválidos antes de exportar." : "Exporta los anticipos pendientes y la última REXAN vinculada que coinciden con los filtros activos."}
-            </span>
-          </div>
-        )}
       </div>
 
       <div
@@ -347,11 +332,28 @@ export function RenditionsInboxPage() {
       )}
 
       <Card>
-        <CardHeader>
-          <CardTitle>Anticipos por rendir</CardTitle>
-          <CardDescription>
-            Total exacto con todos los filtros: {inbox.total}
-          </CardDescription>
+        <CardHeader className="flex flex-wrap items-start justify-between gap-4 sm:flex-row">
+          <div className="min-w-0">
+            <CardTitle>Anticipos por rendir</CardTitle>
+            <CardDescription>
+              Total exacto con todos los filtros: {inbox.total}
+            </CardDescription>
+          </div>
+          {isRenditionExportReady() && canExport && (
+            <div className="ml-auto flex flex-wrap items-center gap-2">
+              <Button type="button" variant="outline" onClick={() => void exportExcel()}
+                disabled={hasInvalidUrl || isExporting} aria-busy={isExporting}
+                aria-describedby="renditions-export-state">
+                {isExporting ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <Download className="h-4 w-4" aria-hidden="true" />}
+                {isExporting ? "Exportando Excel..." : "Exportar Excel"}
+              </Button>
+              {isExporting && <Button type="button" variant="ghost" onClick={() => exportControllerRef.current?.abort()}>Cancelar descarga</Button>}
+              <span id="renditions-export-state" role={isExporting ? "status" : undefined}
+                aria-live="polite" className={isExporting ? "text-sm text-muted-foreground" : "sr-only"}>
+                {isExporting ? "Preparando el Excel. La cancelación es best-effort." : hasInvalidUrl ? "Restablece los filtros inválidos antes de exportar." : "Exporta los anticipos pendientes y la última REXAN vinculada que coinciden con los filtros activos."}
+              </span>
+            </div>
+          )}
         </CardHeader>
         <CardContent className="space-y-4">
           {bulkAssignmentMode === GIOF_BULK_ASSIGNMENT_MODE.MANAGER_TARGET &&

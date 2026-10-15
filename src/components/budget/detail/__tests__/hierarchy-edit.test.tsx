@@ -162,6 +162,104 @@ describe("edición de jerarquía POA", () => {
     );
     expect(mocks.patch.mock.calls[0][1]).not.toHaveProperty("request_id");
   });
+  it.each(["DRAFT", "APPROVED"] as const)(
+    "%s renames an existing resource on hierarchy Save without a catalog POST or a visible ID",
+    async (status) => {
+      const approvedSave = vi.fn().mockResolvedValue(undefined);
+      const onSaved = vi.fn();
+      render(
+        <PlanningHierarchyEditor
+          line={{ ...line, status }}
+          onSaved={onSaved}
+          approvedSave={status === "APPROVED" ? approvedSave : undefined}
+        />,
+      );
+      expect(
+        screen.getByText(
+          "Renombrar este recurso también cambia su nombre en otras líneas que lo comparten. Cambiarlo de acción está sujeto a las restricciones existentes.",
+        ),
+      ).toBeInTheDocument();
+      expect(
+        screen.getByRole("region", { name: "Editar jerarquía POA" }),
+      ).not.toHaveTextContent("private-resource");
+      fireEvent.change(screen.getByLabelText("Nombre del recurso POA *"), {
+        target: { value: "Renombrado" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Guardar jerarquía" }));
+      const hierarchy = expect.objectContaining({
+        operative_action_id: "a",
+        resource_name: "Renombrado",
+      });
+      if (status === "DRAFT")
+        await waitFor(() =>
+          expect(mocks.patch).toHaveBeenCalledWith(
+            "/budget/planning-lines/line-1",
+            { hierarchy },
+          ),
+        );
+      else
+        await waitFor(() =>
+          expect(approvedSave).toHaveBeenCalledWith(
+            hierarchy,
+            expect.objectContaining({ resource: "Renombrado" }),
+          ),
+        );
+      expect(mocks.post).not.toHaveBeenCalled();
+      expect(
+        mocks.patch.mock.calls.some(([path]) =>
+          path.startsWith("/catalogs/poa-resources"),
+        ),
+      ).toBe(false);
+    },
+  );
+  it("blocks historical lines without resource identity instead of creating a resource", () => {
+    render(
+      <PlanningHierarchyEditor
+        line={{ ...line, resource_id: null, poaHierarchy: null } as PlanningLine}
+        onSaved={vi.fn()}
+      />,
+    );
+    expect(screen.getByLabelText("Nombre del recurso POA *")).toBeDisabled();
+    expect(
+      screen.getByRole("button", { name: "Guardar jerarquía" }),
+    ).toBeDisabled();
+    expect(screen.getByRole("status")).toHaveTextContent(
+      /sin recurso POA asociado/,
+    );
+    expect(mocks.post).not.toHaveBeenCalled();
+  });
+  it("explains an action-move 409 without losing the entered resource name", async () => {
+    mocks.patch.mockRejectedValue(
+      new ApiRequestError(409, {
+        statusCode: 409,
+        error: "Conflict",
+        message: "private",
+        timestamp: "now",
+        path: "",
+      }),
+    );
+    render(<PlanningHierarchyEditor line={line} onSaved={vi.fn()} />);
+    fireEvent.change(screen.getByLabelText("Programa / proyecto / gestión *"), {
+      target: { value: "p2" },
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Componente estratégico *" }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Otro componente" }));
+    fireEvent.click(screen.getByRole("button", { name: "Acción operativa *" }));
+    fireEvent.click(screen.getByRole("button", { name: "Otra acción" }));
+    fireEvent.change(screen.getByLabelText("Nombre del recurso POA *"), {
+      target: { value: "Intento" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Guardar jerarquía" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      /compartido o publicado/,
+    );
+    expect(screen.getByLabelText("Nombre del recurso POA *")).toHaveValue(
+      "Intento",
+    );
+    expect(mocks.post).not.toHaveBeenCalled();
+  });
   it.each(["loading", "empty"])(
     "blocks %s catalog validation without losing the draft",
     async (mode) => {

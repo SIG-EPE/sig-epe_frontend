@@ -21,15 +21,17 @@ export function seedPlanningHierarchy(line: import("@/types/budget").PlanningLin
   return {
     organizational_unit_id: line.organizational_unit_id ?? "",
     planning_type: line.planning_type,
-    program_id: line.program_id ?? "",
+    program_id: line.program_id ?? line.programId ?? line.program?.id ?? "",
     component_id: line.poaHierarchy?.component?.id ?? line.operativeAction?.component?.id ?? "",
     operative_action_id: line.operative_action_id ?? line.poaHierarchy?.action?.id ?? "",
     resource_name: line.resource?.name ?? line.poaHierarchy?.resource?.name ?? line.resource_description ?? "",
   };
 }
 
-export function hierarchyEditError(error: unknown): string {
+export function hierarchyEditError(error: unknown, context?: { actionMove: boolean }): string {
   if (error instanceof ApiRequestError && error.status === 403) return "No tienes permiso para editar esta línea. Tus entradas se conservaron.";
+  if (error instanceof ApiRequestError && error.status === 409 && context?.actionMove)
+    return "No se pudo mover el recurso a otra acción: puede estar compartido o publicado, o la jerarquía cambió. Conservamos tus entradas; cierra y recarga el detalle antes de reintentar.";
   if (error instanceof ApiRequestError && error.status === 409) return "La línea o la jerarquía cambió. Conservamos tus entradas; cierra y recarga el detalle antes de reintentar.";
   if (error instanceof ApiRequestError && error.status === 500)
     return "La actualización aún no está disponible. Verifica que el esquema de auditoría esté listo; tus entradas se conservaron.";

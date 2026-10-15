@@ -18,6 +18,7 @@ import { useAuthStore } from "@/stores/auth-store";
 import {
   REQUEST_DOCUMENT_CATEGORY,
   REQUEST_TYPE,
+  REQUEST_STATUS,
   SUPPLIER_DOCUMENT_PROJECTION_STATE,
 } from "@/types/requests";
 import {
@@ -25,7 +26,8 @@ import {
   type GiofWorkLease,
   type GiofWorkScope,
 } from "@/types/giof-work";
-import { isGiofLeaseCurrent } from "@/lib/giof-work-lease-session";
+import { getGiofLeaseCredential, isGiofLeaseCurrent } from "@/lib/giof-work-lease-session";
+import { ROLE_CODE } from "@/lib/constants";
 import {
   normalizeRequestReviewFilters,
   parseSupplierDocumentEvidence,
@@ -84,6 +86,7 @@ import type {
   RequestType,
   UpdateRequestDto,
   ExtraRequestDocumentMutationContext,
+  ValidateRenditionReportInput,
 } from "@/types/requests";
 
 function appendIfPresent(
@@ -1412,9 +1415,26 @@ export function useRequestRenditionReport(requestId?: string, enabled = true) {
   };
 }
 
+export function canDeclareRenditionZeroExpense(request: PaymentRequest): boolean {
+  const { user, accessToken, isLoading } = useAuthStore.getState();
+  const work = request.giof_work;
+  return Boolean(!isLoading && accessToken && user?.role?.code === ROLE_CODE.GIOF_GESTOR
+    && request.request_type === REQUEST_TYPE.ADVANCE_SETTLEMENT
+    && request.status !== REQUEST_STATUS.PAID && work?.pool === GIOF_WORK_POOL.REXAN
+    && work.canEdit && !work.readOnly && work.assigneeId === user.id
+    && isGiofLeaseCurrent(getGiofLeaseCredential(request.id), {
+      requestId: request.id, pool: GIOF_WORK_POOL.REXAN,
+      assignmentVersion: work.assignmentVersion, ownerId: user.id,
+    }));
+}
+
 export function useRequestRenditionReportActions() {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<Error | null>(null);
+  const validationAbortRef = useRef<AbortController | null>(null);
+  const actor = useAuthStore((state) => state.user);
+  const accessToken = useAuthStore((state) => state.accessToken);
+  useEffect(() => () => validationAbortRef.current?.abort(), [actor, accessToken]);
 
   async function run<T>(
     fallbackMessage: string,
@@ -1500,12 +1520,32 @@ export function useRequestRenditionReportActions() {
           `${getRenditionReportPath(requestId)}/rows/${rowId}`,
         ),
       ),
-    validateReport: (requestId: string) =>
-      run("Error al validar informe de rendición", () =>
-        api.post<RequestRenditionValidationResponse>(
-          `${getRenditionReportPath(requestId)}/validate`,
-        ),
-      ),
+    validateReport: (requestId: string, input?: ValidateRenditionReportInput, request?: PaymentRequest) =>
+      run("Error al validar informe de rendición", async () => {
+        if (input?.zero_expense_allocation_ids === undefined) {
+          return api.post<RequestRenditionValidationResponse>(`${getRenditionReportPath(requestId)}/validate`, undefined, undefined);
+        }
+        if (!request || request.id !== requestId || !canDeclareRenditionZeroExpense(request)
+          || input.zero_expense_allocation_ids.some((id) => !request.allocations?.some((allocation) => allocation.id === id))) {
+          throw new Error("La declaración requiere la asignación GIOF y un lease vigente de esta rendición.");
+        }
+        const initialUser = useAuthStore.getState().user;
+        const initialToken = useAuthStore.getState().accessToken;
+        const controller = new AbortController();
+        validationAbortRef.current = controller;
+        try {
+          const result = await api.post<RequestRenditionValidationResponse>(
+            `${getRenditionReportPath(requestId)}/validate`, input,
+            { signal: controller.signal, retryUnauthorized: false },
+          );
+          controller.signal.throwIfAborted();
+          if (useAuthStore.getState().user !== initialUser || useAuthStore.getState().accessToken !== initialToken
+            || !canDeclareRenditionZeroExpense(request)) throw new DOMException("Contexto de validación cambió", "AbortError");
+          return result;
+        } finally {
+          if (validationAbortRef.current === controller) validationAbortRef.current = null;
+        }
+      }),
     generateReport: (requestId: string) =>
       runWithTimeout("Error al generar informe de rendición", (signal) =>
         api.post<RequestRenditionGenerateResponse>(

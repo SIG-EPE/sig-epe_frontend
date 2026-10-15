@@ -27,6 +27,16 @@ const line = {
 } as PlanningLine;
 
 describe("approved amendment exact input", () => {
+  it("includes category only when changed and never drops required financial/monthly basis", () => {
+    const fields = seedApprovedAmendment(line)!;
+    const unchanged = buildApprovedAmendment(fields, "4", false, undefined, { baselineId: "cat-old", selectedId: "cat-old" });
+    expect(unchanged.request).not.toHaveProperty("budget_category_id");
+    const changed = buildApprovedAmendment(fields, "4", false, undefined, { baselineId: "cat-old", selectedId: "cat-next" });
+    expect(changed.request).toMatchObject({ budget_category_id: "cat-next", expected_revision: "4", unit_price: "100.00", quantity: "1.00" });
+    expect(changed.request?.monthly).toHaveLength(12);
+    expect(changed.request).not.toHaveProperty("funding_source_id");
+    expect(buildApprovedAmendment(fields, "4", false, undefined, { baselineId: "cat-old", selectedId: "" }).request).toBeNull();
+  });
   it("seeds only from a complete exact month projection", () => {
     expect(seedApprovedAmendment(line)?.monthly).toHaveLength(12);
     expect(

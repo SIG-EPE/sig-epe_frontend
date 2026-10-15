@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api } from "@/lib/api-client";
 import { invalidateQueryTag } from "@/lib/query-cache";
 import {
@@ -24,6 +24,10 @@ import { Button } from "@/components/ui/button";
 import type { PlanningLine, PlanningLineHierarchyInput } from "@/types/budget";
 import { useAuthStore } from "@/stores/auth-store";
 import { ROLE_CODE } from "@/lib/constants";
+import {
+  CatalogNameDialog,
+  type CatalogNameTarget,
+} from "./catalog-name-dialog";
 
 interface Props {
   line: PlanningLine;
@@ -33,6 +37,11 @@ interface Props {
     labels: HierarchyReviewLabels,
   ) => Promise<void>;
   disabled?: boolean;
+  onCatalogRenamed?: () => void | Promise<void>;
+  draft?: PlanningLineHierarchyInput;
+  onDraftChange?: (value: PlanningLineHierarchyInput) => void;
+  onValidationChange?: (valid: boolean, labels: HierarchyReviewLabels) => void;
+  onNameRenamed?: (level: string, id: string, name: string) => void;
 }
 
 export interface HierarchyReviewLabels {
@@ -49,13 +58,29 @@ export function PlanningHierarchyEditor({
   onSaved,
   approvedSave,
   disabled = false,
+  onCatalogRenamed,
+  draft,
+  onDraftChange,
+  onValidationChange,
+  onNameRenamed,
 }: Props) {
-  const [value, setValue] = useState(() => seedPlanningHierarchy(line));
+  const [localValue, setLocalValue] = useState(() => seedPlanningHierarchy(line));
+  const value = draft ?? localValue;
+  const setValue = (next: PlanningLineHierarchyInput | ((previous: PlanningLineHierarchyInput) => PlanningLineHierarchyInput)) => {
+    const updated = typeof next === "function" ? next(value) : next;
+    if (draft) onDraftChange?.(updated);
+    else setLocalValue(updated);
+  };
   const [errors, setErrors] = useState<
     Partial<Record<keyof PlanningLineHierarchyInput, string>>
   >({});
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const [renameTarget, setRenameTarget] = useState<CatalogNameTarget | null>(
+    null,
+  );
+  const [renamed, setRenamed] = useState<Record<string, string>>({});
   const role = useAuthStore((state) => state.user?.role?.code);
   const canCreateNode =
     role === ROLE_CODE.GIOF_MANAGER || role === ROLE_CODE.ADMIN_SISTEMA;
@@ -95,6 +120,67 @@ export function PlanningHierarchyEditor({
   const actionOptions = actions.data.filter(
     (item) => item.isActive && item.componentId === value.component_id,
   );
+  const labels: HierarchyReviewLabels = {
+    unit: renamed[`unit:${value.organizational_unit_id}`] ?? orgs.data?.find((item) => item.id === value.organizational_unit_id)?.name,
+    type: PLANNING_TYPE_LABELS[value.planning_type],
+    program: renamed[`program:${value.program_id}`] ?? programs.data?.find((item) => item.id === value.program_id)?.name,
+    component: renamed[`component:${value.component_id}`] ?? componentOptions.find((item) => item.id === value.component_id)?.name ?? (createdComponent?.id === value.component_id ? createdComponent.name : line.poaHierarchy?.component?.name),
+    action: renamed[`action:${value.operative_action_id}`] ?? actionOptions.find((item) => item.id === value.operative_action_id)?.name ?? (createdAction?.id === value.operative_action_id ? createdAction.name : line.poaHierarchy?.action?.name),
+    resource: value.resource_name,
+  };
+  const hierarchyValid = Boolean(buildPlanningHierarchy(value).hierarchy && catalogsReady && line.resource_id &&
+    orgs.data?.some((item) => item.id === value.organizational_unit_id && item.is_active) &&
+    programs.data?.some((item) => item.id === value.program_id && item.is_active && (!item.planningType || item.planningType === value.planning_type)) &&
+    (componentOptions.some((item) => item.id === value.component_id) || (createdComponent?.id === value.component_id && createdComponent.parentId === value.program_id)) &&
+    (actionOptions.some((item) => item.id === value.operative_action_id) || (createdAction?.id === value.operative_action_id && createdAction.parentId === value.component_id)));
+  const validationSignature = JSON.stringify([hierarchyValid, labels]);
+  useEffect(() => {
+    onValidationChange?.(hierarchyValid, labels);
+    // The catalog hooks may return new array identities on every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [validationSignature]);
+  // El ID de la línea es la única identidad autoritativa para editar el recurso.
+  const selectedResourceId = line.resource_id;
+  const missingResource = !selectedResourceId;
+  const originalResourceName =
+    line.resource?.name ??
+    line.poaHierarchy?.resource?.name ??
+    line.resource_description;
+  const resourceName =
+    renamed[`resource:${selectedResourceId}`] ?? originalResourceName;
+  const canRenameResource = Boolean(
+    selectedResourceId &&
+    value.operative_action_id ===
+      (line.operative_action_id ?? line.poaHierarchy?.action?.id),
+  );
+  const renameButton = (
+    level: string,
+    label: string,
+    path: string,
+    id: string,
+    name: string,
+    maxLength: number | null,
+  ) =>
+    canCreateNode &&
+    capability?.enabled === true &&
+    !disabled &&
+    !saving &&
+    !creating &&
+    id &&
+    name ? (
+      <Button
+        type="button"
+        size="sm"
+        variant="outline"
+        className="min-h-11 w-full sm:w-auto"
+        aria-label={`Editar nombre de ${label}`}
+        onClick={() =>
+          setRenameTarget({ level, label, path, id, name, maxLength })
+        }
+      >
+        Editar nombre
+      </Button>
+    ) : null;
   const selectClass =
     "flex h-9 w-full rounded-md border border-input bg-background px-3 text-sm";
   const change = (next: PlanningLineHierarchyInput) => {
@@ -106,24 +192,29 @@ export function PlanningHierarchyEditor({
     const parentId =
       level === "component" ? value.program_id : value.component_id;
     if (!parentId) throw new Error("Selecciona el nivel anterior.");
-    const node = await api.post<{ id: string; name: string }>(
-      level === "component"
-        ? "/catalogs/strategic-components"
-        : "/catalogs/operative-actions",
-      level === "component"
-        ? { name, program_id: parentId }
-        : { name, component_id: parentId },
-    );
-    if (level === "component")
-      setCreatedComponent({ id: node.id, name: node.name, parentId });
-    else setCreatedAction({ id: node.id, name: node.name, parentId });
-    if (level === "component") void components.refetch();
-    else void actions.refetch();
-    return node;
+    setCreating(true);
+    try {
+      const node = await api.post<{ id: string; name: string }>(
+        level === "component"
+          ? "/catalogs/strategic-components"
+          : "/catalogs/operative-actions",
+        level === "component"
+          ? { name, program_id: parentId }
+          : { name, component_id: parentId },
+      );
+      if (level === "component")
+        setCreatedComponent({ id: node.id, name: node.name, parentId });
+      else setCreatedAction({ id: node.id, name: node.name, parentId });
+      if (level === "component") void components.refetch();
+      else void actions.refetch();
+      return node;
+    } finally {
+      setCreating(false);
+    }
   }
 
   async function submit() {
-    if (pending.current || disabled || !catalogsReady) return;
+    if (pending.current || disabled || !catalogsReady || missingResource) return;
     const result = buildPlanningHierarchy(value);
     if (result.hierarchy) {
       if (
@@ -203,7 +294,13 @@ export function PlanningHierarchyEditor({
         await onSaved();
       }
     } catch (error) {
-      setSaveError(hierarchyEditError(error));
+      setSaveError(
+        hierarchyEditError(error, {
+          actionMove:
+            value.operative_action_id !==
+            (line.operative_action_id ?? line.poaHierarchy?.action?.id),
+        }),
+      );
     } finally {
       pending.current = false;
       setSaving(false);
@@ -227,10 +324,16 @@ export function PlanningHierarchyEditor({
           la jerarquía POA.
         </p>
       )}
-      {capability?.enabled === true && !catalogsReady && (
+      {capability?.enabled === true && !catalogsReady && !missingResource && (
         <p role="status">
           Cargando o verificando catálogos de la jerarquía POA. No se puede
           guardar hasta validar las selecciones.
+        </p>
+      )}
+      {missingResource && (
+        <p role="status" className="text-sm text-destructive">
+          Esta línea histórica está sin recurso POA asociado. No se puede editar
+          el nombre ni guardar la jerarquía hasta regularizar su asociación.
         </p>
       )}
       <div className="space-y-1">
@@ -239,6 +342,7 @@ export function PlanningHierarchyEditor({
           ariaLabel="Unidad orgánica"
           value={value.organizational_unit_id || null}
           displayValue={
+            renamed[`unit:${value.organizational_unit_id}`] ??
             orgs.data?.find((item) => item.id === value.organizational_unit_id)
               ?.name ??
             (value.organizational_unit_id === line.organizational_unit_id
@@ -255,6 +359,19 @@ export function PlanningHierarchyEditor({
           }
           disabled={saving || disabled}
         />
+        {renameButton(
+          "unit",
+          "Unidad orgánica",
+          "/catalogs/organizational-units",
+          value.organizational_unit_id,
+          renamed[`unit:${value.organizational_unit_id}`] ??
+            orgs.data?.find(
+              (item) =>
+                item.id === value.organizational_unit_id && item.is_active,
+            )?.name ??
+            "",
+          200,
+        )}
         {errors.organizational_unit_id && (
           <p role="alert">{errors.organizational_unit_id}</p>
         )}
@@ -275,7 +392,7 @@ export function PlanningHierarchyEditor({
                 program_id: "",
                 component_id: "",
                 operative_action_id: "",
-                resource_name: "",
+                resource_name: line.resource_id ? value.resource_name : "",
               })
             }
           >
@@ -301,7 +418,7 @@ export function PlanningHierarchyEditor({
                 program_id: e.target.value,
                 component_id: "",
                 operative_action_id: "",
-                resource_name: "",
+                resource_name: line.resource_id ? value.resource_name : "",
               })
             }
           >
@@ -315,10 +432,21 @@ export function PlanningHierarchyEditor({
               )
               .map((item) => (
                 <option key={item.id} value={item.id}>
-                  {item.name}
+                  {renamed[`program:${item.id}`] ?? item.name}
                 </option>
               ))}
           </select>
+          {renameButton(
+            "program",
+            "Programa",
+            "/catalogs/budget-programs",
+            value.program_id,
+            renamed[`program:${value.program_id}`] ??
+              programs.data?.find((item) => item.id === value.program_id)
+                ?.name ??
+              "",
+            255,
+          )}
           {errors.program_id && <p role="alert">{errors.program_id}</p>}
         </div>
         <div className="space-y-1">
@@ -344,6 +472,7 @@ export function PlanningHierarchyEditor({
                 : []),
             ]}
             displayValue={
+              renamed[`component:${value.component_id}`] ??
               componentOptions.find((item) => item.id === value.component_id)
                 ?.name ??
               (createdComponent?.id === value.component_id &&
@@ -360,7 +489,7 @@ export function PlanningHierarchyEditor({
                 ...value,
                 component_id: id ?? "",
                 operative_action_id: "",
-                resource_name: "",
+                resource_name: line.resource_id ? value.resource_name : "",
               })
             }
             onCreateNew={
@@ -371,6 +500,20 @@ export function PlanningHierarchyEditor({
             disabled={saving || disabled || !value.program_id}
             hasError={!!errors.component_id}
           />
+          {renameButton(
+            "component",
+            "Componente estratégico",
+            "/catalogs/strategic-components",
+            value.component_id,
+            renamed[`component:${value.component_id}`] ??
+              componentOptions.find((item) => item.id === value.component_id)
+                ?.name ??
+              (createdComponent?.id === value.component_id &&
+              createdComponent.parentId === value.program_id
+                ? createdComponent.name
+                : ""),
+            255,
+          )}
           {errors.component_id && <p role="alert">{errors.component_id}</p>}
         </div>
         <div className="space-y-1">
@@ -396,6 +539,7 @@ export function PlanningHierarchyEditor({
                 : []),
             ]}
             displayValue={
+              renamed[`action:${value.operative_action_id}`] ??
               actionOptions.find(
                 (item) => item.id === value.operative_action_id,
               )?.name ??
@@ -412,7 +556,7 @@ export function PlanningHierarchyEditor({
               change({
                 ...value,
                 operative_action_id: id ?? "",
-                resource_name: "",
+                resource_name: line.resource_id ? value.resource_name : "",
               })
             }
             onCreateNew={
@@ -421,6 +565,21 @@ export function PlanningHierarchyEditor({
             disabled={saving || disabled || !value.component_id}
             hasError={!!errors.operative_action_id}
           />
+          {renameButton(
+            "action",
+            "Acción operativa",
+            "/catalogs/operative-actions",
+            value.operative_action_id,
+            renamed[`action:${value.operative_action_id}`] ??
+              actionOptions.find(
+                (item) => item.id === value.operative_action_id,
+              )?.name ??
+              (createdAction?.id === value.operative_action_id &&
+              createdAction.parentId === value.component_id
+                ? createdAction.name
+                : ""),
+            null,
+          )}
           {errors.operative_action_id && (
             <p role="alert">{errors.operative_action_id}</p>
           )}
@@ -433,14 +592,26 @@ export function PlanningHierarchyEditor({
           maxLength={500}
           autoComplete="off"
           value={value.resource_name}
-          disabled={saving || disabled || !value.operative_action_id}
+          disabled={
+            saving || disabled || missingResource || !value.operative_action_id
+          }
           aria-invalid={!!errors.resource_name}
+          aria-describedby="hierarchy-resource-help"
           onChange={(e) => change({ ...value, resource_name: e.target.value })}
         />
+        {canRenameResource &&
+          renameButton(
+            "resource",
+            "Recurso POA",
+            "/catalogs/poa-resources",
+            selectedResourceId!,
+            resourceName,
+            500,
+          )}
         {errors.resource_name && <p role="alert">{errors.resource_name}</p>}
-        <p className="text-xs text-muted-foreground">
-          Si cambia el nombre o la acción, se creará un recurso exclusivo dentro
-          de la transacción de la línea. No se usa el recurso de otra línea.
+        <p id="hierarchy-resource-help" className="text-xs text-muted-foreground">
+          Renombrar este recurso también cambia su nombre en otras líneas que lo comparten.
+          Cambiarlo de acción está sujeto a las restricciones existentes.
         </p>
       </div>
       {saveError && (
@@ -448,13 +619,33 @@ export function PlanningHierarchyEditor({
           {saveError}
         </p>
       )}
-      <Button
+      {!draft && <Button
         type="button"
-        disabled={saving || disabled || !catalogsReady}
+        disabled={saving || disabled || !catalogsReady || missingResource}
         onClick={() => void submit()}
       >
         {saving ? "Guardando…" : "Guardar jerarquía"}
-      </Button>
+      </Button>}
+      {renameTarget && (
+        <CatalogNameDialog
+          target={renameTarget}
+          onClose={() => setRenameTarget(null)}
+          onRenamed={async (name) => {
+            setRenamed((previous) => ({
+              ...previous,
+              [`${renameTarget.level}:${renameTarget.id}`]: name,
+            }));
+            if (renameTarget.level === "resource")
+              setValue((previous) => ({ ...previous, resource_name: name }));
+            onNameRenamed?.(renameTarget.level, renameTarget.id, name);
+            if (renameTarget.level === "unit") await orgs.refetch?.();
+            if (renameTarget.level === "program") await programs.refetch?.();
+            if (renameTarget.level === "component") await components.refetch();
+            if (renameTarget.level === "action") await actions.refetch();
+            await onCatalogRenamed?.();
+          }}
+        />
+      )}
     </section>
   );
 }

@@ -270,11 +270,12 @@ export function DialogDescription({
 interface DialogBodyProps {
   children: ReactNode;
   className?: string;
+  "data-testid"?: string;
 }
 
-export function DialogBody({ children, className }: DialogBodyProps) {
+export function DialogBody({ children, className, "data-testid": testId }: DialogBodyProps) {
   return (
-    <div className={cn("min-h-0 flex-1 overflow-y-auto", className)}>
+    <div data-testid={testId} className={cn("min-h-0 flex-1 overflow-y-auto", className)}>
       {children}
     </div>
   );

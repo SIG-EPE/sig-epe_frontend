@@ -1,4 +1,5 @@
 import type { PlanningLine, PlanningLineHierarchyInput } from "@/types/budget";
+import type { FundingMembershipChanges } from "@/lib/approved-funding";
 
 export const APPROVED_IMPORTANCE = [
   "Actividad estratégica",
@@ -32,8 +33,11 @@ export interface ApprovedAmendmentRequest {
   monthly: ApprovedAmendmentMonth[];
   resource_description?: string;
   hierarchy?: PlanningLineHierarchyInput;
+  budget_category_id?: string;
+  funding_membership_changes?: FundingMembershipChanges;
 }
 export interface ApprovedAmendmentErrors {
+  budget_category_id?: string;
   unit_price?: string;
   quantity?: string;
   importance?: string;
@@ -131,6 +135,8 @@ export function buildApprovedAmendment(
   revision: string,
   hasCatalogResource: boolean,
   hierarchy?: PlanningLineHierarchyInput,
+  category?: { baselineId: string; selectedId: string },
+  fundingChanges?: FundingMembershipChanges | null,
 ): {
   request: ApprovedAmendmentRequest | null;
   errors: ApprovedAmendmentErrors;
@@ -193,6 +199,8 @@ export function buildApprovedAmendment(
   )
     errors.resource_description =
       "La descripción es obligatoria y admite hasta 2000 caracteres.";
+  if (category && (!category.selectedId || !category.baselineId))
+    errors.budget_category_id = "Selecciona un tipo de recurso válido.";
   if (Object.keys(errors).length || total === null)
     return {
       request: null,
@@ -213,6 +221,10 @@ export function buildApprovedAmendment(
         ? { resource_description: fields.resource_description }
         : {}),
       ...(hierarchy ? { hierarchy } : {}),
+      ...(category && category.selectedId !== category.baselineId
+        ? { budget_category_id: category.selectedId }
+        : {}),
+      ...(fundingChanges ? { funding_membership_changes: fundingChanges } : {}),
     },
     errors,
     total: decimal(total!),

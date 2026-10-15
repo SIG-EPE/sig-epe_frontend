@@ -24,7 +24,25 @@ import {
   getGiofExceptionLabel,
   getRequestStatusDashboardLabel,
 } from "@/lib/dashboard-formatters";
-import type { GiofOperationsDashboard } from "@/types/dashboard";
+import type { GiofMoneyValuation, GiofOperationsDashboard } from "@/types/dashboard";
+
+// No interpretar como soles los importes mixtos de respuestas anteriores.
+function formatKnownPen(
+  data: GiofOperationsDashboard,
+  amount: number | null,
+  valuation?: GiofMoneyValuation,
+): string {
+  if (data.amount_currency !== "PEN") return "Sin valoración PEN";
+  if (amount === null) return "Sin dato monetario";
+  const parts = [`Valor PEN conocido: ${formatMoneyStrict(amount)}`];
+  if (valuation?.unvalued_count) {
+    parts.push(`${formatNumberStrict(valuation.unvalued_count)} sin valoración`);
+  }
+  if (valuation?.provisional_count) {
+    parts.push(`${formatNumberStrict(valuation.provisional_count)} provisional(es)`);
+  }
+  return parts.join(" · ");
+}
 
 function DashboardSkeleton() {
   return (
@@ -117,7 +135,7 @@ function FunnelChart({ data }: { data: GiofOperationsDashboard }) {
   const chartData = data.funnel.map((item) => ({
     estado: getRequestStatusDashboardLabel(item.status),
     Solicitudes: item.count,
-    Monto: item.amount,
+    "Valor PEN conocido": data.amount_currency === "PEN" ? item.amount : null,
   }));
 
   return (
@@ -126,6 +144,12 @@ function FunnelChart({ data }: { data: GiofOperationsDashboard }) {
         <CardTitle>Embudo de solicitudes</CardTitle>
       </CardHeader>
       <CardContent>
+        {data.amount_currency !== "PEN" && <p className="text-sm text-muted-foreground">Sin valoración PEN</p>}
+        {data.funnel.filter((item) => item.valuation?.unvalued_count || item.valuation?.provisional_count).map((item) => (
+          <p key={item.status} className="text-sm text-muted-foreground">
+            {getRequestStatusDashboardLabel(item.status)} · {formatKnownPen(data, item.amount, item.valuation)}
+          </p>
+        ))}
         <ChartContainer empty={chartData.length === 0} height={360}>
           <BarChart data={chartData} margin={{ left: 12, right: 24, top: 12, bottom: 48 }}>
             <CartesianGrid stroke={CHART_COLORS.grid} strokeDasharray="3 3" vertical={false} />
@@ -135,7 +159,7 @@ function FunnelChart({ data }: { data: GiofOperationsDashboard }) {
             <DashboardTooltip />
             <DashboardLegend />
             <Bar yAxisId="left" dataKey="Solicitudes" fill={CHART_COLORS.primary} radius={[4, 4, 0, 0]} />
-            <Bar yAxisId="right" dataKey="Monto" fill={CHART_COLORS.blue} radius={[4, 4, 0, 0]} />
+            <Bar yAxisId="right" dataKey="Valor PEN conocido" fill={CHART_COLORS.blue} radius={[4, 4, 0, 0]} />
           </BarChart>
         </ChartContainer>
       </CardContent>
@@ -178,8 +202,8 @@ function PaymentsAndRenditions({ data }: { data: GiofOperationsDashboard }) {
           <CardTitle>Pagos</CardTitle>
         </CardHeader>
         <CardContent className="grid gap-3 sm:grid-cols-2">
-          <KpiCard title="Pendiente de pago" value={formatNumberStrict(data.payments.pending_count)} description={formatMoneyStrict(data.payments.pending_amount)} Icon={Clock3} />
-          <KpiCard title="Pagos registrados" value={formatNumberStrict(data.payments.paid_count)} description={`${formatMoneyStrict(data.payments.paid_amount)} · ${formatPercentStrict(paidRate)}`} Icon={CheckCircle2} />
+          <KpiCard title="Pendiente de pago" value={formatNumberStrict(data.payments.pending_count)} description={formatKnownPen(data, data.payments.pending_amount, data.payments.pending_valuation)} Icon={Clock3} />
+          <KpiCard title="Pagos registrados" value={formatNumberStrict(data.payments.paid_count)} description={`${formatKnownPen(data, data.payments.paid_amount, data.payments.paid_valuation)} · ${formatPercentStrict(paidRate)}`} Icon={CheckCircle2} />
         </CardContent>
       </Card>
       <Card>
@@ -246,7 +270,7 @@ function WorkloadAndExceptions({ data }: { data: GiofOperationsDashboard }) {
               <Alert key={item.type} variant="destructive">
                 <AlertTriangle className="h-4 w-4" />
                 <AlertDescription>
-                  {getGiofExceptionLabel(item.type)}: {formatNumberStrict(item.count)} caso(s) · {formatMoneyStrict(item.amount)}
+                  {getGiofExceptionLabel(item.type)}: {formatNumberStrict(item.count)} caso(s) · {formatKnownPen(data, item.amount, item.valuation)}
                 </AlertDescription>
               </Alert>
             ))

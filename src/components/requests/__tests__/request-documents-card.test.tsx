@@ -310,7 +310,7 @@ describe("RequestDocumentsCard", () => {
         drive_web_url: "https://drive.google.com/file/d/example/view",
         metadata_json: { provenance_label: "Forged label" },
       });
-      const { rerender, container } = render(
+    const { rerender, container } = render(
         <RequestDocumentsCard
           request={makeRequest()}
           readOnly={readOnly}
@@ -795,7 +795,7 @@ describe("RequestDocumentsCard", () => {
     expect(screen.getByText("Sustento.pdf")).toBeInTheDocument();
   });
 
-  it("characterizes supplier 4+7 cards and historical OTHER display in read-only mode", () => {
+  it("characterizes supplier 6+5 cards in two sections and historical OTHER display in read-only mode", () => {
     vi.mocked(api.get).mockResolvedValue([]);
     render(
       <RequestDocumentsCard
@@ -812,11 +812,27 @@ describe("RequestDocumentsCard", () => {
     );
 
     expect(screen.getByTestId("supplier-primary-grid").children).toHaveLength(
-      4,
+      6,
     );
     expect(
       screen.getByTestId("supplier-complementary-grid").children,
-    ).toHaveLength(7);
+    ).toHaveLength(5);
+    const primary = screen.getByRole("region", { name: "Documento principal" });
+    const otherMain = screen.getByRole("region", {
+      name: "Otros documentos principales",
+    });
+    expect(screen.getAllByRole("heading", { level: 3 }).map((heading) => heading.textContent)).toEqual([
+      "Documento principal",
+      "Otros documentos principales",
+    ]);
+    expect(within(primary).getAllByRole("heading", { level: 4 }).map((heading) => heading.textContent)).toEqual([
+      "Factura", "Recibo por honorarios", "Boleta", "Recibo de caja", "Cotización", "Contrato o convenio",
+    ]);
+    expect(within(otherMain).getAllByRole("heading", { level: 4 }).map((heading) => heading.textContent)).toEqual([
+      "Evidencias", "Suspensión de 4ta categoría", "Planilla de movilidad", "Declaración Jurada", "Otros documentos",
+    ]);
+    expect(screen.queryByRole("heading", { name: "Documentos de sustento adicionales" })).not.toBeInTheDocument();
+    expect(screen.queryByTestId("supplier-other-main-grid")).not.toBeInTheDocument();
     expect(screen.getByText("anexo-historico.pdf")).toBeInTheDocument();
     expect(
       screen.getByText("Nombre personalizado no registrado"),
@@ -858,6 +874,252 @@ describe("RequestDocumentsCard", () => {
       accessToken: "token",
       isLoading: false,
     });
+  });
+
+  it("amber suggestions appear only after continuing RHE guidance, without changing other cards or validation", async () => {
+    vi.mocked(api.get).mockResolvedValue([]);
+    render(<RequestDocumentsCard request={makeRequest({ request_type: REQUEST_TYPE.SUPPLIER_PAYMENT, requested_amount: 100 })} />);
+    const suspension = screen.getByTestId("supplier-category-FOURTH_CATEGORY_SUSPENSION");
+    const evidence = screen.getByTestId("supplier-category-EVIDENCE");
+    const picker = vi.spyOn(screen.getByLabelText("Seleccionar Recibo por honorarios"), "click").mockImplementation(() => undefined);
+    const secondaryPicker = vi.spyOn(screen.getByLabelText("Seleccionar Suspensión de 4ta categoría"), "click").mockImplementation(() => undefined);
+    expect(suspension).not.toHaveClass("border-amber-600");
+    fireEvent.click(screen.getByRole("button", { name: "Adjuntar Recibo por honorarios" }));
+    fireEvent.click(screen.getByRole("button", { name: "Entendido, seleccionar archivo" }));
+    expect(suspension).toHaveClass("border-amber-600", "bg-amber-50");
+    expect(within(suspension).getByText("Documento sugerido")).toBeInTheDocument();
+    expect(suspension).toHaveTextContent("Si el recibo por honorarios supera S/ 1,500 y no incluye retención");
+    expect(evidence).not.toHaveClass("border-amber-600");
+    expect(picker).toHaveBeenCalledTimes(1);
+    expect(secondaryPicker).not.toHaveBeenCalled();
+    expect(screen.getByLabelText("Seleccionar Suspensión de 4ta categoría")).toHaveAttribute("accept", ".pdf");
+    expect(api.postForm).not.toHaveBeenCalled();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    await act(async () => {});
+  });
+
+  it("amber suggestions suppress an already attached suspension and disappear after attachment refresh", async () => {
+    vi.mocked(api.get).mockResolvedValue([]);
+    const request = makeRequest({ request_type: REQUEST_TYPE.SUPPLIER_PAYMENT });
+    const attached = makeDocument({ document_category: REQUEST_DOCUMENT_CATEGORY.FOURTH_CATEGORY_SUSPENSION });
+    const { rerender } = render(<RequestDocumentsCard request={request} documents={[attached]} />);
+    vi.spyOn(screen.getByLabelText("Seleccionar Recibo por honorarios"), "click").mockImplementation(() => undefined);
+    fireEvent.click(screen.getByRole("button", { name: "Adjuntar Recibo por honorarios" }));
+    fireEvent.click(screen.getByRole("button", { name: "Entendido, seleccionar archivo" }));
+    expect(screen.getByTestId("supplier-category-FOURTH_CATEGORY_SUSPENSION")).not.toHaveClass("border-amber-600");
+    rerender(<RequestDocumentsCard request={request} documents={[]} />);
+    expect(screen.getByTestId("supplier-category-FOURTH_CATEGORY_SUSPENSION")).toHaveClass("border-amber-600");
+    rerender(<RequestDocumentsCard request={request} documents={[attached]} />);
+    expect(screen.queryByText("Documento sugerido")).not.toBeInTheDocument();
+    expect(api.postForm).not.toHaveBeenCalled();
+    await act(async () => {});
+  });
+
+  it("amber suggestions reset on request changes and discard the stale pending picker", async () => {
+    vi.mocked(api.get).mockResolvedValue([]);
+    const request = makeRequest({ request_type: REQUEST_TYPE.SUPPLIER_PAYMENT });
+    const { rerender } = render(<RequestDocumentsCard request={request} />);
+    const picker = vi.spyOn(screen.getByLabelText("Seleccionar Recibo por honorarios"), "click").mockImplementation(() => undefined);
+    fireEvent.click(screen.getByRole("button", { name: "Adjuntar Recibo por honorarios" }));
+    fireEvent.click(screen.getByRole("button", { name: "Entendido, seleccionar archivo" }));
+    expect(screen.getByText("Documento sugerido")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Adjuntar Recibo por honorarios" }));
+    rerender(<RequestDocumentsCard request={{ ...request, id: "req-2" }} />);
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(screen.queryByText("Documento sugerido")).not.toBeInTheDocument();
+    rerender(<RequestDocumentsCard request={request} />);
+    expect(screen.queryByText("Documento sugerido")).not.toBeInTheDocument();
+    expect(picker).toHaveBeenCalledTimes(1);
+    await act(async () => {});
+  });
+
+  it("amber invoice suggestions retain the explicit not-yet-issued condition and alternative wording", async () => {
+    vi.mocked(api.get).mockResolvedValue([]);
+    render(<RequestDocumentsCard request={makeRequest({ request_type: REQUEST_TYPE.SUPPLIER_PAYMENT })} />);
+    vi.spyOn(screen.getByLabelText("Seleccionar Factura"), "click").mockImplementation(() => undefined);
+    fireEvent.click(screen.getByRole("button", { name: "Adjuntar Factura" }));
+    expect(screen.getByRole("dialog")).toHaveTextContent("Si la factura aún no está emitida");
+    expect(screen.queryByText("Documento sugerido")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Entendido, seleccionar archivo" }));
+    for (const category of [REQUEST_DOCUMENT_CATEGORY.CONTRACT, REQUEST_DOCUMENT_CATEGORY.QUOTATION]) {
+      const card = screen.getByTestId(`supplier-category-${category}`);
+      expect(card).toHaveClass("border-amber-600");
+      expect(card).toHaveTextContent("Si la factura aún no está emitida, adjunta el contrato o la cotización (según el caso).");
+    }
+    expect(screen.getByTestId("supplier-category-INVOICE")).not.toHaveClass("border-amber-600");
+    expect(api.postForm).not.toHaveBeenCalled();
+    await act(async () => {});
+  });
+
+  it("cancel and revoked permission do not activate amber suggestions or a stale picker", async () => {
+    vi.mocked(api.get).mockResolvedValue([]);
+    const request = makeRequest({ request_type: REQUEST_TYPE.SUPPLIER_PAYMENT });
+    const { rerender } = render(<RequestDocumentsCard request={request} />);
+    const picker = vi.spyOn(screen.getByLabelText("Seleccionar Recibo por honorarios"), "click").mockImplementation(() => undefined);
+    fireEvent.click(screen.getByRole("button", { name: "Adjuntar Recibo por honorarios" }));
+    fireEvent.click(screen.getByRole("button", { name: "Cancelar" }));
+    expect(screen.queryByText("Documento sugerido")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Adjuntar Recibo por honorarios" }));
+    rerender(<RequestDocumentsCard request={request} readOnly />);
+    fireEvent.click(screen.getByRole("button", { name: "Entendido, seleccionar archivo" }));
+    expect(screen.queryByText("Documento sugerido")).not.toBeInTheDocument();
+    expect(picker).not.toHaveBeenCalled();
+    expect(api.postForm).not.toHaveBeenCalled();
+    await act(async () => {});
+  });
+
+  it("document information waits for Entendido before opening the original invoice picker once", async () => {
+    vi.mocked(api.get).mockResolvedValue([]);
+    render(<RequestDocumentsCard request={makeRequest({ request_type: REQUEST_TYPE.SUPPLIER_PAYMENT })} />);
+    const input = screen.getByLabelText("Seleccionar Factura") as HTMLInputElement;
+    const picker = vi.spyOn(input, "click").mockImplementation(() => undefined);
+    fireEvent.click(screen.getByRole("button", { name: "Adjuntar Factura" }));
+    expect(screen.getByRole("dialog", { name: "Factura" })).toHaveTextContent("Si aún no ha sido emitida, adjunta el contrato o la cotización (según el caso)");
+    expect(screen.getByRole("dialog")).toHaveTextContent("Documentos sugeridos: Contrato o cotización (según el caso)");
+    expect(picker).not.toHaveBeenCalled();
+    expect(api.postForm).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Entendido, seleccionar archivo" }));
+    expect(picker).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(input.accept).toBe(".pdf,.jpg,.jpeg,.png");
+    await act(async () => {});
+  });
+
+  it("document information cancel and Escape leave the picker unopened", async () => {
+    vi.mocked(api.get).mockResolvedValue([]);
+    render(<RequestDocumentsCard request={makeRequest({ request_type: REQUEST_TYPE.SUPPLIER_PAYMENT })} />);
+    const picker = vi.spyOn(screen.getByLabelText("Seleccionar Factura"), "click").mockImplementation(() => undefined);
+    fireEvent.click(screen.getByRole("button", { name: "Adjuntar Factura" }));
+    fireEvent.click(screen.getByRole("button", { name: "Cancelar" }));
+    fireEvent.click(screen.getByRole("button", { name: "Adjuntar Factura" }));
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(picker).not.toHaveBeenCalled();
+    expect(api.postForm).not.toHaveBeenCalled();
+    await act(async () => {});
+  });
+
+  it.each([REQUEST_CURRENCY.PEN, REQUEST_CURRENCY.USD])("RHE suggestion stays conditional for a small %s request and resumes only its picker", async (currency) => {
+    vi.mocked(api.get).mockResolvedValue([]);
+    render(<RequestDocumentsCard request={makeRequest({ request_type: REQUEST_TYPE.SUPPLIER_PAYMENT, requested_amount: 100, currency })} />);
+    const picker = vi.spyOn(screen.getByLabelText("Seleccionar Recibo por honorarios"), "click").mockImplementation(() => undefined);
+    const suspensionPicker = vi.spyOn(screen.getByLabelText("Seleccionar Suspensión de 4ta categoría"), "click").mockImplementation(() => undefined);
+    fireEvent.click(screen.getByRole("button", { name: "Adjuntar Recibo por honorarios" }));
+    const dialog = screen.getByRole("dialog");
+    expect(dialog).toHaveTextContent("Adjunta el recibo por honorarios por los servicios prestados por una persona independiente.");
+    expect(dialog).toHaveTextContent("Documento sugerido: Suspensión de cuarta categoría");
+    expect(dialog).toHaveTextContent("Si el recibo por honorarios supera S/ 1,500 y no incluye retención, adjunta una constancia vigente emitida antes del RH.");
+    expect(within(dialog).queryByRole("checkbox")).not.toBeInTheDocument();
+    expect(picker).not.toHaveBeenCalled();
+    expect(suspensionPicker).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Entendido, seleccionar archivo" }));
+    expect(picker).toHaveBeenCalledTimes(1);
+    expect(suspensionPicker).not.toHaveBeenCalled();
+    expect(api.postForm).not.toHaveBeenCalled();
+    await act(async () => {});
+  });
+
+  it("canceling the RHE suggestion leaves both pickers closed and suspension keeps its own guidance", async () => {
+    vi.mocked(api.get).mockResolvedValue([]);
+    render(<RequestDocumentsCard request={makeRequest({ request_type: REQUEST_TYPE.SUPPLIER_PAYMENT })} />);
+    const picker = vi.spyOn(screen.getByLabelText("Seleccionar Recibo por honorarios"), "click").mockImplementation(() => undefined);
+    const suspensionPicker = vi.spyOn(screen.getByLabelText("Seleccionar Suspensión de 4ta categoría"), "click").mockImplementation(() => undefined);
+    fireEvent.click(screen.getByRole("button", { name: "Adjuntar Recibo por honorarios" }));
+    fireEvent.click(screen.getByRole("button", { name: "Cancelar" }));
+    expect(picker).not.toHaveBeenCalled();
+    expect(suspensionPicker).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Adjuntar Suspensión de 4ta categoría" }));
+    expect(screen.getByRole("dialog")).toHaveTextContent("Si el recibo por honorarios electrónico supera S/ 1500 y no se aplica retención");
+    expect(screen.getByRole("dialog")).not.toHaveTextContent("Documento sugerido:");
+    fireEvent.click(screen.getByRole("button", { name: "Entendido, seleccionar archivo" }));
+    expect(suspensionPicker).toHaveBeenCalledTimes(1);
+    expect(picker).not.toHaveBeenCalled();
+    expect(api.postForm).not.toHaveBeenCalled();
+    await act(async () => {});
+  });
+
+  it("document information shows snapshot quotation and contract copy and ignores revoked editing", async () => {
+    vi.mocked(api.get).mockResolvedValue([]);
+    const request = makeRequest({ request_type: REQUEST_TYPE.SUPPLIER_PAYMENT, requested_amount: 100, uit_year_applied: 2026, uit_amount_applied: "5500.00" });
+    const { rerender } = render(<RequestDocumentsCard request={request} />);
+    fireEvent.click(screen.getByRole("button", { name: "Adjuntar Cotización" }));
+    expect(screen.getByRole("dialog")).toHaveTextContent("cotización aprobada que sustenta el monto solicitado");
+    expect(screen.getByRole("dialog")).toHaveTextContent("alcanza o supera ½ UIT del año de la solicitud (S/ 2,750.00)");
+    fireEvent.click(screen.getByRole("button", { name: "Cancelar" }));
+    const picker = vi.spyOn(screen.getByLabelText("Seleccionar Contrato o convenio"), "click").mockImplementation(() => undefined);
+    fireEvent.click(screen.getByRole("button", { name: "Adjuntar Contrato o convenio" }));
+    expect(screen.getByRole("dialog")).toHaveTextContent("formaliza el servicio");
+    rerender(<RequestDocumentsCard request={{ ...request, requested_amount: 5000 }} readOnly />);
+    fireEvent.click(screen.getByRole("button", { name: "Entendido, seleccionar archivo" }));
+    expect(picker).not.toHaveBeenCalled();
+    expect(api.postForm).not.toHaveBeenCalled();
+    await act(async () => {});
+  });
+
+  it("document information reads the latest request snapshot when opened", async () => {
+    vi.mocked(api.get).mockResolvedValue([]);
+    const request = makeRequest({ request_type: REQUEST_TYPE.SUPPLIER_PAYMENT, uit_year_applied: 2026, uit_amount_applied: "5500.00" });
+    const { rerender } = render(<RequestDocumentsCard request={request} />);
+    fireEvent.click(screen.getByRole("button", { name: "Adjuntar Cotización" }));
+    expect(screen.getByRole("dialog")).toHaveTextContent("S/ 2,750.00");
+    fireEvent.click(screen.getByRole("button", { name: "Cancelar" }));
+    rerender(<RequestDocumentsCard request={{ ...request, fiscal_year: 2025, uit_year_applied: 2025, uit_amount_applied: "6000.00" }} />);
+    fireEvent.click(screen.getByRole("button", { name: "Adjuntar Cotización" }));
+    expect(screen.getByRole("dialog")).toHaveTextContent("alcanza o supera ½ UIT del año de la solicitud (S/ 3,000.00)");
+    expect(screen.getByRole("dialog")).not.toHaveTextContent("2,750");
+    expect(api.get).not.toHaveBeenCalledWith(expect.stringContaining("annual-uit"), expect.anything());
+    await act(async () => {});
+  });
+
+  it("document information uses the existing annual lookup but omits mismatched years and USD amounts", async () => {
+    vi.mocked(api.get).mockImplementation(async (path) =>
+      path.includes("annual-uit") ? { year: 2026, annual_uit: "5500.00" } : [],
+    );
+    const request = makeRequest({ request_type: REQUEST_TYPE.SUPPLIER_PAYMENT });
+    const { rerender } = render(<RequestDocumentsCard request={request} />);
+    await waitFor(() => expect(api.get).toHaveBeenCalledWith("/requests/lookups/annual-uit/2026", expect.anything()));
+    await act(async () => {});
+    fireEvent.click(screen.getByRole("button", { name: "Adjuntar Cotización" }));
+    expect(screen.getByRole("dialog")).toHaveTextContent("S/ 2,750.00");
+    fireEvent.click(screen.getByRole("button", { name: "Cancelar" }));
+    rerender(<RequestDocumentsCard request={{ ...request, fiscal_year: 2025 }} />);
+    await waitFor(() => expect(api.get).toHaveBeenCalledWith("/requests/lookups/annual-uit/2025", expect.anything()));
+    await act(async () => {});
+    fireEvent.click(screen.getByRole("button", { name: "Adjuntar Cotización" }));
+    expect(screen.getByRole("dialog")).toHaveTextContent("½ UIT del año de la solicitud");
+    expect(screen.getByRole("dialog")).not.toHaveTextContent("S/");
+    fireEvent.click(screen.getByRole("button", { name: "Cancelar" }));
+    const lookupCount = vi.mocked(api.get).mock.calls.filter(([path]) => path.includes("annual-uit")).length;
+    rerender(<RequestDocumentsCard request={{ ...request, currency: REQUEST_CURRENCY.USD, uit_year_applied: 2026, uit_amount_applied: "5500.00" }} />);
+    fireEvent.click(screen.getByRole("button", { name: "Adjuntar Contrato o convenio" }));
+    expect(screen.getByRole("dialog")).toHaveTextContent("importe en soles alcanza o supera ½ UIT del año de la solicitud");
+    expect(screen.getByRole("dialog")).not.toHaveTextContent("S/");
+    expect(api.postForm).not.toHaveBeenCalled();
+    await act(async () => {});
+    expect(vi.mocked(api.get).mock.calls.filter(([path]) => path.includes("annual-uit"))).toHaveLength(lookupCount);
+  });
+
+  it("document information leaves PXQ direct and resumes the generic picker without recursion", async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.get).mockResolvedValue([]);
+    render(<RequestDocumentsCard request={makeRequest()} />);
+    const input = screen.getByLabelText("Seleccionar PXQ");
+    const picker = vi.spyOn(input, "click").mockImplementation(() => undefined);
+    fireEvent.click(screen.getByRole("button", { name: "Adjuntar PXQ" }));
+    expect(picker).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("combobox", { name: "Categoría" }));
+    await user.click(screen.getByRole("option", { name: "Cotización" }));
+    const genericInput = screen.getByLabelText("Archivo") as HTMLInputElement;
+    const genericPicker = vi.spyOn(genericInput, "click");
+    fireEvent.click(genericInput);
+    expect(screen.getByRole("dialog")).toHaveTextContent("½ UIT del año de la solicitud");
+    expect(screen.getByRole("dialog")).not.toHaveTextContent("S/");
+    expect(genericPicker).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Entendido, seleccionar archivo" }));
+    expect(genericPicker).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    await act(async () => {});
   });
 
   it("individual POA tagging uses all settlement UUID options and reconciles the real PATCH without uploading", async () => {

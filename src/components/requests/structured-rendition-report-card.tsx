@@ -7,19 +7,23 @@ import { toast } from "sonner";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
-import { useRequestDocuments, useRequestReceiptReviews, useRequestRenditionReport, useRequestRenditionReportActions, useUploadRequestDocument } from "@/hooks/use-requests";
-import { formatRequestCurrency, formatRequestDate, getApiErrorMessage, getPlanningLineDisplay, getRequestDocumentDisplayName } from "@/lib/requests";
+import { canDeclareRenditionZeroExpense, useRequestDocuments, useRequestReceiptReviews, useRequestRenditionReport, useRequestRenditionReportActions, useUploadRequestDocument } from "@/hooks/use-requests";
+import { useAuthStore } from "@/stores/auth-store";
+import { formatRequestCurrency, formatRequestDate, getApiErrorMessage, getPlanningLineDisplay, getRequestDocumentDisplayName, normalizeMoneyAmount, toMoneyCents } from "@/lib/requests";
 import { cn } from "@/lib/utils";
+import { getRenditionReportReadiness } from "@/lib/rendition-report-readiness";
 import { SettlementBudgetClassification } from "./settlement-preparation/settlement-budget-classification";
 import {
   REQUEST_CURRENCY,
   REQUEST_DOCUMENT_CATEGORY,
+  REQUEST_DOCUMENT_PURPOSE,
   REQUEST_DOCUMENT_SCOPE_TYPE,
   REQUEST_DOCUMENT_UPLOAD_STATUS,
   LINE_RETURN_VALIDATION_STATUS,
@@ -28,6 +32,7 @@ import {
   REQUEST_RENDITION_ROW_TYPE,
   REQUEST_STATUS,
   REQUEST_TYPE,
+  REXAN_OUTCOME,
   type CreateManualRenditionRowInput,
   type PaymentRequest,
   type RequestAllocation,
@@ -374,25 +379,6 @@ function isReportGeneratedForReview(report: RequestRenditionReport | null): bool
   return report.status === REQUEST_RENDITION_REPORT_STATUS.EXPORTED || report.status === REQUEST_RENDITION_REPORT_STATUS.SUBMITTED;
 }
 
-function hasSafeReportCoverage(report: RequestRenditionReport | null): boolean {
-  if (!report || report.rows.length === 0 || report.totals.missing_allocations.length > 0) return false;
-  if (report.allocation_coverage.some((coverage) => !coverage.has_rows)) return false;
-  if (report.allocation_coverage.some((coverage) => {
-    const expectedReturn = Number(coverage.expected_return_amount ?? 0);
-    if (expectedReturn <= 0) return false;
-    return coverage.return_validation_status !== LINE_RETURN_VALIDATION_STATUS.VALID
-      && coverage.return_validation_status !== LINE_RETURN_VALIDATION_STATUS.NOT_REQUIRED;
-  })) return false;
-  return report.rows.every((row) => (
-    Boolean(row.request_document_id)
-    && Boolean(row.request_allocation_id)
-    && Boolean(row.purchase_date)
-    && Boolean(row.provider_name.trim())
-    && Boolean(row.detail.trim())
-    && Number(row.amount) > 0
-  ));
-}
-
 function toMoneyInput(value: number | string | null | undefined): string {
   const amount = Number(value ?? 0);
   return Number.isFinite(amount) ? amount.toFixed(2) : "0.00";
@@ -519,6 +505,9 @@ export function StructuredRenditionReportCard({ request, guidanceAllocations = [
   const [isManualDialogOpen, setIsManualDialogOpen] = useState(false);
   const [blockers, setBlockers] = useState<RequestRenditionValidationBlocker[]>([]);
   const [ready, setReady] = useState(false);
+  const actor = useAuthStore((state) => state.user);
+  const [zeroSelection, setZeroSelection] = useState<string[] | null>(null);
+  const [validationFailed, setValidationFailed] = useState(false);
   const [rowToDelete, setRowToDelete] = useState<RequestRenditionRow | null>(null);
   const [isGenerateConfirmOpen, setIsGenerateConfirmOpen] = useState(false);
   const [selectedReceiptIds, setSelectedReceiptIds] = useState<Set<string>>(() => new Set());
@@ -536,6 +525,26 @@ export function StructuredRenditionReportCard({ request, guidanceAllocations = [
   const shouldFocusBlockerRef = useRef(false);
 
   const report = reportState.report;
+  const canEditZero = isZeroEditable();
+  const canonicalZeroIds = report?.zero_expense_declaration_valid === false ? [] : report?.zero_expense_allocation_ids ?? [];
+  const selectedZeroIds = zeroSelection ?? canonicalZeroIds;
+  const hasUnvalidatedZeroChanges = zeroSelection !== null;
+  const zeroContextKey = `${request.id}:${actor?.id}:${actor?.role?.code}:${request.giof_work?.assignmentVersion}:${canEditZero}:${readOnly}`;
+  const validationContextRef = useRef(zeroContextKey);
+  validationContextRef.current = zeroContextKey;
+  useEffect(() => {
+    setZeroSelection(null);
+    setReady(false);
+    setValidationFailed(false);
+    setBlockers([]);
+  }, [report, zeroContextKey]);
+
+  function isZeroEditable(): boolean {
+    return !readOnly && request.status !== REQUEST_STATUS.PAID
+      && Boolean(actor) && report?.zero_expense_allocation_ids !== undefined
+      && (report?.status === REQUEST_RENDITION_REPORT_STATUS.DRAFT || report?.status === REQUEST_RENDITION_REPORT_STATUS.OBSERVED)
+      && canDeclareRenditionZeroExpense(request);
+  }
   const allocationOptions = getAllocationOptions(request, report);
   const hasGuidanceAllocations = guidanceAllocations.length > 0;
   const documents = documentsState.documents;
@@ -569,12 +578,18 @@ export function StructuredRenditionReportCard({ request, guidanceAllocations = [
   const lineBalanceCoverages = (report?.allocation_coverage ?? []).filter(hasLineBalanceAmount);
   const hasLineBalanceCandidates = lineBalanceCoverages.length > 0;
   const shouldShowLineBalances = hasLineBalanceCandidates
-    && (hasRenditionActivity(report, confirmedReceipts.length) || hasGeneratedOrObservedReportStatus(report, isObservedRequest));
+    && (hasRenditionActivity(report, confirmedReceipts.length) || hasGeneratedOrObservedReportStatus(report, isObservedRequest)
+      || (report?.zero_expense_declaration_valid === true && canonicalZeroIds.length > 0));
   const reportLocked = isReportLocked(report, isObservedRequest);
-  const validationReady = ready || isReportStatusReady(report);
-  const generatedReportMatchesCurrentRows = reportGeneratedForReview && hasSafeReportCoverage(report);
+  const currentValidationUsable = !hasUnvalidatedZeroChanges && !validationFailed && !reportState.error && !reportState.isRefreshing && report?.zero_expense_declaration_valid !== false;
+  const reportReadiness = getRenditionReportReadiness(request, report, documents);
+  const currentCoverageUsable = reportReadiness.eligible
+    && (reportReadiness.preview?.outcome !== REXAN_OUTCOME.DEVOLUCION
+      || (!documentsState.error && !documentsState.isLoading && !documentsState.isRefreshing));
+  const validationReady = currentValidationUsable && currentCoverageUsable && (ready || isReportStatusReady(report));
+  const generatedReportMatchesCurrentRows = currentValidationUsable && currentCoverageUsable && reportGeneratedForReview;
   const derivedReady = generatedReportMatchesCurrentRows;
-  const canGenerateFromLoadedReport = validationReady || hasSafeReportCoverage(report) || report?.status === REQUEST_RENDITION_REPORT_STATUS.EXPORT_FAILED;
+  const canGenerateFromLoadedReport = currentValidationUsable && currentCoverageUsable && (validationReady || reportReadiness.eligible || report?.status === REQUEST_RENDITION_REPORT_STATUS.EXPORT_FAILED);
   const effectiveBlockers: RequestRenditionValidationBlocker[] = (blockers.length > 0 ? blockers : missingAllocations.map((allocationId): RequestRenditionValidationBlocker => ({
     code: "MISSING_ALLOCATION_COVERAGE",
     message: `Falta al menos un comprobante para ${allocationLabelsById.get(allocationId) ?? "una línea POA pendiente"}.`,
@@ -596,6 +611,12 @@ export function StructuredRenditionReportCard({ request, guidanceAllocations = [
   const validationSummaryBlockers = [
     ...effectiveBlockers,
     ...(unconfirmedActiveReceipts.length > 0 && !hasUnconfirmedReceiptBlocker ? [{ code: "UNCONFIRMED_RECEIPTS_PENDING", message: unconfirmedReceiptsMessage, pending_count: unconfirmedActiveReceipts.length }] : []),
+    ...(request.request_type === REQUEST_TYPE.ADVANCE_SETTLEMENT && !currentCoverageUsable ? [{
+      code: "GLOBAL_REPORT_NOT_READY",
+      message: reportReadiness.preview?.outcome === REXAN_OUTCOME.DEVOLUCION
+        ? "La devolución global requiere constancias activas vinculadas a esta rendición por el saldo total exacto antes de generar o enviar el informe."
+        : "Valida el informe y la lectura del anticipo pagado para determinar el resultado global antes de generar o enviar.",
+    }] : []),
   ];
   const administrativeCoverageBlockers = (report?.allocation_coverage ?? [])
     .filter((coverage) => coverage.return_validation_status === LINE_RETURN_VALIDATION_STATUS.MISSING_EXECUTION)
@@ -613,7 +634,7 @@ export function StructuredRenditionReportCard({ request, guidanceAllocations = [
   const hasHardBlockers = effectiveBlockers.length > 0 || administrativeCoverageBlockers.length > 0;
   const hasPendingValidationItems = checklistBlockers.length > 0;
   const canGeneratePendingReport = !readOnly && !reportGeneratedForReview && !reportLocked && canGenerateFromLoadedReport && !hasHardBlockers;
-  const canUseGenerationAction = !hasPendingValidationItems && (canRegenerateReport || canGeneratePendingReport);
+  const canUseGenerationAction = currentValidationUsable && currentCoverageUsable && !hasPendingValidationItems && (canRegenerateReport || canGeneratePendingReport);
   const canUseValidationAction = isReportEditable;
   const generationButtonLabel = isExportPendingRetryAvailable(report) ? "Reintentar generación" : canRegenerateReport ? "Regenerar informe actualizado" : "Generar informe";
   const exportPendingInProgress = isExportPendingInProgress(report);
@@ -693,6 +714,40 @@ export function StructuredRenditionReportCard({ request, guidanceAllocations = [
   const areAllAddableReceiptsSelected = addableReceiptIds.length > 0 && selectedAddableReceiptIds.length === addableReceiptIds.length;
   const hasUnknownMutationResult = mutationReconciliationStatus === MUTATION_RECONCILIATION_STATUS.FAILED;
   const areMutationActionsBlocked = actions.isLoading || isBulkAddingReceipts || mutationReconciliationStatus !== MUTATION_RECONCILIATION_STATUS.IDLE;
+  const isValidationDisabled = !isReportEditable || areMutationActionsBlocked || reportState.isLoading || reportState.isRefreshing || (hasUnvalidatedZeroChanges && !canEditZero);
+  const validationButtonLabel = actions.isLoading ? isBulkAddingReceipts ? "Agregando comprobantes…" : "Procesando informe…"
+    : mutationReconciliationStatus === MUTATION_RECONCILIATION_STATUS.RECONCILING || reportState.isRefreshing ? "Sincronizando informe…"
+      : hasUnknownMutationResult ? "Sincronización pendiente"
+        : isBulkAddingReceipts ? "Agregando comprobantes…"
+          : "Validar comprobantes y declaraciones sin gasto";
+
+  // Display only: the existing server validation/approval remains authoritative.
+  const origin = request.relatedRequest;
+  const originAmount = origin && origin.id === request.related_request_id
+    && origin.request_type === REQUEST_TYPE.ADVANCE && origin.status === REQUEST_STATUS.PAID
+    && origin.currency === report?.currency
+    ? normalizeMoneyAmount(origin.requested_amount) : null;
+  const advanceAmount = originAmount !== null && originAmount > 0 ? originAmount : null;
+  const loadedSpentAmount = typeof report?.totals.total_amount === "number" ? normalizeMoneyAmount(report.totals.total_amount) : null;
+  const spentAmount = !reportState.error && !reportState.isRefreshing && loadedSpentAmount !== null && loadedSpentAmount >= 0
+    ? loadedSpentAmount : null;
+  const globalPreview = currentValidationUsable && !areMutationActionsBlocked
+    ? reportReadiness.preview : null;
+  const payment = request.payment;
+  const excessPaid = globalPreview?.outcome === REXAN_OUTCOME.EXCESS && request.status === REQUEST_STATUS.PAID
+    && payment?.payment_request_id === request.id && Boolean(payment.paid_at)
+    && toMoneyCents(payment.amount_paid) === toMoneyCents(globalPreview.balanceAmount)
+    && payment.proof_pending === false && Boolean(payment.proof_document_id);
+  const globalReturnRegistered = globalPreview?.outcome === REXAN_OUTCOME.DEVOLUCION
+    && !documentsState.error && !documentsState.isLoading && !documentsState.isRefreshing
+    && reportReadiness.returnRegistered;
+  const returnGuidance = !globalPreview
+    ? "Valida informe para determinar devolución total. Los saldos por línea no determinan automáticamente una devolución ni una constancia requerida."
+    : globalPreview.outcome === REXAN_OUTCOME.DEVOLUCION
+      ? globalReturnRegistered
+        ? "La devolución total tiene constancia validada. Conserva los registros y sustentos vinculados a sus líneas POA."
+        : "Adjunta o selecciona la constancia de la devolución total ahora desde Registrar devolución, con los controles de la línea POA correspondiente. La validación del servidor confirma el monto y el sustento; no necesitas esperar una observación."
+      : "El resultado global no requiere devolución. La asignación original y los saldos de distribución por POA son referencia; conserva las devoluciones históricas y sus constancias para revisión independiente.";
 
   useEffect(() => {
     const readinessNotificationKey = `${derivedReady ? "ready" : "pending"}:${readinessMessagesKey}`;
@@ -1131,10 +1186,15 @@ export function StructuredRenditionReportCard({ request, guidanceAllocations = [
   }
 
   async function handleValidate(): Promise<void> {
-    if (!isReportEditable) return;
+    if (isValidationDisabled) return;
+    const contextKey = zeroContextKey;
+    setReady(false);
+    setValidationFailed(true);
     try {
-      const validation = await actions.validateReport(request.id);
-      setReady(validation.ready);
+      const validation = hasUnvalidatedZeroChanges
+        ? await actions.validateReport(request.id, { zero_expense_allocation_ids: selectedZeroIds }, request)
+        : await actions.validateReport(request.id);
+      if (validationContextRef.current !== contextKey) return;
       setBlockers(validation.blockers);
       if (!validation.ready) {
         shouldFocusBlockerRef.current = true;
@@ -1145,8 +1205,14 @@ export function StructuredRenditionReportCard({ request, guidanceAllocations = [
       } else {
         toast.success("Informe validado correctamente");
       }
-      await reportState.refetch({ background: true });
+      await reportState.refetchOrThrow({ background: true });
+      if (validationContextRef.current !== contextKey) return;
+      setZeroSelection(null);
+      setBlockers(validation.blockers);
+      setReady(validation.ready);
+      setValidationFailed(!validation.ready);
     } catch (error) {
+      if (validationContextRef.current !== contextKey) return;
       toast.error(getApiErrorMessage(error));
     }
   }
@@ -1257,29 +1323,84 @@ export function StructuredRenditionReportCard({ request, guidanceAllocations = [
         {reportState.isLoading && !report ? <p className="rounded-md border p-4 text-sm text-muted-foreground">Cargando informe...</p> : null}
         {reportState.isRefreshing ? <p className="rounded-md border bg-muted/40 px-3 py-2 text-sm text-muted-foreground" role="status">Actualizando informe en segundo plano…</p> : null}
         {reportState.error && !hasUnknownMutationResult ? (
-          <Alert variant="destructive"><AlertDescription>No se pudo cargar el informe. Intenta nuevamente.</AlertDescription></Alert>
+          <Alert variant="destructive"><AlertDescription className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <span>No se pudo cargar el informe. Intenta nuevamente.</span>
+            <Button type="button" variant="outline" disabled={reportState.isLoading || reportState.isRefreshing} onClick={() => void reportState.refetch()}>
+              Reintentar carga del informe
+            </Button>
+          </AlertDescription></Alert>
         ) : null}
 
         <section className="grid gap-3 md:grid-cols-4">
-          <div className="rounded-md border p-3"><p className="text-xs text-muted-foreground">Total rendido</p><p className="text-lg font-semibold">{formatRequestCurrency(report?.totals.total_amount ?? 0, report?.currency || request.currency)}</p></div>
+          <div className="rounded-md border p-3"><p className="text-xs text-muted-foreground">Gasto sustentado</p><p className="text-lg font-semibold">{spentAmount === null ? "Pendiente de evaluación" : formatRequestCurrency(spentAmount, report?.currency || request.currency)}</p></div>
           <div className="rounded-md border p-3"><p className="text-xs text-muted-foreground">Filas registradas</p><p className="text-lg font-semibold">{rows.length}</p></div>
           <div className="rounded-md border p-3"><p className="text-xs text-muted-foreground">Líneas POA pendientes</p><p className="text-lg font-semibold">{missingAllocations.length}</p></div>
-          <div className="rounded-md border p-3"><p className="text-xs text-muted-foreground">Estado</p><p className="text-lg font-semibold">{getReportStatusLabel(report)}</p></div>
+          <div className="rounded-md border p-3"><p className="text-xs text-muted-foreground">Estado</p><p className="text-lg font-semibold">{hasUnvalidatedZeroChanges || validationFailed ? "Pendiente de validación" : getReportStatusLabel(report)}</p></div>
         </section>
+
+        {request.request_type === REQUEST_TYPE.ADVANCE_SETTLEMENT ? (
+          <section className="space-y-2 rounded-md border p-4 text-sm" data-testid="rendition-global-summary">
+            <p>{advanceAmount === null ? "Anticipo: pendiente de lectura" : `Anticipo entregado: ${formatRequestCurrency(advanceAmount, report?.currency ?? null)}`}</p>
+            <p>Gasto sustentado: {spentAmount === null ? "Pendiente de evaluación" : formatRequestCurrency(spentAmount, report?.currency ?? null)}</p>
+            {hasUnvalidatedZeroChanges ? <p>Cambios pendientes de validación</p> : null}
+            {!globalPreview ? <p>Resultado global: Pendiente de evaluación</p> : (
+              <>
+                <p className="font-semibold">Resultado global: {globalPreview.outcome === REXAN_OUTCOME.EXCESS ? "Exceso" : globalPreview.outcome === REXAN_OUTCOME.EXACT ? "Coincide con el anticipo" : "Devolución"}</p>
+                <p>{globalPreview.outcome === REXAN_OUTCOME.EXCESS
+                  ? `${excessPaid ? "Exceso pagado" : "Exceso por pagar"}: ${formatRequestCurrency(globalPreview.balanceAmount, report?.currency ?? null)}`
+                  : globalPreview.outcome === REXAN_OUTCOME.EXACT
+                    ? `Saldo: ${formatRequestCurrency(0, report?.currency ?? null)} · No requiere pago adicional ni devolución.`
+                    : `${globalReturnRegistered ? "Devolución registrada" : "Devolución requerida"}: ${formatRequestCurrency(globalPreview.balanceAmount, report?.currency ?? null)}`}</p>
+                <p className="text-xs text-muted-foreground">Comparación del anticipo original con el informe vigente. La validación y aprobación del servidor determinan el cierre.</p>
+                {globalPreview.outcome !== REXAN_OUTCOME.DEVOLUCION && lineBalanceCoverages.some((coverage) => Number(coverage.expected_return_amount) > 0) ? (
+                  <p className="text-xs text-amber-700">Los saldos de distribución original por POA no constituyen una devolución global. Los registros históricos por línea conservan su discrepancia y requieren revisión independiente.</p>
+                ) : null}
+              </>
+            )}
+            <p className="text-xs text-muted-foreground">{returnGuidance}</p>
+          </section>
+        ) : null}
 
         <section className="space-y-3">
           <h3 className="text-sm font-semibold">Total por línea POA</h3>
+          {canUseValidationAction ? <Button type="button" variant="outline" className="h-auto max-w-full whitespace-normal text-left" onClick={() => void handleValidate()} disabled={isValidationDisabled}>{validationButtonLabel}</Button> : null}
+          {report?.zero_expense_declaration_warning ? <Alert variant="destructive"><AlertDescription>{report.zero_expense_declaration_warning}</AlertDescription></Alert> : null}
           <div className="grid gap-3 md:grid-cols-2">
             {allocationOptions.map((allocationOption) => {
               const coverage = report?.allocation_coverage.find((item) => item.request_allocation_id === allocationOption.id);
               const allocation = allocationOption.allocation;
+              const isZeroValid = currentValidationUsable && canonicalZeroIds.includes(allocationOption.id);
+              const isZeroPending = selectedZeroIds.includes(allocationOption.id) && !isZeroValid;
+              const zeroDisabledReason = rows.some((row) => row.request_allocation_id === allocationOption.id && Number(row.amount) > 0) || Number(coverage?.row_total_amount ?? 0) > 0
+                ? "Esta POA ya tiene gasto registrado."
+                : receiptsWithoutRows.some((review) => getReceiptDocumentAllocationId(review, documents) === allocationOption.id && hasActiveReceiptDocument(review, documents))
+                  || evidenceDocuments.some((document) => document.request_allocation_id === allocationOption.id
+                    && document.document_category !== REQUEST_DOCUMENT_CATEGORY.PAYMENT_PROOF
+                    && document.document_purpose !== REQUEST_DOCUMENT_PURPOSE.EXTRA
+                    && !rows.some((row) => row.request_document_id === document.id))
+                  ? "Esta POA tiene comprobantes pendientes de revisar o agregar al informe."
+                  : null;
               return (
                 <div key={allocationOption.id} className="rounded-md border p-3 text-sm">
                   <div className="flex items-start justify-between gap-2">
                     <div><p className="font-medium">{allocationOption.label}</p><p className="text-xs text-muted-foreground">Planificado: {formatRequestCurrency(Number(allocation?.amount ?? coverage?.planned_amount ?? 0), allocation?.currency || report?.currency || request.currency)}</p></div>
-                    <Badge variant={coverage?.has_rows ? "secondary" : "destructive"}>{coverage?.has_rows ? "Con comprobante" : "Pendiente"}</Badge>
+                    <Badge className="whitespace-normal" variant={coverage?.has_rows || isZeroValid ? "secondary" : "destructive"}>{coverage?.has_rows ? "Con comprobante" : isZeroValid ? "Sin gasto validado" : isZeroPending ? "Sin gasto seleccionado · pendiente de validar" : "Pendiente"}</Badge>
                   </div>
                   <p className="mt-2 text-muted-foreground">Rendido: {formatRequestCurrency(coverage?.row_total_amount ?? 0, allocation?.currency || report?.currency || request.currency)} · {coverage?.row_count ?? 0} fila(s)</p>
+                  {canEditZero && allocation?.payment_request_id === request.id ? (
+                    <div className="mt-2 space-y-1">
+                      <label className="flex items-center gap-2" htmlFor={`zero-${allocationOption.id}`}>
+                        <Checkbox id={`zero-${allocationOption.id}`} checked={selectedZeroIds.includes(allocationOption.id)} disabled={areMutationActionsBlocked || Boolean(zeroDisabledReason) || reportState.isRefreshing || documentsState.isLoading || receiptState.isLoading} aria-describedby={zeroDisabledReason ? `zero-reason-${allocationOption.id}` : isZeroPending ? `zero-pending-${allocationOption.id}` : undefined} onCheckedChange={(checked) => {
+                          if (!isZeroEditable() || zeroDisabledReason) return;
+                          setZeroSelection(checked === true ? [...selectedZeroIds.filter((id) => id !== allocationOption.id), allocationOption.id] : selectedZeroIds.filter((id) => id !== allocationOption.id));
+                          setReady(false);
+                        }} />
+                        Sin gasto en esta POA
+                      </label>
+                      {isZeroPending ? <p id={`zero-pending-${allocationOption.id}`} className="text-xs text-muted-foreground">Valida los comprobantes y declaraciones sin gasto para guardar esta selección.</p> : null}
+                      {zeroDisabledReason ? <p id={`zero-reason-${allocationOption.id}`} className="text-xs text-muted-foreground">{zeroDisabledReason}</p> : null}
+                    </div>
+                  ) : null}
                 </div>
               );
             })}
@@ -1308,7 +1429,7 @@ export function StructuredRenditionReportCard({ request, guidanceAllocations = [
           <section className="space-y-3 rounded-md border p-4">
             <div>
               <h3 className="text-sm font-semibold">Saldos por línea POA</h3>
-              <p className="text-xs text-muted-foreground">Durante la preparación inicial los saldos son informativos. La constancia de devolución se solicita solo si GIOF observa la rendición y pide sustento de devolución; el exceso rendido queda visible como advertencia de revisión.</p>
+              <p className="text-xs text-muted-foreground">{request.request_type === REQUEST_TYPE.ADVANCE_SETTLEMENT ? returnGuidance : "Los saldos por línea se revisan según la validación del servidor."}</p>
             </div>
             <div className="grid gap-3">
               {lineBalanceCoverages.map((coverage, index) => {
@@ -1318,10 +1439,13 @@ export function StructuredRenditionReportCard({ request, guidanceAllocations = [
                 const returnedAmount = Number(coverage.returned_amount ?? coverage.line_return?.returned_amount ?? 0);
                 const excessAmount = Number(coverage.excess_amount ?? 0);
                 const validationStatus = coverage.return_validation_status ?? (expectedReturn > 0 ? LINE_RETURN_VALIDATION_STATUS.MISSING : LINE_RETURN_VALIDATION_STATUS.NOT_REQUIRED);
-                const requiresReturnProof = shouldRequireLineReturnProof(coverage, isObservedRequest);
+                const requiresReturnProof = shouldRequireLineReturnProof(coverage, isObservedRequest)
+                  || (globalPreview?.outcome === REXAN_OUTCOME.DEVOLUCION && expectedReturn > 0);
                 const isMissingExecution = validationStatus === LINE_RETURN_VALIDATION_STATUS.MISSING_EXECUTION;
-                const blockerMessage = getLineReturnBlockerMessage(validationStatus, requiresReturnProof);
-                const meaningMessage = getLineReturnMeaningMessage(expectedReturn, excessAmount, currency, requiresReturnProof);
+                const blockerMessage = request.request_type === REQUEST_TYPE.ADVANCE_SETTLEMENT && !isMissingExecution
+                  ? globalPreview?.outcome === REXAN_OUTCOME.DEVOLUCION && validationStatus !== LINE_RETURN_VALIDATION_STATUS.VALID && validationStatus !== LINE_RETURN_VALIDATION_STATUS.NOT_REQUIRED ? returnGuidance : null
+                  : getLineReturnBlockerMessage(validationStatus, requiresReturnProof);
+                const meaningMessage = request.request_type === REQUEST_TYPE.ADVANCE_SETTLEMENT ? null : getLineReturnMeaningMessage(expectedReturn, excessAmount, currency, requiresReturnProof);
                 const form = getLineReturnForm(coverage);
                 const lineReturnProofs = returnProofDocuments.filter((document) => document.request_allocation_id === coverage.request_allocation_id || document.id === coverage.line_return?.return_proof_document_id);
                 const selectedProof = form.return_proof_document_id ? getDocumentById(documents, form.return_proof_document_id) : null;
@@ -1337,9 +1461,9 @@ export function StructuredRenditionReportCard({ request, guidanceAllocations = [
                     <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
                       <div>
                         <p className="font-medium">{allocationLabel}</p>
-                        <p className="text-xs text-muted-foreground">Saldo calculado contra la base efectivamente pagada para esta línea POA.</p>
+                        <p className="text-xs text-muted-foreground">Asignación original/saldo de distribución. No acredita una devolución bancaria.</p>
                       </div>
-                      <Badge variant={!requiresReturnProof || validationStatus === LINE_RETURN_VALIDATION_STATUS.VALID || validationStatus === LINE_RETURN_VALIDATION_STATUS.NOT_REQUIRED ? "secondary" : isMissingExecution ? "outline" : "destructive"}>{getLineBalanceStatusLabel(validationStatus, requiresReturnProof, expectedReturn)}</Badge>
+                      <Badge variant={!requiresReturnProof || validationStatus === LINE_RETURN_VALIDATION_STATUS.VALID || validationStatus === LINE_RETURN_VALIDATION_STATUS.NOT_REQUIRED ? "secondary" : isMissingExecution ? "outline" : "destructive"}>{request.request_type === REQUEST_TYPE.ADVANCE_SETTLEMENT && !coverage.line_return && !isMissingExecution && globalPreview?.outcome !== REXAN_OUTCOME.DEVOLUCION ? "Saldo de distribución" : getLineBalanceStatusLabel(validationStatus, requiresReturnProof, expectedReturn)}</Badge>
                     </div>
                     <dl className="grid gap-2 sm:grid-cols-5">
                       <div className="rounded-md bg-background p-2"><dt className="text-xs text-muted-foreground">{paidBaseLabel}</dt><dd className="font-semibold">{formatRequestCurrency(Number(coverage.paid_base_amount ?? coverage.planned_amount ?? 0), currency)}</dd></div>
@@ -1372,7 +1496,7 @@ export function StructuredRenditionReportCard({ request, guidanceAllocations = [
                       <div className="space-y-3">
                         {!isLineReturnFormOpen && !coverage.line_return ? (
                           <div className="flex flex-col gap-3 rounded-md border border-dashed bg-background p-3 sm:flex-row sm:items-center sm:justify-between">
-                            <p className="text-sm text-muted-foreground">Registra la devolución de esta línea POA con su monto, justificación y constancia propia. No uses documentos generales para este sustento.</p>
+                            <p className="text-sm text-muted-foreground">{request.request_type === REQUEST_TYPE.ADVANCE_SETTLEMENT ? "Estos controles vinculan el monto, la justificación y la constancia a esta línea POA según la validación del servidor. El saldo de distribución no determina por sí solo el total a devolver." : "Registra la devolución de esta línea POA con su monto, justificación y constancia propia. No uses documentos generales para este sustento."}</p>
                             {isReportEditable ? <Button type="button" onClick={() => openLineReturnForm(coverage)}>Registrar devolución</Button> : null}
                           </div>
                         ) : null}
@@ -1428,9 +1552,9 @@ export function StructuredRenditionReportCard({ request, guidanceAllocations = [
                         ) : null}
                       </div>
                     ) : excessAmount > 0 ? (
-                      <p className="text-xs text-muted-foreground">No adjuntes constancia de devolución para esta línea: no hay saldo a devolver. El exceso queda documentado para la revisión presupuestal de GIOF.</p>
+                      <p className="text-xs text-muted-foreground">{request.request_type === REQUEST_TYPE.ADVANCE_SETTLEMENT ? "El exceso por línea es una referencia de distribución; el resultado global determina la devolución total." : "No adjuntes constancia de devolución para esta línea: no hay saldo a devolver. El exceso queda documentado para la revisión presupuestal de GIOF."}</p>
                     ) : expectedReturn > 0 ? (
-                      <p className="text-xs text-muted-foreground">No adjuntes constancia de devolución en esta preparación inicial. Completa comprobantes y genera el informe; si GIOF observa la rendición, esta línea se reabrirá para cargar la constancia solicitada.</p>
+                      <p className="text-xs text-muted-foreground">{request.request_type === REQUEST_TYPE.ADVANCE_SETTLEMENT ? "Valida informe para determinar devolución total; este saldo de distribución no es una devolución registrada." : "Completa comprobantes y valida el informe para determinar el sustento requerido."}</p>
                     ) : null}
                   </div>
                 );
@@ -1464,7 +1588,7 @@ export function StructuredRenditionReportCard({ request, guidanceAllocations = [
                     <Badge variant="outline">{item.responsible}</Badge>
                     <Badge variant={item.status === RENDITION_CHECKLIST_STATUS.BLOCKER ? "destructive" : "secondary"}>{getChecklistStatusLabel(item.status)}</Badge>
                   </div>
-                  <p className="text-muted-foreground">{item.description}</p>
+                  <p className="text-muted-foreground">{request.request_type === REQUEST_TYPE.ADVANCE_SETTLEMENT && item.id.startsWith("LINE_RETURN_") && !item.id.startsWith("LINE_RETURN_MISSING_EXECUTION") ? returnGuidance : item.description}</p>
                 </div>
               </div>
             ))}
@@ -1667,12 +1791,12 @@ export function StructuredRenditionReportCard({ request, guidanceAllocations = [
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div>
               <h3 className="text-sm font-semibold">Validación y generación</h3>
-              <p className="text-xs text-muted-foreground">Valida que todas las líneas POA tengan comprobantes y luego genera el informe final.</p>
+              <p className="text-xs text-muted-foreground">Valida los comprobantes o declaraciones sin gasto de las líneas POA y luego genera el informe final.</p>
               {hasPendingValidationItems ? <p className="mt-1 text-xs text-muted-foreground">Revisa los pendientes del checklist antes de continuar. La página se mantiene en esta sección para que puedas corregirlos sin recargar.</p> : null}
             </div>
             {canUseValidationAction || canUseGenerationAction || hasPendingValidationItems || isExportPendingWithoutDocument(report) ? (
-              <div className="flex flex-col gap-2 sm:flex-row">
-                {canUseValidationAction ? <Button type="button" variant="outline" onClick={() => void handleValidate()} disabled={actions.isLoading}>Validar informe</Button> : null}
+              <div className="flex min-w-0 flex-col gap-2 sm:flex-row sm:flex-wrap">
+                {canUseValidationAction ? <Button type="button" variant="outline" aria-label="Validar informe" aria-description={validationButtonLabel} className="h-auto max-w-full whitespace-normal" onClick={() => void handleValidate()} disabled={isValidationDisabled}>{validationButtonLabel}</Button> : null}
                 {isExportPendingWithoutDocument(report) ? <Button type="button" variant="outline" onClick={() => void handleRefreshExportStatus()} disabled={actions.isLoading || reportState.isRefreshing}>Actualizar estado</Button> : null}
                 {hasPendingValidationItems ? <Button type="button" variant="outline" onClick={focusFirstBlocker}>Ir al primer pendiente</Button> : null}
                 {!exportPendingInProgress ? <Button type="button" onClick={openGenerateConfirmation} disabled={areMutationActionsBlocked || !canUseGenerationAction}>{generationButtonLabel}</Button> : null}

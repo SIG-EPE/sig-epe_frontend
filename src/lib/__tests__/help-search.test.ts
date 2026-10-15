@@ -31,9 +31,13 @@ describe("FAQ catalog", () => {
     expect(FAQ_ITEMS).toHaveLength(19);
     expect(FAQ_ITEMS.map((item) => item.question)).toEqual(EXPECTED_QUESTIONS);
 
-    const visibleCopy = FAQ_ITEMS.map((item) => `${item.question} ${item.answer}`).join(" ");
+    const visibleCopy = FAQ_ITEMS.map(
+      (item) => `${item.question} ${item.answer}`,
+    ).join(" ");
     expect(visibleCopy).not.toMatch(/\b(?:SSO|token|handoff|replay)\b/i);
-    expect(visibleCopy).not.toMatch(/\b(?:SUBMITTED|ADVANCE_SETTLEMENT|REQUEST|PAYMENT|REXAN|DRAFT|IN_VALIDATION|OBSERVED|PAID)\b/);
+    expect(visibleCopy).not.toMatch(
+      /\b(?:SUBMITTED|ADVANCE_SETTLEMENT|REQUEST|PAYMENT|REXAN|DRAFT|IN_VALIDATION|OBSERVED|PAID)\b/,
+    );
     expect(FAQ_ITEMS[0].keywords).toContain("SSO institucional");
     expect(FAQ_ITEMS[1].keywords).toContain("SSO");
 
@@ -41,7 +45,9 @@ describe("FAQ catalog", () => {
     const rexanItem = FAQ_ITEMS.find((item) => item.id === "rexan-generacion");
     expect(pxqItem?.answer).toMatch(/PxQ significa presupuesto por cantidad/i);
     expect(rexanItem?.answer).toMatch(/SIG-EPE crea la rendición de anticipo/i);
-    expect(FAQ_ITEMS.find((item) => item.id === "asignacion-giof")?.href).toBe("/help/giof-assignment");
+    expect(FAQ_ITEMS.find((item) => item.id === "asignacion-giof")?.href).toBe(
+      "/help/giof-assignment",
+    );
   });
 
   it("has complete, unique, DOM-safe and categorized entries", () => {
@@ -54,15 +60,18 @@ describe("FAQ catalog", () => {
       expect(categories).toContain(item.category);
       expect(item.answer.trim()).not.toBe("");
       expect(item.keywords.length).toBeGreaterThan(0);
-      expect(item.keywords.every((keyword) => keyword.trim().length > 0)).toBe(true);
+      expect(item.keywords.every((keyword) => keyword.trim().length > 0)).toBe(
+        true,
+      );
     }
   });
 
   it("usa en la ayuda los labels visibles contextuales vigentes", () => {
     const faqCopy = FAQ_ITEMS.map((item) => item.answer).join(" ");
-    const giofCopy = GIOF_STAGE_GUIDES
-      .flatMap((guide) => [guide.assignable, guide.notAssignable])
-      .join(" ");
+    const giofCopy = GIOF_STAGE_GUIDES.flatMap((guide) => [
+      guide.assignable,
+      guide.notAssignable,
+    ]).join(" ");
 
     expect(faqCopy).toContain("Enviada a revisión");
     expect(faqCopy).toContain("Aprobada · pendiente de pago");
@@ -74,6 +83,19 @@ describe("FAQ catalog", () => {
     expect(giofCopy).not.toMatch(/En gestión de pago|Rendición en preparación/);
   });
 
+  it("describes the four independent supplier primary documents without stale conditions", () => {
+    const supplierDocuments = FAQ_ITEMS.find(
+      (item) => item.id === "documentos-por-tipo",
+    );
+
+    expect(supplierDocuments?.answer).toContain(
+      "cuatro tipos independientes de documento principal: Factura, Recibo por honorarios (RHE), Boleta y Recibo de caja",
+    );
+    expect(supplierDocuments?.answer).toContain(
+      "Cada tipo es opcional por separado, pero debes adjuntar al menos uno",
+    );
+    expect(supplierDocuments?.answer).not.toMatch(/RUS|Casa de Retiro/i);
+  });
 });
 
 describe("FAQ search", () => {
@@ -84,15 +106,23 @@ describe("FAQ search", () => {
   });
 
   it("matches question, answer and keywords without case or accent distinctions", () => {
-    expect(filterFaqItems(FAQ_ITEMS, "sso institucional").map((item) => item.id)).toContain(
-      "sso-institucional",
-    );
+    expect(
+      filterFaqItems(FAQ_ITEMS, "sso institucional").map((item) => item.id),
+    ).toContain("sso-institucional");
     expect(filterFaqItems(FAQ_ITEMS, "RENDICION").length).toBeGreaterThan(0);
-    expect(filterFaqItems(FAQ_ITEMS, "bandeja de entrada").map((item) => item.id)).toContain(
-      "correos-sig-epe",
-    );
-    for (const query of ["asignación", "GIOF", "Rendición", "casilla", "solo lectura"]) {
-      expect(filterFaqItems(FAQ_ITEMS, query).map((item) => item.id)).toContain("asignacion-giof");
+    expect(
+      filterFaqItems(FAQ_ITEMS, "bandeja de entrada").map((item) => item.id),
+    ).toContain("correos-sig-epe");
+    for (const query of [
+      "asignación",
+      "GIOF",
+      "Rendición",
+      "casilla",
+      "solo lectura",
+    ]) {
+      expect(filterFaqItems(FAQ_ITEMS, query).map((item) => item.id)).toContain(
+        "asignacion-giof",
+      );
     }
   });
 

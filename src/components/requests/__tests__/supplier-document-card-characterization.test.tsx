@@ -220,7 +220,7 @@ describe("supplier document card approved grouping", () => {
     });
   });
 
-  it("renders exactly four primary and seven complementary responsive category cards", () => {
+  it("renders exactly two sections with six principal and five other responsive category cards", () => {
     render(
       <RequestDocumentsCard
         request={request()}
@@ -231,10 +231,23 @@ describe("supplier document card approved grouping", () => {
 
     const primary = screen.getByRole("region", { name: "Documento principal" });
     const complementary = screen.getByRole("region", {
-      name: "Documentos complementarios",
+      name: "Otros documentos principales",
     });
-    expect(within(primary).getAllByRole("article")).toHaveLength(4);
-    expect(within(complementary).getAllByRole("article")).toHaveLength(7);
+    expect(within(primary).getAllByRole("article")).toHaveLength(6);
+    expect(within(complementary).getAllByRole("article")).toHaveLength(5);
+    expect(screen.getAllByRole("heading", { name: "Documento principal" })).toHaveLength(1);
+    expect(screen.getAllByRole("heading", { name: "Otros documentos principales" })).toHaveLength(1);
+    expect(screen.queryByRole("heading", { name: "Documentos de sustento adicionales" })).not.toBeInTheDocument();
+    expect(screen.getAllByRole("heading", { level: 3 })).toHaveLength(2);
+    expect(within(primary).getByRole("heading", { name: "Cotización" })).toBeVisible();
+    expect(within(primary).getByRole("heading", { name: "Contrato o convenio" })).toBeVisible();
+    expect(within(complementary).queryByRole("heading", { name: "Cotización" })).not.toBeInTheDocument();
+    expect(within(primary).getAllByRole("heading", { level: 4 }).map((heading) => heading.textContent)).toEqual([
+      "Factura", "Recibo por honorarios", "Boleta", "Recibo de caja", "Cotización", "Contrato o convenio",
+    ]);
+    expect(within(complementary).getAllByRole("heading", { level: 4 }).map((heading) => heading.textContent)).toEqual([
+      "Evidencias", "Suspensión de 4ta categoría", "Planilla de movilidad", "Declaración Jurada", "Otros documentos",
+    ]);
     expect(within(primary).getByTestId("supplier-primary-grid")).toHaveClass(
       "grid-cols-1",
       "md:grid-cols-2",
@@ -297,7 +310,7 @@ describe("supplier document card approved grouping", () => {
     const sectionHeadings = screen.getAllByRole("heading", { level: 3 });
     expect(sectionHeadings.map((heading) => heading.textContent)).toEqual([
       "Documento principal",
-      "Documentos complementarios",
+      "Otros documentos principales",
       "Documentos históricos",
     ]);
     expect(
@@ -513,6 +526,28 @@ describe("supplier document card approved grouping", () => {
     );
   });
 
+  it("quotation and contract in principal cards do not satisfy the authoritative fiscal requirement", () => {
+    const documents = [
+      document("quote-only", REQUEST_DOCUMENT_CATEGORY.QUOTATION),
+      document("contract-only", REQUEST_DOCUMENT_CATEGORY.CONTRACT),
+    ];
+    const pending = evidence([REQUEST_DOCUMENT_CATEGORY.QUOTATION, REQUEST_DOCUMENT_CATEGORY.CONTRACT].map((category, index) => ({
+      id: documents[index].id,
+      stored_category: category,
+      effective_category: category,
+      activity_state: SUPPLIER_DOCUMENT_ACTIVITY_STATE.ACTIVE,
+      eligibility_state: SUPPLIER_DOCUMENT_ELIGIBILITY_STATE.INELIGIBLE,
+      eligible: false,
+      reason_code: SUPPLIER_DOCUMENT_PROJECTION_REASON.CATEGORY_NOT_PRIMARY,
+    })));
+    render(<RequestDocumentsCard request={request()} documents={documents} supplierEvidenceResource={evidenceResource(pending)} />);
+    const primary = screen.getByRole("region", { name: "Documento principal" });
+    expect(within(primary).getByText("quote-only.pdf")).toBeVisible();
+    expect(within(primary).getByText("contract-only.pdf")).toBeVisible();
+    expect(screen.getByRole("status", { name: "Estado del requisito de documento principal" })).toHaveTextContent("Pendiente · 0 válidos");
+    expect(pending.primary_satisfied).toBe(false);
+  });
+
   it("shows the authoritative pending and satisfied count without local inference", () => {
     const pending = evidence();
     const { rerender } = render(
@@ -525,7 +560,7 @@ describe("supplier document card approved grouping", () => {
       />,
     );
 
-    expect(screen.getByText("Debes adjuntar al menos uno.")).toBeVisible();
+    expect(screen.getByText("El requisito de comprobante se cumple con Factura, RH, Boleta o Recibo de caja. Cotización y contrato acompañan según el caso.")).toBeVisible();
     expect(screen.getByText("Pendiente · 0 válidos")).toBeVisible();
 
     const satisfied = evidence([
@@ -839,7 +874,7 @@ describe("supplier document card approved grouping", () => {
     );
     const supplierSections = [
       screen.getByRole("region", { name: "Documento principal" }),
-      screen.getByRole("region", { name: "Documentos complementarios" }),
+      screen.getByRole("region", { name: "Otros documentos principales" }),
     ];
     for (const section of supplierSections) {
       const controls = [

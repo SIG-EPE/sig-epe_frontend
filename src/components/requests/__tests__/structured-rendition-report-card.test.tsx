@@ -126,6 +126,9 @@ function makeRequest(overrides: Partial<PaymentRequest> = {}): PaymentRequest {
     organizationalUnit: null,
     scheduled_rendition_at: null,
     related_request_id: "advance-1",
+    relatedRequest: { id: "advance-1", request_code: "ANT-1", sequential_number: "1", request_type: REQUEST_TYPE.ADVANCE,
+      status: REQUEST_STATUS.PAID, requested_amount: 125.5, currency: REQUEST_CURRENCY.PEN, concept: "Anticipo pagado",
+      requester_id: "user-1", created_at: "2026-06-01T00:00:00.000Z" },
     supplier_ruc: null,
     supplier_name: null,
     document_type: null,
@@ -627,7 +630,7 @@ describe("StructuredRenditionReportCard", () => {
     expect(screen.getByRole("button", { name: "Generar informe" })).toBeEnabled();
   });
 
-  it("muestra saldo estimado sin pedir devolución durante la preparación inicial", () => {
+  it("mantiene saldo de distribución pendiente cuando falta la lectura del anticipo pagado", () => {
     mocks.report = makeReport({
       status: REQUEST_RENDITION_REPORT_STATUS.DRAFT,
       allocation_coverage: [{
@@ -646,13 +649,13 @@ describe("StructuredRenditionReportCard", () => {
       }],
     });
 
-    render(<StructuredRenditionReportCard request={makeRequest()} />);
+    render(<StructuredRenditionReportCard request={makeRequest({ relatedRequest: undefined })} />);
 
-    expect(screen.getByText("Saldo estimado")).toBeInTheDocument();
-    expect(screen.getByText(/En esta preparación inicial no se solicita constancia de devolución/i)).toBeInTheDocument();
+    expect(screen.getByText("Saldo de distribución")).toBeInTheDocument();
+    expect(screen.getAllByText(/Valida informe para determinar devolución total/i).length).toBeGreaterThan(0);
     expect(screen.queryByText("Devolución requerida")).not.toBeInTheDocument();
     expect(screen.queryByLabelText(/Constancia de devolución \*/i)).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Generar informe" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Generar informe" })).toBeDisabled();
   });
 
   it("requiere constancia de devolución cuando la rendición fue observada", () => {
@@ -674,10 +677,12 @@ describe("StructuredRenditionReportCard", () => {
       }],
     });
 
-    render(<StructuredRenditionReportCard request={makeRequest({ status: REQUEST_STATUS.OBSERVED })} />);
+    const request = makeRequest({ status: REQUEST_STATUS.OBSERVED });
+    request.relatedRequest = { ...request.relatedRequest!, requested_amount: 300 };
+    render(<StructuredRenditionReportCard request={request} />);
 
-    expect(screen.getAllByText("Devolución requerida").length).toBeGreaterThan(0);
-    expect(screen.getByText(/Debes devolver/)).toBeInTheDocument();
+    expect(screen.getByText(/Devolución requerida:.*174/)).toBeInTheDocument();
+    expect(screen.getAllByText(/Adjunta o selecciona la constancia de la devolución total ahora/).length).toBeGreaterThan(0);
     expect(screen.getByRole("button", { name: "Registrar devolución" })).toBeInTheDocument();
     expect(screen.queryByLabelText(/Monto devuelto \*/i)).not.toBeInTheDocument();
     expect(screen.queryByLabelText(/Constancia de devolución \*/i)).not.toBeInTheDocument();
@@ -1377,6 +1382,8 @@ describe("StructuredRenditionReportCard", () => {
   it("muestra panel de devolución por línea con importes y pendiente de constancia", () => {
     mocks.report = makeReport({
       status: REQUEST_RENDITION_REPORT_STATUS.DRAFT,
+      rows: [makeRow({ amount: 125 })],
+      totals: { total_amount: 125, by_allocation: [], missing_allocations: [] },
       allocation_coverage: [{
         request_allocation_id: "allocation-1",
         request_allocation_label: "Línea 1: POA-001 · Materiales",
@@ -1394,12 +1401,14 @@ describe("StructuredRenditionReportCard", () => {
       }],
     });
 
-    render(<StructuredRenditionReportCard request={makeRequest({ status: REQUEST_STATUS.OBSERVED })} />);
+    const request = makeRequest({ status: REQUEST_STATUS.OBSERVED });
+    request.relatedRequest = { ...request.relatedRequest!, requested_amount: 300 };
+    render(<StructuredRenditionReportCard request={request} />);
 
     expect(screen.getByText("Saldos por línea POA")).toBeInTheDocument();
-    expect(screen.getByText("Devolución requerida")).toBeInTheDocument();
-    expect(screen.getByText(/Devolución requerida: la base pagada es mayor al monto rendido/i)).toBeInTheDocument();
-    expect(screen.getByText(/registra el saldo exacto no utilizado/i)).toBeInTheDocument();
+    expect(screen.getByText(/Devolución requerida:.*175/)).toBeInTheDocument();
+    expect(screen.getAllByText(/Adjunta o selecciona la constancia de la devolución total ahora/).length).toBeGreaterThan(0);
+    expect(screen.getByRole("button", { name: "Generar informe" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Registrar devolución" })).toBeInTheDocument();
     expect(screen.queryByLabelText(/Constancia de devolución/i)).not.toBeInTheDocument();
   });
@@ -1460,7 +1469,9 @@ describe("StructuredRenditionReportCard", () => {
     render(<StructuredRenditionReportCard request={makeRequest({ status: REQUEST_STATUS.OBSERVED })} />);
 
     expect(screen.getByText("Saldos por línea POA")).toBeInTheDocument();
-    expect(screen.getByText("Falta constancia")).toBeInTheDocument();
+    expect(screen.getByText("Saldo de distribución")).toBeInTheDocument();
+    expect(screen.getAllByText(/Valida informe para determinar devolución total/i).length).toBeGreaterThan(0);
+    expect(screen.getByRole("button", { name: "Generar informe" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Registrar devolución" })).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Registrar devolución" }));
     expect(screen.getByLabelText("Monto devuelto *")).toBeInTheDocument();
@@ -1470,6 +1481,8 @@ describe("StructuredRenditionReportCard", () => {
   it("muestra falta de base pagada como aviso administrativo no ingresable en rendición", () => {
     mocks.report = makeReport({
       status: REQUEST_RENDITION_REPORT_STATUS.DRAFT,
+      rows: [makeRow({ amount: 502.22 })],
+      totals: { total_amount: 502.22, by_allocation: [], missing_allocations: [] },
       allocation_coverage: [{
         request_allocation_id: "allocation-1",
         request_allocation_label: "Línea 1: POA-001 · Materiales",
@@ -1487,13 +1500,14 @@ describe("StructuredRenditionReportCard", () => {
       }],
     });
 
-    render(<StructuredRenditionReportCard request={makeRequest()} />);
+    render(<StructuredRenditionReportCard request={makeRequest({ relatedRequest: undefined })} />);
 
+    expect(screen.getByText("Resultado global: Pendiente de evaluación")).toBeInTheDocument();
     expect(screen.getAllByText("Pendiente administrativo GIOF").length).toBeGreaterThan(0);
     expect(screen.getByText(/no se encontró la base efectivamente pagada/i)).toBeInTheDocument();
     expect(screen.getByText(/no se ingresa en la rendición/i)).toBeInTheDocument();
-    expect(screen.getByText(/Exceso rendido para revisión GIOF: los gastos superan la base pagada/i)).toBeInTheDocument();
-    expect(screen.getByText(/no hay saldo a devolver/i)).toBeInTheDocument();
+    expect(screen.getByText(/El exceso por línea es una referencia de distribución/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Generar informe" })).toBeDisabled();
     expect(screen.queryByLabelText("Monto devuelto *")).not.toBeInTheDocument();
   });
 
@@ -1755,7 +1769,8 @@ describe("StructuredRenditionReportCard", () => {
 
     await user.click(screen.getByRole("button", { name: "Validar informe" }));
 
-    expect(await screen.findByText(/La devolución ya requiere constancia/i)).toBeInTheDocument();
+    expect(await screen.findByText("Devolución requerida")).toBeInTheDocument();
+    expect(screen.getAllByText(/Valida informe para determinar devolución total/i).length).toBeGreaterThan(0);
     expect(screen.getByRole("button", { name: "Generar informe" })).toBeDisabled();
   });
 

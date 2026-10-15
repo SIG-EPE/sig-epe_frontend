@@ -57,6 +57,8 @@ export function getGiofMutationHeaders(path: string, method?: string): HeadersIn
   // EXTRA tiene autorización propia por rol/lectura, sin lease financiero ambiental.
   if (
     /^\/requests\/[^/?#]+\/documents\/extra(?:\/[^/?#]+)?(?:[?#].*)?$/.test(path)
+    // El rechazo bancario terminal no exige ni hereda una sesión financiera.
+    || /^\/requests\/[^/?#]+\/reject-bank-payment$/.test(path)
   ) return undefined;
 
   for (const [target, lease] of credentialsByTarget.entries()) {

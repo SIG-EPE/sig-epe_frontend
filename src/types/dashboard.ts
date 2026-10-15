@@ -282,10 +282,16 @@ export interface GiofOperationsSummary {
   in_risk_count: number;
 }
 
+export interface GiofMoneyValuation {
+  unvalued_count: number;
+  provisional_count: number;
+}
+
 export interface GiofOperationsFunnelItem {
   status: string;
   count: number;
   amount: number;
+  valuation?: GiofMoneyValuation;
 }
 
 export interface GiofOperationsAgingBucket {
@@ -305,6 +311,8 @@ export interface GiofOperationsPayments {
   paid_count: number;
   pending_amount: number;
   paid_amount: number;
+  pending_valuation?: GiofMoneyValuation;
+  paid_valuation?: GiofMoneyValuation;
 }
 
 export interface GiofOperationsRenditions {
@@ -326,9 +334,11 @@ export interface GiofOperationsException {
   type: string;
   count: number;
   amount: number | null;
+  valuation?: GiofMoneyValuation;
 }
 
 export interface GiofOperationsDashboard {
+  amount_currency?: "PEN";
   generated_at: string;
   applied_filters: GiofOperationsDashboardFilters;
   summary: GiofOperationsSummary;

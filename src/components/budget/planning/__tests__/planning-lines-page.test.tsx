@@ -63,6 +63,54 @@ describe("PlanningLinesPage code search", () => {
 
   afterEach(() => vi.useRealTimers());
 
+  it("shows only the named custom clear control for a nonempty code, never a native search cancel control", () => {
+    const { rerender } = render(<PlanningLinesPage />);
+    const search = screen.getByRole("searchbox", { name: "Buscar por código" });
+    expect(search).toHaveAttribute("type", "text");
+    expect(
+      screen.queryByRole("button", { name: "Limpiar búsqueda por código" }),
+    ).not.toBeInTheDocument();
+
+    fireEvent.change(search, { target: { value: "POA-001" } });
+    expect(
+      screen.getAllByRole("button", { name: "Limpiar búsqueda por código" }),
+    ).toHaveLength(1);
+    expect(search).toHaveValue("POA-001");
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Limpiar búsqueda por código" }),
+    );
+    rerender(<PlanningLinesPage />);
+    expect(search).toHaveValue("");
+    expect(
+      screen.queryByRole("button", { name: "Limpiar búsqueda por código" }),
+    ).not.toBeInTheDocument();
+    expect(replaceMock).toHaveBeenLastCalledWith("/budget/planning", {
+      scroll: false,
+    });
+    expect(usePlanningLinesMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ code: undefined, page: 1 }),
+    );
+  });
+
+  it("clears code with Escape while retaining the other URL filters", () => {
+    currentQuery = "status=APPROVED&code=POA-002";
+    render(<PlanningLinesPage />);
+    const search = screen.getByRole("searchbox", { name: "Buscar por código" });
+    fireEvent.keyDown(search, { key: "Escape" });
+    expect(search).toHaveValue("");
+    expect(
+      screen.queryByRole("button", { name: "Limpiar búsqueda por código" }),
+    ).not.toBeInTheDocument();
+    expect(replaceMock).toHaveBeenLastCalledWith(
+      "/budget/planning?status=APPROVED",
+      { scroll: false },
+    );
+    expect(usePlanningLinesMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ code: undefined, status: "APPROVED" }),
+    );
+  });
+
   it("offers Add only to the effective manager or admin role", () => {
     const { rerender } = render(<PlanningLinesPage />);
     expect(
@@ -83,8 +131,12 @@ describe("PlanningLinesPage code search", () => {
     auth.role = "GIOF_MANAGER";
     readiness.enabled = false;
     render(<PlanningLinesPage />);
-    expect(screen.queryByRole("button", { name: "Agregar línea" })).not.toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "Planificación POA" })).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Agregar línea" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: "Planificación POA" }),
+    ).toBeInTheDocument();
   });
 
   it("debounces 300 ms, trims code, composes current filters, and resets page", async () => {

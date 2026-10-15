@@ -6,6 +6,7 @@ import { GiofOperationsDashboardView } from "@/components/dashboard/giof-operati
 import type { GiofOperationsDashboard } from "@/types/dashboard";
 
 const data: GiofOperationsDashboard = {
+  amount_currency: "PEN",
   generated_at: "2026-08-28T12:00:00.000Z",
   applied_filters: {},
   summary: {
@@ -50,7 +51,7 @@ vi.mock("recharts", () => ({
 }));
 
 describe("GiofOperationsDashboardView", () => {
-  it("cambia solo copy y conserva exactamente los valores recibidos", () => {
+  it("conserva los conteos y muestra los valores PEN recibidos", () => {
     vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 800, 360));
     render(<GiofOperationsDashboardView />);
 
@@ -71,9 +72,9 @@ describe("GiofOperationsDashboardView", () => {
 
     const [funnelChart] = screen.getAllByTestId("bar-chart");
     expect(JSON.parse(funnelChart.getAttribute("data-chart") ?? "[]")).toEqual([
-      { estado: "Enviadas a revisión", Solicitudes: 7, Monto: 700 },
-      { estado: "Aprobadas · pendientes de pago", Solicitudes: 5, Monto: 500 },
-      { estado: "Pagadas", Solicitudes: 4, Monto: 400 },
+      { estado: "Enviadas a revisión", Solicitudes: 7, "Valor PEN conocido": 700 },
+      { estado: "Aprobadas · pendientes de pago", Solicitudes: 5, "Valor PEN conocido": 500 },
+      { estado: "Pagadas", Solicitudes: 4, "Valor PEN conocido": 400 },
     ]);
 
     const pendingPaymentCard = screen.getByText("Pendiente de pago").closest("div.rounded-xl");
@@ -88,5 +89,53 @@ describe("GiofOperationsDashboardView", () => {
     expect(screen.queryByText("Próximas a vencer")).not.toBeInTheDocument();
     expect(screen.getByText("Rendidas:")).toHaveTextContent("4");
     expect(screen.queryByText("Regularizadas:")).not.toBeInTheDocument();
+  });
+
+  it("avisa también en embudo y excepciones cuando ningún importe está valorado", () => {
+    const originalFunnel = data.funnel;
+    const originalExceptions = data.exceptions;
+    data.funnel = [{ status: "PAID", count: 1, amount: 0, valuation: { unvalued_count: 1, provisional_count: 0 } }];
+    data.exceptions = [{ type: "overdue_renditions", count: 1, amount: 0, valuation: { unvalued_count: 1, provisional_count: 0 } }];
+    try {
+      render(<GiofOperationsDashboardView />);
+      expect(screen.getAllByText(/Valor PEN conocido: S\/\s0\.00 · 1 sin valoración/)).toHaveLength(2);
+    } finally {
+      data.funnel = originalFunnel;
+      data.exceptions = originalExceptions;
+    }
+  });
+
+  it("muestra el subtotal PEN conocido y avisa de valoración ausente o provisional", () => {
+    const original = { ...data.payments };
+    Object.assign(data.payments, {
+      paid_amount: 200,
+      paid_valuation: { unvalued_count: 1, provisional_count: 0 },
+      pending_amount: 570,
+      pending_valuation: { unvalued_count: 0, provisional_count: 1 },
+    });
+    try {
+      render(<GiofOperationsDashboardView />);
+      const paidCard = screen.getByText("Pagos registrados").closest("div.rounded-xl") as HTMLElement;
+      expect(within(paidCard).getByText(/Valor PEN conocido: S\/\s200\.00 · 1 sin valoración/)).toBeInTheDocument();
+      const pendingCard = screen.getByText("Pendiente de pago").closest("div.rounded-xl") as HTMLElement;
+      expect(within(pendingCard).getByText(/Valor PEN conocido: S\/\s570\.00 · 1 provisional/)).toBeInTheDocument();
+      expect(within(paidCard).getByText("4")).toBeInTheDocument();
+    } finally {
+      data.payments = original;
+    }
+  });
+
+  it("no etiqueta importes de una respuesta antigua sin marcador como PEN", () => {
+    Object.assign(data, { amount_currency: undefined });
+    try {
+      render(<GiofOperationsDashboardView />);
+      const paidCard = screen.getByText("Pagos registrados").closest("div.rounded-xl") as HTMLElement;
+      expect(within(paidCard).getByText(/Sin valoración PEN/)).toBeInTheDocument();
+      expect(within(paidCard).queryByText(/S\//)).not.toBeInTheDocument();
+      const [funnelChart] = screen.getAllByTestId("bar-chart");
+      expect(JSON.parse(funnelChart.getAttribute("data-chart") ?? "[]")[0]["Valor PEN conocido"]).toBeNull();
+    } finally {
+      Object.assign(data, { amount_currency: "PEN" });
+    }
   });
 });

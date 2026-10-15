@@ -177,6 +177,12 @@ describe("MonthlyFxPanel", () => {
       await user.type(input, "3.785");
       expect(input).toHaveValue("3.785");
       await user.click(screen.getByRole("button", { name: "Publicar cierre" }));
+      const cancel = screen.getByRole("button", { name: "Cancelar" });
+      const confirm = screen.getByRole("button", { name: "Confirmar cierre" });
+      expect(cancel).toHaveAttribute("data-variant", "outline");
+      expect(cancel).toHaveClass("border", "bg-background", "focus-visible:ring-[3px]");
+      expect(confirm).toHaveAttribute("data-variant", "default");
+      expect(confirm).toHaveClass("bg-primary", "text-primary-foreground", "disabled:opacity-50");
       expect(
         within(screen.getByRole("dialog")).getByText(
           /TC 3.79 \(3.785\) PEN por USD/,
@@ -243,5 +249,46 @@ describe("MonthlyFxPanel", () => {
       month: 2,
       referenceRate: "3.805",
     });
+  });
+
+  it("un GET cerrado invalida el diálogo previo y permite gestionar otro mes", async () => {
+    const user = userEvent.setup();
+    const close = vi.fn();
+    const props = {
+      year: 2026,
+      onCreateReference: vi.fn(),
+      onRetryReference: vi.fn(),
+      onRefresh: vi.fn(),
+      onCloseMonth: close,
+    };
+    const { rerender } = render(<MonthlyFxPanel {...props} months={[january]} />);
+    await user.type(screen.getByLabelText("TC de cierre (PEN por USD)"), "3.5212");
+    await user.click(screen.getByRole("button", { name: "Publicar cierre" }));
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    rerender(<MonthlyFxPanel {...props} months={[{ ...january, closeRate: "3.50" }]} />);
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    const input = screen.getByLabelText("TC de cierre (PEN por USD)");
+    expect(input).toHaveAttribute("readonly");
+    expect(input).toHaveValue("3.50");
+    fireEvent.change(input, { target: { value: "3.9" } });
+    await user.type(input, "{Enter}3.9");
+    expect(input).toHaveValue("3.50");
+    expect(screen.queryByRole("button", { name: /Publicar cierre|Reintentar cierre/ })).not.toBeInTheDocument();
+    expect(close).not.toHaveBeenCalled();
+    await user.selectOptions(screen.getByLabelText("Mes"), "2");
+    expect(input).not.toHaveAttribute("readonly");
+    expect(screen.getByRole("button", { name: "Guardar referencia" })).toBeEnabled();
+  });
+
+  it("el helper conserva replay numérico exacto sin ofrecerlo como acción de mes cerrado", async () => {
+    const stored = { ...january, closeRate: "3.8" };
+    const post = vi.spyOn(api, "post").mockResolvedValue(stored);
+    try {
+      const input = { year: 2026, month: 1, closeRate: "3.800000000000" };
+      expect(await monthlyFxApi.closeMonth(input)).toEqual(stored);
+      expect(post).toHaveBeenCalledWith("/catalogs/monthly-fx/rates/close", input, undefined);
+    } finally {
+      post.mockRestore();
+    }
   });
 });
